@@ -323,6 +323,20 @@ func (_c *UsageLogCreate) SetNillableFirstTokenMs(v *int) *UsageLogCreate {
 	return _c
 }
 
+// SetUserAgent sets the "user_agent" field.
+func (_c *UsageLogCreate) SetUserAgent(v string) *UsageLogCreate {
+	_c.mutation.SetUserAgent(v)
+	return _c
+}
+
+// SetNillableUserAgent sets the "user_agent" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableUserAgent(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetUserAgent(*v)
+	}
+	return _c
+}
+
 // SetImageCount sets the "image_count" field.
 func (_c *UsageLogCreate) SetImageCount(v int) *UsageLogCreate {
 	_c.mutation.SetImageCount(v)
@@ -567,6 +581,11 @@ func (_c *UsageLogCreate) check() error {
 	if _, ok := _c.mutation.Stream(); !ok {
 		return &ValidationError{Name: "stream", err: errors.New(`ent: missing required field "UsageLog.stream"`)}
 	}
+	if v, ok := _c.mutation.UserAgent(); ok {
+		if err := usagelog.UserAgentValidator(v); err != nil {
+			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.ImageCount(); !ok {
 		return &ValidationError{Name: "image_count", err: errors.New(`ent: missing required field "UsageLog.image_count"`)}
 	}
@@ -689,6 +708,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.FirstTokenMs(); ok {
 		_spec.SetField(usagelog.FieldFirstTokenMs, field.TypeInt, value)
 		_node.FirstTokenMs = &value
+	}
+	if value, ok := _c.mutation.UserAgent(); ok {
+		_spec.SetField(usagelog.FieldUserAgent, field.TypeString, value)
+		_node.UserAgent = &value
 	}
 	if value, ok := _c.mutation.ImageCount(); ok {
 		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)
@@ -1247,6 +1270,24 @@ func (u *UsageLogUpsert) ClearFirstTokenMs() *UsageLogUpsert {
 	return u
 }
 
+// SetUserAgent sets the "user_agent" field.
+func (u *UsageLogUpsert) SetUserAgent(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldUserAgent, v)
+	return u
+}
+
+// UpdateUserAgent sets the "user_agent" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateUserAgent() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldUserAgent)
+	return u
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (u *UsageLogUpsert) ClearUserAgent() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldUserAgent)
+	return u
+}
+
 // SetImageCount sets the "image_count" field.
 func (u *UsageLogUpsert) SetImageCount(v int) *UsageLogUpsert {
 	u.Set(usagelog.FieldImageCount, v)
@@ -1801,6 +1842,27 @@ func (u *UsageLogUpsertOne) UpdateFirstTokenMs() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearFirstTokenMs() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearFirstTokenMs()
+	})
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (u *UsageLogUpsertOne) SetUserAgent(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetUserAgent(v)
+	})
+}
+
+// UpdateUserAgent sets the "user_agent" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateUserAgent() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateUserAgent()
+	})
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (u *UsageLogUpsertOne) ClearUserAgent() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearUserAgent()
 	})
 }
 
@@ -2530,6 +2592,27 @@ func (u *UsageLogUpsertBulk) UpdateFirstTokenMs() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearFirstTokenMs() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearFirstTokenMs()
+	})
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (u *UsageLogUpsertBulk) SetUserAgent(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetUserAgent(v)
+	})
+}
+
+// UpdateUserAgent sets the "user_agent" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateUserAgent() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateUserAgent()
+	})
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (u *UsageLogUpsertBulk) ClearUserAgent() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearUserAgent()
 	})
 }
 
