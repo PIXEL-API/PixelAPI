@@ -83,19 +83,33 @@ func NewConcurrencyHelper(concurrencyService *service.ConcurrencyService, pingFo
 
 // wrapReleaseOnDone ensures release runs at most once and still triggers on context cancellation.
 // 用于避免客户端断开或上游超时导致的并发槽位泄漏。
+// 修复：添加 quit channel 确保 goroutine 及时退出，避免泄露
 func wrapReleaseOnDone(ctx context.Context, releaseFunc func()) func() {
 	if releaseFunc == nil {
 		return nil
 	}
 	var once sync.Once
-	wrapped := func() {
-		once.Do(releaseFunc)
+	quit := make(chan struct{})
+
+	release := func() {
+		once.Do(func() {
+			releaseFunc()
+			close(quit) // 通知监听 goroutine 退出
+		})
 	}
+
 	go func() {
-		<-ctx.Done()
-		wrapped()
+		select {
+		case <-ctx.Done():
+			// Context 取消时释放资源
+			release()
+		case <-quit:
+			// 正常释放已完成，goroutine 退出
+			return
+		}
 	}()
-	return wrapped
+
+	return release
 }
 
 // IncrementWaitCount increments the wait count for a user
