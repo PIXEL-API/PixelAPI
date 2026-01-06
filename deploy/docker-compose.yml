@@ -109,6 +109,13 @@ services:
       - SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=${SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS:-false}
       # Upstream hosts whitelist (comma-separated, only used when enabled=true)
       - SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-}
+
+      # =======================================================================
+      # Update Configuration (在线更新配置)
+      # =======================================================================
+      # Proxy for accessing GitHub (online updates + pricing data)
+      # Examples: http://host:port, socks5://host:port
+      - UPDATE_PROXY_URL=${UPDATE_PROXY_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
