@@ -98,6 +98,10 @@ type CreateGroupInput struct {
 	DailyLimitUSD    *float64 // 日限额 (USD)
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
+	// 图片生成计费配置（仅 antigravity 平台使用）
+	ImagePrice1K *float64
+	ImagePrice2K *float64
+	ImagePrice4K *float64
 }
 
 type UpdateGroupInput struct {
@@ -111,6 +115,10 @@ type UpdateGroupInput struct {
 	DailyLimitUSD    *float64 // 日限额 (USD)
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
+	// 图片生成计费配置（仅 antigravity 平台使用）
+	ImagePrice1K *float64
+	ImagePrice2K *float64
+	ImagePrice4K *float64
 }
 
 type CreateAccountInput struct {
@@ -498,6 +506,11 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	weeklyLimit := normalizeLimit(input.WeeklyLimitUSD)
 	monthlyLimit := normalizeLimit(input.MonthlyLimitUSD)
 
+	// 图片价格：负数表示清除（使用默认价格），0 保留（表示免费）
+	imagePrice1K := normalizePrice(input.ImagePrice1K)
+	imagePrice2K := normalizePrice(input.ImagePrice2K)
+	imagePrice4K := normalizePrice(input.ImagePrice4K)
+
 	group := &Group{
 		Name:             input.Name,
 		Description:      input.Description,
@@ -509,6 +522,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		DailyLimitUSD:    dailyLimit,
 		WeeklyLimitUSD:   weeklyLimit,
 		MonthlyLimitUSD:  monthlyLimit,
+		ImagePrice1K:     imagePrice1K,
+		ImagePrice2K:     imagePrice2K,
+		ImagePrice4K:     imagePrice4K,
 	}
 	if err := s.groupRepo.Create(ctx, group); err != nil {
 		return nil, err
@@ -522,6 +538,14 @@ func normalizeLimit(limit *float64) *float64 {
 		return nil
 	}
 	return limit
+}
+
+// normalizePrice 将负数转换为 nil（表示使用默认价格），0 保留（表示免费）
+func normalizePrice(price *float64) *float64 {
+	if price == nil || *price < 0 {
+		return nil
+	}
+	return price
 }
 
 func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error) {
@@ -562,6 +586,16 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.MonthlyLimitUSD != nil {
 		group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
+	}
+	// 图片生成计费配置：负数表示清除（使用默认价格）
+	if input.ImagePrice1K != nil {
+		group.ImagePrice1K = normalizePrice(input.ImagePrice1K)
+	}
+	if input.ImagePrice2K != nil {
+		group.ImagePrice2K = normalizePrice(input.ImagePrice2K)
+	}
+	if input.ImagePrice4K != nil {
+		group.ImagePrice4K = normalizePrice(input.ImagePrice4K)
 	}
 
 	if err := s.groupRepo.Update(ctx, group); err != nil {
@@ -702,7 +736,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		account.Extra = input.Extra
 	}
 	if input.ProxyID != nil {
-		account.ProxyID = input.ProxyID
+		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
+		if *input.ProxyID == 0 {
+			account.ProxyID = nil
+		} else {
+			account.ProxyID = input.ProxyID
+		}
 		account.Proxy = nil // 清除关联对象，防止 GORM Save 时根据 Proxy.ID 覆盖 ProxyID
 	}
 	// 只在指针非 nil 时更新 Concurrency（支持设置为 0）

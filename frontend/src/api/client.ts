@@ -21,6 +21,15 @@ export const apiClient: AxiosInstance = axios.create({
 
 // ==================== Request Interceptor ====================
 
+// Get user's timezone
+const getUserTimezone = (): string => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone
+  } catch {
+    return 'UTC'
+  }
+}
+
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     // Attach token from localStorage
@@ -32,6 +41,14 @@ apiClient.interceptors.request.use(
     // Attach locale for backend translations
     if (config.headers) {
       config.headers['Accept-Language'] = getLocale()
+    }
+
+    // Attach timezone for all GET requests (backend may use it for default date ranges)
+    if (config.method === 'get') {
+      if (!config.params) {
+        config.params = {}
+      }
+      config.params.timezone = getUserTimezone()
     }
 
     return config

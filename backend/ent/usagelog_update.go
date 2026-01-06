@@ -504,6 +504,47 @@ func (_u *UsageLogUpdate) ClearFirstTokenMs() *UsageLogUpdate {
 	return _u
 }
 
+// SetImageCount sets the "image_count" field.
+func (_u *UsageLogUpdate) SetImageCount(v int) *UsageLogUpdate {
+	_u.mutation.ResetImageCount()
+	_u.mutation.SetImageCount(v)
+	return _u
+}
+
+// SetNillableImageCount sets the "image_count" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableImageCount(v *int) *UsageLogUpdate {
+	if v != nil {
+		_u.SetImageCount(*v)
+	}
+	return _u
+}
+
+// AddImageCount adds value to the "image_count" field.
+func (_u *UsageLogUpdate) AddImageCount(v int) *UsageLogUpdate {
+	_u.mutation.AddImageCount(v)
+	return _u
+}
+
+// SetImageSize sets the "image_size" field.
+func (_u *UsageLogUpdate) SetImageSize(v string) *UsageLogUpdate {
+	_u.mutation.SetImageSize(v)
+	return _u
+}
+
+// SetNillableImageSize sets the "image_size" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableImageSize(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetImageSize(*v)
+	}
+	return _u
+}
+
+// ClearImageSize clears the value of the "image_size" field.
+func (_u *UsageLogUpdate) ClearImageSize() *UsageLogUpdate {
+	_u.mutation.ClearImageSize()
+	return _u
+}
+
 // SetUser sets the "user" edge to the User entity.
 func (_u *UsageLogUpdate) SetUser(v *User) *UsageLogUpdate {
 	return _u.SetUserID(v.ID)
@@ -601,6 +642,11 @@ func (_u *UsageLogUpdate) check() error {
 	if v, ok := _u.mutation.Model(); ok {
 		if err := usagelog.ModelValidator(v); err != nil {
 			return &ValidationError{Name: "model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.model": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ImageSize(); ok {
+		if err := usagelog.ImageSizeValidator(v); err != nil {
+			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "UsageLog.image_size": %w`, err)}
 		}
 	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
@@ -737,6 +783,18 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.FirstTokenMsCleared() {
 		_spec.ClearField(usagelog.FieldFirstTokenMs, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ImageCount(); ok {
+		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedImageCount(); ok {
+		_spec.AddField(usagelog.FieldImageCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.ImageSize(); ok {
+		_spec.SetField(usagelog.FieldImageSize, field.TypeString, value)
+	}
+	if _u.mutation.ImageSizeCleared() {
+		_spec.ClearField(usagelog.FieldImageSize, field.TypeString)
 	}
 	if _u.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1375,6 +1433,47 @@ func (_u *UsageLogUpdateOne) ClearFirstTokenMs() *UsageLogUpdateOne {
 	return _u
 }
 
+// SetImageCount sets the "image_count" field.
+func (_u *UsageLogUpdateOne) SetImageCount(v int) *UsageLogUpdateOne {
+	_u.mutation.ResetImageCount()
+	_u.mutation.SetImageCount(v)
+	return _u
+}
+
+// SetNillableImageCount sets the "image_count" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableImageCount(v *int) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetImageCount(*v)
+	}
+	return _u
+}
+
+// AddImageCount adds value to the "image_count" field.
+func (_u *UsageLogUpdateOne) AddImageCount(v int) *UsageLogUpdateOne {
+	_u.mutation.AddImageCount(v)
+	return _u
+}
+
+// SetImageSize sets the "image_size" field.
+func (_u *UsageLogUpdateOne) SetImageSize(v string) *UsageLogUpdateOne {
+	_u.mutation.SetImageSize(v)
+	return _u
+}
+
+// SetNillableImageSize sets the "image_size" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableImageSize(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetImageSize(*v)
+	}
+	return _u
+}
+
+// ClearImageSize clears the value of the "image_size" field.
+func (_u *UsageLogUpdateOne) ClearImageSize() *UsageLogUpdateOne {
+	_u.mutation.ClearImageSize()
+	return _u
+}
+
 // SetUser sets the "user" edge to the User entity.
 func (_u *UsageLogUpdateOne) SetUser(v *User) *UsageLogUpdateOne {
 	return _u.SetUserID(v.ID)
@@ -1485,6 +1584,11 @@ func (_u *UsageLogUpdateOne) check() error {
 	if v, ok := _u.mutation.Model(); ok {
 		if err := usagelog.ModelValidator(v); err != nil {
 			return &ValidationError{Name: "model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.model": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ImageSize(); ok {
+		if err := usagelog.ImageSizeValidator(v); err != nil {
+			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "UsageLog.image_size": %w`, err)}
 		}
 	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
@@ -1638,6 +1742,18 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.FirstTokenMsCleared() {
 		_spec.ClearField(usagelog.FieldFirstTokenMs, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ImageCount(); ok {
+		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedImageCount(); ok {
+		_spec.AddField(usagelog.FieldImageCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.ImageSize(); ok {
+		_spec.SetField(usagelog.FieldImageSize, field.TypeString, value)
+	}
+	if _u.mutation.ImageSizeCleared() {
+		_spec.ClearField(usagelog.FieldImageSize, field.TypeString)
 	}
 	if _u.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{

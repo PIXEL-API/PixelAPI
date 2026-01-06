@@ -323,6 +323,34 @@ func (_c *UsageLogCreate) SetNillableFirstTokenMs(v *int) *UsageLogCreate {
 	return _c
 }
 
+// SetImageCount sets the "image_count" field.
+func (_c *UsageLogCreate) SetImageCount(v int) *UsageLogCreate {
+	_c.mutation.SetImageCount(v)
+	return _c
+}
+
+// SetNillableImageCount sets the "image_count" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableImageCount(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetImageCount(*v)
+	}
+	return _c
+}
+
+// SetImageSize sets the "image_size" field.
+func (_c *UsageLogCreate) SetImageSize(v string) *UsageLogCreate {
+	_c.mutation.SetImageSize(v)
+	return _c
+}
+
+// SetNillableImageSize sets the "image_size" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableImageSize(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetImageSize(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *UsageLogCreate) SetCreatedAt(v time.Time) *UsageLogCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -457,6 +485,10 @@ func (_c *UsageLogCreate) defaults() {
 		v := usagelog.DefaultStream
 		_c.mutation.SetStream(v)
 	}
+	if _, ok := _c.mutation.ImageCount(); !ok {
+		v := usagelog.DefaultImageCount
+		_c.mutation.SetImageCount(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := usagelog.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -534,6 +566,14 @@ func (_c *UsageLogCreate) check() error {
 	}
 	if _, ok := _c.mutation.Stream(); !ok {
 		return &ValidationError{Name: "stream", err: errors.New(`ent: missing required field "UsageLog.stream"`)}
+	}
+	if _, ok := _c.mutation.ImageCount(); !ok {
+		return &ValidationError{Name: "image_count", err: errors.New(`ent: missing required field "UsageLog.image_count"`)}
+	}
+	if v, ok := _c.mutation.ImageSize(); ok {
+		if err := usagelog.ImageSizeValidator(v); err != nil {
+			return &ValidationError{Name: "image_size", err: fmt.Errorf(`ent: validator failed for field "UsageLog.image_size": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "UsageLog.created_at"`)}
@@ -649,6 +689,14 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.FirstTokenMs(); ok {
 		_spec.SetField(usagelog.FieldFirstTokenMs, field.TypeInt, value)
 		_node.FirstTokenMs = &value
+	}
+	if value, ok := _c.mutation.ImageCount(); ok {
+		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)
+		_node.ImageCount = value
+	}
+	if value, ok := _c.mutation.ImageSize(); ok {
+		_spec.SetField(usagelog.FieldImageSize, field.TypeString, value)
+		_node.ImageSize = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(usagelog.FieldCreatedAt, field.TypeTime, value)
@@ -1199,6 +1247,42 @@ func (u *UsageLogUpsert) ClearFirstTokenMs() *UsageLogUpsert {
 	return u
 }
 
+// SetImageCount sets the "image_count" field.
+func (u *UsageLogUpsert) SetImageCount(v int) *UsageLogUpsert {
+	u.Set(usagelog.FieldImageCount, v)
+	return u
+}
+
+// UpdateImageCount sets the "image_count" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateImageCount() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldImageCount)
+	return u
+}
+
+// AddImageCount adds v to the "image_count" field.
+func (u *UsageLogUpsert) AddImageCount(v int) *UsageLogUpsert {
+	u.Add(usagelog.FieldImageCount, v)
+	return u
+}
+
+// SetImageSize sets the "image_size" field.
+func (u *UsageLogUpsert) SetImageSize(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldImageSize, v)
+	return u
+}
+
+// UpdateImageSize sets the "image_size" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateImageSize() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldImageSize)
+	return u
+}
+
+// ClearImageSize clears the value of the "image_size" field.
+func (u *UsageLogUpsert) ClearImageSize() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldImageSize)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -1717,6 +1801,48 @@ func (u *UsageLogUpsertOne) UpdateFirstTokenMs() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearFirstTokenMs() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearFirstTokenMs()
+	})
+}
+
+// SetImageCount sets the "image_count" field.
+func (u *UsageLogUpsertOne) SetImageCount(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetImageCount(v)
+	})
+}
+
+// AddImageCount adds v to the "image_count" field.
+func (u *UsageLogUpsertOne) AddImageCount(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddImageCount(v)
+	})
+}
+
+// UpdateImageCount sets the "image_count" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateImageCount() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateImageCount()
+	})
+}
+
+// SetImageSize sets the "image_size" field.
+func (u *UsageLogUpsertOne) SetImageSize(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetImageSize(v)
+	})
+}
+
+// UpdateImageSize sets the "image_size" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateImageSize() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateImageSize()
+	})
+}
+
+// ClearImageSize clears the value of the "image_size" field.
+func (u *UsageLogUpsertOne) ClearImageSize() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearImageSize()
 	})
 }
 
@@ -2404,6 +2530,48 @@ func (u *UsageLogUpsertBulk) UpdateFirstTokenMs() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearFirstTokenMs() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearFirstTokenMs()
+	})
+}
+
+// SetImageCount sets the "image_count" field.
+func (u *UsageLogUpsertBulk) SetImageCount(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetImageCount(v)
+	})
+}
+
+// AddImageCount adds v to the "image_count" field.
+func (u *UsageLogUpsertBulk) AddImageCount(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddImageCount(v)
+	})
+}
+
+// UpdateImageCount sets the "image_count" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateImageCount() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateImageCount()
+	})
+}
+
+// SetImageSize sets the "image_size" field.
+func (u *UsageLogUpsertBulk) SetImageSize(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetImageSize(v)
+	})
+}
+
+// UpdateImageSize sets the "image_size" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateImageSize() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateImageSize()
+	})
+}
+
+// ClearImageSize clears the value of the "image_size" field.
+func (u *UsageLogUpsertBulk) ClearImageSize() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearImageSize()
 	})
 }
 

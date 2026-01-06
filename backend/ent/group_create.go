@@ -216,6 +216,48 @@ func (_c *GroupCreate) SetNillableDefaultValidityDays(v *int) *GroupCreate {
 	return _c
 }
 
+// SetImagePrice1k sets the "image_price_1k" field.
+func (_c *GroupCreate) SetImagePrice1k(v float64) *GroupCreate {
+	_c.mutation.SetImagePrice1k(v)
+	return _c
+}
+
+// SetNillableImagePrice1k sets the "image_price_1k" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableImagePrice1k(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetImagePrice1k(*v)
+	}
+	return _c
+}
+
+// SetImagePrice2k sets the "image_price_2k" field.
+func (_c *GroupCreate) SetImagePrice2k(v float64) *GroupCreate {
+	_c.mutation.SetImagePrice2k(v)
+	return _c
+}
+
+// SetNillableImagePrice2k sets the "image_price_2k" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableImagePrice2k(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetImagePrice2k(*v)
+	}
+	return _c
+}
+
+// SetImagePrice4k sets the "image_price_4k" field.
+func (_c *GroupCreate) SetImagePrice4k(v float64) *GroupCreate {
+	_c.mutation.SetImagePrice4k(v)
+	return _c
+}
+
+// SetNillableImagePrice4k sets the "image_price_4k" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableImagePrice4k(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetImagePrice4k(*v)
+	}
+	return _c
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_c *GroupCreate) AddAPIKeyIDs(ids ...int64) *GroupCreate {
 	_c.mutation.AddAPIKeyIDs(ids...)
@@ -515,6 +557,18 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
 		_node.DefaultValidityDays = value
+	}
+	if value, ok := _c.mutation.ImagePrice1k(); ok {
+		_spec.SetField(group.FieldImagePrice1k, field.TypeFloat64, value)
+		_node.ImagePrice1k = &value
+	}
+	if value, ok := _c.mutation.ImagePrice2k(); ok {
+		_spec.SetField(group.FieldImagePrice2k, field.TypeFloat64, value)
+		_node.ImagePrice2k = &value
+	}
+	if value, ok := _c.mutation.ImagePrice4k(); ok {
+		_spec.SetField(group.FieldImagePrice4k, field.TypeFloat64, value)
+		_node.ImagePrice4k = &value
 	}
 	if nodes := _c.mutation.APIKeysIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -888,6 +942,78 @@ func (u *GroupUpsert) AddDefaultValidityDays(v int) *GroupUpsert {
 	return u
 }
 
+// SetImagePrice1k sets the "image_price_1k" field.
+func (u *GroupUpsert) SetImagePrice1k(v float64) *GroupUpsert {
+	u.Set(group.FieldImagePrice1k, v)
+	return u
+}
+
+// UpdateImagePrice1k sets the "image_price_1k" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateImagePrice1k() *GroupUpsert {
+	u.SetExcluded(group.FieldImagePrice1k)
+	return u
+}
+
+// AddImagePrice1k adds v to the "image_price_1k" field.
+func (u *GroupUpsert) AddImagePrice1k(v float64) *GroupUpsert {
+	u.Add(group.FieldImagePrice1k, v)
+	return u
+}
+
+// ClearImagePrice1k clears the value of the "image_price_1k" field.
+func (u *GroupUpsert) ClearImagePrice1k() *GroupUpsert {
+	u.SetNull(group.FieldImagePrice1k)
+	return u
+}
+
+// SetImagePrice2k sets the "image_price_2k" field.
+func (u *GroupUpsert) SetImagePrice2k(v float64) *GroupUpsert {
+	u.Set(group.FieldImagePrice2k, v)
+	return u
+}
+
+// UpdateImagePrice2k sets the "image_price_2k" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateImagePrice2k() *GroupUpsert {
+	u.SetExcluded(group.FieldImagePrice2k)
+	return u
+}
+
+// AddImagePrice2k adds v to the "image_price_2k" field.
+func (u *GroupUpsert) AddImagePrice2k(v float64) *GroupUpsert {
+	u.Add(group.FieldImagePrice2k, v)
+	return u
+}
+
+// ClearImagePrice2k clears the value of the "image_price_2k" field.
+func (u *GroupUpsert) ClearImagePrice2k() *GroupUpsert {
+	u.SetNull(group.FieldImagePrice2k)
+	return u
+}
+
+// SetImagePrice4k sets the "image_price_4k" field.
+func (u *GroupUpsert) SetImagePrice4k(v float64) *GroupUpsert {
+	u.Set(group.FieldImagePrice4k, v)
+	return u
+}
+
+// UpdateImagePrice4k sets the "image_price_4k" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateImagePrice4k() *GroupUpsert {
+	u.SetExcluded(group.FieldImagePrice4k)
+	return u
+}
+
+// AddImagePrice4k adds v to the "image_price_4k" field.
+func (u *GroupUpsert) AddImagePrice4k(v float64) *GroupUpsert {
+	u.Add(group.FieldImagePrice4k, v)
+	return u
+}
+
+// ClearImagePrice4k clears the value of the "image_price_4k" field.
+func (u *GroupUpsert) ClearImagePrice4k() *GroupUpsert {
+	u.SetNull(group.FieldImagePrice4k)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -1182,6 +1308,90 @@ func (u *GroupUpsertOne) AddDefaultValidityDays(v int) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateDefaultValidityDays() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateDefaultValidityDays()
+	})
+}
+
+// SetImagePrice1k sets the "image_price_1k" field.
+func (u *GroupUpsertOne) SetImagePrice1k(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImagePrice1k(v)
+	})
+}
+
+// AddImagePrice1k adds v to the "image_price_1k" field.
+func (u *GroupUpsertOne) AddImagePrice1k(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddImagePrice1k(v)
+	})
+}
+
+// UpdateImagePrice1k sets the "image_price_1k" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateImagePrice1k() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImagePrice1k()
+	})
+}
+
+// ClearImagePrice1k clears the value of the "image_price_1k" field.
+func (u *GroupUpsertOne) ClearImagePrice1k() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearImagePrice1k()
+	})
+}
+
+// SetImagePrice2k sets the "image_price_2k" field.
+func (u *GroupUpsertOne) SetImagePrice2k(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImagePrice2k(v)
+	})
+}
+
+// AddImagePrice2k adds v to the "image_price_2k" field.
+func (u *GroupUpsertOne) AddImagePrice2k(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddImagePrice2k(v)
+	})
+}
+
+// UpdateImagePrice2k sets the "image_price_2k" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateImagePrice2k() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImagePrice2k()
+	})
+}
+
+// ClearImagePrice2k clears the value of the "image_price_2k" field.
+func (u *GroupUpsertOne) ClearImagePrice2k() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearImagePrice2k()
+	})
+}
+
+// SetImagePrice4k sets the "image_price_4k" field.
+func (u *GroupUpsertOne) SetImagePrice4k(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImagePrice4k(v)
+	})
+}
+
+// AddImagePrice4k adds v to the "image_price_4k" field.
+func (u *GroupUpsertOne) AddImagePrice4k(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddImagePrice4k(v)
+	})
+}
+
+// UpdateImagePrice4k sets the "image_price_4k" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateImagePrice4k() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImagePrice4k()
+	})
+}
+
+// ClearImagePrice4k clears the value of the "image_price_4k" field.
+func (u *GroupUpsertOne) ClearImagePrice4k() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearImagePrice4k()
 	})
 }
 
@@ -1645,6 +1855,90 @@ func (u *GroupUpsertBulk) AddDefaultValidityDays(v int) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateDefaultValidityDays() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateDefaultValidityDays()
+	})
+}
+
+// SetImagePrice1k sets the "image_price_1k" field.
+func (u *GroupUpsertBulk) SetImagePrice1k(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImagePrice1k(v)
+	})
+}
+
+// AddImagePrice1k adds v to the "image_price_1k" field.
+func (u *GroupUpsertBulk) AddImagePrice1k(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddImagePrice1k(v)
+	})
+}
+
+// UpdateImagePrice1k sets the "image_price_1k" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateImagePrice1k() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImagePrice1k()
+	})
+}
+
+// ClearImagePrice1k clears the value of the "image_price_1k" field.
+func (u *GroupUpsertBulk) ClearImagePrice1k() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearImagePrice1k()
+	})
+}
+
+// SetImagePrice2k sets the "image_price_2k" field.
+func (u *GroupUpsertBulk) SetImagePrice2k(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImagePrice2k(v)
+	})
+}
+
+// AddImagePrice2k adds v to the "image_price_2k" field.
+func (u *GroupUpsertBulk) AddImagePrice2k(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddImagePrice2k(v)
+	})
+}
+
+// UpdateImagePrice2k sets the "image_price_2k" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateImagePrice2k() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImagePrice2k()
+	})
+}
+
+// ClearImagePrice2k clears the value of the "image_price_2k" field.
+func (u *GroupUpsertBulk) ClearImagePrice2k() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearImagePrice2k()
+	})
+}
+
+// SetImagePrice4k sets the "image_price_4k" field.
+func (u *GroupUpsertBulk) SetImagePrice4k(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImagePrice4k(v)
+	})
+}
+
+// AddImagePrice4k adds v to the "image_price_4k" field.
+func (u *GroupUpsertBulk) AddImagePrice4k(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddImagePrice4k(v)
+	})
+}
+
+// UpdateImagePrice4k sets the "image_price_4k" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateImagePrice4k() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImagePrice4k()
+	})
+}
+
+// ClearImagePrice4k clears the value of the "image_price_4k" field.
+func (u *GroupUpsertBulk) ClearImagePrice4k() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearImagePrice4k()
 	})
 }
 

@@ -122,3 +122,40 @@ func StartOfMonth(t time.Time) time.Time {
 func ParseInLocation(layout, value string) (time.Time, error) {
 	return time.ParseInLocation(layout, value, Location())
 }
+
+// ParseInUserLocation parses a time string in the user's timezone.
+// If userTZ is empty or invalid, falls back to the configured server timezone.
+func ParseInUserLocation(layout, value, userTZ string) (time.Time, error) {
+	loc := Location() // default to server timezone
+	if userTZ != "" {
+		if userLoc, err := time.LoadLocation(userTZ); err == nil {
+			loc = userLoc
+		}
+	}
+	return time.ParseInLocation(layout, value, loc)
+}
+
+// NowInUserLocation returns the current time in the user's timezone.
+// If userTZ is empty or invalid, falls back to the configured server timezone.
+func NowInUserLocation(userTZ string) time.Time {
+	if userTZ == "" {
+		return Now()
+	}
+	if userLoc, err := time.LoadLocation(userTZ); err == nil {
+		return time.Now().In(userLoc)
+	}
+	return Now()
+}
+
+// StartOfDayInUserLocation returns the start of the given day in the user's timezone.
+// If userTZ is empty or invalid, falls back to the configured server timezone.
+func StartOfDayInUserLocation(t time.Time, userTZ string) time.Time {
+	loc := Location()
+	if userTZ != "" {
+		if userLoc, err := time.LoadLocation(userTZ); err == nil {
+			loc = userLoc
+		}
+	}
+	t = t.In(loc)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+}

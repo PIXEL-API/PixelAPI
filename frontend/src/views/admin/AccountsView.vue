@@ -3,22 +3,18 @@
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-wrap-reverse items-start justify-between gap-3">
-          <div class="min-w-0 flex-1">
-            <AccountTableFilters
-              v-model:searchQuery="params.search"
-              :filters="params"
-              @change="reload"
-              @update:searchQuery="debouncedReload"
-            />
-          </div>
-          <div class="flex-shrink-0">
-            <AccountTableActions
-              :loading="loading"
-              @refresh="load"
-              @sync="showSync = true"
-              @create="showCreate = true"
-            />
-          </div>
+          <AccountTableFilters
+            v-model:searchQuery="params.search"
+            :filters="params"
+            @change="reload"
+            @update:searchQuery="debouncedReload"
+          />
+          <AccountTableActions
+            :loading="loading"
+            @refresh="load"
+            @sync="showSync = true"
+            @create="showCreate = true"
+          />
         </div>
       </template>
       <template #table>
@@ -201,10 +197,10 @@ const handleViewStats = (a: Account) => { statsAcc.value = a; showStats.value = 
 const handleReAuth = (a: Account) => { reAuthAcc.value = a; showReAuth.value = true }
 const handleRefresh = async (a: Account) => { try { await adminAPI.accounts.refreshCredentials(a.id); load() } catch (error) { console.error('Failed to refresh credentials:', error) } }
 const handleResetStatus = async (a: Account) => { try { await adminAPI.accounts.clearError(a.id); appStore.showSuccess(t('common.success')); load() } catch (error) { console.error('Failed to reset status:', error) } }
-const handleClearRateLimit = async (a: Account) => { try { await adminAPI.accounts.clearError(a.id); appStore.showSuccess(t('common.success')); load() } catch (error) { console.error('Failed to clear rate limit:', error) } }
+const handleClearRateLimit = async (a: Account) => { try { await adminAPI.accounts.clearRateLimit(a.id); appStore.showSuccess(t('common.success')); load() } catch (error) { console.error('Failed to clear rate limit:', error) } }
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
 const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
-const handleToggleSchedulable = async (a: Account) => { togglingSchedulable.value = a.id; try { await adminAPI.accounts.update(a.id, { schedulable: !a.schedulable }); load() } finally { togglingSchedulable.value = null } }
+const handleToggleSchedulable = async (a: Account) => { togglingSchedulable.value = a.id; try { await adminAPI.accounts.setSchedulable(a.id, !a.schedulable); load() } finally { togglingSchedulable.value = null } }
 const handleShowTempUnsched = (a: Account) => { tempUnschedAcc.value = a; showTempUnsched.value = true }
 const handleTempUnschedReset = async () => { if(!tempUnschedAcc.value) return; try { await adminAPI.accounts.clearError(tempUnschedAcc.value.id); showTempUnsched.value = false; tempUnschedAcc.value = null; load() } catch (error) { console.error('Failed to reset temp unscheduled:', error) } }
 
