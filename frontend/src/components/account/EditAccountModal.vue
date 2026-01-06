@@ -1140,7 +1140,7 @@ const handleSubmit = async () => {
     emit('updated')
     handleClose()
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.accounts.failedToUpdate'))
+    appStore.showError(error.response?.data?.message || error.response?.data?.detail || t('admin.accounts.failedToUpdate'))
   } finally {
     submitting.value = false
   }
