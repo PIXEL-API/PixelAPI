@@ -1,7 +1,11 @@
 // Package dto provides data transfer objects for HTTP handlers.
 package dto
 
-import "github.com/Wei-Shaw/sub2api/internal/service"
+import (
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
+)
 
 func UserFromServiceShallow(u *service.User) *User {
 	if u == nil {
@@ -120,6 +124,8 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Status:                  a.Status,
 		ErrorMessage:            a.ErrorMessage,
 		LastUsedAt:              a.LastUsedAt,
+		ExpiresAt:               timeToUnixSeconds(a.ExpiresAt),
+		AutoPauseOnExpired:      a.AutoPauseOnExpired,
 		CreatedAt:               a.CreatedAt,
 		UpdatedAt:               a.UpdatedAt,
 		Schedulable:             a.Schedulable,
@@ -155,6 +161,14 @@ func AccountFromService(a *service.Account) *Account {
 		}
 	}
 	return out
+}
+
+func timeToUnixSeconds(value *time.Time) *int64 {
+	if value == nil {
+		return nil
+	}
+	ts := value.Unix()
+	return &ts
 }
 
 func AccountGroupFromService(ag *service.AccountGroup) *AccountGroup {

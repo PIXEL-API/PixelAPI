@@ -247,6 +247,40 @@ func (_u *AccountUpdate) ClearLastUsedAt() *AccountUpdate {
 	return _u
 }
 
+// SetExpiresAt sets the "expires_at" field.
+func (_u *AccountUpdate) SetExpiresAt(v time.Time) *AccountUpdate {
+	_u.mutation.SetExpiresAt(v)
+	return _u
+}
+
+// SetNillableExpiresAt sets the "expires_at" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableExpiresAt(v *time.Time) *AccountUpdate {
+	if v != nil {
+		_u.SetExpiresAt(*v)
+	}
+	return _u
+}
+
+// ClearExpiresAt clears the value of the "expires_at" field.
+func (_u *AccountUpdate) ClearExpiresAt() *AccountUpdate {
+	_u.mutation.ClearExpiresAt()
+	return _u
+}
+
+// SetAutoPauseOnExpired sets the "auto_pause_on_expired" field.
+func (_u *AccountUpdate) SetAutoPauseOnExpired(v bool) *AccountUpdate {
+	_u.mutation.SetAutoPauseOnExpired(v)
+	return _u
+}
+
+// SetNillableAutoPauseOnExpired sets the "auto_pause_on_expired" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableAutoPauseOnExpired(v *bool) *AccountUpdate {
+	if v != nil {
+		_u.SetAutoPauseOnExpired(*v)
+	}
+	return _u
+}
+
 // SetSchedulable sets the "schedulable" field.
 func (_u *AccountUpdate) SetSchedulable(v bool) *AccountUpdate {
 	_u.mutation.SetSchedulable(v)
@@ -609,6 +643,15 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.LastUsedAtCleared() {
 		_spec.ClearField(account.FieldLastUsedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ExpiresAt(); ok {
+		_spec.SetField(account.FieldExpiresAt, field.TypeTime, value)
+	}
+	if _u.mutation.ExpiresAtCleared() {
+		_spec.ClearField(account.FieldExpiresAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.AutoPauseOnExpired(); ok {
+		_spec.SetField(account.FieldAutoPauseOnExpired, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Schedulable(); ok {
 		_spec.SetField(account.FieldSchedulable, field.TypeBool, value)
@@ -1016,6 +1059,40 @@ func (_u *AccountUpdateOne) ClearLastUsedAt() *AccountUpdateOne {
 	return _u
 }
 
+// SetExpiresAt sets the "expires_at" field.
+func (_u *AccountUpdateOne) SetExpiresAt(v time.Time) *AccountUpdateOne {
+	_u.mutation.SetExpiresAt(v)
+	return _u
+}
+
+// SetNillableExpiresAt sets the "expires_at" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableExpiresAt(v *time.Time) *AccountUpdateOne {
+	if v != nil {
+		_u.SetExpiresAt(*v)
+	}
+	return _u
+}
+
+// ClearExpiresAt clears the value of the "expires_at" field.
+func (_u *AccountUpdateOne) ClearExpiresAt() *AccountUpdateOne {
+	_u.mutation.ClearExpiresAt()
+	return _u
+}
+
+// SetAutoPauseOnExpired sets the "auto_pause_on_expired" field.
+func (_u *AccountUpdateOne) SetAutoPauseOnExpired(v bool) *AccountUpdateOne {
+	_u.mutation.SetAutoPauseOnExpired(v)
+	return _u
+}
+
+// SetNillableAutoPauseOnExpired sets the "auto_pause_on_expired" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableAutoPauseOnExpired(v *bool) *AccountUpdateOne {
+	if v != nil {
+		_u.SetAutoPauseOnExpired(*v)
+	}
+	return _u
+}
+
 // SetSchedulable sets the "schedulable" field.
 func (_u *AccountUpdateOne) SetSchedulable(v bool) *AccountUpdateOne {
 	_u.mutation.SetSchedulable(v)
@@ -1408,6 +1485,15 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if _u.mutation.LastUsedAtCleared() {
 		_spec.ClearField(account.FieldLastUsedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ExpiresAt(); ok {
+		_spec.SetField(account.FieldExpiresAt, field.TypeTime, value)
+	}
+	if _u.mutation.ExpiresAtCleared() {
+		_spec.ClearField(account.FieldExpiresAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.AutoPauseOnExpired(); ok {
+		_spec.SetField(account.FieldAutoPauseOnExpired, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Schedulable(); ok {
 		_spec.SetField(account.FieldSchedulable, field.TypeBool, value)
