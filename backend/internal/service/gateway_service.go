@@ -35,6 +35,7 @@ const (
 	stickySessionTTL        = time.Hour // 粘性会话TTL
 	defaultMaxLineSize      = 10 * 1024 * 1024
 	claudeCodeSystemPrompt  = "You are Claude Code, Anthropic's official CLI for Claude."
+	maxCacheControlBlocks   = 4 // Anthropic API 允许的最大 cache_control 块数量
 )
 
 // sseDataRe matches SSE data lines with optional whitespace after colon.
@@ -43,6 +44,16 @@ var (
 	sseDataRe            = regexp.MustCompile(`^data:\s*`)
 	sessionIDRegex       = regexp.MustCompile(`session_([a-f0-9-]{36})`)
 	claudeCliUserAgentRe = regexp.MustCompile(`^claude-cli/\d+\.\d+\.\d+`)
+
+	// claudeCodePromptPrefixes 用于检测 Claude Code 系统提示词的前缀列表
+	// 支持多种变体：标准版、Agent SDK 版、Explore Agent 版、Compact 版等
+	// 注意：前缀之间不应存在包含关系，否则会导致冗余匹配
+	claudeCodePromptPrefixes = []string{
+		"You are Claude Code, Anthropic's official CLI for Claude",             // 标准版 & Agent SDK 版（含 running within...）
+		"You are a Claude agent, built on Anthropic's Claude Agent SDK",        // Agent SDK 变体
+		"You are a file search specialist for Claude Code",                     // Explore Agent 版
+		"You are a helpful AI assistant tasked with summarizing conversations", // Compact 版
+	}
 )
 
 // allowedHeaders 白名单headers（参考CRS项目）
@@ -1013,18 +1024,28 @@ func isClaudeCodeClient(userAgent string, metadataUserID string) bool {
 }
 
 // systemIncludesClaudeCodePrompt 检查 system 中是否已包含 Claude Code 提示词
-// 支持 string 和 []any 两种格式
+// 使用前缀匹配支持多种变体（标准版、Agent SDK 版等）
 func systemIncludesClaudeCodePrompt(system any) bool {
 	switch v := system.(type) {
 	case string:
-		return v == claudeCodeSystemPrompt
+		return hasClaudeCodePrefix(v)
 	case []any:
 		for _, item := range v {
 			if m, ok := item.(map[string]any); ok {
-				if text, ok := m["text"].(string); ok && text == claudeCodeSystemPrompt {
+				if text, ok := m["text"].(string); ok && hasClaudeCodePrefix(text) {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// hasClaudeCodePrefix 检查文本是否以 Claude Code 提示词的特征前缀开头
+func hasClaudeCodePrefix(text string) bool {
+	for _, prefix := range claudeCodePromptPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
 		}
 	}
 	return false
@@ -1073,6 +1094,124 @@ func injectClaudeCodePrompt(body []byte, system any) []byte {
 	return result
 }
 
+// enforceCacheControlLimit 强制执行 cache_control 块数量限制（最多 4 个）
+// 超限时优先从 messages 中移除 cache_control，保护 system 中的缓存控制
+func enforceCacheControlLimit(body []byte) []byte {
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return body
+	}
+
+	// 计算当前 cache_control 块数量
+	count := countCacheControlBlocks(data)
+	if count <= maxCacheControlBlocks {
+		return body
+	}
+
+	// 超限：优先从 messages 中移除，再从 system 中移除
+	for count > maxCacheControlBlocks {
+		if removeCacheControlFromMessages(data) {
+			count--
+			continue
+		}
+		if removeCacheControlFromSystem(data) {
+			count--
+			continue
+		}
+		break
+	}
+
+	result, err := json.Marshal(data)
+	if err != nil {
+		return body
+	}
+	return result
+}
+
+// countCacheControlBlocks 统计 system 和 messages 中的 cache_control 块数量
+func countCacheControlBlocks(data map[string]any) int {
+	count := 0
+
+	// 统计 system 中的块
+	if system, ok := data["system"].([]any); ok {
+		for _, item := range system {
+			if m, ok := item.(map[string]any); ok {
+				if _, has := m["cache_control"]; has {
+					count++
+				}
+			}
+		}
+	}
+
+	// 统计 messages 中的块
+	if messages, ok := data["messages"].([]any); ok {
+		for _, msg := range messages {
+			if msgMap, ok := msg.(map[string]any); ok {
+				if content, ok := msgMap["content"].([]any); ok {
+					for _, item := range content {
+						if m, ok := item.(map[string]any); ok {
+							if _, has := m["cache_control"]; has {
+								count++
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return count
+}
+
+// removeCacheControlFromMessages 从 messages 中移除一个 cache_control（从头开始）
+// 返回 true 表示成功移除，false 表示没有可移除的
+func removeCacheControlFromMessages(data map[string]any) bool {
+	messages, ok := data["messages"].([]any)
+	if !ok {
+		return false
+	}
+
+	for _, msg := range messages {
+		msgMap, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := msgMap["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range content {
+			if m, ok := item.(map[string]any); ok {
+				if _, has := m["cache_control"]; has {
+					delete(m, "cache_control")
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// removeCacheControlFromSystem 从 system 中移除一个 cache_control（从尾部开始，保护注入的 prompt）
+// 返回 true 表示成功移除，false 表示没有可移除的
+func removeCacheControlFromSystem(data map[string]any) bool {
+	system, ok := data["system"].([]any)
+	if !ok {
+		return false
+	}
+
+	// 从尾部开始移除，保护开头注入的 Claude Code prompt
+	for i := len(system) - 1; i >= 0; i-- {
+		if m, ok := system[i].(map[string]any); ok {
+			if _, has := m["cache_control"]; has {
+				delete(m, "cache_control")
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Forward 转发请求到Claude API
 func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
 	startTime := time.Now()
@@ -1092,6 +1231,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		!systemIncludesClaudeCodePrompt(parsed.System) {
 		body = injectClaudeCodePrompt(body, parsed.System)
 	}
+
+	// 强制执行 cache_control 块数量限制（最多 4 个）
+	body = enforceCacheControlLimit(body)
 
 	// 应用模型映射（仅对apikey类型账号）
 	originalModel := reqModel
