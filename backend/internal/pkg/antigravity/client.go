@@ -13,16 +13,48 @@ import (
 	"time"
 )
 
+// resolveHost 从 URL 解析 host
+func resolveHost(urlStr string) string {
+	parsed, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
+}
+
 // NewAPIRequest 创建 Antigravity API 请求（v1internal 端点）
 func NewAPIRequest(ctx context.Context, action, accessToken string, body []byte) (*http.Request, error) {
+	// 构建 URL，流式请求添加 ?alt=sse 参数
 	apiURL := fmt.Sprintf("%s/v1internal:%s", BaseURL, action)
+	isStream := action == "streamGenerateContent"
+	if isStream {
+		apiURL += "?alt=sse"
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+
+	// 基础 Headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", UserAgent)
+
+	// Accept Header 根据请求类型设置
+	if isStream {
+		req.Header.Set("Accept", "text/event-stream")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
+
+	// 显式设置 Host Header
+	if host := resolveHost(apiURL); host != "" {
+		req.Host = host
+	}
+
+	// 注意：requestType 已在 JSON body 的 V1InternalRequest 中设置，不需要 HTTP Header
+
 	return req, nil
 }
 
