@@ -2152,6 +2152,7 @@ type RecordUsageInput struct {
 	User         *User
 	Account      *Account
 	Subscription *UserSubscription // 可选：订阅信息
+	UserAgent    string            // 请求的 User-Agent
 }
 
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
@@ -2235,6 +2236,11 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		ImageCount:          result.ImageCount,
 		ImageSize:           imageSize,
 		CreatedAt:           time.Now(),
+	}
+
+	// 添加 UserAgent
+	if input.UserAgent != "" {
+		usageLog.UserAgent = &input.UserAgent
 	}
 
 	// 添加分组和订阅关联
