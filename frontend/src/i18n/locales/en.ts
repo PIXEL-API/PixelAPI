@@ -1561,6 +1561,7 @@ export default {
         protocol: 'Protocol',
         address: 'Address',
         status: 'Status',
+        accounts: 'Accounts',
         actions: 'Actions'
       },
       testConnection: 'Test Connection',
