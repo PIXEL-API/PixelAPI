@@ -166,14 +166,14 @@ type mockGatewayCacheForPlatform struct {
 	sessionBindings map[string]int64
 }
 
-func (m *mockGatewayCacheForPlatform) GetSessionAccountID(ctx context.Context, sessionHash string) (int64, error) {
+func (m *mockGatewayCacheForPlatform) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
 	if id, ok := m.sessionBindings[sessionHash]; ok {
 		return id, nil
 	}
 	return 0, errors.New("not found")
 }
 
-func (m *mockGatewayCacheForPlatform) SetSessionAccountID(ctx context.Context, sessionHash string, accountID int64, ttl time.Duration) error {
+func (m *mockGatewayCacheForPlatform) SetSessionAccountID(ctx context.Context, groupID int64, sessionHash string, accountID int64, ttl time.Duration) error {
 	if m.sessionBindings == nil {
 		m.sessionBindings = make(map[string]int64)
 	}
@@ -181,7 +181,7 @@ func (m *mockGatewayCacheForPlatform) SetSessionAccountID(ctx context.Context, s
 	return nil
 }
 
-func (m *mockGatewayCacheForPlatform) RefreshSessionTTL(ctx context.Context, sessionHash string, ttl time.Duration) error {
+func (m *mockGatewayCacheForPlatform) RefreshSessionTTL(ctx context.Context, groupID int64, sessionHash string, ttl time.Duration) error {
 	return nil
 }
 
