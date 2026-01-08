@@ -51,6 +51,7 @@ const handleBalanceSubmit = async () => {
     await adminAPI.users.updateBalance(props.user.id, form.amount, props.operation, form.notes)
     appStore.showSuccess(t('common.success')); emit('success'); emit('close')
   } catch (e: any) {
+    console.error('Failed to update balance:', e)
     appStore.showError(e.response?.data?.detail || t('common.error'))
   } finally { submitting.value = false }
 }

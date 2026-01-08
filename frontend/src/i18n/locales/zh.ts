@@ -373,6 +373,8 @@ export default {
   usage: {
     title: '使用记录',
     description: '查看和分析您的 API 使用历史',
+    costDetails: '成本明细',
+    tokenDetails: 'Token 明细',
     totalRequests: '总请求数',
     totalTokens: '总 Token',
     totalCost: '总消费',
@@ -857,7 +859,7 @@ export default {
         accountsLabel: '指定账号',
         accountsPlaceholder: '选择账号（留空则不限制）',
         priorityLabel: '优先级',
-        priorityHint: '数值越高优先级越高，用于账号调度',
+        priorityHint: '数值越小优先级越高，用于账号调度',
         statusLabel: '状态'
       },
       exclusiveObj: {
@@ -1059,6 +1061,7 @@ export default {
         groups: '分组',
         usageWindows: '用量窗口',
         lastUsed: '最近使用',
+        expiresAt: '过期时间',
         actions: '操作'
       },
       clearRateLimit: '清除速率限制',
@@ -1178,7 +1181,7 @@ export default {
         credentialsLabel: '凭证',
         credentialsPlaceholder: '请输入 Cookie 或 API Key',
         priorityLabel: '优先级',
-        priorityHint: '数值越高优先级越高',
+        priorityHint: '数值越小优先级越高',
         weightLabel: '权重',
         weightHint: '用于负载均衡的权重值',
         statusLabel: '状态'
@@ -1284,12 +1287,17 @@ export default {
       errorCodeExists: '该错误码已被选中',
       interceptWarmupRequests: '拦截预热请求',
       interceptWarmupRequestsDesc: '启用后，标题生成等预热请求将返回 mock 响应，不消耗上游 token',
+      autoPauseOnExpired: '过期自动暂停调度',
+      autoPauseOnExpiredDesc: '启用后，账号过期将自动暂停调度',
+      expired: '已过期',
       proxy: '代理',
       noProxy: '无代理',
       concurrency: '并发数',
       priority: '优先级',
-      priorityHint: '优先级越高的账号优先使用',
-      higherPriorityFirst: '数值越高优先级越高',
+      priorityHint: '优先级越小的账号优先使用',
+      expiresAt: '过期时间',
+      expiresAtHint: '留空表示不过期',
+      higherPriorityFirst: '数值越小优先级越高',
       mixedScheduling: '在 /v1/messages 中使用',
       mixedSchedulingHint: '启用后可参与 Anthropic/Gemini 分组的调度',
       mixedSchedulingTooltip:
@@ -1836,6 +1844,7 @@ export default {
       userFilter: '用户',
       searchUserPlaceholder: '按邮箱搜索用户...',
       searchApiKeyPlaceholder: '按名称搜索 API 密钥...',
+      searchAccountPlaceholder: '按名称搜索账号...',
       selectedUser: '已选择',
       user: '用户',
       account: '账户',
@@ -2126,7 +2135,7 @@ export default {
       },
       accountPriority: {
         title: '⚖️ 4. 优先级（可选）',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">设置账号的调用优先级。</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📊 优先级规则：</b><ul style="margin: 8px 0 0 16px;"><li>数字越大，优先级越高</li><li>系统优先使用高优先级账号</li><li>相同优先级则随机选择</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 使用场景：</b>主账号设置高优先级，备用账号设置低优先级</p></div>',
+        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">设置账号的调用优先级。</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📊 优先级规则：</b><ul style="margin: 8px 0 0 16px;"><li>数字越小，优先级越高</li><li>系统优先使用低数值账号</li><li>相同优先级则随机选择</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 使用场景：</b>主账号设置低数值，备用账号设置高数值</p></div>',
         nextBtn: '下一步'
       },
       accountGroups: {

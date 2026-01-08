@@ -96,6 +96,7 @@ export function formatBytes(bytes: number, decimals: number = 2): string {
  * 格式化日期
  * @param date 日期字符串或 Date 对象
  * @param options Intl.DateTimeFormatOptions
+ * @param localeOverride 可选 locale 覆盖
  * @returns 格式化后的日期字符串
  */
 export function formatDate(
@@ -108,14 +109,15 @@ export function formatDate(
     minute: '2-digit',
     second: '2-digit',
     hour12: false
-  }
+  },
+  localeOverride?: string
 ): string {
   if (!date) return ''
 
   const d = new Date(date)
   if (isNaN(d.getTime())) return ''
 
-  const locale = getLocale()
+  const locale = localeOverride ?? getLocale()
   return new Intl.DateTimeFormat(locale, options).format(d)
 }
 
@@ -135,10 +137,41 @@ export function formatDateOnly(date: string | Date | null | undefined): string {
 /**
  * 格式化日期时间（完整格式）
  * @param date 日期字符串或 Date 对象
+ * @param options Intl.DateTimeFormatOptions
+ * @param localeOverride 可选 locale 覆盖
  * @returns 格式化后的日期时间字符串
  */
-export function formatDateTime(date: string | Date | null | undefined): string {
-  return formatDate(date)
+export function formatDateTime(
+  date: string | Date | null | undefined,
+  options?: Intl.DateTimeFormatOptions,
+  localeOverride?: string
+): string {
+  return formatDate(date, options, localeOverride)
+}
+
+/**
+ * 格式化为 datetime-local 控件值（YYYY-MM-DDTHH:mm，使用本地时间）
+ */
+export function formatDateTimeLocalInput(timestampSeconds: number | null): string {
+  if (!timestampSeconds) return ''
+  const date = new Date(timestampSeconds * 1000)
+  if (isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+/**
+ * 解析 datetime-local 控件值为时间戳（秒，使用本地时间）
+ */
+export function parseDateTimeLocalInput(value: string): number | null {
+  if (!value) return null
+  const date = new Date(value)
+  if (isNaN(date.getTime())) return null
+  return Math.floor(date.getTime() / 1000)
 }
 
 /**
