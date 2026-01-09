@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	mathrand "math/rand"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -26,6 +27,32 @@ const (
 	antigravityRetryBaseDelay   = 1 * time.Second
 	antigravityRetryMaxDelay    = 16 * time.Second
 )
+
+// isAntigravityConnectionError 判断是否为连接错误（网络超时、DNS 失败、连接拒绝）
+func isAntigravityConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// 检查超时错误
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	// 检查连接错误（DNS 失败、连接拒绝）
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
+}
+
+// shouldAntigravityFallbackToNextURL 判断是否应切换到下一个 URL
+// 仅连接错误和 HTTP 429 触发 URL 降级
+func shouldAntigravityFallbackToNextURL(err error, statusCode int) bool {
+	if isAntigravityConnectionError(err) {
+		return true
+	}
+	return statusCode == http.StatusTooManyRequests
+}
 
 // getSessionID 从 gin.Context 获取 session_id（用于日志追踪）
 func getSessionID(c *gin.Context) string {
@@ -181,45 +208,70 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		return nil, fmt.Errorf("构建请求失败: %w", err)
 	}
 
-	// 构建 HTTP 请求（总是使用流式 endpoint，与官方客户端一致）
-	req, err := antigravity.NewAPIRequest(ctx, "streamGenerateContent", accessToken, requestBody)
-	if err != nil {
-		return nil, err
-	}
-
-	// 调试日志：Test 请求信息
-	log.Printf("[antigravity-Test] account=%s request_size=%d url=%s", account.Name, len(requestBody), req.URL.String())
-
 	// 代理 URL
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
-	// 发送请求
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
-	if err != nil {
-		return nil, fmt.Errorf("请求失败: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// 读取响应
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
+	// URL fallback 循环
+	availableURLs := antigravity.DefaultURLAvailability.GetAvailableURLs()
+	if len(availableURLs) == 0 {
+		availableURLs = antigravity.BaseURLs // 所有 URL 都不可用时，重试所有
 	}
 
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API 返回 %d: %s", resp.StatusCode, string(respBody))
+	var lastErr error
+	for urlIdx, baseURL := range availableURLs {
+		// 构建 HTTP 请求（总是使用流式 endpoint，与官方客户端一致）
+		req, err := antigravity.NewAPIRequestWithURL(ctx, baseURL, "streamGenerateContent", accessToken, requestBody)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// 调试日志：Test 请求信息
+		log.Printf("[antigravity-Test] account=%s request_size=%d url=%s", account.Name, len(requestBody), req.URL.String())
+
+		// 发送请求
+		resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+		if err != nil {
+			lastErr = fmt.Errorf("请求失败: %w", err)
+			if shouldAntigravityFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
+				antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
+				log.Printf("[antigravity-Test] URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
+				continue
+			}
+			return nil, lastErr
+		}
+
+		// 读取响应
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		_ = resp.Body.Close() // 立即关闭，避免循环内 defer 导致的资源泄漏
+		if err != nil {
+			return nil, fmt.Errorf("读取响应失败: %w", err)
+		}
+
+		// 检查是否需要 URL 降级
+		if shouldAntigravityFallbackToNextURL(nil, resp.StatusCode) && urlIdx < len(availableURLs)-1 {
+			antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
+			log.Printf("[antigravity-Test] URL fallback (HTTP %d): %s -> %s", resp.StatusCode, baseURL, availableURLs[urlIdx+1])
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("API 返回 %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		// 解析流式响应，提取文本
+		text := extractTextFromSSEResponse(respBody)
+
+		return &TestConnectionResult{
+			Text:        text,
+			MappedModel: mappedModel,
+		}, nil
 	}
 
-	// 解析流式响应，提取文本
-	text := extractTextFromSSEResponse(respBody)
-
-	return &TestConnectionResult{
-		Text:        text,
-		MappedModel: mappedModel,
-	}, nil
+	return nil, lastErr
 }
 
 // buildGeminiTestRequest 构建 Gemini 格式测试请求
@@ -484,62 +536,86 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	// 如果客户端请求非流式，在响应处理阶段会收集完整流式响应后转换返回
 	action := "streamGenerateContent"
 
+	// URL fallback 循环
+	availableURLs := antigravity.DefaultURLAvailability.GetAvailableURLs()
+	if len(availableURLs) == 0 {
+		availableURLs = antigravity.BaseURLs // 所有 URL 都不可用时，重试所有
+	}
+
 	// 重试循环
 	var resp *http.Response
-	for attempt := 1; attempt <= antigravityMaxRetries; attempt++ {
-		// 检查 context 是否已取消（客户端断开连接）
-		select {
-		case <-ctx.Done():
-			log.Printf("%s status=context_canceled error=%v", prefix, ctx.Err())
-			return nil, ctx.Err()
-		default:
-		}
+urlFallbackLoop:
+	for urlIdx, baseURL := range availableURLs {
+		for attempt := 1; attempt <= antigravityMaxRetries; attempt++ {
+			// 检查 context 是否已取消（客户端断开连接）
+			select {
+			case <-ctx.Done():
+				log.Printf("%s status=context_canceled error=%v", prefix, ctx.Err())
+				return nil, ctx.Err()
+			default:
+			}
 
-		upstreamReq, err := antigravity.NewAPIRequest(ctx, action, accessToken, geminiBody)
-		if err != nil {
-			return nil, err
-		}
+			upstreamReq, err := antigravity.NewAPIRequestWithURL(ctx, baseURL, action, accessToken, geminiBody)
+			if err != nil {
+				return nil, err
+			}
 
-		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-		if err != nil {
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=request_failed retry=%d/%d error=%v", prefix, attempt, antigravityMaxRetries, err)
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					log.Printf("%s status=context_canceled_during_backoff", prefix)
-					return nil, ctx.Err()
+			resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+			if err != nil {
+				// 检查是否应触发 URL 降级
+				if shouldAntigravityFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
+					antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
+					log.Printf("%s URL fallback (connection error): %s -> %s", prefix, baseURL, availableURLs[urlIdx+1])
+					continue urlFallbackLoop
 				}
-				continue
-			}
-			log.Printf("%s status=request_failed retries_exhausted error=%v", prefix, err)
-			return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries")
-		}
-
-		if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(resp.StatusCode) {
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			_ = resp.Body.Close()
-
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=%d retry=%d/%d body=%s", prefix, resp.StatusCode, attempt, antigravityMaxRetries, truncateForLog(respBody, 500))
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					log.Printf("%s status=context_canceled_during_backoff", prefix)
-					return nil, ctx.Err()
+				if attempt < antigravityMaxRetries {
+					log.Printf("%s status=request_failed retry=%d/%d error=%v", prefix, attempt, antigravityMaxRetries, err)
+					if !sleepAntigravityBackoffWithContext(ctx, attempt) {
+						log.Printf("%s status=context_canceled_during_backoff", prefix)
+						return nil, ctx.Err()
+					}
+					continue
 				}
-				continue
+				log.Printf("%s status=request_failed retries_exhausted error=%v", prefix, err)
+				return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries")
 			}
-			// 所有重试都失败，标记限流状态
-			if resp.StatusCode == 429 {
-				s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody)
-			}
-			// 最后一次尝试也失败
-			resp = &http.Response{
-				StatusCode: resp.StatusCode,
-				Header:     resp.Header.Clone(),
-				Body:       io.NopCloser(bytes.NewReader(respBody)),
-			}
-			break
-		}
 
-		break
+			// 检查是否应触发 URL 降级（仅 429）
+			if resp.StatusCode == http.StatusTooManyRequests && urlIdx < len(availableURLs)-1 {
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+				antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
+				log.Printf("%s URL fallback (HTTP 429): %s -> %s body=%s", prefix, baseURL, availableURLs[urlIdx+1], truncateForLog(respBody, 200))
+				continue urlFallbackLoop
+			}
+
+			if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(resp.StatusCode) {
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+
+				if attempt < antigravityMaxRetries {
+					log.Printf("%s status=%d retry=%d/%d body=%s", prefix, resp.StatusCode, attempt, antigravityMaxRetries, truncateForLog(respBody, 500))
+					if !sleepAntigravityBackoffWithContext(ctx, attempt) {
+						log.Printf("%s status=context_canceled_during_backoff", prefix)
+						return nil, ctx.Err()
+					}
+					continue
+				}
+				// 所有重试都失败，标记限流状态
+				if resp.StatusCode == 429 {
+					s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody)
+				}
+				// 最后一次尝试也失败
+				resp = &http.Response{
+					StatusCode: resp.StatusCode,
+					Header:     resp.Header.Clone(),
+					Body:       io.NopCloser(bytes.NewReader(respBody)),
+				}
+				break urlFallbackLoop
+			}
+
+			break urlFallbackLoop
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -1003,61 +1079,85 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	// 如果客户端请求非流式，在响应处理阶段会收集完整流式响应后返回
 	upstreamAction := "streamGenerateContent"
 
+	// URL fallback 循环
+	availableURLs := antigravity.DefaultURLAvailability.GetAvailableURLs()
+	if len(availableURLs) == 0 {
+		availableURLs = antigravity.BaseURLs // 所有 URL 都不可用时，重试所有
+	}
+
 	// 重试循环
 	var resp *http.Response
-	for attempt := 1; attempt <= antigravityMaxRetries; attempt++ {
-		// 检查 context 是否已取消（客户端断开连接）
-		select {
-		case <-ctx.Done():
-			log.Printf("%s status=context_canceled error=%v", prefix, ctx.Err())
-			return nil, ctx.Err()
-		default:
-		}
+urlFallbackLoop:
+	for urlIdx, baseURL := range availableURLs {
+		for attempt := 1; attempt <= antigravityMaxRetries; attempt++ {
+			// 检查 context 是否已取消（客户端断开连接）
+			select {
+			case <-ctx.Done():
+				log.Printf("%s status=context_canceled error=%v", prefix, ctx.Err())
+				return nil, ctx.Err()
+			default:
+			}
 
-		upstreamReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, wrappedBody)
-		if err != nil {
-			return nil, err
-		}
+			upstreamReq, err := antigravity.NewAPIRequestWithURL(ctx, baseURL, upstreamAction, accessToken, wrappedBody)
+			if err != nil {
+				return nil, err
+			}
 
-		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-		if err != nil {
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=request_failed retry=%d/%d error=%v", prefix, attempt, antigravityMaxRetries, err)
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					log.Printf("%s status=context_canceled_during_backoff", prefix)
-					return nil, ctx.Err()
+			resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+			if err != nil {
+				// 检查是否应触发 URL 降级
+				if shouldAntigravityFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
+					antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
+					log.Printf("%s URL fallback (connection error): %s -> %s", prefix, baseURL, availableURLs[urlIdx+1])
+					continue urlFallbackLoop
 				}
-				continue
-			}
-			log.Printf("%s status=request_failed retries_exhausted error=%v", prefix, err)
-			return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream request failed after retries")
-		}
-
-		if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(resp.StatusCode) {
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			_ = resp.Body.Close()
-
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=%d retry=%d/%d", prefix, resp.StatusCode, attempt, antigravityMaxRetries)
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					log.Printf("%s status=context_canceled_during_backoff", prefix)
-					return nil, ctx.Err()
+				if attempt < antigravityMaxRetries {
+					log.Printf("%s status=request_failed retry=%d/%d error=%v", prefix, attempt, antigravityMaxRetries, err)
+					if !sleepAntigravityBackoffWithContext(ctx, attempt) {
+						log.Printf("%s status=context_canceled_during_backoff", prefix)
+						return nil, ctx.Err()
+					}
+					continue
 				}
-				continue
+				log.Printf("%s status=request_failed retries_exhausted error=%v", prefix, err)
+				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream request failed after retries")
 			}
-			// 所有重试都失败，标记限流状态
-			if resp.StatusCode == 429 {
-				s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody)
-			}
-			resp = &http.Response{
-				StatusCode: resp.StatusCode,
-				Header:     resp.Header.Clone(),
-				Body:       io.NopCloser(bytes.NewReader(respBody)),
-			}
-			break
-		}
 
-		break
+			// 检查是否应触发 URL 降级（仅 429）
+			if resp.StatusCode == http.StatusTooManyRequests && urlIdx < len(availableURLs)-1 {
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+				antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
+				log.Printf("%s URL fallback (HTTP 429): %s -> %s body=%s", prefix, baseURL, availableURLs[urlIdx+1], truncateForLog(respBody, 200))
+				continue urlFallbackLoop
+			}
+
+			if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(resp.StatusCode) {
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+
+				if attempt < antigravityMaxRetries {
+					log.Printf("%s status=%d retry=%d/%d", prefix, resp.StatusCode, attempt, antigravityMaxRetries)
+					if !sleepAntigravityBackoffWithContext(ctx, attempt) {
+						log.Printf("%s status=context_canceled_during_backoff", prefix)
+						return nil, ctx.Err()
+					}
+					continue
+				}
+				// 所有重试都失败，标记限流状态
+				if resp.StatusCode == 429 {
+					s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody)
+				}
+				resp = &http.Response{
+					StatusCode: resp.StatusCode,
+					Header:     resp.Header.Clone(),
+					Body:       io.NopCloser(bytes.NewReader(respBody)),
+				}
+				break urlFallbackLoop
+			}
+
+			break urlFallbackLoop
+		}
 	}
 	defer func() {
 		if resp != nil && resp.Body != nil {
