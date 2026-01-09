@@ -640,7 +640,7 @@ func (s *GatewayService) schedulingConfig() config.GatewaySchedulingConfig {
 }
 
 func (s *GatewayService) withGroupContext(ctx context.Context, group *Group) context.Context {
-	if group == nil {
+	if !IsGroupContextValid(group) {
 		return ctx
 	}
 	if existing, ok := ctx.Value(ctxkey.Group).(*Group); ok && existing != nil && existing.ID == group.ID {
@@ -650,7 +650,7 @@ func (s *GatewayService) withGroupContext(ctx context.Context, group *Group) con
 }
 
 func (s *GatewayService) groupFromContext(ctx context.Context, groupID int64) *Group {
-	if group, ok := ctx.Value(ctxkey.Group).(*Group); ok && group != nil && group.ID == groupID {
+	if group, ok := ctx.Value(ctxkey.Group).(*Group); ok && IsGroupContextValid(group) && group.ID == groupID {
 		return group
 	}
 	return nil
@@ -673,7 +673,13 @@ func (s *GatewayService) resolveGatewayGroup(ctx context.Context, groupID *int64
 	}
 
 	currentID := *groupID
+	visited := map[int64]struct{}{}
 	for {
+		if _, seen := visited[currentID]; seen {
+			return nil, nil, fmt.Errorf("fallback group cycle detected")
+		}
+		visited[currentID] = struct{}{}
+
 		group, err := s.resolveGroupByID(ctx, currentID)
 		if err != nil {
 			return nil, nil, err
