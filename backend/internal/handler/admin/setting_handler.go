@@ -65,6 +65,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		FallbackModelAntigravity:     settings.FallbackModelAntigravity,
 		EnableIdentityPatch:          settings.EnableIdentityPatch,
 		IdentityPatchPrompt:          settings.IdentityPatchPrompt,
+		OpsMonitoringEnabled:         settings.OpsMonitoringEnabled,
+		OpsRealtimeMonitoringEnabled: settings.OpsRealtimeMonitoringEnabled,
+		OpsQueryModeDefault:          settings.OpsQueryModeDefault,
 	})
 }
 
@@ -110,6 +113,11 @@ type UpdateSettingsRequest struct {
 	// Identity patch configuration (Claude -> Gemini)
 	EnableIdentityPatch bool   `json:"enable_identity_patch"`
 	IdentityPatchPrompt string `json:"identity_patch_prompt"`
+
+	// Ops monitoring (vNext)
+	OpsMonitoringEnabled         *bool `json:"ops_monitoring_enabled"`
+	OpsRealtimeMonitoringEnabled *bool `json:"ops_realtime_monitoring_enabled"`
+	OpsQueryModeDefault          *string `json:"ops_query_mode_default"`
 }
 
 // UpdateSettings 更新系统设置
@@ -193,6 +201,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		FallbackModelAntigravity: req.FallbackModelAntigravity,
 		EnableIdentityPatch:      req.EnableIdentityPatch,
 		IdentityPatchPrompt:      req.IdentityPatchPrompt,
+		OpsMonitoringEnabled: func() bool {
+			if req.OpsMonitoringEnabled != nil {
+				return *req.OpsMonitoringEnabled
+			}
+			return previousSettings.OpsMonitoringEnabled
+		}(),
+		OpsRealtimeMonitoringEnabled: func() bool {
+			if req.OpsRealtimeMonitoringEnabled != nil {
+				return *req.OpsRealtimeMonitoringEnabled
+			}
+			return previousSettings.OpsRealtimeMonitoringEnabled
+		}(),
+		OpsQueryModeDefault: func() string {
+			if req.OpsQueryModeDefault != nil {
+				return *req.OpsQueryModeDefault
+			}
+			return previousSettings.OpsQueryModeDefault
+		}(),
 	}
 
 	if err := h.settingService.UpdateSettings(c.Request.Context(), settings); err != nil {
@@ -237,6 +263,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		FallbackModelAntigravity:     updatedSettings.FallbackModelAntigravity,
 		EnableIdentityPatch:          updatedSettings.EnableIdentityPatch,
 		IdentityPatchPrompt:          updatedSettings.IdentityPatchPrompt,
+		OpsMonitoringEnabled:         updatedSettings.OpsMonitoringEnabled,
+		OpsRealtimeMonitoringEnabled: updatedSettings.OpsRealtimeMonitoringEnabled,
+		OpsQueryModeDefault:          updatedSettings.OpsQueryModeDefault,
 	})
 }
 
@@ -336,6 +365,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.FallbackModelAntigravity != after.FallbackModelAntigravity {
 		changed = append(changed, "fallback_model_antigravity")
+	}
+	if before.OpsMonitoringEnabled != after.OpsMonitoringEnabled {
+		changed = append(changed, "ops_monitoring_enabled")
+	}
+	if before.OpsRealtimeMonitoringEnabled != after.OpsRealtimeMonitoringEnabled {
+		changed = append(changed, "ops_realtime_monitoring_enabled")
+	}
+	if before.OpsQueryModeDefault != after.OpsQueryModeDefault {
+		changed = append(changed, "ops_query_mode_default")
 	}
 	return changed
 }

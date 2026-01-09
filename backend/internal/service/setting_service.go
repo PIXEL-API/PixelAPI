@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -134,6 +135,11 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyEnableIdentityPatch] = strconv.FormatBool(settings.EnableIdentityPatch)
 	updates[SettingKeyIdentityPatchPrompt] = settings.IdentityPatchPrompt
 
+	// Ops monitoring (vNext)
+	updates[SettingKeyOpsMonitoringEnabled] = strconv.FormatBool(settings.OpsMonitoringEnabled)
+	updates[SettingKeyOpsRealtimeMonitoringEnabled] = strconv.FormatBool(settings.OpsRealtimeMonitoringEnabled)
+	updates[SettingKeyOpsQueryModeDefault] = string(ParseOpsQueryMode(settings.OpsQueryModeDefault))
+
 	return s.settingRepo.SetMultiple(ctx, updates)
 }
 
@@ -220,6 +226,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Identity patch defaults
 		SettingKeyEnableIdentityPatch: "true",
 		SettingKeyIdentityPatchPrompt: "",
+
+		// Ops monitoring defaults (vNext)
+		SettingKeyOpsMonitoringEnabled:         "true",
+		SettingKeyOpsRealtimeMonitoringEnabled: "true",
+		SettingKeyOpsQueryModeDefault:          "auto",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -286,7 +297,21 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.IdentityPatchPrompt = settings[SettingKeyIdentityPatchPrompt]
 
+	// Ops monitoring settings (default: enabled, fail-open)
+	result.OpsMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsMonitoringEnabled])
+	result.OpsRealtimeMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsRealtimeMonitoringEnabled])
+	result.OpsQueryModeDefault = string(ParseOpsQueryMode(settings[SettingKeyOpsQueryModeDefault]))
+
 	return result
+}
+
+func isFalseSettingValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "false", "0", "off", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // getStringOrDefault 获取字符串值或默认值
