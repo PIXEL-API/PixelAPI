@@ -115,15 +115,9 @@
           <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDateTime(value) }}</span>
         </template>
 
-        <template #cell-request_id="{ row }">
-          <div v-if="row.request_id" class="flex items-center gap-1.5 max-w-[120px]">
-            <span class="font-mono text-xs text-gray-500 dark:text-gray-400 truncate" :title="row.request_id">{{ row.request_id }}</span>
-            <button @click="copyRequestId(row.request_id)" class="flex-shrink-0 rounded p-0.5 transition-colors hover:bg-gray-100 dark:hover:bg-dark-700" :class="copiedRequestId === row.request_id ? 'text-green-500' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'" :title="copiedRequestId === row.request_id ? t('keys.copied') : t('keys.copyToClipboard')">
-              <svg v-if="copiedRequestId === row.request_id" class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
-              <Icon v-else name="copy" size="sm" class="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <span v-else class="text-gray-400 dark:text-gray-500">-</span>
+        <template #cell-user_agent="{ row }">
+          <span v-if="row.user_agent" class="text-sm text-gray-600 dark:text-gray-400 max-w-[150px] truncate block" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
         <template #empty><EmptyState :message="t('usage.noRecords')" /></template>
@@ -228,7 +222,6 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatDateTime } from '@/utils/format'
-import { useAppStore } from '@/stores/app'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -236,8 +229,6 @@ import type { UsageLog } from '@/types'
 
 defineProps(['data', 'loading'])
 const { t } = useI18n()
-const appStore = useAppStore()
-const copiedRequestId = ref<string | null>(null)
 
 // Tooltip state - cost
 const tooltipVisible = ref(false)
@@ -262,7 +253,7 @@ const cols = computed(() => [
   { key: 'first_token', label: t('usage.firstToken'), sortable: false },
   { key: 'duration', label: t('usage.duration'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
-  { key: 'request_id', label: t('admin.usage.requestId'), sortable: false }
+  { key: 'user_agent', label: t('usage.userAgent'), sortable: false }
 ])
 
 const formatCacheTokens = (tokens: number): string => {
@@ -271,21 +262,23 @@ const formatCacheTokens = (tokens: number): string => {
   return tokens.toString()
 }
 
+const formatUserAgent = (ua: string): string => {
+  // 提取主要客户端标识
+  if (ua.includes('claude-cli')) return ua.match(/claude-cli\/[\d.]+/)?.[0] || 'Claude CLI'
+  if (ua.includes('Cursor')) return 'Cursor'
+  if (ua.includes('VSCode') || ua.includes('vscode')) return 'VS Code'
+  if (ua.includes('Continue')) return 'Continue'
+  if (ua.includes('Cline')) return 'Cline'
+  if (ua.includes('OpenAI')) return 'OpenAI SDK'
+  if (ua.includes('anthropic')) return 'Anthropic SDK'
+  // 截断过长的 UA
+  return ua.length > 30 ? ua.substring(0, 30) + '...' : ua
+}
+
 const formatDuration = (ms: number | null | undefined): string => {
   if (ms == null) return '-'
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(2)}s`
-}
-
-const copyRequestId = async (requestId: string) => {
-  try {
-    await navigator.clipboard.writeText(requestId)
-    copiedRequestId.value = requestId
-    appStore.showSuccess(t('admin.usage.requestIdCopied'))
-    setTimeout(() => { copiedRequestId.value = null }, 2000)
-  } catch {
-    appStore.showError(t('common.copyFailed'))
-  }
 }
 
 // Cost tooltip functions
