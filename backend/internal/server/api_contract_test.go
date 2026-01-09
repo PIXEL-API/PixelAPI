@@ -82,6 +82,8 @@ func TestAPIContracts(t *testing.T) {
 					"name": "Key One",
 					"group_id": null,
 					"status": "active",
+					"ip_whitelist": null,
+					"ip_blacklist": null,
 					"created_at": "2025-01-02T03:04:05Z",
 					"updated_at": "2025-01-02T03:04:05Z"
 				}
@@ -116,6 +118,8 @@ func TestAPIContracts(t *testing.T) {
 							"name": "Key One",
 							"group_id": null,
 							"status": "active",
+							"ip_whitelist": null,
+							"ip_blacklist": null,
 							"created_at": "2025-01-02T03:04:05Z",
 							"updated_at": "2025-01-02T03:04:05Z"
 						}
