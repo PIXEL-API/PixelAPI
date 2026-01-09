@@ -112,10 +112,10 @@ func (r *groupRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *groupRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Group, *pagination.PaginationResult, error) {
-	return r.ListWithFilters(ctx, params, "", "", nil)
+	return r.ListWithFilters(ctx, params, "", "", "", nil)
 }
 
-func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
+func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
 	q := r.client.Group.Query()
 
 	if platform != "" {
@@ -123,6 +123,12 @@ func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination
 	}
 	if status != "" {
 		q = q.Where(group.StatusEQ(status))
+	}
+	if search != "" {
+		q = q.Where(group.Or(
+			group.NameContainsFold(search),
+			group.DescriptionContainsFold(search),
+		))
 	}
 	if isExclusive != nil {
 		q = q.Where(group.IsExclusiveEQ(*isExclusive))
