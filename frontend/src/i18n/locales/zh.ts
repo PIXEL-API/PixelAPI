@@ -1601,6 +1601,7 @@ export default {
       startTest: '开始测试',
       retry: '重试',
       copyOutput: '复制输出',
+      outputCopied: '输出已复制',
       startingTestForAccount: '开始测试账号：{name}',
       testAccountTypeLabel: '账号类型：{type}',
 	      selectTestModel: '选择测试模型',
