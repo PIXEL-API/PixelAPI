@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
@@ -39,6 +40,16 @@ func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashbo
 
 	// Best-effort system health + jobs; dashboard metrics should still render if these are missing.
 	if metrics, err := s.opsRepo.GetLatestSystemMetrics(ctx, 1); err == nil {
+		// Attach config-derived limits so the UI can show "current / max" for connection pools.
+		// These are best-effort and should never block the dashboard rendering.
+		if s != nil && s.cfg != nil {
+			if s.cfg.Database.MaxOpenConns > 0 {
+				metrics.DBMaxOpenConns = intPtr(s.cfg.Database.MaxOpenConns)
+			}
+			if s.cfg.Redis.PoolSize > 0 {
+				metrics.RedisPoolSize = intPtr(s.cfg.Redis.PoolSize)
+			}
+		}
 		overview.SystemMetrics = metrics
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Printf("[Ops] GetLatestSystemMetrics failed: %v", err)
@@ -49,6 +60,8 @@ func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashbo
 	} else {
 		log.Printf("[Ops] ListJobHeartbeats failed: %v", err)
 	}
+
+	overview.HealthScore = computeDashboardHealthScore(time.Now().UTC(), overview)
 
 	return overview, nil
 }

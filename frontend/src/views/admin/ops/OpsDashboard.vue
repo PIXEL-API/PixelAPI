@@ -33,190 +33,6 @@
         @open-error-details="openErrorDetails"
       />
 
-      <!-- Overview -->
-      <div
-        v-if="opsEnabled && !(loading && !hasLoadedOnce)"
-        class="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-gray-900/5 dark:bg-dark-800 dark:ring-dark-700"
-      >
-        <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-          <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.systemHealth') }}</h3>
-        </div>
-        <div class="p-6">
-          <div v-if="loadingOverview" class="flex items-center justify-center py-10">
-            <div class="h-8 w-8 animate-spin rounded-full border-b-2 border-primary-600"></div>
-          </div>
-
-          <div v-else-if="!overview?.system_metrics" class="py-6 text-sm text-gray-500 dark:text-gray-400">
-            {{ t('admin.ops.noSystemMetrics') }}
-          </div>
-
-          <div v-else class="space-y-6">
-            <div class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.ops.collectedAt') }} {{ formatDateTime(overview.system_metrics.created_at) }} ({{ t('admin.ops.window') }}
-              {{ overview.system_metrics.window_minutes }}m)
-            </div>
-
-            <div class="grid grid-cols-1 gap-4 md:grid-cols-5">
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.cpu') }}</div>
-                <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
-                  {{ formatPercent0to100(overview.system_metrics.cpu_usage_percent) }}
-                </div>
-              </div>
-
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.memory') }}</div>
-                <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
-                  {{ formatPercent0to100(overview.system_metrics.memory_usage_percent) }}
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ formatMBPair(overview.system_metrics.memory_used_mb, overview.system_metrics.memory_total_mb) }}
-                </div>
-              </div>
-
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.db') }}</div>
-                <div class="mt-1 text-xl font-semibold" :class="boolOkClass(overview.system_metrics.db_ok)">
-                  {{ boolOkLabel(overview.system_metrics.db_ok) }}
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.ops.active') }}: {{ overview.system_metrics.db_conn_active ?? '-' }}, {{ t('admin.ops.idle') }}:
-                  {{ overview.system_metrics.db_conn_idle ?? '-' }}
-                </div>
-              </div>
-
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.redis') }}</div>
-                <div class="mt-1 text-xl font-semibold" :class="boolOkClass(overview.system_metrics.redis_ok)">
-                  {{ boolOkLabel(overview.system_metrics.redis_ok) }}
-                </div>
-              </div>
-
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.goroutines') }}</div>
-                <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
-                  {{ overview.system_metrics.goroutine_count ?? '-' }}
-                </div>
-              </div>
-            </div>
-
-            <div v-if="overview?.job_heartbeats?.length" class="rounded-xl border border-gray-100 dark:border-dark-700">
-              <div class="border-b border-gray-100 px-4 py-3 text-sm font-semibold text-gray-900 dark:border-dark-700 dark:text-white">
-                {{ t('admin.ops.jobs') }}
-              </div>
-              <div class="divide-y divide-gray-100 dark:divide-dark-700">
-                <div
-                  v-for="job in overview.job_heartbeats"
-                  :key="job.job_name"
-                  class="flex flex-col gap-1 px-4 py-3 md:flex-row md:items-center md:justify-between"
-                >
-                  <div class="text-sm font-medium text-gray-900 dark:text-white">
-                    {{ job.job_name }}
-                  </div>
-                  <div class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('admin.ops.lastRun') }}: {{ job.last_run_at ? formatDateTime(job.last_run_at) : '-' }} · {{ t('admin.ops.lastSuccess') }}:
-                    {{ job.last_success_at ? formatDateTime(job.last_success_at) : '-' }} ·
-                    <span v-if="job.last_error" class="text-rose-600 dark:text-rose-400">
-                      {{ t('admin.ops.lastError') }}: {{ job.last_error }}
-                    </span>
-                    <span v-else class="text-emerald-600 dark:text-emerald-400">{{ t('admin.ops.ok') }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="opsEnabled && !(loading && !hasLoadedOnce)" class="card">
-        <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-          <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.overview') }}</h3>
-        </div>
-        <div class="p-6">
-          <div v-if="loadingOverview" class="flex items-center justify-center py-10">
-            <div class="h-8 w-8 animate-spin rounded-full border-b-2 border-primary-600"></div>
-          </div>
-
-          <div v-else-if="!overview" class="py-6 text-sm text-gray-500 dark:text-gray-400">
-            {{ t('admin.ops.noData') }}
-          </div>
-
-          <div v-else class="space-y-6">
-            <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.requestsTotal') }}</div>
-                <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
-                  {{ formatInt(overview.request_count_total) }}
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.ops.slaScope') }} {{ formatInt(overview.request_count_sla) }}
-                </div>
-              </div>
-
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.tokens') }}</div>
-                <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
-                  {{ formatInt(overview.token_consumed) }}
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.ops.tps') }} {{ overview.tps.current }} ({{ t('admin.ops.peak') }} {{ overview.tps.peak }})
-                </div>
-              </div>
-
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.sla') }}</div>
-                <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
-                  {{ formatPercent(overview.sla) }}
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.ops.businessLimited') }}: {{ formatInt(overview.business_limited_count) }}
-                </div>
-              </div>
-
-              <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-800/50">
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.errors') }}</div>
-                <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-                  {{ t('admin.ops.errorRate') }}: <span class="font-semibold">{{ formatPercent(overview.error_rate) }}</span>
-                </div>
-                <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-                  {{ t('admin.ops.upstreamRate') }}: <span class="font-semibold">{{ formatPercent(overview.upstream_error_rate) }}</span>
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  429: {{ formatInt(overview.upstream_429_count) }} · 529:
-                  {{ formatInt(overview.upstream_529_count) }}
-                </div>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
-                <div class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.latencyDuration') }}</div>
-                <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-300 md:grid-cols-3">
-                  <div>{{ t('admin.ops.p50') }}: <span class="font-mono">{{ formatMs(overview.duration.p50_ms) }}</span></div>
-                  <div>{{ t('admin.ops.p90') }}: <span class="font-mono">{{ formatMs(overview.duration.p90_ms) }}</span></div>
-                  <div>{{ t('admin.ops.p95') }}: <span class="font-mono">{{ formatMs(overview.duration.p95_ms) }}</span></div>
-                  <div>{{ t('admin.ops.p99') }}: <span class="font-mono">{{ formatMs(overview.duration.p99_ms) }}</span></div>
-                  <div>{{ t('admin.ops.avg') }}: <span class="font-mono">{{ formatMs(overview.duration.avg_ms) }}</span></div>
-                  <div>{{ t('admin.ops.max') }}: <span class="font-mono">{{ formatMs(overview.duration.max_ms) }}</span></div>
-                </div>
-              </div>
-
-              <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
-                <div class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.ttftLabel') }}</div>
-                <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-300 md:grid-cols-3">
-                  <div>{{ t('admin.ops.p50') }}: <span class="font-mono">{{ formatMs(overview.ttft.p50_ms) }}</span></div>
-                  <div>{{ t('admin.ops.p90') }}: <span class="font-mono">{{ formatMs(overview.ttft.p90_ms) }}</span></div>
-                  <div>{{ t('admin.ops.p95') }}: <span class="font-mono">{{ formatMs(overview.ttft.p95_ms) }}</span></div>
-                  <div>{{ t('admin.ops.p99') }}: <span class="font-mono">{{ formatMs(overview.ttft.p99_ms) }}</span></div>
-                  <div>{{ t('admin.ops.avg') }}: <span class="font-mono">{{ formatMs(overview.ttft.avg_ms) }}</span></div>
-                  <div>{{ t('admin.ops.max') }}: <span class="font-mono">{{ formatMs(overview.ttft.max_ms) }}</span></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Row: Concurrency + Throughput -->
       <div v-if="opsEnabled && !(loading && !hasLoadedOnce)" class="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div class="lg:col-span-1 min-h-[360px]">
@@ -308,7 +124,6 @@ import OpsLatencyChart from './components/OpsLatencyChart.vue'
 import OpsThroughputTrendChart from './components/OpsThroughputTrendChart.vue'
 import OpsAlertEventsCard from './components/OpsAlertEventsCard.vue'
 import OpsRequestDetailsModal, { type OpsRequestDetailsPreset } from './components/OpsRequestDetailsModal.vue'
-import { formatDateTime, formatNumberLocaleString } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -486,7 +301,6 @@ const syncQueryToRoute = useDebounceFn(async () => {
 }, 250)
 
 const overview = ref<OpsDashboardOverview | null>(null)
-const loadingOverview = ref(false)
 
 const throughputTrend = ref<OpsThroughputTrendResponse | null>(null)
 const loadingTrend = ref(false)
@@ -523,12 +337,15 @@ function handleThroughputSelectGroup(nextGroupId: number) {
   groupId.value = id
 }
 
-function handleOpenRequestDetails() {
-  requestDetailsPreset.value = {
+function handleOpenRequestDetails(preset?: OpsRequestDetailsPreset) {
+  const basePreset: OpsRequestDetailsPreset = {
     title: t('admin.ops.requestDetails.title'),
     kind: 'all',
     sort: 'created_at_desc'
   }
+
+  requestDetailsPreset.value = { ...basePreset, ...(preset ?? {}) }
+  if (!requestDetailsPreset.value.title) requestDetailsPreset.value.title = basePreset.title
   showRequestDetails.value = true
 }
 
@@ -573,46 +390,8 @@ function openError(id: number) {
   showErrorModal.value = true
 }
 
-function formatInt(v: number | null | undefined): string {
-  if (typeof v !== 'number') return '0'
-  return formatNumberLocaleString(v)
-}
-
-function formatPercent(v: number | null | undefined): string {
-  if (typeof v !== 'number') return '-'
-  return `${(v * 100).toFixed(2)}%`
-}
-
-function formatPercent0to100(v: number | null | undefined): string {
-  if (typeof v !== 'number') return '-'
-  return `${v.toFixed(1)}%`
-}
-
-function formatMBPair(used: number | null | undefined, total: number | null | undefined): string {
-  if (typeof used !== 'number' || typeof total !== 'number') return '-'
-  return `${formatNumberLocaleString(used)} / ${formatNumberLocaleString(total)} MB`
-}
-
-function boolOkLabel(v: boolean | null | undefined): string {
-  if (v === true) return 'OK'
-  if (v === false) return 'FAIL'
-  return '-'
-}
-
-function boolOkClass(v: boolean | null | undefined): string {
-  if (v === true) return 'text-emerald-600 dark:text-emerald-400'
-  if (v === false) return 'text-rose-600 dark:text-rose-400'
-  return 'text-gray-900 dark:text-white'
-}
-
-function formatMs(v: number | null | undefined): string {
-  if (v == null) return '-'
-  return `${v}ms`
-}
-
 async function refreshOverviewWithCancel(fetchSeq: number, signal: AbortSignal) {
   if (!opsEnabled.value) return
-  loadingOverview.value = true
   try {
     const data = await opsAPI.getDashboardOverview(
       {
@@ -628,11 +407,7 @@ async function refreshOverviewWithCancel(fetchSeq: number, signal: AbortSignal) 
   } catch (err: any) {
     if (fetchSeq !== dashboardFetchSeq || isCanceledRequest(err)) return
     overview.value = null
-    appStore.showError(err?.message || 'Failed to load overview')
-  } finally {
-    if (fetchSeq === dashboardFetchSeq) {
-      loadingOverview.value = false
-    }
+    appStore.showError(err?.message || t('admin.ops.failedToLoadOverview'))
   }
 }
 
@@ -654,7 +429,7 @@ async function refreshThroughputTrendWithCancel(fetchSeq: number, signal: AbortS
   } catch (err: any) {
     if (fetchSeq !== dashboardFetchSeq || isCanceledRequest(err)) return
     throughputTrend.value = null
-    appStore.showError(err?.message || 'Failed to load throughput trend')
+    appStore.showError(err?.message || t('admin.ops.failedToLoadThroughputTrend'))
   } finally {
     if (fetchSeq === dashboardFetchSeq) {
       loadingTrend.value = false
@@ -680,7 +455,7 @@ async function refreshLatencyHistogramWithCancel(fetchSeq: number, signal: Abort
   } catch (err: any) {
     if (fetchSeq !== dashboardFetchSeq || isCanceledRequest(err)) return
     latencyHistogram.value = null
-    appStore.showError(err?.message || 'Failed to load latency histogram')
+    appStore.showError(err?.message || t('admin.ops.failedToLoadLatencyHistogram'))
   } finally {
     if (fetchSeq === dashboardFetchSeq) {
       loadingLatency.value = false
@@ -706,7 +481,7 @@ async function refreshErrorTrendWithCancel(fetchSeq: number, signal: AbortSignal
   } catch (err: any) {
     if (fetchSeq !== dashboardFetchSeq || isCanceledRequest(err)) return
     errorTrend.value = null
-    appStore.showError(err?.message || 'Failed to load error trend')
+    appStore.showError(err?.message || t('admin.ops.failedToLoadErrorTrend'))
   } finally {
     if (fetchSeq === dashboardFetchSeq) {
       loadingErrorTrend.value = false
@@ -732,7 +507,7 @@ async function refreshErrorDistributionWithCancel(fetchSeq: number, signal: Abor
   } catch (err: any) {
     if (fetchSeq !== dashboardFetchSeq || isCanceledRequest(err)) return
     errorDistribution.value = null
-    appStore.showError(err?.message || 'Failed to load error distribution')
+    appStore.showError(err?.message || t('admin.ops.failedToLoadErrorDistribution'))
   } finally {
     if (fetchSeq === dashboardFetchSeq) {
       loadingErrorDistribution.value = false

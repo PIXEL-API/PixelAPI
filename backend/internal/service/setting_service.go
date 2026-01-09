@@ -139,6 +139,9 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyOpsMonitoringEnabled] = strconv.FormatBool(settings.OpsMonitoringEnabled)
 	updates[SettingKeyOpsRealtimeMonitoringEnabled] = strconv.FormatBool(settings.OpsRealtimeMonitoringEnabled)
 	updates[SettingKeyOpsQueryModeDefault] = string(ParseOpsQueryMode(settings.OpsQueryModeDefault))
+	if settings.OpsMetricsIntervalSeconds > 0 {
+		updates[SettingKeyOpsMetricsIntervalSeconds] = strconv.Itoa(settings.OpsMetricsIntervalSeconds)
+	}
 
 	return s.settingRepo.SetMultiple(ctx, updates)
 }
@@ -231,6 +234,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpsMonitoringEnabled:         "true",
 		SettingKeyOpsRealtimeMonitoringEnabled: "true",
 		SettingKeyOpsQueryModeDefault:          "auto",
+		SettingKeyOpsMetricsIntervalSeconds:    "60",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -301,6 +305,18 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpsMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsMonitoringEnabled])
 	result.OpsRealtimeMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsRealtimeMonitoringEnabled])
 	result.OpsQueryModeDefault = string(ParseOpsQueryMode(settings[SettingKeyOpsQueryModeDefault]))
+	result.OpsMetricsIntervalSeconds = 60
+	if raw := strings.TrimSpace(settings[SettingKeyOpsMetricsIntervalSeconds]); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			if v < 60 {
+				v = 60
+			}
+			if v > 3600 {
+				v = 3600
+			}
+			result.OpsMetricsIntervalSeconds = v
+		}
+	}
 
 	return result
 }

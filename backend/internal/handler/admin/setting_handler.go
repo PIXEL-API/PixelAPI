@@ -68,6 +68,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpsMonitoringEnabled:         settings.OpsMonitoringEnabled,
 		OpsRealtimeMonitoringEnabled: settings.OpsRealtimeMonitoringEnabled,
 		OpsQueryModeDefault:          settings.OpsQueryModeDefault,
+		OpsMetricsIntervalSeconds:    settings.OpsMetricsIntervalSeconds,
 	})
 }
 
@@ -115,9 +116,10 @@ type UpdateSettingsRequest struct {
 	IdentityPatchPrompt string `json:"identity_patch_prompt"`
 
 	// Ops monitoring (vNext)
-	OpsMonitoringEnabled         *bool `json:"ops_monitoring_enabled"`
-	OpsRealtimeMonitoringEnabled *bool `json:"ops_realtime_monitoring_enabled"`
+	OpsMonitoringEnabled         *bool   `json:"ops_monitoring_enabled"`
+	OpsRealtimeMonitoringEnabled *bool   `json:"ops_realtime_monitoring_enabled"`
 	OpsQueryModeDefault          *string `json:"ops_query_mode_default"`
+	OpsMetricsIntervalSeconds    *int    `json:"ops_metrics_interval_seconds"`
 }
 
 // UpdateSettings 更新系统设置
@@ -173,6 +175,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 
+	// Ops metrics collector interval validation (seconds).
+	if req.OpsMetricsIntervalSeconds != nil {
+		v := *req.OpsMetricsIntervalSeconds
+		if v < 60 {
+			v = 60
+		}
+		if v > 3600 {
+			v = 3600
+		}
+		req.OpsMetricsIntervalSeconds = &v
+	}
+
 	settings := &service.SystemSettings{
 		RegistrationEnabled:      req.RegistrationEnabled,
 		EmailVerifyEnabled:       req.EmailVerifyEnabled,
@@ -218,6 +232,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpsQueryModeDefault
 			}
 			return previousSettings.OpsQueryModeDefault
+		}(),
+		OpsMetricsIntervalSeconds: func() int {
+			if req.OpsMetricsIntervalSeconds != nil {
+				return *req.OpsMetricsIntervalSeconds
+			}
+			return previousSettings.OpsMetricsIntervalSeconds
 		}(),
 	}
 
@@ -266,6 +286,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpsMonitoringEnabled:         updatedSettings.OpsMonitoringEnabled,
 		OpsRealtimeMonitoringEnabled: updatedSettings.OpsRealtimeMonitoringEnabled,
 		OpsQueryModeDefault:          updatedSettings.OpsQueryModeDefault,
+		OpsMetricsIntervalSeconds:    updatedSettings.OpsMetricsIntervalSeconds,
 	})
 }
 
@@ -374,6 +395,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpsQueryModeDefault != after.OpsQueryModeDefault {
 		changed = append(changed, "ops_query_mode_default")
+	}
+	if before.OpsMetricsIntervalSeconds != after.OpsMetricsIntervalSeconds {
+		changed = append(changed, "ops_metrics_interval_seconds")
 	}
 	return changed
 }
