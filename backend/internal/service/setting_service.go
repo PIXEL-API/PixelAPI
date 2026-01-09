@@ -121,7 +121,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 		updates[SettingKeyTurnstileSecretKey] = settings.TurnstileSecretKey
 	}
 
-	// LinuxDo Connect OAuth login (end-user SSO)
+	// LinuxDo Connect OAuth 登录（终端用户 SSO）
 	updates[SettingKeyLinuxDoConnectEnabled] = strconv.FormatBool(settings.LinuxDoConnectEnabled)
 	updates[SettingKeyLinuxDoConnectClientID] = settings.LinuxDoConnectClientID
 	updates[SettingKeyLinuxDoConnectRedirectURL] = settings.LinuxDoConnectRedirectURL
@@ -289,9 +289,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.SMTPPassword = settings[SettingKeySMTPPassword]
 	result.TurnstileSecretKey = settings[SettingKeyTurnstileSecretKey]
 
-	// LinuxDo Connect settings:
-	// - Backward compatible with config.yaml/env (so existing deployments don't get disabled by accident)
-	// - Can be overridden and persisted via admin "system settings" (stored in DB)
+	// LinuxDo Connect 设置：
+	// - 兼容 config.yaml/env（避免老部署因为未迁移到数据库设置而被意外关闭）
+	// - 支持在后台“系统设置”中覆盖并持久化（存储于 DB）
 	linuxDoBase := config.LinuxDoConnectConfig{}
 	if s.cfg != nil {
 		linuxDoBase = s.cfg.LinuxDo
@@ -339,11 +339,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	return result
 }
 
-// GetLinuxDoConnectOAuthConfig returns the effective LinuxDo Connect config for login.
+// GetLinuxDoConnectOAuthConfig 返回用于登录的“最终生效” LinuxDo Connect 配置。
 //
-// Precedence:
-// - If a corresponding system setting key exists, it overrides config.yaml/env values.
-// - Otherwise, it falls back to config.yaml/env values.
+// 优先级：
+// - 若对应系统设置键存在，则覆盖 config.yaml/env 的值
+// - 否则回退到 config.yaml/env 的值
 func (s *SettingService) GetLinuxDoConnectOAuthConfig(ctx context.Context) (config.LinuxDoConnectConfig, error) {
 	if s == nil || s.cfg == nil {
 		return config.LinuxDoConnectConfig{}, infraerrors.ServiceUnavailable("CONFIG_NOT_READY", "config not loaded")
@@ -379,7 +379,7 @@ func (s *SettingService) GetLinuxDoConnectOAuthConfig(ctx context.Context) (conf
 		return config.LinuxDoConnectConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "oauth login is disabled")
 	}
 
-	// Best-effort sanity check (avoid redirecting users into a broken OAuth flow).
+	// 基础健壮性校验（避免把用户重定向到一个必然失败或不安全的 OAuth 流程里）。
 	if strings.TrimSpace(effective.ClientID) == "" {
 		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth client id not configured")
 	}
@@ -397,6 +397,22 @@ func (s *SettingService) GetLinuxDoConnectOAuthConfig(ctx context.Context) (conf
 	}
 	if strings.TrimSpace(effective.FrontendRedirectURL) == "" {
 		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth frontend redirect url not configured")
+	}
+
+	if err := config.ValidateAbsoluteHTTPURL(effective.AuthorizeURL); err != nil {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth authorize url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.TokenURL); err != nil {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth token url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.UserInfoURL); err != nil {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth userinfo url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.RedirectURL); err != nil {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth redirect url invalid")
+	}
+	if err := config.ValidateFrontendRedirectURL(effective.FrontendRedirectURL); err != nil {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth frontend redirect url invalid")
 	}
 
 	method := strings.ToLower(strings.TrimSpace(effective.TokenAuthMethod))
