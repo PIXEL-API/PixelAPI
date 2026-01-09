@@ -82,14 +82,18 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 
 	// 检查是否需要邮件验证
 	if s.settingService != nil && s.settingService.IsEmailVerifyEnabled(ctx) {
+		// 如果邮件验证已开启但邮件服务未配置，拒绝注册
+		// 这是一个配置错误，不应该允许绕过验证
+		if s.emailService == nil {
+			log.Println("[Auth] Email verification enabled but email service not configured, rejecting registration")
+			return "", nil, ErrServiceUnavailable
+		}
 		if verifyCode == "" {
 			return "", nil, ErrEmailVerifyRequired
 		}
 		// 验证邮箱验证码
-		if s.emailService != nil {
-			if err := s.emailService.VerifyCode(ctx, email, verifyCode); err != nil {
-				return "", nil, fmt.Errorf("verify code: %w", err)
-			}
+		if err := s.emailService.VerifyCode(ctx, email, verifyCode); err != nil {
+			return "", nil, fmt.Errorf("verify code: %w", err)
 		}
 	}
 
@@ -336,6 +340,11 @@ func (s *AuthService) ValidateToken(tokenString string) (*JWTClaims, error) {
 
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
+			// token 过期但仍返回 claims（用于 RefreshToken 等场景）
+			// jwt-go 在解析时即使遇到过期错误，token.Claims 仍会被填充
+			if claims, ok := token.Claims.(*JWTClaims); ok {
+				return claims, ErrTokenExpired
+			}
 			return nil, ErrTokenExpired
 		}
 		return nil, ErrInvalidToken
