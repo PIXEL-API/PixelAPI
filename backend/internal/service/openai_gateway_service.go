@@ -540,10 +540,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		bodyModified = true
 	}
 
-	// For OAuth accounts using ChatGPT internal API, add store: false
+	// For OAuth accounts using ChatGPT internal API:
+	// 1. Add store: false
+	// 2. Normalize input format for Codex API compatibility
 	if account.Type == AccountTypeOAuth {
 		reqBody["store"] = false
 		bodyModified = true
+
+		// Normalize input format: convert AI SDK multi-part content format to simplified format
+		// AI SDK sends: {"content": [{"type": "input_text", "text": "..."}]}
+		// Codex API expects: {"content": "..."}
+		if normalizeInputForCodexAPI(reqBody) {
+			bodyModified = true
+		}
 	}
 
 	// Re-serialize body only if modified
@@ -1083,6 +1092,101 @@ func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel
 	}
 
 	return newBody
+}
+
+// normalizeInputForCodexAPI converts AI SDK multi-part content format to simplified format
+// that the ChatGPT internal Codex API expects.
+//
+// AI SDK sends content as an array of typed objects:
+//
+//	{"content": [{"type": "input_text", "text": "hello"}]}
+//
+// ChatGPT Codex API expects content as a simple string:
+//
+//	{"content": "hello"}
+//
+// This function modifies reqBody in-place and returns true if any modification was made.
+func normalizeInputForCodexAPI(reqBody map[string]any) bool {
+	input, ok := reqBody["input"]
+	if !ok {
+		return false
+	}
+
+	// Handle case where input is a simple string (already compatible)
+	if _, isString := input.(string); isString {
+		return false
+	}
+
+	// Handle case where input is an array of messages
+	inputArray, ok := input.([]any)
+	if !ok {
+		return false
+	}
+
+	modified := false
+	for _, item := range inputArray {
+		message, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		content, ok := message["content"]
+		if !ok {
+			continue
+		}
+
+		// If content is already a string, no conversion needed
+		if _, isString := content.(string); isString {
+			continue
+		}
+
+		// If content is an array (AI SDK format), convert to string
+		contentArray, ok := content.([]any)
+		if !ok {
+			continue
+		}
+
+		// Extract text from content array
+		var textParts []string
+		for _, part := range contentArray {
+			partMap, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			// Handle different content types
+			partType, _ := partMap["type"].(string)
+			switch partType {
+			case "input_text", "text":
+				// Extract text from input_text or text type
+				if text, ok := partMap["text"].(string); ok {
+					textParts = append(textParts, text)
+				}
+			case "input_image", "image":
+				// For images, we need to preserve the original format
+				// as ChatGPT Codex API may support images in a different way
+				// For now, skip image parts (they will be lost in conversion)
+				// TODO: Consider preserving image data or handling it separately
+				continue
+			case "input_file", "file":
+				// Similar to images, file inputs may need special handling
+				continue
+			default:
+				// For unknown types, try to extract text if available
+				if text, ok := partMap["text"].(string); ok {
+					textParts = append(textParts, text)
+				}
+			}
+		}
+
+		// Convert content array to string
+		if len(textParts) > 0 {
+			message["content"] = strings.Join(textParts, "\n")
+			modified = true
+		}
+	}
+
+	return modified
 }
 
 // OpenAIRecordUsageInput input for recording usage
