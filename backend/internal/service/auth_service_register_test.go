@@ -180,3 +180,63 @@ func TestAuthService_Register_Success(t *testing.T) {
 	require.Len(t, repo.created, 1)
 	require.True(t, user.CheckPassword("password"))
 }
+
+func TestAuthService_ValidateToken_ExpiredReturnsClaimsWithError(t *testing.T) {
+	repo := &userRepoStub{}
+	service := newAuthService(repo, nil, nil)
+
+	// 创建用户并生成 token
+	user := &User{
+		ID:           1,
+		Email:        "test@test.com",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+	token, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	// 验证有效 token
+	claims, err := service.ValidateToken(token)
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	require.Equal(t, int64(1), claims.UserID)
+
+	// 模拟过期 token（通过创建一个过期很久的 token）
+	service.cfg.JWT.ExpireHour = -1 // 设置为负数使 token 立即过期
+	expiredToken, err := service.GenerateToken(user)
+	require.NoError(t, err)
+	service.cfg.JWT.ExpireHour = 1 // 恢复
+
+	// 验证过期 token 应返回 claims 和 ErrTokenExpired
+	claims, err = service.ValidateToken(expiredToken)
+	require.ErrorIs(t, err, ErrTokenExpired)
+	require.NotNil(t, claims, "claims should not be nil when token is expired")
+	require.Equal(t, int64(1), claims.UserID)
+	require.Equal(t, "test@test.com", claims.Email)
+}
+
+func TestAuthService_RefreshToken_ExpiredTokenNoPanic(t *testing.T) {
+	user := &User{
+		ID:           1,
+		Email:        "test@test.com",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+	repo := &userRepoStub{user: user}
+	service := newAuthService(repo, nil, nil)
+
+	// 创建过期 token
+	service.cfg.JWT.ExpireHour = -1
+	expiredToken, err := service.GenerateToken(user)
+	require.NoError(t, err)
+	service.cfg.JWT.ExpireHour = 1
+
+	// RefreshToken 使用过期 token 不应 panic
+	require.NotPanics(t, func() {
+		newToken, err := service.RefreshToken(context.Background(), expiredToken)
+		require.NoError(t, err)
+		require.NotEmpty(t, newToken)
+	})
+}

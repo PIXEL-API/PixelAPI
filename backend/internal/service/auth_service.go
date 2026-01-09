@@ -336,6 +336,11 @@ func (s *AuthService) ValidateToken(tokenString string) (*JWTClaims, error) {
 
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
+			// token 过期但仍返回 claims（用于 RefreshToken 等场景）
+			// jwt-go 在解析时即使遇到过期错误，token.Claims 仍会被填充
+			if claims, ok := token.Claims.(*JWTClaims); ok {
+				return claims, ErrTokenExpired
+			}
 			return nil, ErrTokenExpired
 		}
 		return nil, ErrInvalidToken
