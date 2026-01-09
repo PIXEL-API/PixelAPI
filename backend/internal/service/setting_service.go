@@ -82,6 +82,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		APIBaseURL:          settings[SettingKeyAPIBaseURL],
 		ContactInfo:         settings[SettingKeyContactInfo],
 		DocURL:              settings[SettingKeyDocURL],
+		LinuxDoOAuthEnabled: s.cfg != nil && s.cfg.LinuxDo.Enabled,
 	}, nil
 }
 
