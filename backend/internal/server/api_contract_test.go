@@ -304,6 +304,10 @@ func TestAPIContracts(t *testing.T) {
 					"turnstile_enabled": true,
 					"turnstile_site_key": "site-key",
 					"turnstile_secret_key_configured": true,
+					"linuxdo_connect_enabled": false,
+					"linuxdo_connect_client_id": "",
+					"linuxdo_connect_client_secret_configured": false,
+					"linuxdo_connect_redirect_url": "",
 					"site_name": "Sub2API",
 					"site_logo": "",
 					"site_subtitle": "Subtitle",
@@ -390,7 +394,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
 
-	authHandler := handler.NewAuthHandler(cfg, nil, userService)
+	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil)

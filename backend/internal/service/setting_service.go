@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -64,11 +65,19 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyAPIBaseURL,
 		SettingKeyContactInfo,
 		SettingKeyDocURL,
+		SettingKeyLinuxDoConnectEnabled,
 	}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
 	if err != nil {
 		return nil, fmt.Errorf("get public settings: %w", err)
+	}
+
+	linuxDoEnabled := false
+	if raw, ok := settings[SettingKeyLinuxDoConnectEnabled]; ok {
+		linuxDoEnabled = raw == "true"
+	} else {
+		linuxDoEnabled = s.cfg != nil && s.cfg.LinuxDo.Enabled
 	}
 
 	return &PublicSettings{
@@ -82,7 +91,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		APIBaseURL:          settings[SettingKeyAPIBaseURL],
 		ContactInfo:         settings[SettingKeyContactInfo],
 		DocURL:              settings[SettingKeyDocURL],
-		LinuxDoOAuthEnabled: s.cfg != nil && s.cfg.LinuxDo.Enabled,
+		LinuxDoOAuthEnabled: linuxDoEnabled,
 	}, nil
 }
 
@@ -110,6 +119,14 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyTurnstileSiteKey] = settings.TurnstileSiteKey
 	if settings.TurnstileSecretKey != "" {
 		updates[SettingKeyTurnstileSecretKey] = settings.TurnstileSecretKey
+	}
+
+	// LinuxDo Connect OAuth login (end-user SSO)
+	updates[SettingKeyLinuxDoConnectEnabled] = strconv.FormatBool(settings.LinuxDoConnectEnabled)
+	updates[SettingKeyLinuxDoConnectClientID] = settings.LinuxDoConnectClientID
+	updates[SettingKeyLinuxDoConnectRedirectURL] = settings.LinuxDoConnectRedirectURL
+	if settings.LinuxDoConnectClientSecret != "" {
+		updates[SettingKeyLinuxDoConnectClientSecret] = settings.LinuxDoConnectClientSecret
 	}
 
 	// OEM设置
@@ -272,6 +289,38 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.SMTPPassword = settings[SettingKeySMTPPassword]
 	result.TurnstileSecretKey = settings[SettingKeyTurnstileSecretKey]
 
+	// LinuxDo Connect settings:
+	// - Backward compatible with config.yaml/env (so existing deployments don't get disabled by accident)
+	// - Can be overridden and persisted via admin "system settings" (stored in DB)
+	linuxDoBase := config.LinuxDoConnectConfig{}
+	if s.cfg != nil {
+		linuxDoBase = s.cfg.LinuxDo
+	}
+
+	if raw, ok := settings[SettingKeyLinuxDoConnectEnabled]; ok {
+		result.LinuxDoConnectEnabled = raw == "true"
+	} else {
+		result.LinuxDoConnectEnabled = linuxDoBase.Enabled
+	}
+
+	if v, ok := settings[SettingKeyLinuxDoConnectClientID]; ok && strings.TrimSpace(v) != "" {
+		result.LinuxDoConnectClientID = strings.TrimSpace(v)
+	} else {
+		result.LinuxDoConnectClientID = linuxDoBase.ClientID
+	}
+
+	if v, ok := settings[SettingKeyLinuxDoConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
+		result.LinuxDoConnectRedirectURL = strings.TrimSpace(v)
+	} else {
+		result.LinuxDoConnectRedirectURL = linuxDoBase.RedirectURL
+	}
+
+	result.LinuxDoConnectClientSecret = strings.TrimSpace(settings[SettingKeyLinuxDoConnectClientSecret])
+	if result.LinuxDoConnectClientSecret == "" {
+		result.LinuxDoConnectClientSecret = strings.TrimSpace(linuxDoBase.ClientSecret)
+	}
+	result.LinuxDoConnectClientSecretConfigured = result.LinuxDoConnectClientSecret != ""
+
 	// Model fallback settings
 	result.EnableModelFallback = settings[SettingKeyEnableModelFallback] == "true"
 	result.FallbackModelAnthropic = s.getStringOrDefault(settings, SettingKeyFallbackModelAnthropic, "claude-3-5-sonnet-20241022")
@@ -288,6 +337,83 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.IdentityPatchPrompt = settings[SettingKeyIdentityPatchPrompt]
 
 	return result
+}
+
+// GetLinuxDoConnectOAuthConfig returns the effective LinuxDo Connect config for login.
+//
+// Precedence:
+// - If a corresponding system setting key exists, it overrides config.yaml/env values.
+// - Otherwise, it falls back to config.yaml/env values.
+func (s *SettingService) GetLinuxDoConnectOAuthConfig(ctx context.Context) (config.LinuxDoConnectConfig, error) {
+	if s == nil || s.cfg == nil {
+		return config.LinuxDoConnectConfig{}, infraerrors.ServiceUnavailable("CONFIG_NOT_READY", "config not loaded")
+	}
+
+	effective := s.cfg.LinuxDo
+
+	keys := []string{
+		SettingKeyLinuxDoConnectEnabled,
+		SettingKeyLinuxDoConnectClientID,
+		SettingKeyLinuxDoConnectClientSecret,
+		SettingKeyLinuxDoConnectRedirectURL,
+	}
+	settings, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		return config.LinuxDoConnectConfig{}, fmt.Errorf("get linuxdo connect settings: %w", err)
+	}
+
+	if raw, ok := settings[SettingKeyLinuxDoConnectEnabled]; ok {
+		effective.Enabled = raw == "true"
+	}
+	if v, ok := settings[SettingKeyLinuxDoConnectClientID]; ok && strings.TrimSpace(v) != "" {
+		effective.ClientID = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyLinuxDoConnectClientSecret]; ok && strings.TrimSpace(v) != "" {
+		effective.ClientSecret = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyLinuxDoConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
+		effective.RedirectURL = strings.TrimSpace(v)
+	}
+
+	if !effective.Enabled {
+		return config.LinuxDoConnectConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "oauth login is disabled")
+	}
+
+	// Best-effort sanity check (avoid redirecting users into a broken OAuth flow).
+	if strings.TrimSpace(effective.ClientID) == "" {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth client id not configured")
+	}
+	if strings.TrimSpace(effective.AuthorizeURL) == "" {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth authorize url not configured")
+	}
+	if strings.TrimSpace(effective.TokenURL) == "" {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth token url not configured")
+	}
+	if strings.TrimSpace(effective.UserInfoURL) == "" {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth userinfo url not configured")
+	}
+	if strings.TrimSpace(effective.RedirectURL) == "" {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth redirect url not configured")
+	}
+	if strings.TrimSpace(effective.FrontendRedirectURL) == "" {
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth frontend redirect url not configured")
+	}
+
+	method := strings.ToLower(strings.TrimSpace(effective.TokenAuthMethod))
+	switch method {
+	case "", "client_secret_post", "client_secret_basic":
+		if strings.TrimSpace(effective.ClientSecret) == "" {
+			return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth client secret not configured")
+		}
+	case "none":
+		if !effective.UsePKCE {
+			return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth pkce must be enabled when token_auth_method=none")
+		}
+	default:
+		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth token_auth_method invalid")
+	}
+
+	return effective, nil
 }
 
 // getStringOrDefault 获取字符串值或默认值
