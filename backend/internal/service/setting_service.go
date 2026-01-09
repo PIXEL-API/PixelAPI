@@ -141,8 +141,8 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 func (s *SettingService) IsRegistrationEnabled(ctx context.Context) bool {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyRegistrationEnabled)
 	if err != nil {
-		// 默认开放注册
-		return true
+		// 安全默认：如果设置不存在或查询出错，默认关闭注册
+		return false
 	}
 	return value == "true"
 }
