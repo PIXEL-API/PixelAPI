@@ -831,6 +831,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Status)
 		idx++
 	}
+	if updates.Schedulable != nil {
+		setClauses = append(setClauses, "schedulable = $"+itoa(idx))
+		args = append(args, *updates.Schedulable)
+		idx++
+	}
 	// JSONB 需要合并而非覆盖，使用 raw SQL 保持旧行为。
 	if len(updates.Credentials) > 0 {
 		payload, err := json.Marshal(updates.Credentials)
