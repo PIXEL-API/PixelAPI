@@ -259,6 +259,82 @@ var (
 			},
 		},
 	}
+	// PromoCodesColumns holds the columns for the "promo_codes" table.
+	PromoCodesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "code", Type: field.TypeString, Unique: true, Size: 32},
+		{Name: "bonus_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "max_uses", Type: field.TypeInt, Default: 0},
+		{Name: "used_count", Type: field.TypeInt, Default: 0},
+		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
+		{Name: "expires_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "notes", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// PromoCodesTable holds the schema information for the "promo_codes" table.
+	PromoCodesTable = &schema.Table{
+		Name:       "promo_codes",
+		Columns:    PromoCodesColumns,
+		PrimaryKey: []*schema.Column{PromoCodesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "promocode_status",
+				Unique:  false,
+				Columns: []*schema.Column{PromoCodesColumns[5]},
+			},
+			{
+				Name:    "promocode_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{PromoCodesColumns[6]},
+			},
+		},
+	}
+	// PromoCodeUsagesColumns holds the columns for the "promo_code_usages" table.
+	PromoCodeUsagesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "bonus_amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "used_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "promo_code_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+	}
+	// PromoCodeUsagesTable holds the schema information for the "promo_code_usages" table.
+	PromoCodeUsagesTable = &schema.Table{
+		Name:       "promo_code_usages",
+		Columns:    PromoCodeUsagesColumns,
+		PrimaryKey: []*schema.Column{PromoCodeUsagesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "promo_code_usages_promo_codes_usage_records",
+				Columns:    []*schema.Column{PromoCodeUsagesColumns[3]},
+				RefColumns: []*schema.Column{PromoCodesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "promo_code_usages_users_promo_code_usages",
+				Columns:    []*schema.Column{PromoCodeUsagesColumns[4]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "promocodeusage_promo_code_id",
+				Unique:  false,
+				Columns: []*schema.Column{PromoCodeUsagesColumns[3]},
+			},
+			{
+				Name:    "promocodeusage_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{PromoCodeUsagesColumns[4]},
+			},
+			{
+				Name:    "promocodeusage_promo_code_id_user_id",
+				Unique:  true,
+				Columns: []*schema.Column{PromoCodeUsagesColumns[3], PromoCodeUsagesColumns[4]},
+			},
+		},
+	}
 	// ProxiesColumns holds the columns for the "proxies" table.
 	ProxiesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -720,6 +796,8 @@ var (
 		AccountsTable,
 		AccountGroupsTable,
 		GroupsTable,
+		PromoCodesTable,
+		PromoCodeUsagesTable,
 		ProxiesTable,
 		RedeemCodesTable,
 		SettingsTable,
@@ -749,6 +827,14 @@ func init() {
 	}
 	GroupsTable.Annotation = &entsql.Annotation{
 		Table: "groups",
+	}
+	PromoCodesTable.Annotation = &entsql.Annotation{
+		Table: "promo_codes",
+	}
+	PromoCodeUsagesTable.ForeignKeys[0].RefTable = PromoCodesTable
+	PromoCodeUsagesTable.ForeignKeys[1].RefTable = UsersTable
+	PromoCodeUsagesTable.Annotation = &entsql.Annotation{
+		Table: "promo_code_usages",
 	}
 	ProxiesTable.Annotation = &entsql.Annotation{
 		Table: "proxies",
