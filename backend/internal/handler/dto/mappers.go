@@ -53,16 +53,18 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		return nil
 	}
 	return &APIKey{
-		ID:        k.ID,
-		UserID:    k.UserID,
-		Key:       k.Key,
-		Name:      k.Name,
-		GroupID:   k.GroupID,
-		Status:    k.Status,
-		CreatedAt: k.CreatedAt,
-		UpdatedAt: k.UpdatedAt,
-		User:      UserFromServiceShallow(k.User),
-		Group:     GroupFromServiceShallow(k.Group),
+		ID:          k.ID,
+		UserID:      k.UserID,
+		Key:         k.Key,
+		Name:        k.Name,
+		GroupID:     k.GroupID,
+		Status:      k.Status,
+		IPWhitelist: k.IPWhitelist,
+		IPBlacklist: k.IPBlacklist,
+		CreatedAt:   k.CreatedAt,
+		UpdatedAt:   k.UpdatedAt,
+		User:        UserFromServiceShallow(k.User),
+		Group:       GroupFromServiceShallow(k.Group),
 	}
 }
 
@@ -250,11 +252,12 @@ func AccountSummaryFromService(a *service.Account) *AccountSummary {
 
 // usageLogFromServiceBase is a helper that converts service UsageLog to DTO.
 // The account parameter allows caller to control what Account info is included.
-func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary) *UsageLog {
+// The includeIPAddress parameter controls whether to include the IP address (admin-only).
+func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary, includeIPAddress bool) *UsageLog {
 	if l == nil {
 		return nil
 	}
-	return &UsageLog{
+	result := &UsageLog{
 		ID:                    l.ID,
 		UserID:                l.UserID,
 		APIKeyID:              l.APIKeyID,
@@ -290,21 +293,26 @@ func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary) *Usag
 		Group:                 GroupFromServiceShallow(l.Group),
 		Subscription:          UserSubscriptionFromService(l.Subscription),
 	}
+	// IP 地址仅对管理员可见
+	if includeIPAddress {
+		result.IPAddress = l.IPAddress
+	}
+	return result
 }
 
 // UsageLogFromService converts a service UsageLog to DTO for regular users.
-// It excludes Account details - users should not see account information.
+// It excludes Account details and IP address - users should not see these.
 func UsageLogFromService(l *service.UsageLog) *UsageLog {
-	return usageLogFromServiceBase(l, nil)
+	return usageLogFromServiceBase(l, nil, false)
 }
 
 // UsageLogFromServiceAdmin converts a service UsageLog to DTO for admin users.
-// It includes minimal Account info (ID, Name only).
+// It includes minimal Account info (ID, Name only) and IP address.
 func UsageLogFromServiceAdmin(l *service.UsageLog) *UsageLog {
 	if l == nil {
 		return nil
 	}
-	return usageLogFromServiceBase(l, AccountSummaryFromService(l.Account))
+	return usageLogFromServiceBase(l, AccountSummaryFromService(l.Account), true)
 }
 
 func SettingFromService(s *service.Setting) *Setting {
@@ -360,5 +368,37 @@ func BulkAssignResultFromService(r *service.BulkAssignResult) *BulkAssignResult 
 		FailedCount:   r.FailedCount,
 		Subscriptions: subs,
 		Errors:        r.Errors,
+	}
+}
+
+func PromoCodeFromService(pc *service.PromoCode) *PromoCode {
+	if pc == nil {
+		return nil
+	}
+	return &PromoCode{
+		ID:          pc.ID,
+		Code:        pc.Code,
+		BonusAmount: pc.BonusAmount,
+		MaxUses:     pc.MaxUses,
+		UsedCount:   pc.UsedCount,
+		Status:      pc.Status,
+		ExpiresAt:   pc.ExpiresAt,
+		Notes:       pc.Notes,
+		CreatedAt:   pc.CreatedAt,
+		UpdatedAt:   pc.UpdatedAt,
+	}
+}
+
+func PromoCodeUsageFromService(u *service.PromoCodeUsage) *PromoCodeUsage {
+	if u == nil {
+		return nil
+	}
+	return &PromoCodeUsage{
+		ID:          u.ID,
+		PromoCodeID: u.PromoCodeID,
+		UserID:      u.UserID,
+		BonusAmount: u.BonusAmount,
+		UsedAt:      u.UsedAt,
+		User:        UserFromServiceShallow(u.User),
 	}
 }

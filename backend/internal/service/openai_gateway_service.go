@@ -1251,6 +1251,7 @@ type OpenAIRecordUsageInput struct {
 	Account      *Account
 	Subscription *UserSubscription
 	UserAgent    string // 请求的 User-Agent
+	IPAddress    string // 请求的客户端 IP 地址
 }
 
 // RecordUsage records usage and deducts balance
@@ -1323,6 +1324,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// 添加 UserAgent
 	if input.UserAgent != "" {
 		usageLog.UserAgent = &input.UserAgent
+	}
+
+	// 添加 IPAddress
+	if input.IPAddress != "" {
+		usageLog.IPAddress = &input.IPAddress
 	}
 
 	if apiKey.GroupID != nil {

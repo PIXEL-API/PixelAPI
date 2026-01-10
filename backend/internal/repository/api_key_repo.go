@@ -26,13 +26,21 @@ func (r *apiKeyRepository) activeQuery() *dbent.APIKeyQuery {
 }
 
 func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) error {
-	created, err := r.client.APIKey.Create().
+	builder := r.client.APIKey.Create().
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
 		SetStatus(key.Status).
-		SetNillableGroupID(key.GroupID).
-		Save(ctx)
+		SetNillableGroupID(key.GroupID)
+
+	if len(key.IPWhitelist) > 0 {
+		builder.SetIPWhitelist(key.IPWhitelist)
+	}
+	if len(key.IPBlacklist) > 0 {
+		builder.SetIPBlacklist(key.IPBlacklist)
+	}
+
+	created, err := builder.Save(ctx)
 	if err == nil {
 		key.ID = created.ID
 		key.CreatedAt = created.CreatedAt
@@ -106,6 +114,18 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		builder.SetGroupID(*key.GroupID)
 	} else {
 		builder.ClearGroupID()
+	}
+
+	// IP 限制字段
+	if len(key.IPWhitelist) > 0 {
+		builder.SetIPWhitelist(key.IPWhitelist)
+	} else {
+		builder.ClearIPWhitelist()
+	}
+	if len(key.IPBlacklist) > 0 {
+		builder.SetIPBlacklist(key.IPBlacklist)
+	} else {
+		builder.ClearIPBlacklist()
 	}
 
 	affected, err := builder.Save(ctx)
@@ -268,14 +288,16 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		return nil
 	}
 	out := &service.APIKey{
-		ID:        m.ID,
-		UserID:    m.UserID,
-		Key:       m.Key,
-		Name:      m.Name,
-		Status:    m.Status,
-		CreatedAt: m.CreatedAt,
-		UpdatedAt: m.UpdatedAt,
-		GroupID:   m.GroupID,
+		ID:          m.ID,
+		UserID:      m.UserID,
+		Key:         m.Key,
+		Name:        m.Name,
+		Status:      m.Status,
+		IPWhitelist: m.IPWhitelist,
+		IPBlacklist: m.IPBlacklist,
+		CreatedAt:   m.CreatedAt,
+		UpdatedAt:   m.UpdatedAt,
+		GroupID:     m.GroupID,
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)
@@ -317,6 +339,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		RateMultiplier:      g.RateMultiplier,
 		IsExclusive:         g.IsExclusive,
 		Status:              g.Status,
+		Hydrated:            true,
 		SubscriptionType:    g.SubscriptionType,
 		DailyLimitUSD:       g.DailyLimitUsd,
 		WeeklyLimitUSD:      g.WeeklyLimitUsd,

@@ -337,6 +337,20 @@ func (_c *UsageLogCreate) SetNillableUserAgent(v *string) *UsageLogCreate {
 	return _c
 }
 
+// SetIPAddress sets the "ip_address" field.
+func (_c *UsageLogCreate) SetIPAddress(v string) *UsageLogCreate {
+	_c.mutation.SetIPAddress(v)
+	return _c
+}
+
+// SetNillableIPAddress sets the "ip_address" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableIPAddress(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetIPAddress(*v)
+	}
+	return _c
+}
+
 // SetImageCount sets the "image_count" field.
 func (_c *UsageLogCreate) SetImageCount(v int) *UsageLogCreate {
 	_c.mutation.SetImageCount(v)
@@ -586,6 +600,11 @@ func (_c *UsageLogCreate) check() error {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.IPAddress(); ok {
+		if err := usagelog.IPAddressValidator(v); err != nil {
+			return &ValidationError{Name: "ip_address", err: fmt.Errorf(`ent: validator failed for field "UsageLog.ip_address": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.ImageCount(); !ok {
 		return &ValidationError{Name: "image_count", err: errors.New(`ent: missing required field "UsageLog.image_count"`)}
 	}
@@ -712,6 +731,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.UserAgent(); ok {
 		_spec.SetField(usagelog.FieldUserAgent, field.TypeString, value)
 		_node.UserAgent = &value
+	}
+	if value, ok := _c.mutation.IPAddress(); ok {
+		_spec.SetField(usagelog.FieldIPAddress, field.TypeString, value)
+		_node.IPAddress = &value
 	}
 	if value, ok := _c.mutation.ImageCount(); ok {
 		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)
@@ -1285,6 +1308,24 @@ func (u *UsageLogUpsert) UpdateUserAgent() *UsageLogUpsert {
 // ClearUserAgent clears the value of the "user_agent" field.
 func (u *UsageLogUpsert) ClearUserAgent() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldUserAgent)
+	return u
+}
+
+// SetIPAddress sets the "ip_address" field.
+func (u *UsageLogUpsert) SetIPAddress(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldIPAddress, v)
+	return u
+}
+
+// UpdateIPAddress sets the "ip_address" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateIPAddress() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldIPAddress)
+	return u
+}
+
+// ClearIPAddress clears the value of the "ip_address" field.
+func (u *UsageLogUpsert) ClearIPAddress() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldIPAddress)
 	return u
 }
 
@@ -1863,6 +1904,27 @@ func (u *UsageLogUpsertOne) UpdateUserAgent() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearUserAgent() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearUserAgent()
+	})
+}
+
+// SetIPAddress sets the "ip_address" field.
+func (u *UsageLogUpsertOne) SetIPAddress(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetIPAddress(v)
+	})
+}
+
+// UpdateIPAddress sets the "ip_address" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateIPAddress() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateIPAddress()
+	})
+}
+
+// ClearIPAddress clears the value of the "ip_address" field.
+func (u *UsageLogUpsertOne) ClearIPAddress() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearIPAddress()
 	})
 }
 
@@ -2613,6 +2675,27 @@ func (u *UsageLogUpsertBulk) UpdateUserAgent() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearUserAgent() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearUserAgent()
+	})
+}
+
+// SetIPAddress sets the "ip_address" field.
+func (u *UsageLogUpsertBulk) SetIPAddress(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetIPAddress(v)
+	})
+}
+
+// UpdateIPAddress sets the "ip_address" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateIPAddress() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateIPAddress()
+	})
+}
+
+// ClearIPAddress clears the value of the "ip_address" field.
+func (u *UsageLogUpsertBulk) ClearIPAddress() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearIPAddress()
 	})
 }
 

@@ -127,12 +127,6 @@
           <Select v-model="filters.stream" :options="streamTypeOptions" @change="emitChange" />
         </div>
 
-        <!-- Billing Type Filter -->
-        <div class="w-full sm:w-auto sm:min-w-[180px]">
-          <label class="input-label">{{ t('usage.billingType') }}</label>
-          <Select v-model="filters.billing_type" :options="billingTypeOptions" @change="emitChange" />
-        </div>
-
         <!-- Group Filter -->
         <div class="w-full sm:w-auto sm:min-w-[200px]">
           <label class="input-label">{{ t('admin.usage.group') }}</label>
@@ -225,12 +219,6 @@ const streamTypeOptions = ref<SelectOption[]>([
   { value: null, label: t('admin.usage.allTypes') },
   { value: true, label: t('usage.stream') },
   { value: false, label: t('usage.sync') }
-])
-
-const billingTypeOptions = ref<SelectOption[]>([
-  { value: null, label: t('admin.usage.allBillingTypes') },
-  { value: 1, label: t('usage.subscription') },
-  { value: 0, label: t('usage.balance') }
 ])
 
 const emitChange = () => emit('change')
