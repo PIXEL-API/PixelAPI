@@ -60,6 +60,17 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 }
 
 func (r *groupRepository) GetByID(ctx context.Context, id int64) (*service.Group, error) {
+	out, err := r.GetByIDLite(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	count, _ := r.GetAccountCount(ctx, out.ID)
+	out.AccountCount = count
+	return out, nil
+}
+
+func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
+	// AccountCount is intentionally not loaded here; use GetByID when needed.
 	m, err := r.client.Group.Query().
 		Where(group.IDEQ(id)).
 		Only(ctx)
@@ -67,10 +78,7 @@ func (r *groupRepository) GetByID(ctx context.Context, id int64) (*service.Group
 		return nil, translatePersistenceError(err, service.ErrGroupNotFound, nil)
 	}
 
-	out := groupEntityToService(m)
-	count, _ := r.GetAccountCount(ctx, out.ID)
-	out.AccountCount = count
-	return out, nil
+	return groupEntityToService(m), nil
 }
 
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {

@@ -86,9 +86,15 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 		platform = forcePlatform
 	} else if groupID != nil {
 		// 根据分组 platform 决定查询哪种账号
-		group, err := s.groupRepo.GetByID(ctx, *groupID)
-		if err != nil {
-			return nil, fmt.Errorf("get group failed: %w", err)
+		var group *Group
+		if ctxGroup, ok := ctx.Value(ctxkey.Group).(*Group); ok && IsGroupContextValid(ctxGroup) && ctxGroup.ID == *groupID {
+			group = ctxGroup
+		} else {
+			var err error
+			group, err = s.groupRepo.GetByIDLite(ctx, *groupID)
+			if err != nil {
+				return nil, fmt.Errorf("get group failed: %w", err)
+			}
 		}
 		platform = group.Platform
 	} else {
