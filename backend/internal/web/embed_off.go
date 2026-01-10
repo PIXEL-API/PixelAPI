@@ -14,7 +14,7 @@ import (
 // PublicSettingsProvider is an interface to fetch public settings
 // This stub is needed for compilation when frontend is not embedded
 type PublicSettingsProvider interface {
-	GetPublicSettingsForInjection(ctx context.Context) (interface{}, error)
+	GetPublicSettingsForInjection(ctx context.Context) (any, error)
 }
 
 // FrontendServer is a stub for non-embed builds
