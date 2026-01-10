@@ -244,14 +244,15 @@ type ProxyExitInfoProber interface {
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
-	userRepo            UserRepository
-	groupRepo           GroupRepository
-	accountRepo         AccountRepository
-	proxyRepo           ProxyRepository
-	apiKeyRepo          APIKeyRepository
-	redeemCodeRepo      RedeemCodeRepository
-	billingCacheService *BillingCacheService
-	proxyProber         ProxyExitInfoProber
+	userRepo             UserRepository
+	groupRepo            GroupRepository
+	accountRepo          AccountRepository
+	proxyRepo            ProxyRepository
+	apiKeyRepo           APIKeyRepository
+	redeemCodeRepo       RedeemCodeRepository
+	billingCacheService  *BillingCacheService
+	proxyProber          ProxyExitInfoProber
+	authCacheInvalidator APIKeyAuthCacheInvalidator
 }
 
 // NewAdminService creates a new AdminService
@@ -264,16 +265,18 @@ func NewAdminService(
 	redeemCodeRepo RedeemCodeRepository,
 	billingCacheService *BillingCacheService,
 	proxyProber ProxyExitInfoProber,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
 ) AdminService {
 	return &adminServiceImpl{
-		userRepo:            userRepo,
-		groupRepo:           groupRepo,
-		accountRepo:         accountRepo,
-		proxyRepo:           proxyRepo,
-		apiKeyRepo:          apiKeyRepo,
-		redeemCodeRepo:      redeemCodeRepo,
-		billingCacheService: billingCacheService,
-		proxyProber:         proxyProber,
+		userRepo:             userRepo,
+		groupRepo:            groupRepo,
+		accountRepo:          accountRepo,
+		proxyRepo:            proxyRepo,
+		apiKeyRepo:           apiKeyRepo,
+		redeemCodeRepo:       redeemCodeRepo,
+		billingCacheService:  billingCacheService,
+		proxyProber:          proxyProber,
+		authCacheInvalidator: authCacheInvalidator,
 	}
 }
 
@@ -323,6 +326,8 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	}
 
 	oldConcurrency := user.Concurrency
+	oldStatus := user.Status
+	oldRole := user.Role
 
 	if input.Email != "" {
 		user.Email = input.Email
@@ -354,6 +359,11 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
+	}
+	if s.authCacheInvalidator != nil {
+		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole {
+			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, user.ID)
+		}
 	}
 
 	concurrencyDiff := user.Concurrency - oldConcurrency
@@ -393,6 +403,9 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 		log.Printf("delete user failed: user_id=%d err=%v", id, err)
 		return err
 	}
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
+	}
 	return nil
 }
 
@@ -420,6 +433,10 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
 	}
+	balanceDiff := user.Balance - oldBalance
+	if s.authCacheInvalidator != nil && balanceDiff != 0 {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
 
 	if s.billingCacheService != nil {
 		go func() {
@@ -431,7 +448,6 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 		}()
 	}
 
-	balanceDiff := user.Balance - oldBalance
 	if balanceDiff != 0 {
 		code, err := GenerateRedeemCode()
 		if err != nil {
@@ -675,10 +691,21 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if err := s.groupRepo.Update(ctx, group); err != nil {
 		return nil, err
 	}
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, id)
+	}
 	return group, nil
 }
 
 func (s *adminServiceImpl) DeleteGroup(ctx context.Context, id int64) error {
+	var groupKeys []string
+	if s.authCacheInvalidator != nil {
+		keys, err := s.apiKeyRepo.ListKeysByGroupID(ctx, id)
+		if err == nil {
+			groupKeys = keys
+		}
+	}
+
 	affectedUserIDs, err := s.groupRepo.DeleteCascade(ctx, id)
 	if err != nil {
 		return err
@@ -696,6 +723,11 @@ func (s *adminServiceImpl) DeleteGroup(ctx context.Context, id int64) error {
 				}
 			}
 		}()
+	}
+	if s.authCacheInvalidator != nil {
+		for _, key := range groupKeys {
+			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, key)
+		}
 	}
 
 	return nil
