@@ -54,17 +54,19 @@ type UsageStats struct {
 
 // UsageService 使用统计服务
 type UsageService struct {
-	usageRepo UsageLogRepository
-	userRepo  UserRepository
-	entClient *dbent.Client
+	usageRepo            UsageLogRepository
+	userRepo             UserRepository
+	entClient            *dbent.Client
+	authCacheInvalidator APIKeyAuthCacheInvalidator
 }
 
 // NewUsageService 创建使用统计服务实例
-func NewUsageService(usageRepo UsageLogRepository, userRepo UserRepository, entClient *dbent.Client) *UsageService {
+func NewUsageService(usageRepo UsageLogRepository, userRepo UserRepository, entClient *dbent.Client, authCacheInvalidator APIKeyAuthCacheInvalidator) *UsageService {
 	return &UsageService{
-		usageRepo: usageRepo,
-		userRepo:  userRepo,
-		entClient: entClient,
+		usageRepo:            usageRepo,
+		userRepo:             userRepo,
+		entClient:            entClient,
+		authCacheInvalidator: authCacheInvalidator,
 	}
 }
 
@@ -118,10 +120,12 @@ func (s *UsageService) Create(ctx context.Context, req CreateUsageLogRequest) (*
 	}
 
 	// 扣除用户余额
+	balanceUpdated := false
 	if inserted && req.ActualCost > 0 {
 		if err := s.userRepo.UpdateBalance(txCtx, req.UserID, -req.ActualCost); err != nil {
 			return nil, fmt.Errorf("update user balance: %w", err)
 		}
+		balanceUpdated = true
 	}
 
 	if tx != nil {
@@ -130,7 +134,16 @@ func (s *UsageService) Create(ctx context.Context, req CreateUsageLogRequest) (*
 		}
 	}
 
+	s.invalidateUsageCaches(ctx, req.UserID, balanceUpdated)
+
 	return usageLog, nil
+}
+
+func (s *UsageService) invalidateUsageCaches(ctx context.Context, userID int64, balanceUpdated bool) {
+	if !balanceUpdated || s.authCacheInvalidator == nil {
+		return
+	}
+	s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 }
 
 // GetByID 根据ID获取使用日志
