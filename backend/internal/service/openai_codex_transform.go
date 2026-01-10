@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	codexReleaseAPIURL  = "https://api.github.com/repos/openai/codex/releases/latest"
-	codexReleaseHTMLURL = "https://github.com/openai/codex/releases/latest"
-	codexPromptURLFmt   = "https://raw.githubusercontent.com/openai/codex/%s/codex-rs/core/%s"
-	opencodeCodexURL    = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/prompt/codex.txt"
-	codexCacheTTL       = 15 * time.Minute
+	codexReleaseAPIURL     = "https://api.github.com/repos/openai/codex/releases/latest"
+	codexReleaseHTMLURL    = "https://github.com/openai/codex/releases/latest"
+	codexPromptURLFmt      = "https://raw.githubusercontent.com/openai/codex/%s/codex-rs/core/%s"
+	opencodeCodexURL       = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/prompt/codex.txt"
+	opencodeCodexHeaderURL = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/prompt/codex_header.txt"
+	codexCacheTTL          = 15 * time.Minute
 )
 
 type codexModelFamily string
@@ -177,7 +178,7 @@ func applyCodexOAuthTransform(reqBody map[string]any) codexTransformResult {
 		result.PromptCacheKey = strings.TrimSpace(v)
 	}
 
-	instructions := strings.TrimSpace(getCodexInstructions(normalizedModel))
+	instructions := strings.TrimSpace(getOpenCodeCodexHeader())
 	existingInstructions, _ := reqBody["instructions"].(string)
 	existingInstructions = strings.TrimSpace(existingInstructions)
 
@@ -408,13 +409,13 @@ func parseReleaseTagFromHTML(html string) (string, error) {
 	return "", fmt.Errorf("release tag not found")
 }
 
-func getOpenCodeCodexPrompt() string {
+func getOpenCodeCachedPrompt(url, cacheFileName, metaFileName string) string {
 	cacheDir := codexCachePath("")
 	if cacheDir == "" {
 		return ""
 	}
-	cacheFile := filepath.Join(cacheDir, "opencode-codex.txt")
-	metaFile := filepath.Join(cacheDir, "opencode-codex-meta.json")
+	cacheFile := filepath.Join(cacheDir, cacheFileName)
+	metaFile := filepath.Join(cacheDir, metaFileName)
 
 	var cachedContent string
 	if content, ok := readFile(cacheFile); ok {
@@ -428,7 +429,7 @@ func getOpenCodeCodexPrompt() string {
 		}
 	}
 
-	content, etag, status, err := fetchWithETag(opencodeCodexURL, meta.ETag)
+	content, etag, status, err := fetchWithETag(url, meta.ETag)
 	if err == nil && status == http.StatusNotModified && cachedContent != "" {
 		return cachedContent
 	}
@@ -444,6 +445,14 @@ func getOpenCodeCodexPrompt() string {
 	}
 
 	return cachedContent
+}
+
+func getOpenCodeCodexPrompt() string {
+	return getOpenCodeCachedPrompt(opencodeCodexURL, "opencode-codex.txt", "opencode-codex-meta.json")
+}
+
+func getOpenCodeCodexHeader() string {
+	return getOpenCodeCachedPrompt(opencodeCodexHeaderURL, "opencode-codex-header.txt", "opencode-codex-header-meta.json")
 }
 
 func filterCodexInput(input []any) []any {
