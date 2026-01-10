@@ -9,43 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
 )
 
 const (
-	codexReleaseAPIURL     = "https://api.github.com/repos/openai/codex/releases/latest"
-	codexReleaseHTMLURL    = "https://github.com/openai/codex/releases/latest"
-	codexPromptURLFmt      = "https://raw.githubusercontent.com/openai/codex/%s/codex-rs/core/%s"
-	opencodeCodexURL       = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/prompt/codex.txt"
 	opencodeCodexHeaderURL = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/prompt/codex_header.txt"
 	codexCacheTTL          = 15 * time.Minute
 )
-
-type codexModelFamily string
-
-const (
-	codexFamilyGpt52Codex codexModelFamily = "gpt-5.2-codex"
-	codexFamilyCodexMax   codexModelFamily = "codex-max"
-	codexFamilyCodex      codexModelFamily = "codex"
-	codexFamilyGpt52      codexModelFamily = "gpt-5.2"
-	codexFamilyGpt51      codexModelFamily = "gpt-5.1"
-)
-
-var codexPromptFiles = map[codexModelFamily]string{
-	codexFamilyGpt52Codex: "gpt-5.2-codex_prompt.md",
-	codexFamilyCodexMax:   "gpt-5.1-codex-max_prompt.md",
-	codexFamilyCodex:      "gpt_5_codex_prompt.md",
-	codexFamilyGpt52:      "gpt_5_2_prompt.md",
-	codexFamilyGpt51:      "gpt_5_1_prompt.md",
-}
-
-var codexCacheFiles = map[codexModelFamily]string{
-	codexFamilyGpt52Codex: "gpt-5.2-codex-instructions.md",
-	codexFamilyCodexMax:   "codex-max-instructions.md",
-	codexFamilyCodex:      "codex-instructions.md",
-	codexFamilyGpt52:      "gpt-5.2-instructions.md",
-	codexFamilyGpt51:      "gpt-5.1-instructions.md",
-}
 
 var codexModelMap = map[string]string{
 	"gpt-5.1-codex":             "gpt-5.1-codex",
@@ -87,53 +56,16 @@ var codexModelMap = map[string]string{
 	"gpt-5-nano":                "gpt-5.1",
 }
 
-var opencodePromptSignatures = []string{
-	"you are a coding agent running in the opencode",
-	"you are opencode, an agent",
-	"you are opencode, an interactive cli agent",
-	"you are opencode, an interactive cli tool",
-	"you are opencode, the best coding agent on the planet",
-}
-
-var opencodeContextMarkers = []string{
-	"here is some useful information about the environment you are running in:",
-	"<env>",
-	"instructions from:",
-	"<instructions>",
-}
-
 type codexTransformResult struct {
 	Modified        bool
 	NormalizedModel string
 	PromptCacheKey  string
 }
 
-type codexCacheMetadata struct {
-	ETag        string `json:"etag"`
-	Tag         string `json:"tag"`
-	LastChecked int64  `json:"lastChecked"`
-	URL         string `json:"url"`
-}
-
 type opencodeCacheMetadata struct {
 	ETag        string `json:"etag"`
 	LastFetch   string `json:"lastFetch,omitempty"`
 	LastChecked int64  `json:"lastChecked"`
-}
-
-func codexModeEnabled() bool {
-	value := strings.TrimSpace(os.Getenv("CODEX_MODE"))
-	if value == "" {
-		return true
-	}
-	switch strings.ToLower(value) {
-	case "0", "false", "no", "off":
-		return false
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return true
-	}
 }
 
 func applyCodexOAuthTransform(reqBody map[string]any) codexTransformResult {
@@ -271,144 +203,6 @@ func getNormalizedCodexModel(modelID string) string {
 	return ""
 }
 
-func getCodexModelFamily(normalizedModel string) codexModelFamily {
-	model := strings.ToLower(normalizedModel)
-	if strings.Contains(model, "gpt-5.2-codex") || strings.Contains(model, "gpt 5.2 codex") {
-		return codexFamilyGpt52Codex
-	}
-	if strings.Contains(model, "codex-max") {
-		return codexFamilyCodexMax
-	}
-	if strings.Contains(model, "codex") || strings.HasPrefix(model, "codex-") {
-		return codexFamilyCodex
-	}
-	if strings.Contains(model, "gpt-5.2") {
-		return codexFamilyGpt52
-	}
-	return codexFamilyGpt51
-}
-
-func getCodexInstructions(normalizedModel string) string {
-	if normalizedModel == "" {
-		normalizedModel = "gpt-5.1-codex"
-	}
-
-	modelFamily := getCodexModelFamily(normalizedModel)
-	promptFile := codexPromptFiles[modelFamily]
-	cacheFile := codexCachePath(codexCacheFiles[modelFamily])
-	metaFile := codexCachePath(strings.TrimSuffix(codexCacheFiles[modelFamily], ".md") + "-meta.json")
-
-	var meta codexCacheMetadata
-	if loadJSON(metaFile, &meta) && meta.LastChecked > 0 {
-		if time.Since(time.UnixMilli(meta.LastChecked)) < codexCacheTTL {
-			if cached, ok := readFile(cacheFile); ok {
-				return cached
-			}
-		}
-	}
-
-	latestTag, err := getLatestCodexReleaseTag()
-	if err != nil {
-		if cached, ok := readFile(cacheFile); ok {
-			return cached
-		}
-		return ""
-	}
-
-	if meta.Tag != latestTag {
-		meta.ETag = ""
-	}
-
-	promptURL := fmt.Sprintf(codexPromptURLFmt, latestTag, promptFile)
-	content, etag, status, err := fetchWithETag(promptURL, meta.ETag)
-	if err == nil && status == http.StatusNotModified {
-		if cached, ok := readFile(cacheFile); ok {
-			return cached
-		}
-	}
-	if err == nil && status >= 200 && status < 300 {
-		if content != "" {
-			if err := writeFile(cacheFile, content); err == nil {
-				meta = codexCacheMetadata{
-					ETag:        etag,
-					Tag:         latestTag,
-					LastChecked: time.Now().UnixMilli(),
-					URL:         promptURL,
-				}
-				_ = writeJSON(metaFile, meta)
-			}
-			return content
-		}
-	}
-
-	if cached, ok := readFile(cacheFile); ok {
-		return cached
-	}
-
-	return ""
-}
-
-func getLatestCodexReleaseTag() (string, error) {
-	body, _, status, err := fetchWithETag(codexReleaseAPIURL, "")
-	if err == nil && status >= 200 && status < 300 && body != "" {
-		var data struct {
-			TagName string `json:"tag_name"`
-		}
-		if json.Unmarshal([]byte(body), &data) == nil && data.TagName != "" {
-			return data.TagName, nil
-		}
-	}
-
-	resp, err := http.Get(codexReleaseHTMLURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	finalURL := ""
-	if resp.Request != nil && resp.Request.URL != nil {
-		finalURL = resp.Request.URL.String()
-	}
-	if finalURL != "" {
-		if tag := parseReleaseTagFromURL(finalURL); tag != "" {
-			return tag, nil
-		}
-	}
-
-	html, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	return parseReleaseTagFromHTML(string(html))
-}
-
-func parseReleaseTagFromURL(url string) string {
-	parts := strings.Split(url, "/tag/")
-	if len(parts) < 2 {
-		return ""
-	}
-	tag := parts[len(parts)-1]
-	if tag == "" || strings.Contains(tag, "/") {
-		return ""
-	}
-	return tag
-}
-
-func parseReleaseTagFromHTML(html string) (string, error) {
-	const marker = "/openai/codex/releases/tag/"
-	idx := strings.Index(html, marker)
-	if idx == -1 {
-		return "", fmt.Errorf("release tag not found")
-	}
-	rest := html[idx+len(marker):]
-	for i, r := range rest {
-		if r == '"' || r == '\'' {
-			return rest[:i], nil
-		}
-	}
-	return "", fmt.Errorf("release tag not found")
-}
-
 func getOpenCodeCachedPrompt(url, cacheFileName, metaFileName string) string {
 	cacheDir := codexCachePath("")
 	if cacheDir == "" {
@@ -447,10 +241,6 @@ func getOpenCodeCachedPrompt(url, cacheFileName, metaFileName string) string {
 	return cachedContent
 }
 
-func getOpenCodeCodexPrompt() string {
-	return getOpenCodeCachedPrompt(opencodeCodexURL, "opencode-codex.txt", "opencode-codex-meta.json")
-}
-
 func getOpenCodeCodexHeader() string {
 	return getOpenCodeCachedPrompt(opencodeCodexHeaderURL, "opencode-codex-header.txt", "opencode-codex-header-meta.json")
 }
@@ -470,9 +260,7 @@ func filterCodexInput(input []any) []any {
 		if typ, ok := m["type"].(string); ok && typ == "item_reference" {
 			continue
 		}
-		if _, ok := m["id"]; ok {
-			delete(m, "id")
-		}
+		delete(m, "id")
 		filtered = append(filtered, m)
 	}
 	return filtered
@@ -489,180 +277,6 @@ func prependSystemInstruction(input []any, instructions string) []any {
 		},
 	}
 	return append([]any{message}, input...)
-}
-
-func filterOpenCodeSystemPromptsWithCachedPrompt(input []any, cachedPrompt string) []any {
-	if len(input) == 0 {
-		return input
-	}
-	cachedPrompt = strings.TrimSpace(cachedPrompt)
-
-	result := make([]any, 0, len(input))
-	for _, item := range input {
-		m, ok := item.(map[string]any)
-		if !ok {
-			result = append(result, item)
-			continue
-		}
-		role, _ := m["role"].(string)
-		if role == "user" {
-			result = append(result, item)
-			continue
-		}
-		if !isOpenCodeSystemPrompt(m, cachedPrompt) {
-			result = append(result, item)
-			continue
-		}
-		contentText := getContentText(m)
-		if contentText == "" {
-			continue
-		}
-		if preserved := extractOpenCodeContext(contentText); preserved != "" {
-			result = append(result, replaceContentText(m, preserved))
-		}
-	}
-	return result
-}
-
-func isOpenCodeSystemPrompt(item map[string]any, cachedPrompt string) bool {
-	role, _ := item["role"].(string)
-	if role != "developer" && role != "system" {
-		return false
-	}
-
-	contentText := getContentText(item)
-	if contentText == "" {
-		return false
-	}
-
-	if cachedPrompt != "" {
-		contentTrimmed := strings.TrimSpace(contentText)
-		cachedTrimmed := strings.TrimSpace(cachedPrompt)
-		if contentTrimmed == cachedTrimmed {
-			return true
-		}
-		if strings.HasPrefix(contentTrimmed, cachedTrimmed) {
-			return true
-		}
-		contentPrefix := contentTrimmed
-		if len(contentPrefix) > 200 {
-			contentPrefix = contentPrefix[:200]
-		}
-		cachedPrefix := cachedTrimmed
-		if len(cachedPrefix) > 200 {
-			cachedPrefix = cachedPrefix[:200]
-		}
-		if contentPrefix == cachedPrefix {
-			return true
-		}
-	}
-
-	normalized := strings.ToLower(strings.TrimLeftFunc(contentText, unicode.IsSpace))
-	for _, signature := range opencodePromptSignatures {
-		if strings.HasPrefix(normalized, signature) {
-			return true
-		}
-	}
-	return false
-}
-
-func getContentText(item map[string]any) string {
-	content := item["content"]
-	if content == nil {
-		return ""
-	}
-	switch v := content.(type) {
-	case string:
-		return v
-	case []any:
-		var parts []string
-		for _, part := range v {
-			partMap, ok := part.(map[string]any)
-			if !ok {
-				continue
-			}
-			typ, _ := partMap["type"].(string)
-			if typ != "input_text" {
-				continue
-			}
-			if text, ok := partMap["text"].(string); ok && text != "" {
-				parts = append(parts, text)
-			}
-		}
-		return strings.Join(parts, "\n")
-	default:
-		return ""
-	}
-}
-
-func replaceContentText(item map[string]any, contentText string) map[string]any {
-	content := item["content"]
-	switch content.(type) {
-	case string:
-		item["content"] = contentText
-	case []any:
-		item["content"] = []any{map[string]any{
-			"type": "input_text",
-			"text": contentText,
-		}}
-	default:
-		item["content"] = contentText
-	}
-	return item
-}
-
-func extractOpenCodeContext(contentText string) string {
-	lower := strings.ToLower(contentText)
-	earliest := -1
-	for _, marker := range opencodeContextMarkers {
-		idx := strings.Index(lower, marker)
-		if idx >= 0 && (earliest == -1 || idx < earliest) {
-			earliest = idx
-		}
-	}
-	if earliest == -1 {
-		return ""
-	}
-	return strings.TrimLeftFunc(contentText[earliest:], unicode.IsSpace)
-}
-
-func addCodexBridgeMessage(input []any) []any {
-	message := map[string]any{
-		"type": "message",
-		"role": "developer",
-		"content": []any{
-			map[string]any{
-				"type": "input_text",
-				"text": codexOpenCodeBridge,
-			},
-		},
-	}
-	return append([]any{message}, input...)
-}
-
-func addToolRemapMessage(input []any) []any {
-	message := map[string]any{
-		"type": "message",
-		"role": "developer",
-		"content": []any{
-			map[string]any{
-				"type": "input_text",
-				"text": codexToolRemapMessage,
-			},
-		},
-	}
-	return append([]any{message}, input...)
-}
-
-func hasTools(reqBody map[string]any) bool {
-	tools, ok := reqBody["tools"]
-	if !ok || tools == nil {
-		return false
-	}
-	if list, ok := tools.([]any); ok {
-		return len(list) > 0
-	}
-	return true
 }
 
 func normalizeCodexTools(reqBody map[string]any) bool {
@@ -761,7 +375,7 @@ func normalizeOrphanedToolOutputs(input []any) []any {
 		switch m["type"] {
 		case "function_call_output":
 			callID := getCallID(m)
-			if callID == "" || !(functionCallIDs[callID] || localShellCallIDs[callID]) {
+			if callID == "" || (!functionCallIDs[callID] && !localShellCallIDs[callID]) {
 				output = append(output, convertOrphanedOutputToMessage(m, callID))
 				continue
 			}
@@ -828,183 +442,6 @@ func stringifyOutput(output any) string {
 			return string(data)
 		}
 		return fmt.Sprintf("%v", v)
-	}
-}
-
-func resolveCodexReasoning(reqBody map[string]any, modelName string) (string, string) {
-	existingEffort := getReasoningValue(reqBody, "effort", "reasoningEffort")
-	existingSummary := getReasoningValue(reqBody, "summary", "reasoningSummary")
-	return getReasoningConfig(modelName, existingEffort, existingSummary)
-}
-
-func getReasoningValue(reqBody map[string]any, field, providerField string) string {
-	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
-		if value, ok := reasoning[field].(string); ok && value != "" {
-			return value
-		}
-	}
-	if provider := getProviderOpenAI(reqBody); provider != nil {
-		if value, ok := provider[providerField].(string); ok && value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func resolveTextVerbosity(reqBody map[string]any) string {
-	if text, ok := reqBody["text"].(map[string]any); ok {
-		if value, ok := text["verbosity"].(string); ok && value != "" {
-			return value
-		}
-	}
-	if provider := getProviderOpenAI(reqBody); provider != nil {
-		if value, ok := provider["textVerbosity"].(string); ok && value != "" {
-			return value
-		}
-	}
-	return "medium"
-}
-
-func resolveInclude(reqBody map[string]any) []any {
-	include := toStringSlice(reqBody["include"])
-	if len(include) == 0 {
-		if provider := getProviderOpenAI(reqBody); provider != nil {
-			include = toStringSlice(provider["include"])
-		}
-	}
-	if len(include) == 0 {
-		include = []string{"reasoning.encrypted_content"}
-	}
-
-	unique := make(map[string]struct{}, len(include)+1)
-	for _, value := range include {
-		if value == "" {
-			continue
-		}
-		unique[value] = struct{}{}
-	}
-	if _, ok := unique["reasoning.encrypted_content"]; !ok {
-		include = append(include, "reasoning.encrypted_content")
-		unique["reasoning.encrypted_content"] = struct{}{}
-	}
-
-	final := make([]any, 0, len(unique))
-	for _, value := range include {
-		if value == "" {
-			continue
-		}
-		if _, ok := unique[value]; ok {
-			final = append(final, value)
-			delete(unique, value)
-		}
-	}
-	for value := range unique {
-		final = append(final, value)
-	}
-	return final
-}
-
-func getReasoningConfig(modelName, effortOverride, summaryOverride string) (string, string) {
-	normalized := strings.ToLower(modelName)
-
-	isGpt52Codex := strings.Contains(normalized, "gpt-5.2-codex") || strings.Contains(normalized, "gpt 5.2 codex")
-	isGpt52General := (strings.Contains(normalized, "gpt-5.2") || strings.Contains(normalized, "gpt 5.2")) && !isGpt52Codex
-	isCodexMax := strings.Contains(normalized, "codex-max") || strings.Contains(normalized, "codex max")
-	isCodexMini := strings.Contains(normalized, "codex-mini") ||
-		strings.Contains(normalized, "codex mini") ||
-		strings.Contains(normalized, "codex_mini") ||
-		strings.Contains(normalized, "codex-mini-latest")
-	isCodex := strings.Contains(normalized, "codex") && !isCodexMini
-	isLightweight := !isCodexMini && (strings.Contains(normalized, "nano") || strings.Contains(normalized, "mini"))
-	isGpt51General := (strings.Contains(normalized, "gpt-5.1") || strings.Contains(normalized, "gpt 5.1")) &&
-		!isCodex && !isCodexMax && !isCodexMini
-
-	supportsXhigh := isGpt52General || isGpt52Codex || isCodexMax
-	supportsNone := isGpt52General || isGpt51General
-
-	defaultEffort := "medium"
-	if isCodexMini {
-		defaultEffort = "medium"
-	} else if supportsXhigh {
-		defaultEffort = "high"
-	} else if isLightweight {
-		defaultEffort = "minimal"
-	}
-
-	effort := effortOverride
-	if effort == "" {
-		effort = defaultEffort
-	}
-
-	if isCodexMini {
-		if effort == "minimal" || effort == "low" || effort == "none" {
-			effort = "medium"
-		}
-		if effort == "xhigh" {
-			effort = "high"
-		}
-		if effort != "high" && effort != "medium" {
-			effort = "medium"
-		}
-	}
-
-	if !supportsXhigh && effort == "xhigh" {
-		effort = "high"
-	}
-	if !supportsNone && effort == "none" {
-		effort = "low"
-	}
-	if effort == "minimal" {
-		effort = "low"
-	}
-
-	summary := summaryOverride
-	if summary == "" {
-		summary = "auto"
-	}
-
-	return effort, summary
-}
-
-func getProviderOpenAI(reqBody map[string]any) map[string]any {
-	providerOptions, ok := reqBody["providerOptions"].(map[string]any)
-	if !ok || providerOptions == nil {
-		return nil
-	}
-	openaiOptions, ok := providerOptions["openai"].(map[string]any)
-	if !ok || openaiOptions == nil {
-		return nil
-	}
-	return openaiOptions
-}
-
-func ensureMap(value any) map[string]any {
-	if value == nil {
-		return map[string]any{}
-	}
-	if m, ok := value.(map[string]any); ok {
-		return m
-	}
-	return map[string]any{}
-}
-
-func toStringSlice(value any) []string {
-	if value == nil {
-		return nil
-	}
-	switch v := value.(type) {
-	case []string:
-		return append([]string{}, v...)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if text, ok := item.(string); ok {
-				out = append(out, text)
-			}
-		}
-		return out
-	default:
-		return nil
 	}
 }
 
@@ -1079,7 +516,9 @@ func fetchWithETag(url, etag string) (string, string, int, error) {
 	if err != nil {
 		return "", "", 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
