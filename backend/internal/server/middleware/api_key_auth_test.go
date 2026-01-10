@@ -26,6 +26,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		ID:               42,
 		Name:             "sub",
 		Status:           service.StatusActive,
+		Hydrated:         true,
 		SubscriptionType: service.SubscriptionTypeSubscription,
 		DailyLimitUSD:    &limit,
 	}
@@ -119,6 +120,7 @@ func TestAPIKeyAuthSetsGroupContext(t *testing.T) {
 		Name:     "g1",
 		Status:   service.StatusActive,
 		Platform: service.PlatformAnthropic,
+		Hydrated: true,
 	}
 	user := &service.User{
 		ID:          7,

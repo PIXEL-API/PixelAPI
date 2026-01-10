@@ -142,6 +142,7 @@ func TestApiKeyAuthWithSubscriptionGoogleSetsGroupContext(t *testing.T) {
 		Name:     "g1",
 		Status:   service.StatusActive,
 		Platform: service.PlatformGemini,
+		Hydrated: true,
 	}
 	user := &service.User{
 		ID:          7,
