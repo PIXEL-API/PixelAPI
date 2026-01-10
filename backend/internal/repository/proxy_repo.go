@@ -133,6 +133,55 @@ func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination
 	return outProxies, paginationResultFromTotal(int64(total), params), nil
 }
 
+// ListWithFiltersAndAccountCount lists proxies with filters and includes account count per proxy
+func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
+	q := r.client.Proxy.Query()
+	if protocol != "" {
+		q = q.Where(proxy.ProtocolEQ(protocol))
+	}
+	if status != "" {
+		q = q.Where(proxy.StatusEQ(status))
+	}
+	if search != "" {
+		q = q.Where(proxy.NameContainsFold(search))
+	}
+
+	total, err := q.Count(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	proxies, err := q.
+		Offset(params.Offset()).
+		Limit(params.Limit()).
+		Order(dbent.Desc(proxy.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Get account counts
+	counts, err := r.GetAccountCountsForProxies(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Build result with account counts
+	result := make([]service.ProxyWithAccountCount, 0, len(proxies))
+	for i := range proxies {
+		proxyOut := proxyEntityToService(proxies[i])
+		if proxyOut == nil {
+			continue
+		}
+		result = append(result, service.ProxyWithAccountCount{
+			Proxy:        *proxyOut,
+			AccountCount: counts[proxyOut.ID],
+		})
+	}
+
+	return result, paginationResultFromTotal(int64(total), params), nil
+}
+
 func (r *proxyRepository) ListActive(ctx context.Context) ([]service.Proxy, error) {
 	proxies, err := r.client.Proxy.Query().
 		Where(proxy.StatusEQ(service.StatusActive)).

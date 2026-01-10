@@ -109,12 +109,12 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 	cacheKey := "gemini:" + sessionHash
 
 	if sessionHash != "" {
-		accountID, err := s.cache.GetSessionAccountID(ctx, cacheKey)
+		accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), cacheKey)
 		if err == nil && accountID > 0 {
 			if _, excluded := excludedIDs[accountID]; !excluded {
 				account, err := s.accountRepo.GetByID(ctx, accountID)
 				// 检查账号是否有效：原生平台直接匹配，antigravity 需要启用混合调度
-				if err == nil && account.IsSchedulable() && (requestedModel == "" || s.isModelSupportedByAccount(account, requestedModel)) {
+				if err == nil && account.IsSchedulableForModel(requestedModel) && (requestedModel == "" || s.isModelSupportedByAccount(account, requestedModel)) {
 					valid := false
 					if account.Platform == platform {
 						valid = true
@@ -133,7 +133,7 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 							}
 						}
 						if usable {
-							_ = s.cache.RefreshSessionTTL(ctx, cacheKey, geminiStickySessionTTL)
+							_ = s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), cacheKey, geminiStickySessionTTL)
 							return account, nil
 						}
 					}
@@ -170,6 +170,9 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 		// 混合调度模式下：原生平台直接通过，antigravity 需要启用 mixed_scheduling
 		// 非混合调度模式（antigravity 分组）：不需要过滤
 		if useMixedScheduling && acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			continue
+		}
+		if !acc.IsSchedulableForModel(requestedModel) {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccount(acc, requestedModel) {
@@ -217,7 +220,7 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 	}
 
 	if sessionHash != "" {
-		_ = s.cache.SetSessionAccountID(ctx, cacheKey, selected.ID, geminiStickySessionTTL)
+		_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), cacheKey, selected.ID, geminiStickySessionTTL)
 	}
 
 	return selected, nil

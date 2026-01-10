@@ -103,6 +103,10 @@ func (s *accountRepoStub) SetSchedulable(ctx context.Context, id int64, schedula
 	panic("unexpected SetSchedulable call")
 }
 
+func (s *accountRepoStub) AutoPauseExpiredAccounts(ctx context.Context, now time.Time) (int64, error) {
+	panic("unexpected AutoPauseExpiredAccounts call")
+}
+
 func (s *accountRepoStub) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
 	panic("unexpected BindGroups call")
 }
@@ -135,6 +139,10 @@ func (s *accountRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt 
 	panic("unexpected SetRateLimited call")
 }
 
+func (s *accountRepoStub) SetAntigravityQuotaScopeLimit(ctx context.Context, id int64, scope AntigravityQuotaScope, resetAt time.Time) error {
+	panic("unexpected SetAntigravityQuotaScopeLimit call")
+}
+
 func (s *accountRepoStub) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
 	panic("unexpected SetOverloaded call")
 }
@@ -149,6 +157,10 @@ func (s *accountRepoStub) ClearTempUnschedulable(ctx context.Context, id int64) 
 
 func (s *accountRepoStub) ClearRateLimit(ctx context.Context, id int64) error {
 	panic("unexpected ClearRateLimit call")
+}
+
+func (s *accountRepoStub) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
+	panic("unexpected ClearAntigravityQuotaScopes call")
 }
 
 func (s *accountRepoStub) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {

@@ -1,7 +1,11 @@
 // Package dto provides data transfer objects for HTTP handlers.
 package dto
 
-import "github.com/Wei-Shaw/sub2api/internal/service"
+import (
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
+)
 
 func UserFromServiceShallow(u *service.User) *User {
 	if u == nil {
@@ -49,16 +53,18 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		return nil
 	}
 	return &APIKey{
-		ID:        k.ID,
-		UserID:    k.UserID,
-		Key:       k.Key,
-		Name:      k.Name,
-		GroupID:   k.GroupID,
-		Status:    k.Status,
-		CreatedAt: k.CreatedAt,
-		UpdatedAt: k.UpdatedAt,
-		User:      UserFromServiceShallow(k.User),
-		Group:     GroupFromServiceShallow(k.Group),
+		ID:          k.ID,
+		UserID:      k.UserID,
+		Key:         k.Key,
+		Name:        k.Name,
+		GroupID:     k.GroupID,
+		Status:      k.Status,
+		IPWhitelist: k.IPWhitelist,
+		IPBlacklist: k.IPBlacklist,
+		CreatedAt:   k.CreatedAt,
+		UpdatedAt:   k.UpdatedAt,
+		User:        UserFromServiceShallow(k.User),
+		Group:       GroupFromServiceShallow(k.Group),
 	}
 }
 
@@ -81,6 +87,8 @@ func GroupFromServiceShallow(g *service.Group) *Group {
 		ImagePrice1K:     g.ImagePrice1K,
 		ImagePrice2K:     g.ImagePrice2K,
 		ImagePrice4K:     g.ImagePrice4K,
+		ClaudeCodeOnly:   g.ClaudeCodeOnly,
+		FallbackGroupID:  g.FallbackGroupID,
 		CreatedAt:        g.CreatedAt,
 		UpdatedAt:        g.UpdatedAt,
 		AccountCount:     g.AccountCount,
@@ -120,6 +128,8 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Status:                  a.Status,
 		ErrorMessage:            a.ErrorMessage,
 		LastUsedAt:              a.LastUsedAt,
+		ExpiresAt:               timeToUnixSeconds(a.ExpiresAt),
+		AutoPauseOnExpired:      a.AutoPauseOnExpired,
 		CreatedAt:               a.CreatedAt,
 		UpdatedAt:               a.UpdatedAt,
 		Schedulable:             a.Schedulable,
@@ -155,6 +165,14 @@ func AccountFromService(a *service.Account) *Account {
 		}
 	}
 	return out
+}
+
+func timeToUnixSeconds(value *time.Time) *int64 {
+	if value == nil {
+		return nil
+	}
+	ts := value.Unix()
+	return &ts
 }
 
 func AccountGroupFromService(ag *service.AccountGroup) *AccountGroup {
@@ -220,11 +238,26 @@ func RedeemCodeFromService(rc *service.RedeemCode) *RedeemCode {
 	}
 }
 
-func UsageLogFromService(l *service.UsageLog) *UsageLog {
+// AccountSummaryFromService returns a minimal AccountSummary for usage log display.
+// Only includes ID and Name - no sensitive fields like Credentials, Proxy, etc.
+func AccountSummaryFromService(a *service.Account) *AccountSummary {
+	if a == nil {
+		return nil
+	}
+	return &AccountSummary{
+		ID:   a.ID,
+		Name: a.Name,
+	}
+}
+
+// usageLogFromServiceBase is a helper that converts service UsageLog to DTO.
+// The account parameter allows caller to control what Account info is included.
+// The includeIPAddress parameter controls whether to include the IP address (admin-only).
+func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary, includeIPAddress bool) *UsageLog {
 	if l == nil {
 		return nil
 	}
-	return &UsageLog{
+	result := &UsageLog{
 		ID:                    l.ID,
 		UserID:                l.UserID,
 		APIKeyID:              l.APIKeyID,
@@ -252,13 +285,34 @@ func UsageLogFromService(l *service.UsageLog) *UsageLog {
 		FirstTokenMs:          l.FirstTokenMs,
 		ImageCount:            l.ImageCount,
 		ImageSize:             l.ImageSize,
+		UserAgent:             l.UserAgent,
 		CreatedAt:             l.CreatedAt,
 		User:                  UserFromServiceShallow(l.User),
 		APIKey:                APIKeyFromService(l.APIKey),
-		Account:               AccountFromService(l.Account),
+		Account:               account,
 		Group:                 GroupFromServiceShallow(l.Group),
 		Subscription:          UserSubscriptionFromService(l.Subscription),
 	}
+	// IP 地址仅对管理员可见
+	if includeIPAddress {
+		result.IPAddress = l.IPAddress
+	}
+	return result
+}
+
+// UsageLogFromService converts a service UsageLog to DTO for regular users.
+// It excludes Account details and IP address - users should not see these.
+func UsageLogFromService(l *service.UsageLog) *UsageLog {
+	return usageLogFromServiceBase(l, nil, false)
+}
+
+// UsageLogFromServiceAdmin converts a service UsageLog to DTO for admin users.
+// It includes minimal Account info (ID, Name only) and IP address.
+func UsageLogFromServiceAdmin(l *service.UsageLog) *UsageLog {
+	if l == nil {
+		return nil
+	}
+	return usageLogFromServiceBase(l, AccountSummaryFromService(l.Account), true)
 }
 
 func SettingFromService(s *service.Setting) *Setting {
