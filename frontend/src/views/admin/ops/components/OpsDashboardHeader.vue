@@ -703,6 +703,7 @@ function openJobsDetails() {
         />
 
         <Select
+          v-if="false"
           :model-value="queryMode"
           :options="queryModeOptions"
           class="relative w-full sm:w-[170px]"
