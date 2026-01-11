@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import Select from '@/components/common/Select.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
 import { opsAPI } from '@/api/admin/ops'
 import type { AlertRule, MetricType, Operator } from '../types'
 import type { OpsSeverity } from '@/api/admin/ops'
@@ -42,17 +42,50 @@ const saving = ref(false)
 const editingId = ref<number | null>(null)
 const draft = ref<AlertRule | null>(null)
 
+type MetricGroup = 'system' | 'group' | 'account'
+
+const metricDefinitions = computed(() => {
+  return [
+    // System-level metrics
+    { type: 'success_rate' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.successRate') },
+    { type: 'error_rate' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.errorRate') },
+    { type: 'upstream_error_rate' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.upstreamErrorRate') },
+    { type: 'p95_latency_ms' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.p95') },
+    { type: 'p99_latency_ms' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.p99') },
+    { type: 'cpu_usage_percent' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.cpu') },
+    { type: 'memory_usage_percent' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.memory') },
+    { type: 'concurrency_queue_depth' as MetricType, group: 'system' as const, label: t('admin.ops.alertRules.metrics.queueDepth') },
+
+    // Group-level metrics (requires group_id filter)
+    { type: 'group_available_accounts' as MetricType, group: 'group' as const, label: t('admin.ops.alertRules.metrics.groupAvailableAccounts') },
+    { type: 'group_available_ratio' as MetricType, group: 'group' as const, label: t('admin.ops.alertRules.metrics.groupAvailableRatio') },
+    { type: 'group_rate_limit_ratio' as MetricType, group: 'group' as const, label: t('admin.ops.alertRules.metrics.groupRateLimitRatio') },
+
+    // Account-level metrics
+    { type: 'account_rate_limited_count' as MetricType, group: 'account' as const, label: t('admin.ops.alertRules.metrics.accountRateLimitedCount') },
+    { type: 'account_error_count' as MetricType, group: 'account' as const, label: t('admin.ops.alertRules.metrics.accountErrorCount') },
+    { type: 'account_error_ratio' as MetricType, group: 'account' as const, label: t('admin.ops.alertRules.metrics.accountErrorRatio') },
+    { type: 'overload_account_count' as MetricType, group: 'account' as const, label: t('admin.ops.alertRules.metrics.overloadAccountCount') }
+  ] satisfies Array<{ type: MetricType; group: MetricGroup; label: string }>
+})
+
 const metricOptions = computed(() => {
-  const items: Array<{ value: MetricType; label: string }> = [
-    { value: 'success_rate', label: t('admin.ops.alertRules.metrics.successRate') },
-    { value: 'error_rate', label: t('admin.ops.alertRules.metrics.errorRate') },
-    { value: 'p95_latency_ms', label: t('admin.ops.alertRules.metrics.p95') },
-    { value: 'p99_latency_ms', label: t('admin.ops.alertRules.metrics.p99') },
-    { value: 'cpu_usage_percent', label: t('admin.ops.alertRules.metrics.cpu') },
-    { value: 'memory_usage_percent', label: t('admin.ops.alertRules.metrics.memory') },
-    { value: 'concurrency_queue_depth', label: t('admin.ops.alertRules.metrics.queueDepth') }
-  ]
-  return items
+  const buildGroup = (group: MetricGroup): SelectOption[] => {
+    const items = metricDefinitions.value.filter((m) => m.group === group)
+    if (items.length === 0) return []
+    const headerValue = `__group__${group}`
+    return [
+      {
+        value: headerValue,
+        label: t(`admin.ops.alertRules.metricGroups.${group}`),
+        disabled: true,
+        kind: 'group'
+      },
+      ...items.map((m) => ({ value: m.type, label: m.label }))
+    ]
+  }
+
+  return [...buildGroup('system'), ...buildGroup('group'), ...buildGroup('account')]
 })
 
 const operatorOptions = computed(() => {
