@@ -391,7 +391,10 @@ func tryAcquireOpsWSIPSlot(clientIP string, limit int32) bool {
 	}
 
 	v, _ := wsConnCountByIP.LoadOrStore(clientIP, &atomic.Int32{})
-	counter, ok := v.(*atomic.Int32); if !ok { return }
+	counter, ok := v.(*atomic.Int32)
+	if !ok {
+		return false
+	}
 
 	for {
 		current := counter.Load()

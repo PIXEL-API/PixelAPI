@@ -94,20 +94,19 @@ func (s *OpsCleanupService) Start() {
 			if parsed, err := time.LoadLocation(strings.TrimSpace(s.cfg.Timezone)); err == nil && parsed != nil {
 				loc = parsed
 			}
-		}
-
-		c := cron.New(cron.WithParser(opsCleanupCronParser), cron.WithLocation(loc))
-		id, err := c.AddFunc(schedule, func() { s.runScheduled() })
-		if err != nil {
-			log.Printf("[OpsCleanup] not started (invalid schedule=%q): %v", schedule, err)
-			return
-		}
-		s.cron = c
-		s.entryID = id
-		s.cron.Start()
-		log.Printf("[OpsCleanup] started (schedule=%q tz=%s)", schedule, loc.String())
-	})
-}
+			}
+	
+			c := cron.New(cron.WithParser(opsCleanupCronParser), cron.WithLocation(loc))
+			_, err := c.AddFunc(schedule, func() { s.runScheduled() })
+			if err != nil {
+				log.Printf("[OpsCleanup] not started (invalid schedule=%q): %v", schedule, err)
+				return
+			}
+			s.cron = c
+			s.cron.Start()
+			log.Printf("[OpsCleanup] started (schedule=%q tz=%s)", schedule, loc.String())
+		})
+	}
 
 func (s *OpsCleanupService) Stop() {
 	if s == nil {
