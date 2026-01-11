@@ -68,3 +68,21 @@ type OpsAlertRuntimeSettings struct {
 	Silencing       OpsAlertSilencingSettings  `json:"silencing"`
 }
 
+// OpsAdvancedSettings stores advanced ops configuration (data retention, aggregation).
+type OpsAdvancedSettings struct {
+	DataRetention OpsDataRetentionSettings `json:"data_retention"`
+	Aggregation   OpsAggregationSettings   `json:"aggregation"`
+}
+
+type OpsDataRetentionSettings struct {
+	CleanupEnabled            bool   `json:"cleanup_enabled"`
+	CleanupSchedule           string `json:"cleanup_schedule"`
+	ErrorLogRetentionDays     int    `json:"error_log_retention_days"`
+	MinuteMetricsRetentionDays int   `json:"minute_metrics_retention_days"`
+	HourlyMetricsRetentionDays int   `json:"hourly_metrics_retention_days"`
+}
+
+type OpsAggregationSettings struct {
+	AggregationEnabled bool `json:"aggregation_enabled"`
+}
+

@@ -352,3 +352,115 @@ func (s *OpsService) UpdateOpsAlertRuntimeSettings(ctx context.Context, cfg *Ops
 	return updated, nil
 }
 
+// =========================
+// Advanced settings
+// =========================
+
+func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
+	return &OpsAdvancedSettings{
+		DataRetention: OpsDataRetentionSettings{
+			CleanupEnabled:            false,
+			CleanupSchedule:           "0 2 * * *",
+			ErrorLogRetentionDays:     30,
+			MinuteMetricsRetentionDays: 30,
+			HourlyMetricsRetentionDays: 30,
+		},
+		Aggregation: OpsAggregationSettings{
+			AggregationEnabled: false,
+		},
+	}
+}
+
+func normalizeOpsAdvancedSettings(cfg *OpsAdvancedSettings) {
+	if cfg == nil {
+		return
+	}
+	cfg.DataRetention.CleanupSchedule = strings.TrimSpace(cfg.DataRetention.CleanupSchedule)
+	if cfg.DataRetention.CleanupSchedule == "" {
+		cfg.DataRetention.CleanupSchedule = "0 2 * * *"
+	}
+	if cfg.DataRetention.ErrorLogRetentionDays <= 0 {
+		cfg.DataRetention.ErrorLogRetentionDays = 30
+	}
+	if cfg.DataRetention.MinuteMetricsRetentionDays <= 0 {
+		cfg.DataRetention.MinuteMetricsRetentionDays = 30
+	}
+	if cfg.DataRetention.HourlyMetricsRetentionDays <= 0 {
+		cfg.DataRetention.HourlyMetricsRetentionDays = 30
+	}
+}
+
+func validateOpsAdvancedSettings(cfg *OpsAdvancedSettings) error {
+	if cfg == nil {
+		return errors.New("invalid config")
+	}
+	if cfg.DataRetention.ErrorLogRetentionDays < 1 || cfg.DataRetention.ErrorLogRetentionDays > 365 {
+		return errors.New("error_log_retention_days must be between 1 and 365")
+	}
+	if cfg.DataRetention.MinuteMetricsRetentionDays < 1 || cfg.DataRetention.MinuteMetricsRetentionDays > 365 {
+		return errors.New("minute_metrics_retention_days must be between 1 and 365")
+	}
+	if cfg.DataRetention.HourlyMetricsRetentionDays < 1 || cfg.DataRetention.HourlyMetricsRetentionDays > 365 {
+		return errors.New("hourly_metrics_retention_days must be between 1 and 365")
+	}
+	return nil
+}
+
+func (s *OpsService) GetOpsAdvancedSettings(ctx context.Context) (*OpsAdvancedSettings, error) {
+	defaultCfg := defaultOpsAdvancedSettings()
+	if s == nil || s.settingRepo == nil {
+		return defaultCfg, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyOpsAdvancedSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			if b, mErr := json.Marshal(defaultCfg); mErr == nil {
+				_ = s.settingRepo.Set(ctx, SettingKeyOpsAdvancedSettings, string(b))
+			}
+			return defaultCfg, nil
+		}
+		return nil, err
+	}
+
+	cfg := &OpsAdvancedSettings{}
+	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
+		return defaultCfg, nil
+	}
+
+	normalizeOpsAdvancedSettings(cfg)
+	return cfg, nil
+}
+
+func (s *OpsService) UpdateOpsAdvancedSettings(ctx context.Context, cfg *OpsAdvancedSettings) (*OpsAdvancedSettings, error) {
+	if s == nil || s.settingRepo == nil {
+		return nil, errors.New("setting repository not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cfg == nil {
+		return nil, errors.New("invalid config")
+	}
+
+	if err := validateOpsAdvancedSettings(cfg); err != nil {
+		return nil, err
+	}
+
+	normalizeOpsAdvancedSettings(cfg)
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.settingRepo.Set(ctx, SettingKeyOpsAdvancedSettings, string(raw)); err != nil {
+		return nil, err
+	}
+
+	updated := &OpsAdvancedSettings{}
+	_ = json.Unmarshal(raw, updated)
+	return updated, nil
+}
+

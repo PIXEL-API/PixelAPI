@@ -101,3 +101,49 @@ func (h *OpsHandler) UpdateAlertRuntimeSettings(c *gin.Context) {
 	response.Success(c, updated)
 }
 
+// GetAdvancedSettings returns Ops advanced settings (DB-backed).
+// GET /api/v1/admin/ops/advanced-settings
+func (h *OpsHandler) GetAdvancedSettings(c *gin.Context) {
+	if h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return
+	}
+	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	cfg, err := h.opsService.GetOpsAdvancedSettings(c.Request.Context())
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Failed to get advanced settings")
+		return
+	}
+	response.Success(c, cfg)
+}
+
+// UpdateAdvancedSettings updates Ops advanced settings (DB-backed).
+// PUT /api/v1/admin/ops/advanced-settings
+func (h *OpsHandler) UpdateAdvancedSettings(c *gin.Context) {
+	if h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return
+	}
+	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	var req service.OpsAdvancedSettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request body")
+		return
+	}
+
+	updated, err := h.opsService.UpdateOpsAdvancedSettings(c.Request.Context(), &req)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.Success(c, updated)
+}
+
