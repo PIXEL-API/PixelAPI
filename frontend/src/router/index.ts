@@ -5,6 +5,7 @@
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores/app'
 
 /**
  * Route definitions with lazy loading
@@ -257,6 +258,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/promo-codes',
+    name: 'AdminPromoCodes',
+    component: () => import('@/views/admin/PromoCodesView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Promo Code Management',
+      titleKey: 'admin.promo.title',
+      descriptionKey: 'admin.promo.description'
+    }
+  },
+  {
     path: '/admin/settings',
     name: 'AdminSettings',
     component: () => import('@/views/admin/SettingsView.vue'),
@@ -323,10 +336,12 @@ router.beforeEach((to, _from, next) => {
   }
 
   // Set page title
+  const appStore = useAppStore()
+  const siteName = appStore.siteName || 'Sub2API'
   if (to.meta.title) {
-    document.title = `${to.meta.title} - Sub2API`
+    document.title = `${to.meta.title} - ${siteName}`
   } else {
-    document.title = 'Sub2API'
+    document.title = siteName
   }
 
   // Check if route requires authentication
