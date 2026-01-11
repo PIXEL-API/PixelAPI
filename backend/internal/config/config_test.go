@@ -141,3 +141,67 @@ func TestValidateLinuxDoPKCERequiredForPublicClient(t *testing.T) {
 		t.Fatalf("Validate() expected use_pkce error, got: %v", err)
 	}
 }
+
+func TestLoadDefaultDashboardCacheConfig(t *testing.T) {
+	viper.Reset()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.Dashboard.Enabled {
+		t.Fatalf("Dashboard.Enabled = false, want true")
+	}
+	if cfg.Dashboard.KeyPrefix != "sub2api:" {
+		t.Fatalf("Dashboard.KeyPrefix = %q, want %q", cfg.Dashboard.KeyPrefix, "sub2api:")
+	}
+	if cfg.Dashboard.StatsFreshTTLSeconds != 15 {
+		t.Fatalf("Dashboard.StatsFreshTTLSeconds = %d, want 15", cfg.Dashboard.StatsFreshTTLSeconds)
+	}
+	if cfg.Dashboard.StatsTTLSeconds != 30 {
+		t.Fatalf("Dashboard.StatsTTLSeconds = %d, want 30", cfg.Dashboard.StatsTTLSeconds)
+	}
+	if cfg.Dashboard.StatsRefreshTimeoutSeconds != 30 {
+		t.Fatalf("Dashboard.StatsRefreshTimeoutSeconds = %d, want 30", cfg.Dashboard.StatsRefreshTimeoutSeconds)
+	}
+}
+
+func TestValidateDashboardCacheConfigEnabled(t *testing.T) {
+	viper.Reset()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Dashboard.Enabled = true
+	cfg.Dashboard.StatsFreshTTLSeconds = 10
+	cfg.Dashboard.StatsTTLSeconds = 5
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("Validate() expected error for stats_fresh_ttl_seconds > stats_ttl_seconds, got nil")
+	}
+	if !strings.Contains(err.Error(), "dashboard_cache.stats_fresh_ttl_seconds") {
+		t.Fatalf("Validate() expected stats_fresh_ttl_seconds error, got: %v", err)
+	}
+}
+
+func TestValidateDashboardCacheConfigDisabled(t *testing.T) {
+	viper.Reset()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Dashboard.Enabled = false
+	cfg.Dashboard.StatsTTLSeconds = -1
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("Validate() expected error for negative stats_ttl_seconds, got nil")
+	}
+	if !strings.Contains(err.Error(), "dashboard_cache.stats_ttl_seconds") {
+		t.Fatalf("Validate() expected stats_ttl_seconds error, got: %v", err)
+	}
+}
