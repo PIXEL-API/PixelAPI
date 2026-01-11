@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -38,8 +39,10 @@ func (s *usageRepoStub) GetDashboardStats(ctx context.Context) (*usagestats.Dash
 type dashboardCacheStub struct {
 	get       func(ctx context.Context) (string, error)
 	set       func(ctx context.Context, data string, ttl time.Duration) error
+	del       func(ctx context.Context) error
 	getCalls  int32
 	setCalls  int32
+	delCalls  int32
 	lastSetMu sync.Mutex
 	lastSet   string
 }
@@ -59,6 +62,14 @@ func (c *dashboardCacheStub) SetDashboardStats(ctx context.Context, data string,
 	c.lastSetMu.Unlock()
 	if c.set != nil {
 		return c.set(ctx, data, ttl)
+	}
+	return nil
+}
+
+func (c *dashboardCacheStub) DeleteDashboardStats(ctx context.Context) error {
+	atomic.AddInt32(&c.delCalls, 1)
+	if c.del != nil {
+		return c.del(ctx)
 	}
 	return nil
 }
@@ -186,4 +197,37 @@ func TestDashboardService_CacheHitStale_TriggersAsyncRefresh(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return atomic.LoadInt32(&cache.setCalls) >= 1
 	}, 1*time.Second, 10*time.Millisecond)
+}
+
+func TestDashboardService_CacheParseError_EvictsAndRefetches(t *testing.T) {
+	cache := &dashboardCacheStub{
+		get: func(ctx context.Context) (string, error) {
+			return "not-json", nil
+		},
+	}
+	stats := &usagestats.DashboardStats{TotalUsers: 9}
+	repo := &usageRepoStub{stats: stats}
+	cfg := &config.Config{Dashboard: config.DashboardCacheConfig{Enabled: true}}
+	svc := NewDashboardService(repo, cache, cfg)
+
+	got, err := svc.GetDashboardStats(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, stats, got)
+	require.Equal(t, int32(1), atomic.LoadInt32(&cache.delCalls))
+	require.Equal(t, int32(1), atomic.LoadInt32(&repo.calls))
+}
+
+func TestDashboardService_CacheParseError_RepoFailure(t *testing.T) {
+	cache := &dashboardCacheStub{
+		get: func(ctx context.Context) (string, error) {
+			return "not-json", nil
+		},
+	}
+	repo := &usageRepoStub{err: errors.New("db down")}
+	cfg := &config.Config{Dashboard: config.DashboardCacheConfig{Enabled: true}}
+	svc := NewDashboardService(repo, cache, cfg)
+
+	_, err := svc.GetDashboardStats(context.Background())
+	require.Error(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&cache.delCalls))
 }

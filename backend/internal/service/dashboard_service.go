@@ -26,6 +26,7 @@ var ErrDashboardStatsCacheMiss = errors.New("仪表盘缓存未命中")
 type DashboardStatsCache interface {
 	GetDashboardStats(ctx context.Context) (string, error)
 	SetDashboardStats(ctx context.Context, data string, ttl time.Duration) error
+	DeleteDashboardStats(ctx context.Context) error
 }
 
 type dashboardStatsCacheEntry struct {
@@ -115,10 +116,12 @@ func (s *DashboardService) getCachedDashboardStats(ctx context.Context) (*usages
 
 	var entry dashboardStatsCacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		return nil, false, err
+		s.evictDashboardStatsCache(err)
+		return nil, false, ErrDashboardStatsCacheMiss
 	}
 	if entry.Stats == nil {
-		return nil, false, errors.New("仪表盘缓存缺少统计数据")
+		s.evictDashboardStatsCache(errors.New("仪表盘缓存缺少统计数据"))
+		return nil, false, ErrDashboardStatsCacheMiss
 	}
 
 	age := time.Since(time.Unix(entry.UpdatedAt, 0))
@@ -130,7 +133,9 @@ func (s *DashboardService) refreshDashboardStats(ctx context.Context) (*usagesta
 	if err != nil {
 		return nil, err
 	}
-	s.saveDashboardStatsCache(ctx, stats)
+	cacheCtx, cancel := s.cacheOperationContext()
+	defer cancel()
+	s.saveDashboardStatsCache(cacheCtx, stats)
 	return stats, nil
 }
 
@@ -153,7 +158,9 @@ func (s *DashboardService) refreshDashboardStatsAsync() {
 			log.Printf("[Dashboard] 仪表盘缓存异步刷新失败: %v", err)
 			return
 		}
-		s.saveDashboardStatsCache(ctx, stats)
+		cacheCtx, cancel := s.cacheOperationContext()
+		defer cancel()
+		s.saveDashboardStatsCache(cacheCtx, stats)
 	}()
 }
 
@@ -175,6 +182,25 @@ func (s *DashboardService) saveDashboardStatsCache(ctx context.Context, stats *u
 	if err := s.cache.SetDashboardStats(ctx, string(data), s.cacheTTL); err != nil {
 		log.Printf("[Dashboard] 仪表盘缓存写入失败: %v", err)
 	}
+}
+
+func (s *DashboardService) evictDashboardStatsCache(reason error) {
+	if s.cache == nil {
+		return
+	}
+	cacheCtx, cancel := s.cacheOperationContext()
+	defer cancel()
+
+	if err := s.cache.DeleteDashboardStats(cacheCtx); err != nil {
+		log.Printf("[Dashboard] 仪表盘缓存清理失败: %v", err)
+	}
+	if reason != nil {
+		log.Printf("[Dashboard] 仪表盘缓存异常，已清理: %v", reason)
+	}
+}
+
+func (s *DashboardService) cacheOperationContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), s.refreshTimeout)
 }
 
 func (s *DashboardService) GetAPIKeyUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) ([]usagestats.APIKeyUsageTrendPoint, error) {

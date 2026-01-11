@@ -22,6 +22,9 @@ func NewDashboardCache(rdb *redis.Client, cfg *config.Config) service.DashboardS
 	if cfg != nil {
 		prefix = strings.TrimSpace(cfg.Dashboard.KeyPrefix)
 	}
+	if prefix != "" && !strings.HasSuffix(prefix, ":") {
+		prefix += ":"
+	}
 	return &dashboardCache{
 		rdb:       rdb,
 		keyPrefix: prefix,
@@ -48,4 +51,8 @@ func (c *dashboardCache) buildKey() string {
 		return dashboardStatsCacheKey
 	}
 	return c.keyPrefix + dashboardStatsCacheKey
+}
+
+func (c *dashboardCache) DeleteDashboardStats(ctx context.Context) error {
+	return c.rdb.Del(ctx, c.buildKey()).Err()
 }
