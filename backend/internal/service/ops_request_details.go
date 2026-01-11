@@ -149,4 +149,3 @@ func (s *OpsService) ListRequestDetails(ctx context.Context, filter *OpsRequestD
 		PageSize: pageSize,
 	}, nil
 }
-

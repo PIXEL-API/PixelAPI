@@ -52,7 +52,6 @@ const (
 type limitedResponseWriter struct {
 	header      http.Header
 	wroteHeader bool
-	status      int
 
 	limit        int
 	totalWritten int64
@@ -65,7 +64,6 @@ func newLimitedResponseWriter(limit int) *limitedResponseWriter {
 	}
 	return &limitedResponseWriter{
 		header: make(http.Header),
-		status: http.StatusOK,
 		limit:  limit,
 	}
 }
@@ -79,7 +77,6 @@ func (w *limitedResponseWriter) WriteHeader(statusCode int) {
 		return
 	}
 	w.wroteHeader = true
-	w.status = statusCode
 }
 
 func (w *limitedResponseWriter) Write(p []byte) (int, error) {
