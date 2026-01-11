@@ -20,7 +20,7 @@
       </template>
       <template #table>
         <AccountBulkActionsBar :selected-ids="selIds" @delete="handleBulkDelete" @edit="showBulkEdit = true" @clear="selIds = []" @select-page="selectPage" @toggle-schedulable="handleBulkToggleSchedulable" />
-        <DataTable :columns="cols" :data="accounts" :loading="loading">
+        <DataTable :columns="cols" :data="accounts" :loading="loading" row-key="id">
           <template #cell-select="{ row }">
             <input type="checkbox" :checked="selIds.includes(row.id)" @change="toggleSel(row.id)" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
           </template>
@@ -209,18 +209,107 @@ const openMenu = (a: Account, e: MouseEvent) => { menu.acc = a; menu.pos = { top
 const toggleSel = (id: number) => { const i = selIds.value.indexOf(id); if(i === -1) selIds.value.push(id); else selIds.value.splice(i, 1) }
 const selectPage = () => { selIds.value = [...new Set([...selIds.value, ...accounts.value.map(a => a.id)])] }
 const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return; try { await Promise.all(selIds.value.map(id => adminAPI.accounts.delete(id))); selIds.value = []; reload() } catch (error) { console.error('Failed to bulk delete accounts:', error) } }
+const updateSchedulableInList = (accountIds: number[], schedulable: boolean) => {
+  if (accountIds.length === 0) return
+  const idSet = new Set(accountIds)
+  accounts.value = accounts.value.map((account) => (idSet.has(account.id) ? { ...account, schedulable } : account))
+}
+const normalizeBulkSchedulableResult = (
+  result: {
+    success?: number
+    failed?: number
+    success_ids?: number[]
+    failed_ids?: number[]
+    results?: Array<{ account_id: number; success: boolean }>
+  },
+  accountIds: number[]
+) => {
+  const responseSuccessIds = Array.isArray(result.success_ids) ? result.success_ids : []
+  const responseFailedIds = Array.isArray(result.failed_ids) ? result.failed_ids : []
+  if (responseSuccessIds.length > 0 || responseFailedIds.length > 0) {
+    return {
+      successIds: responseSuccessIds,
+      failedIds: responseFailedIds,
+      successCount: typeof result.success === 'number' ? result.success : responseSuccessIds.length,
+      failedCount: typeof result.failed === 'number' ? result.failed : responseFailedIds.length,
+      hasIds: true,
+      hasCounts: true
+    }
+  }
+
+  const results = Array.isArray(result.results) ? result.results : []
+  if (results.length > 0) {
+    const successIds = results.filter(item => item.success).map(item => item.account_id)
+    const failedIds = results.filter(item => !item.success).map(item => item.account_id)
+    return {
+      successIds,
+      failedIds,
+      successCount: typeof result.success === 'number' ? result.success : successIds.length,
+      failedCount: typeof result.failed === 'number' ? result.failed : failedIds.length,
+      hasIds: true,
+      hasCounts: true
+    }
+  }
+
+  const hasExplicitCounts = typeof result.success === 'number' || typeof result.failed === 'number'
+  const successCount = typeof result.success === 'number' ? result.success : 0
+  const failedCount = typeof result.failed === 'number' ? result.failed : 0
+  if (hasExplicitCounts && failedCount === 0 && successCount === accountIds.length && accountIds.length > 0) {
+    return {
+      successIds: accountIds,
+      failedIds: [],
+      successCount,
+      failedCount,
+      hasIds: true,
+      hasCounts: true
+    }
+  }
+
+  return {
+    successIds: [],
+    failedIds: [],
+    successCount,
+    failedCount,
+    hasIds: false,
+    hasCounts: hasExplicitCounts
+  }
+}
 const handleBulkToggleSchedulable = async (schedulable: boolean) => {
-  const count = selIds.value.length
+  const accountIds = [...selIds.value]
   try {
-    const result = await adminAPI.accounts.bulkUpdate(selIds.value, { schedulable });
-    const message = schedulable
-      ? t('admin.accounts.bulkSchedulableEnabled', { count: result.success || count })
-      : t('admin.accounts.bulkSchedulableDisabled', { count: result.success || count });
-    appStore.showSuccess(message);
-    selIds.value = [];
-    reload()
+    const result = await adminAPI.accounts.bulkUpdate(accountIds, { schedulable })
+    const { successIds, failedIds, successCount, failedCount, hasIds, hasCounts } = normalizeBulkSchedulableResult(result, accountIds)
+    if (!hasIds && !hasCounts) {
+      appStore.showError(t('admin.accounts.bulkSchedulableResultUnknown'))
+      selIds.value = accountIds
+      load().catch((error) => {
+        console.error('Failed to refresh accounts:', error)
+      })
+      return
+    }
+    if (successIds.length > 0) {
+      updateSchedulableInList(successIds, schedulable)
+    }
+    if (successCount > 0 && failedCount === 0) {
+      const message = schedulable
+        ? t('admin.accounts.bulkSchedulableEnabled', { count: successCount })
+        : t('admin.accounts.bulkSchedulableDisabled', { count: successCount })
+      appStore.showSuccess(message)
+    }
+    if (failedCount > 0) {
+      const message = hasCounts || hasIds
+        ? t('admin.accounts.bulkSchedulablePartial', { success: successCount, failed: failedCount })
+        : t('admin.accounts.bulkSchedulableResultUnknown')
+      appStore.showError(message)
+      selIds.value = failedIds.length > 0 ? failedIds : accountIds
+    } else {
+      selIds.value = hasIds ? [] : accountIds
+    }
+    load().catch((error) => {
+      console.error('Failed to refresh accounts:', error)
+    })
   } catch (error) {
-    console.error('Failed to bulk toggle schedulable:', error);
+    console.error('Failed to bulk toggle schedulable:', error)
     appStore.showError(t('common.error'))
   }
 }
@@ -236,7 +325,22 @@ const handleResetStatus = async (a: Account) => { try { await adminAPI.accounts.
 const handleClearRateLimit = async (a: Account) => { try { await adminAPI.accounts.clearRateLimit(a.id); appStore.showSuccess(t('common.success')); load() } catch (error) { console.error('Failed to clear rate limit:', error) } }
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
 const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
-const handleToggleSchedulable = async (a: Account) => { togglingSchedulable.value = a.id; try { await adminAPI.accounts.setSchedulable(a.id, !a.schedulable); load() } finally { togglingSchedulable.value = null } }
+const handleToggleSchedulable = async (a: Account) => {
+  const nextSchedulable = !a.schedulable
+  togglingSchedulable.value = a.id
+  try {
+    const updated = await adminAPI.accounts.setSchedulable(a.id, nextSchedulable)
+    updateSchedulableInList([a.id], updated?.schedulable ?? nextSchedulable)
+    load().catch((error) => {
+      console.error('Failed to refresh accounts:', error)
+    })
+  } catch (error) {
+    console.error('Failed to toggle schedulable:', error)
+    appStore.showError(t('admin.accounts.failedToToggleSchedulable'))
+  } finally {
+    togglingSchedulable.value = null
+  }
+}
 const handleShowTempUnsched = (a: Account) => { tempUnschedAcc.value = a; showTempUnsched.value = true }
 const handleTempUnschedReset = async () => { if(!tempUnschedAcc.value) return; try { await adminAPI.accounts.clearError(tempUnschedAcc.value.id); showTempUnsched.value = false; tempUnschedAcc.value = null; load() } catch (error) { console.error('Failed to reset temp unscheduled:', error) } }
 const formatExpiresAt = (value: number | null) => {
