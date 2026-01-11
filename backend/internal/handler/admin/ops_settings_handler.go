@@ -146,4 +146,3 @@ func (h *OpsHandler) UpdateAdvancedSettings(c *gin.Context) {
 	}
 	response.Success(c, updated)
 }
-

@@ -80,18 +80,6 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	c.Set(OpsUpstreamErrorsKey, existing)
 }
 
-func getOpsUpstreamErrors(c *gin.Context) []*OpsUpstreamErrorEvent {
-	if c == nil {
-		return nil
-	}
-	if v, ok := c.Get(OpsUpstreamErrorsKey); ok {
-		if arr, ok := v.([]*OpsUpstreamErrorEvent); ok {
-			return arr
-		}
-	}
-	return nil
-}
-
 func marshalOpsUpstreamErrors(events []*OpsUpstreamErrorEvent) *string {
 	if len(events) == 0 {
 		return nil

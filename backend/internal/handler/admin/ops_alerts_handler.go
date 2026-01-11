@@ -430,4 +430,3 @@ func (h *OpsHandler) ListAlertEvents(c *gin.Context) {
 	}
 	response.Success(c, events)
 }
-
