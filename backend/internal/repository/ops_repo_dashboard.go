@@ -385,7 +385,7 @@ ORDER BY bucket_start ASC`
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]opsHourlyMetricsRow, 0, 64)
 	for rows.Next() {
