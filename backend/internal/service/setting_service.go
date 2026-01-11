@@ -32,6 +32,8 @@ type SettingRepository interface {
 type SettingService struct {
 	settingRepo SettingRepository
 	cfg         *config.Config
+	onUpdate    func() // Callback when settings are updated (for cache invalidation)
+	version     string // Application version
 }
 
 // NewSettingService 创建系统设置服务实例
@@ -65,6 +67,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyAPIBaseURL,
 		SettingKeyContactInfo,
 		SettingKeyDocURL,
+		SettingKeyHomeContent,
 		SettingKeyLinuxDoConnectEnabled,
 	}
 
@@ -91,7 +94,59 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		APIBaseURL:          settings[SettingKeyAPIBaseURL],
 		ContactInfo:         settings[SettingKeyContactInfo],
 		DocURL:              settings[SettingKeyDocURL],
+		HomeContent:         settings[SettingKeyHomeContent],
 		LinuxDoOAuthEnabled: linuxDoEnabled,
+	}, nil
+}
+
+// SetOnUpdateCallback sets a callback function to be called when settings are updated
+// This is used for cache invalidation (e.g., HTML cache in frontend server)
+func (s *SettingService) SetOnUpdateCallback(callback func()) {
+	s.onUpdate = callback
+}
+
+// SetVersion sets the application version for injection into public settings
+func (s *SettingService) SetVersion(version string) {
+	s.version = version
+}
+
+// GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection
+// This implements the web.PublicSettingsProvider interface
+func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any, error) {
+	settings, err := s.GetPublicSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return a struct that matches the frontend's expected format
+	return &struct {
+		RegistrationEnabled bool   `json:"registration_enabled"`
+		EmailVerifyEnabled  bool   `json:"email_verify_enabled"`
+		TurnstileEnabled    bool   `json:"turnstile_enabled"`
+		TurnstileSiteKey    string `json:"turnstile_site_key,omitempty"`
+		SiteName            string `json:"site_name"`
+		SiteLogo            string `json:"site_logo,omitempty"`
+		SiteSubtitle        string `json:"site_subtitle,omitempty"`
+		APIBaseURL          string `json:"api_base_url,omitempty"`
+		ContactInfo         string `json:"contact_info,omitempty"`
+		DocURL              string `json:"doc_url,omitempty"`
+		HomeContent         string `json:"home_content,omitempty"`
+		LinuxDoOAuthEnabled bool   `json:"linuxdo_oauth_enabled"`
+		Version             string `json:"version,omitempty"`
+	}{
+		RegistrationEnabled: settings.RegistrationEnabled,
+		EmailVerifyEnabled:  settings.EmailVerifyEnabled,
+		TurnstileEnabled:    settings.TurnstileEnabled,
+		TurnstileSiteKey:    settings.TurnstileSiteKey,
+		SiteName:            settings.SiteName,
+		SiteLogo:            settings.SiteLogo,
+		SiteSubtitle:        settings.SiteSubtitle,
+		APIBaseURL:          settings.APIBaseURL,
+		ContactInfo:         settings.ContactInfo,
+		DocURL:              settings.DocURL,
+		HomeContent:         settings.HomeContent,
+		LinuxDoOAuthEnabled: settings.LinuxDoOAuthEnabled,
+		Version:             s.version,
 	}, nil
 }
 
@@ -136,6 +191,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyAPIBaseURL] = settings.APIBaseURL
 	updates[SettingKeyContactInfo] = settings.ContactInfo
 	updates[SettingKeyDocURL] = settings.DocURL
+	updates[SettingKeyHomeContent] = settings.HomeContent
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
@@ -152,7 +208,11 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyEnableIdentityPatch] = strconv.FormatBool(settings.EnableIdentityPatch)
 	updates[SettingKeyIdentityPatchPrompt] = settings.IdentityPatchPrompt
 
-	return s.settingRepo.SetMultiple(ctx, updates)
+	err := s.settingRepo.SetMultiple(ctx, updates)
+	if err == nil && s.onUpdate != nil {
+		s.onUpdate() // Invalidate cache after settings update
+	}
+	return err
 }
 
 // IsRegistrationEnabled 检查是否开放注册
@@ -263,6 +323,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		APIBaseURL:                   settings[SettingKeyAPIBaseURL],
 		ContactInfo:                  settings[SettingKeyContactInfo],
 		DocURL:                       settings[SettingKeyDocURL],
+		HomeContent:                  settings[SettingKeyHomeContent],
 	}
 
 	// 解析整数类型
