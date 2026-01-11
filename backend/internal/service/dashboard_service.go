@@ -29,6 +29,10 @@ type DashboardStatsCache interface {
 	DeleteDashboardStats(ctx context.Context) error
 }
 
+type dashboardStatsRangeFetcher interface {
+	GetDashboardStatsWithRange(ctx context.Context, start, end time.Time) (*usagestats.DashboardStats, error)
+}
+
 type dashboardStatsCacheEntry struct {
 	Stats     *usagestats.DashboardStats `json:"stats"`
 	UpdatedAt int64                      `json:"updated_at"`
@@ -46,6 +50,7 @@ type DashboardService struct {
 	aggEnabled     bool
 	aggInterval    time.Duration
 	aggLookback    time.Duration
+	aggUsageDays   int
 }
 
 func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregationRepository, cache DashboardStatsCache, cfg *config.Config) *DashboardService {
@@ -55,6 +60,7 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 	aggEnabled := true
 	aggInterval := time.Minute
 	aggLookback := 2 * time.Minute
+	aggUsageDays := 90
 	if cfg != nil {
 		if !cfg.Dashboard.Enabled {
 			cache = nil
@@ -75,6 +81,9 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 		if cfg.DashboardAgg.LookbackSeconds > 0 {
 			aggLookback = time.Duration(cfg.DashboardAgg.LookbackSeconds) * time.Second
 		}
+		if cfg.DashboardAgg.Retention.UsageLogsDays > 0 {
+			aggUsageDays = cfg.DashboardAgg.Retention.UsageLogsDays
+		}
 	}
 	return &DashboardService{
 		usageRepo:      usageRepo,
@@ -86,6 +95,7 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 		aggEnabled:     aggEnabled,
 		aggInterval:    aggInterval,
 		aggLookback:    aggLookback,
+		aggUsageDays:   aggUsageDays,
 	}
 }
 
@@ -148,7 +158,7 @@ func (s *DashboardService) getCachedDashboardStats(ctx context.Context) (*usages
 }
 
 func (s *DashboardService) refreshDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error) {
-	stats, err := s.usageRepo.GetDashboardStats(ctx)
+	stats, err := s.fetchDashboardStats(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +183,7 @@ func (s *DashboardService) refreshDashboardStatsAsync() {
 		ctx, cancel := context.WithTimeout(context.Background(), s.refreshTimeout)
 		defer cancel()
 
-		stats, err := s.usageRepo.GetDashboardStats(ctx)
+		stats, err := s.fetchDashboardStats(ctx)
 		if err != nil {
 			log.Printf("[Dashboard] 仪表盘缓存异步刷新失败: %v", err)
 			return
@@ -183,6 +193,17 @@ func (s *DashboardService) refreshDashboardStatsAsync() {
 		defer cancel()
 		s.saveDashboardStatsCache(cacheCtx, stats)
 	}()
+}
+
+func (s *DashboardService) fetchDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error) {
+	if !s.aggEnabled {
+		if fetcher, ok := s.usageRepo.(dashboardStatsRangeFetcher); ok {
+			now := time.Now().UTC()
+			start := truncateToDayUTC(now.AddDate(0, 0, -s.aggUsageDays))
+			return fetcher.GetDashboardStatsWithRange(ctx, start, now)
+		}
+	}
+	return s.usageRepo.GetDashboardStats(ctx)
 }
 
 func (s *DashboardService) saveDashboardStatsCache(ctx context.Context, stats *usagestats.DashboardStats) {
