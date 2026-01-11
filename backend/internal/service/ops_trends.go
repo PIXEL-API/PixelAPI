@@ -24,4 +24,3 @@ func (s *OpsService) GetThroughputTrend(ctx context.Context, filter *OpsDashboar
 	}
 	return s.opsRepo.GetThroughputTrend(ctx, filter, bucketSeconds)
 }
-
