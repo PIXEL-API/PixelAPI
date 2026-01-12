@@ -86,6 +86,19 @@ func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountReposi
 	return svc
 }
 
+// ProvideSchedulerSnapshotService creates and starts SchedulerSnapshotService.
+func ProvideSchedulerSnapshotService(
+	cache SchedulerCache,
+	outboxRepo SchedulerOutboxRepository,
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	cfg *config.Config,
+) *SchedulerSnapshotService {
+	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProvideRateLimitService creates RateLimitService with optional dependencies.
 func ProvideRateLimitService(
 	accountRepo AccountRepository,
@@ -217,6 +230,7 @@ var ProviderSet = wire.NewSet(
 	NewTurnstileService,
 	NewSubscriptionService,
 	ProvideConcurrencyService,
+	ProvideSchedulerSnapshotService,
 	NewIdentityService,
 	NewCRSSyncService,
 	ProvideUpdateService,
