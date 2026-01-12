@@ -1022,6 +1022,7 @@ export default {
       schedulableEnabled: 'Scheduling enabled',
       schedulableDisabled: 'Scheduling disabled',
       failedToToggleSchedulable: 'Failed to toggle scheduling status',
+      allGroups: '{count} groups total',
       platforms: {
         anthropic: 'Anthropic',
         claude: 'Claude',
