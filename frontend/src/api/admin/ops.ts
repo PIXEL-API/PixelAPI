@@ -734,6 +734,9 @@ export interface OpsAlertRuntimeSettings {
 export interface OpsAdvancedSettings {
   data_retention: OpsDataRetentionSettings
   aggregation: OpsAggregationSettings
+  ignore_count_tokens_errors: boolean
+  auto_refresh_enabled: boolean
+  auto_refresh_interval_seconds: number
 }
 
 export interface OpsDataRetentionSettings {
