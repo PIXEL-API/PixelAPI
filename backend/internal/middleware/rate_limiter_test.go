@@ -66,13 +66,13 @@ func TestRateLimiterSuccessAndLimit(t *testing.T) {
 	originalRun := rateLimitRun
 	counts := []int64{1, 2}
 	callIndex := 0
-	rateLimitRun = func(ctx context.Context, client *redis.Client, key string, windowMillis int64) (int64, error) {
+	rateLimitRun = func(ctx context.Context, client *redis.Client, key string, windowMillis int64) (int64, bool, error) {
 		if callIndex >= len(counts) {
-			return counts[len(counts)-1], nil
+			return counts[len(counts)-1], false, nil
 		}
 		value := counts[callIndex]
 		callIndex++
-		return value, nil
+		return value, false, nil
 	}
 	t.Cleanup(func() {
 		rateLimitRun = originalRun
