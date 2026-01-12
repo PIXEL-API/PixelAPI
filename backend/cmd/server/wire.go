@@ -62,6 +62,11 @@ func provideServiceBuildInfo(buildInfo handler.BuildInfo) service.BuildInfo {
 func provideCleanup(
 	entClient *ent.Client,
 	rdb *redis.Client,
+	opsMetricsCollector *service.OpsMetricsCollector,
+	opsAggregation *service.OpsAggregationService,
+	opsAlertEvaluator *service.OpsAlertEvaluatorService,
+	opsCleanup *service.OpsCleanupService,
+	opsScheduledReport *service.OpsScheduledReportService,
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
 	pricing *service.PricingService,
@@ -81,6 +86,36 @@ func provideCleanup(
 			name string
 			fn   func() error
 		}{
+			{"OpsScheduledReportService", func() error {
+				if opsScheduledReport != nil {
+					opsScheduledReport.Stop()
+				}
+				return nil
+			}},
+			{"OpsCleanupService", func() error {
+				if opsCleanup != nil {
+					opsCleanup.Stop()
+				}
+				return nil
+			}},
+			{"OpsAlertEvaluatorService", func() error {
+				if opsAlertEvaluator != nil {
+					opsAlertEvaluator.Stop()
+				}
+				return nil
+			}},
+			{"OpsAggregationService", func() error {
+				if opsAggregation != nil {
+					opsAggregation.Stop()
+				}
+				return nil
+			}},
+			{"OpsMetricsCollector", func() error {
+				if opsMetricsCollector != nil {
+					opsMetricsCollector.Stop()
+				}
+				return nil
+			}},
 			{"TokenRefreshService", func() error {
 				tokenRefresh.Stop()
 				return nil

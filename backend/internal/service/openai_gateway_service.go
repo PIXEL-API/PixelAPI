@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -513,7 +512,7 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 }
 
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account) {
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
 }
 
@@ -594,13 +593,53 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Send request
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
-		return nil, fmt.Errorf("upstream request failed: %w", err)
+		// Ensure the client receives an error response (handlers assume Forward writes on non-failover errors).
+		safeErr := sanitizeUpstreamErrorMessage(err.Error())
+		setOpsUpstreamError(c, 0, safeErr, "")
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			UpstreamStatusCode: 0,
+			Kind:               "request_error",
+			Message:            safeErr,
+		})
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{
+				"type":    "upstream_error",
+				"message": "Upstream request failed",
+			},
+		})
+		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	// Handle error response
 	if resp.StatusCode >= 400 {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
+			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+			upstreamDetail := ""
+			if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+				maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+				if maxBytes <= 0 {
+					maxBytes = 2048
+				}
+				upstreamDetail = truncateString(string(respBody), maxBytes)
+			}
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				UpstreamStatusCode: resp.StatusCode,
+				UpstreamRequestID:  resp.Header.Get("x-request-id"),
+				Kind:               "failover",
+				Message:            upstreamMsg,
+				Detail:             upstreamDetail,
+			})
+
 			s.handleFailoverSideEffects(ctx, resp, account)
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode}
 		}
@@ -724,18 +763,52 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 }
 
 func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*OpenAIForwardResult, error) {
-	body, _ := io.ReadAll(resp.Body)
-	logUpstreamErrorBody(account.ID, resp.StatusCode, body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+
+	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+	upstreamDetail := ""
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 2048
+		}
+		upstreamDetail = truncateString(string(body), maxBytes)
+	}
+	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		log.Printf(
+			"OpenAI upstream error %d (account=%d platform=%s type=%s): %s",
+			resp.StatusCode,
+			account.ID,
+			account.Platform,
+			account.Type,
+			truncateForLog(body, s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes),
+		)
+	}
 
 	// Check custom error codes
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "http_error",
+			Message:            upstreamMsg,
+			Detail:             upstreamDetail,
+		})
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"type":    "upstream_error",
 				"message": "Upstream gateway error",
 			},
 		})
-		return nil, fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d (not in custom error codes) message=%s", resp.StatusCode, upstreamMsg)
 	}
 
 	// Handle upstream error (mark account status)
@@ -743,6 +816,19 @@ func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *ht
 	if s.rateLimitService != nil {
 		shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
 	}
+	kind := "http_error"
+	if shouldDisable {
+		kind = "failover"
+	}
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		UpstreamStatusCode: resp.StatusCode,
+		UpstreamRequestID:  resp.Header.Get("x-request-id"),
+		Kind:               kind,
+		Message:            upstreamMsg,
+		Detail:             upstreamDetail,
+	})
 	if shouldDisable {
 		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode}
 	}
@@ -781,25 +867,10 @@ func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *ht
 		},
 	})
 
-	return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
-}
-
-func logUpstreamErrorBody(accountID int64, statusCode int, body []byte) {
-	if strings.ToLower(strings.TrimSpace(os.Getenv("GATEWAY_LOG_UPSTREAM_ERROR_BODY"))) != "true" {
-		return
+	if upstreamMsg == "" {
+		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
-
-	maxBytes := 2048
-	if rawMax := strings.TrimSpace(os.Getenv("GATEWAY_LOG_UPSTREAM_ERROR_BODY_MAX_BYTES")); rawMax != "" {
-		if parsed, err := strconv.Atoi(rawMax); err == nil && parsed > 0 {
-			maxBytes = parsed
-		}
-	}
-	if len(body) > maxBytes {
-		body = body[:maxBytes]
-	}
-
-	log.Printf("Upstream error body: account=%d status=%d body=%q", accountID, statusCode, string(body))
+	return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 }
 
 // openaiStreamingResult streaming response result
