@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { adminAPI } from '@/api'
-import type { OpsDashboardOverview, OpsWSStatus, OpsMetricThresholds } from '@/api/admin/ops'
+import { opsAPI, type OpsDashboardOverview, type OpsWSStatus, type OpsMetricThresholds, type OpsRealtimeTrafficSummary } from '@/api/admin/ops'
 import type { OpsRequestDetailsPreset } from './OpsRequestDetailsModal.vue'
 import { formatNumber } from '@/utils/format'
 
@@ -49,6 +50,34 @@ const realtimeWindow = ref<RealtimeWindow>('1min')
 
 const overview = computed(() => props.overview ?? null)
 const systemMetrics = computed(() => overview.value?.system_metrics ?? null)
+
+const REALTIME_WINDOW_MINUTES: Record<RealtimeWindow, number> = {
+  '1min': 1,
+  '5min': 5,
+  '30min': 30,
+  '1h': 60
+}
+
+const TOOLBAR_RANGE_MINUTES: Record<string, number> = {
+  '5m': 5,
+  '30m': 30,
+  '1h': 60,
+  '6h': 6 * 60,
+  '24h': 24 * 60
+}
+
+const availableRealtimeWindows = computed(() => {
+  const toolbarMinutes = TOOLBAR_RANGE_MINUTES[props.timeRange] ?? 60
+  return (['1min', '5min', '30min', '1h'] as const).filter((w) => REALTIME_WINDOW_MINUTES[w] <= toolbarMinutes)
+})
+
+watch(
+  () => props.timeRange,
+  () => {
+    // The realtime window must be inside the toolbar window; reset to keep UX predictable.
+    realtimeWindow.value = '1min'
+  }
+)
 
 // --- Filters ---
 
@@ -186,51 +215,83 @@ function isUpstreamErrorRateAboveThreshold(upstreamErrorRatePercent: number | nu
 const totalRequestsLabel = computed(() => formatNumber(overview.value?.request_count_total ?? 0))
 const totalTokensLabel = computed(() => formatNumber(overview.value?.token_consumed ?? 0))
 
+const realtimeTrafficSummary = ref<OpsRealtimeTrafficSummary | null>(null)
+const realtimeTrafficLoading = ref(false)
+
+async function loadRealtimeTrafficSummary() {
+  if (realtimeTrafficLoading.value) return
+  realtimeTrafficLoading.value = true
+  try {
+    realtimeTrafficSummary.value = await opsAPI.getRealtimeTrafficSummary(realtimeWindow.value, props.platform, props.groupId)
+  } catch (err) {
+    console.error('[OpsDashboardHeader] Failed to load realtime traffic summary', err)
+    realtimeTrafficSummary.value = null
+  } finally {
+    realtimeTrafficLoading.value = false
+  }
+}
+
+watch(
+  () => [realtimeWindow.value, props.platform, props.groupId] as const,
+  () => {
+    loadRealtimeTrafficSummary()
+  },
+  { immediate: true }
+)
+
+const { pause: pauseRealtimeTrafficRefresh, resume: resumeRealtimeTrafficRefresh } = useIntervalFn(
+  () => {
+    loadRealtimeTrafficSummary()
+  },
+  5000,
+  { immediate: false }
+)
+
+onMounted(() => {
+  resumeRealtimeTrafficRefresh()
+})
+
+onUnmounted(() => {
+  pauseRealtimeTrafficRefresh()
+})
+
 const displayRealTimeQps = computed(() => {
+  const v = realtimeTrafficSummary.value?.qps?.current
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+
   const ov = overview.value
   if (!ov) return 0
   const useRealtime = props.wsStatus === 'connected' && !!props.wsHasData
-  const v = useRealtime ? props.realTimeQps : ov.qps?.current
-  return typeof v === 'number' && Number.isFinite(v) ? v : 0
+  const fallback = useRealtime ? props.realTimeQps : ov.qps?.current
+  return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : 0
 })
 
 const displayRealTimeTps = computed(() => {
+  const v = realtimeTrafficSummary.value?.tps?.current
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+
   const ov = overview.value
   if (!ov) return 0
   const useRealtime = props.wsStatus === 'connected' && !!props.wsHasData
-  const v = useRealtime ? props.realTimeTps : ov.tps?.current
-  return typeof v === 'number' && Number.isFinite(v) ? v : 0
+  const fallback = useRealtime ? props.realTimeTps : ov.tps?.current
+  return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : 0
 })
 
-// Sparkline history (keep last 60 data points)
-const qpsHistory = ref<number[]>([])
-const tpsHistory = ref<number[]>([])
-const MAX_HISTORY_POINTS = 60
-
-watch([displayRealTimeQps, displayRealTimeTps], ([newQps, newTps]) => {
-  // Add new data points
-  qpsHistory.value.push(newQps)
-  tpsHistory.value.push(newTps)
-
-  // Keep only last N points
-  if (qpsHistory.value.length > MAX_HISTORY_POINTS) {
-    qpsHistory.value.shift()
-  }
-  if (tpsHistory.value.length > MAX_HISTORY_POINTS) {
-    tpsHistory.value.shift()
-  }
+const realtimeQpsPeakLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.qps?.peak
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
 })
-
-const qpsPeakLabel = computed(() => {
-  const v = overview.value?.qps?.peak
-  if (typeof v !== 'number') return '-'
-  return v.toFixed(1)
+const realtimeTpsPeakLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.tps?.peak
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
 })
-
-const tpsPeakLabel = computed(() => {
-  const v = overview.value?.tps?.peak
-  if (typeof v !== 'number') return '-'
-  return v.toFixed(1)
+const realtimeQpsAvgLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.qps?.avg
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
+})
+const realtimeTpsAvgLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.tps?.avg
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
 })
 
 const qpsAvgLabel = computed(() => {
@@ -968,7 +1029,7 @@ function openJobsDetails() {
               <!-- Time Window Selector -->
               <div class="flex flex-wrap gap-1">
                 <button
-                  v-for="window in (['1min', '5min', '30min', '1h'] as RealtimeWindow[])"
+                  v-for="window in availableRealtimeWindows"
                   :key="window"
                   type="button"
                   class="rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors sm:px-2 sm:text-[10px]"
@@ -1005,11 +1066,11 @@ function openJobsDetails() {
                   <div class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.peak') }}</div>
                   <div class="mt-1 space-y-0.5 text-sm font-medium text-gray-600 dark:text-gray-400">
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ qpsPeakLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeQpsPeakLabel }}</span>
                       <span class="text-xs">QPS</span>
                     </div>
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ tpsPeakLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeTpsPeakLabel }}</span>
                       <span class="text-xs">TPS</span>
                     </div>
                   </div>
@@ -1020,11 +1081,11 @@ function openJobsDetails() {
                   <div class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.average') }}</div>
                   <div class="mt-1 space-y-0.5 text-sm font-medium text-gray-600 dark:text-gray-400">
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ qpsAvgLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeQpsAvgLabel }}</span>
                       <span class="text-xs">QPS</span>
                     </div>
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ tpsAvgLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeTpsAvgLabel }}</span>
                       <span class="text-xs">TPS</span>
                     </div>
                   </div>
@@ -1106,7 +1167,7 @@ function openJobsDetails() {
             <button
               class="text-[10px] font-bold text-blue-500 hover:underline"
               type="button"
-              @click="openDetails({ title: t('admin.ops.requestDetails.title') })"
+              @click="openDetails({ title: t('admin.ops.requestDetails.title'), kind: 'error' })"
             >
               {{ t('admin.ops.requestDetails.details') }}
             </button>
@@ -1185,7 +1246,7 @@ function openJobsDetails() {
             <button
               class="text-[10px] font-bold text-blue-500 hover:underline"
               type="button"
-              @click="openDetails({ title: 'TTFT' })"
+              @click="openDetails({ title: 'TTFT', sort: 'duration_desc' })"
             >
               {{ t('admin.ops.requestDetails.details') }}
             </button>
