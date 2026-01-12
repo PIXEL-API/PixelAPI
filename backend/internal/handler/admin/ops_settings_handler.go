@@ -192,4 +192,3 @@ func (h *OpsHandler) UpdateMetricThresholds(c *gin.Context) {
 	}
 	response.Success(c, updated)
 }
-

@@ -553,4 +553,3 @@ func (s *OpsService) UpdateMetricThresholds(ctx context.Context, cfg *OpsMetricT
 	_ = json.Unmarshal(raw, updated)
 	return updated, nil
 }
-
