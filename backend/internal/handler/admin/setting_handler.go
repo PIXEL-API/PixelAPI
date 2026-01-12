@@ -19,14 +19,16 @@ type SettingHandler struct {
 	settingService   *service.SettingService
 	emailService     *service.EmailService
 	turnstileService *service.TurnstileService
+	opsService       *service.OpsService
 }
 
 // NewSettingHandler 创建系统设置处理器
-func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService) *SettingHandler {
+func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService) *SettingHandler {
 	return &SettingHandler{
 		settingService:   settingService,
 		emailService:     emailService,
 		turnstileService: turnstileService,
+		opsService:       opsService,
 	}
 }
 
@@ -38,6 +40,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+
+	// Check if ops monitoring is enabled (respects config.ops.enabled)
+	opsEnabled := h.opsService != nil && h.opsService.IsMonitoringEnabled(c.Request.Context())
 
 	response.Success(c, dto.SystemSettings{
 		RegistrationEnabled:                  settings.RegistrationEnabled,
@@ -72,6 +77,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		FallbackModelAntigravity:             settings.FallbackModelAntigravity,
 		EnableIdentityPatch:                  settings.EnableIdentityPatch,
 		IdentityPatchPrompt:                  settings.IdentityPatchPrompt,
+		OpsMonitoringEnabled:                 opsEnabled && settings.OpsMonitoringEnabled,
+		OpsRealtimeMonitoringEnabled:         settings.OpsRealtimeMonitoringEnabled,
+		OpsQueryModeDefault:                  settings.OpsQueryModeDefault,
+		OpsMetricsIntervalSeconds:            settings.OpsMetricsIntervalSeconds,
 	})
 }
 
@@ -95,7 +104,7 @@ type UpdateSettingsRequest struct {
 	TurnstileSiteKey   string `json:"turnstile_site_key"`
 	TurnstileSecretKey string `json:"turnstile_secret_key"`
 
-	// LinuxDo Connect OAuth 登录（终端用户 SSO）
+	// LinuxDo Connect OAuth 登录
 	LinuxDoConnectEnabled      bool   `json:"linuxdo_connect_enabled"`
 	LinuxDoConnectClientID     string `json:"linuxdo_connect_client_id"`
 	LinuxDoConnectClientSecret string `json:"linuxdo_connect_client_secret"`
@@ -124,6 +133,12 @@ type UpdateSettingsRequest struct {
 	// Identity patch configuration (Claude -> Gemini)
 	EnableIdentityPatch bool   `json:"enable_identity_patch"`
 	IdentityPatchPrompt string `json:"identity_patch_prompt"`
+
+	// Ops monitoring (vNext)
+	OpsMonitoringEnabled         *bool   `json:"ops_monitoring_enabled"`
+	OpsRealtimeMonitoringEnabled *bool   `json:"ops_realtime_monitoring_enabled"`
+	OpsQueryModeDefault          *string `json:"ops_query_mode_default"`
+	OpsMetricsIntervalSeconds    *int    `json:"ops_metrics_interval_seconds"`
 }
 
 // UpdateSettings 更新系统设置
@@ -208,6 +223,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 
+	// Ops metrics collector interval validation (seconds).
+	if req.OpsMetricsIntervalSeconds != nil {
+		v := *req.OpsMetricsIntervalSeconds
+		if v < 60 {
+			v = 60
+		}
+		if v > 3600 {
+			v = 3600
+		}
+		req.OpsMetricsIntervalSeconds = &v
+	}
+
 	settings := &service.SystemSettings{
 		RegistrationEnabled:        req.RegistrationEnabled,
 		EmailVerifyEnabled:         req.EmailVerifyEnabled,
@@ -241,6 +268,30 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		FallbackModelAntigravity:   req.FallbackModelAntigravity,
 		EnableIdentityPatch:        req.EnableIdentityPatch,
 		IdentityPatchPrompt:        req.IdentityPatchPrompt,
+		OpsMonitoringEnabled: func() bool {
+			if req.OpsMonitoringEnabled != nil {
+				return *req.OpsMonitoringEnabled
+			}
+			return previousSettings.OpsMonitoringEnabled
+		}(),
+		OpsRealtimeMonitoringEnabled: func() bool {
+			if req.OpsRealtimeMonitoringEnabled != nil {
+				return *req.OpsRealtimeMonitoringEnabled
+			}
+			return previousSettings.OpsRealtimeMonitoringEnabled
+		}(),
+		OpsQueryModeDefault: func() string {
+			if req.OpsQueryModeDefault != nil {
+				return *req.OpsQueryModeDefault
+			}
+			return previousSettings.OpsQueryModeDefault
+		}(),
+		OpsMetricsIntervalSeconds: func() int {
+			if req.OpsMetricsIntervalSeconds != nil {
+				return *req.OpsMetricsIntervalSeconds
+			}
+			return previousSettings.OpsMetricsIntervalSeconds
+		}(),
 	}
 
 	if err := h.settingService.UpdateSettings(c.Request.Context(), settings); err != nil {
@@ -290,6 +341,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		FallbackModelAntigravity:             updatedSettings.FallbackModelAntigravity,
 		EnableIdentityPatch:                  updatedSettings.EnableIdentityPatch,
 		IdentityPatchPrompt:                  updatedSettings.IdentityPatchPrompt,
+		OpsMonitoringEnabled:                 updatedSettings.OpsMonitoringEnabled,
+		OpsRealtimeMonitoringEnabled:         updatedSettings.OpsRealtimeMonitoringEnabled,
+		OpsQueryModeDefault:                  updatedSettings.OpsQueryModeDefault,
+		OpsMetricsIntervalSeconds:            updatedSettings.OpsMetricsIntervalSeconds,
 	})
 }
 
@@ -410,6 +465,18 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.IdentityPatchPrompt != after.IdentityPatchPrompt {
 		changed = append(changed, "identity_patch_prompt")
+	}
+	if before.OpsMonitoringEnabled != after.OpsMonitoringEnabled {
+		changed = append(changed, "ops_monitoring_enabled")
+	}
+	if before.OpsRealtimeMonitoringEnabled != after.OpsRealtimeMonitoringEnabled {
+		changed = append(changed, "ops_realtime_monitoring_enabled")
+	}
+	if before.OpsQueryModeDefault != after.OpsQueryModeDefault {
+		changed = append(changed, "ops_query_mode_default")
+	}
+	if before.OpsMetricsIntervalSeconds != after.OpsMetricsIntervalSeconds {
+		changed = append(changed, "ops_metrics_interval_seconds")
 	}
 	return changed
 }
