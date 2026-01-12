@@ -1,29 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Icon from '@/components/icons/Icon.vue'
 import { adminAPI } from '@/api'
-import type { OpsDashboardOverview, OpsWSStatus } from '@/api/admin/ops'
+import { opsAPI, type OpsDashboardOverview, type OpsMetricThresholds, type OpsRealtimeTrafficSummary } from '@/api/admin/ops'
 import type { OpsRequestDetailsPreset } from './OpsRequestDetailsModal.vue'
+import { useAdminSettingsStore } from '@/stores'
 import { formatNumber } from '@/utils/format'
 
 type RealtimeWindow = '1min' | '5min' | '30min' | '1h'
 
 interface Props {
   overview?: OpsDashboardOverview | null
-  wsStatus: OpsWSStatus
-  wsReconnectInMs?: number | null
-  wsHasData?: boolean
-  realTimeQps: number
-  realTimeTps: number
   platform: string
   groupId: number | null
   timeRange: string
   queryMode: string
   loading: boolean
   lastUpdated: Date | null
+  thresholds?: OpsMetricThresholds | null // 阈值配置
 }
 
 interface Emits {
@@ -42,11 +41,42 @@ const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
+const adminSettingsStore = useAdminSettingsStore()
 
 const realtimeWindow = ref<RealtimeWindow>('1min')
 
 const overview = computed(() => props.overview ?? null)
 const systemMetrics = computed(() => overview.value?.system_metrics ?? null)
+
+const REALTIME_WINDOW_MINUTES: Record<RealtimeWindow, number> = {
+  '1min': 1,
+  '5min': 5,
+  '30min': 30,
+  '1h': 60
+}
+
+const TOOLBAR_RANGE_MINUTES: Record<string, number> = {
+  '5m': 5,
+  '30m': 30,
+  '1h': 60,
+  '6h': 6 * 60,
+  '24h': 24 * 60
+}
+
+const availableRealtimeWindows = computed(() => {
+  const toolbarMinutes = TOOLBAR_RANGE_MINUTES[props.timeRange] ?? 60
+  return (['1min', '5min', '30min', '1h'] as const).filter((w) => REALTIME_WINDOW_MINUTES[w] <= toolbarMinutes)
+})
+
+watch(
+  () => props.timeRange,
+  () => {
+    // The realtime window must be inside the toolbar window; reset to keep UX predictable.
+    realtimeWindow.value = '1min'
+    // Keep realtime traffic consistent with toolbar changes even when the window is already 1min.
+    loadRealtimeTrafficSummary()
+  }
+)
 
 // --- Filters ---
 
@@ -143,56 +173,143 @@ function getLatencyColor(ms: number | null | undefined): string {
   return 'text-red-600 dark:text-red-400'
 }
 
+// --- Threshold checking helpers ---
+function isSLABelowThreshold(slaPercent: number | null): boolean {
+  if (slaPercent == null) return false
+  const threshold = props.thresholds?.sla_percent_min
+  if (threshold == null) return false
+  return slaPercent < threshold
+}
+
+function isLatencyAboveThreshold(latencyP99Ms: number | null): boolean {
+  if (latencyP99Ms == null) return false
+  const threshold = props.thresholds?.latency_p99_ms_max
+  if (threshold == null) return false
+  return latencyP99Ms > threshold
+}
+
+function isTTFTAboveThreshold(ttftP99Ms: number | null): boolean {
+  if (ttftP99Ms == null) return false
+  const threshold = props.thresholds?.ttft_p99_ms_max
+  if (threshold == null) return false
+  return ttftP99Ms > threshold
+}
+
+function isRequestErrorRateAboveThreshold(errorRatePercent: number | null): boolean {
+  if (errorRatePercent == null) return false
+  const threshold = props.thresholds?.request_error_rate_percent_max
+  if (threshold == null) return false
+  return errorRatePercent > threshold
+}
+
+function isUpstreamErrorRateAboveThreshold(upstreamErrorRatePercent: number | null): boolean {
+  if (upstreamErrorRatePercent == null) return false
+  const threshold = props.thresholds?.upstream_error_rate_percent_max
+  if (threshold == null) return false
+  return upstreamErrorRatePercent > threshold
+}
+
 // --- Realtime / Overview labels ---
 
 const totalRequestsLabel = computed(() => formatNumber(overview.value?.request_count_total ?? 0))
 const totalTokensLabel = computed(() => formatNumber(overview.value?.token_consumed ?? 0))
 
+const realtimeTrafficSummary = ref<OpsRealtimeTrafficSummary | null>(null)
+const realtimeTrafficLoading = ref(false)
+
+function makeZeroRealtimeTrafficSummary(): OpsRealtimeTrafficSummary {
+  const now = new Date().toISOString()
+  return {
+    window: realtimeWindow.value,
+    start_time: now,
+    end_time: now,
+    platform: props.platform,
+    group_id: props.groupId,
+    qps: { current: 0, peak: 0, avg: 0 },
+    tps: { current: 0, peak: 0, avg: 0 }
+  }
+}
+
+async function loadRealtimeTrafficSummary() {
+  if (realtimeTrafficLoading.value) return
+  if (!adminSettingsStore.opsRealtimeMonitoringEnabled) {
+    realtimeTrafficSummary.value = makeZeroRealtimeTrafficSummary()
+    return
+  }
+  realtimeTrafficLoading.value = true
+  try {
+    const res = await opsAPI.getRealtimeTrafficSummary(realtimeWindow.value, props.platform, props.groupId)
+    if (res && res.enabled === false) {
+      adminSettingsStore.setOpsRealtimeMonitoringEnabledLocal(false)
+    }
+    realtimeTrafficSummary.value = res?.summary ?? null
+  } catch (err) {
+    console.error('[OpsDashboardHeader] Failed to load realtime traffic summary', err)
+    realtimeTrafficSummary.value = null
+  } finally {
+    realtimeTrafficLoading.value = false
+  }
+}
+
+watch(
+  () => [realtimeWindow.value, props.platform, props.groupId] as const,
+  () => {
+    loadRealtimeTrafficSummary()
+  },
+  { immediate: true }
+)
+
+const { pause: pauseRealtimeTrafficRefresh, resume: resumeRealtimeTrafficRefresh } = useIntervalFn(
+  () => {
+    loadRealtimeTrafficSummary()
+  },
+  5000,
+  { immediate: false }
+)
+
+watch(
+  () => adminSettingsStore.opsRealtimeMonitoringEnabled,
+  (enabled) => {
+    if (enabled) {
+      resumeRealtimeTrafficRefresh()
+    } else {
+      pauseRealtimeTrafficRefresh()
+      // Keep UI stable when realtime monitoring is turned off.
+      realtimeTrafficSummary.value = makeZeroRealtimeTrafficSummary()
+    }
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  pauseRealtimeTrafficRefresh()
+})
+
 const displayRealTimeQps = computed(() => {
-  const ov = overview.value
-  if (!ov) return 0
-  const useRealtime = props.wsStatus === 'connected' && !!props.wsHasData
-  const v = useRealtime ? props.realTimeQps : ov.qps?.current
+  const v = realtimeTrafficSummary.value?.qps?.current
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
 })
 
 const displayRealTimeTps = computed(() => {
-  const ov = overview.value
-  if (!ov) return 0
-  const useRealtime = props.wsStatus === 'connected' && !!props.wsHasData
-  const v = useRealtime ? props.realTimeTps : ov.tps?.current
+  const v = realtimeTrafficSummary.value?.tps?.current
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
 })
 
-// Sparkline history (keep last 60 data points)
-const qpsHistory = ref<number[]>([])
-const tpsHistory = ref<number[]>([])
-const MAX_HISTORY_POINTS = 60
-
-watch([displayRealTimeQps, displayRealTimeTps], ([newQps, newTps]) => {
-  // Add new data points
-  qpsHistory.value.push(newQps)
-  tpsHistory.value.push(newTps)
-
-  // Keep only last N points
-  if (qpsHistory.value.length > MAX_HISTORY_POINTS) {
-    qpsHistory.value.shift()
-  }
-  if (tpsHistory.value.length > MAX_HISTORY_POINTS) {
-    tpsHistory.value.shift()
-  }
+const realtimeQpsPeakLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.qps?.peak
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
 })
-
-const qpsPeakLabel = computed(() => {
-  const v = overview.value?.qps?.peak
-  if (typeof v !== 'number') return '-'
-  return v.toFixed(1)
+const realtimeTpsPeakLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.tps?.peak
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
 })
-
-const tpsPeakLabel = computed(() => {
-  const v = overview.value?.tps?.peak
-  if (typeof v !== 'number') return '-'
-  return v.toFixed(1)
+const realtimeQpsAvgLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.qps?.avg
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
+})
+const realtimeTpsAvgLabel = computed(() => {
+  const v = realtimeTrafficSummary.value?.tps?.avg
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '-'
 })
 
 const qpsAvgLabel = computed(() => {
@@ -244,7 +361,7 @@ const ttftMaxMs = computed(() => overview.value?.ttft?.max_ms ?? null)
 const isSystemIdle = computed(() => {
   const ov = overview.value
   if (!ov) return true
-  const qps = props.wsStatus === 'connected' && props.wsHasData ? props.realTimeQps : ov.qps?.current
+  const qps = ov.qps?.current
   const errorRate = ov.error_rate ?? 0
   return (qps ?? 0) === 0 && errorRate === 0
 })
@@ -687,6 +804,11 @@ const showJobsDetails = ref(false)
 function openJobsDetails() {
   showJobsDetails.value = true
 }
+
+function handleToolbarRefresh() {
+  loadRealtimeTrafficSummary()
+  emit('refresh')
+}
 </script>
 
 <template>
@@ -764,7 +886,7 @@ function openJobsDetails() {
           class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-gray-500 transition-colors hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-400 dark:hover:bg-dark-600"
           :disabled="loading"
           :title="t('common.refresh')"
-          @click="emit('refresh')"
+          @click="handleToolbarRefresh"
         >
           <svg class="h-4 w-4" :class="{ 'animate-spin': loading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
@@ -818,8 +940,9 @@ function openJobsDetails() {
               class="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-72 -translate-x-1/2 opacity-0 transition-opacity duration-200 group-hover:pointer-events-auto group-hover:opacity-100 md:left-full md:top-0 md:ml-2 md:mt-0 md:translate-x-0"
             >
               <div class="rounded-xl bg-white p-4 shadow-xl ring-1 ring-black/5 dark:bg-gray-800 dark:ring-white/10">
-                <h4 class="mb-3 border-b border-gray-100 pb-2 text-sm font-bold text-gray-900 dark:border-gray-700 dark:text-white">
-                  🧠 {{ t('admin.ops.diagnosis.title') }}
+                <h4 class="mb-3 border-b border-gray-100 pb-2 text-sm font-bold text-gray-900 dark:border-gray-700 dark:text-white flex items-center gap-2">
+                  <Icon name="brain" size="sm" class="text-blue-500" />
+                  {{ t('admin.ops.diagnosis.title') }}
                 </h4>
 
                 <div class="space-y-3">
@@ -850,8 +973,9 @@ function openJobsDetails() {
                     <div class="flex-1">
                       <div class="text-xs font-semibold text-gray-900 dark:text-white">{{ item.message }}</div>
                       <div class="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">{{ item.impact }}</div>
-                      <div v-if="item.action" class="mt-1 text-[11px] text-blue-600 dark:text-blue-400">
-                        💡 {{ item.action }}
+                      <div v-if="item.action" class="mt-1 text-[11px] text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                        <Icon name="lightbulb" size="xs" />
+                        {{ item.action }}
                       </div>
                     </div>
                   </div>
@@ -928,7 +1052,7 @@ function openJobsDetails() {
               <!-- Time Window Selector -->
               <div class="flex flex-wrap gap-1">
                 <button
-                  v-for="window in (['1min', '5min', '30min', '1h'] as RealtimeWindow[])"
+                  v-for="window in availableRealtimeWindows"
                   :key="window"
                   type="button"
                   class="rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors sm:px-2 sm:text-[10px]"
@@ -965,11 +1089,11 @@ function openJobsDetails() {
                   <div class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.peak') }}</div>
                   <div class="mt-1 space-y-0.5 text-sm font-medium text-gray-600 dark:text-gray-400">
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ qpsPeakLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeQpsPeakLabel }}</span>
                       <span class="text-xs">QPS</span>
                     </div>
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ tpsPeakLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeTpsPeakLabel }}</span>
                       <span class="text-xs">TPS</span>
                     </div>
                   </div>
@@ -980,11 +1104,11 @@ function openJobsDetails() {
                   <div class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.average') }}</div>
                   <div class="mt-1 space-y-0.5 text-sm font-medium text-gray-600 dark:text-gray-400">
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ qpsAvgLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeQpsAvgLabel }}</span>
                       <span class="text-xs">QPS</span>
                     </div>
                     <div class="flex items-baseline gap-1.5">
-                      <span class="font-black text-gray-900 dark:text-white">{{ tpsAvgLabel }}</span>
+                      <span class="font-black text-gray-900 dark:text-white">{{ realtimeTpsAvgLabel }}</span>
                       <span class="text-xs">TPS</span>
                     </div>
                   </div>
@@ -1024,7 +1148,7 @@ function openJobsDetails() {
         <div class="rounded-2xl bg-gray-50 p-4 dark:bg-dark-900">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-1">
-              <span class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.requests') }}</span>
+              <span class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.requestsTitle') }}</span>
               <HelpTooltip :content="t('admin.ops.tooltips.totalRequests')" />
             </div>
             <button
@@ -1061,21 +1185,21 @@ function openJobsDetails() {
             <div class="flex items-center gap-2">
               <span class="text-[10px] font-bold uppercase text-gray-400">SLA</span>
               <HelpTooltip :content="t('admin.ops.tooltips.sla')" />
-              <span class="h-1.5 w-1.5 rounded-full" :class="(slaPercent ?? 0) >= 99.5 ? 'bg-green-500' : 'bg-yellow-500'"></span>
+              <span class="h-1.5 w-1.5 rounded-full" :class="isSLABelowThreshold(slaPercent) ? 'bg-red-500' : (slaPercent ?? 0) >= 99.5 ? 'bg-green-500' : 'bg-yellow-500'"></span>
             </div>
             <button
               class="text-[10px] font-bold text-blue-500 hover:underline"
               type="button"
-              @click="openDetails({ title: t('admin.ops.requestDetails.title') })"
+              @click="openDetails({ title: t('admin.ops.requestDetails.title'), kind: 'error' })"
             >
               {{ t('admin.ops.requestDetails.details') }}
             </button>
           </div>
-          <div class="mt-2 text-3xl font-black text-gray-900 dark:text-white">
+          <div class="mt-2 text-3xl font-black" :class="isSLABelowThreshold(slaPercent) ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-white'">
             {{ slaPercent == null ? '-' : `${slaPercent.toFixed(3)}%` }}
           </div>
           <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700">
-            <div class="h-full bg-green-500 transition-all" :style="{ width: `${Math.max((slaPercent ?? 0) - 90, 0) * 10}%` }"></div>
+            <div class="h-full transition-all" :class="isSLABelowThreshold(slaPercent) ? 'bg-red-500' : 'bg-green-500'" :style="{ width: `${Math.max((slaPercent ?? 0) - 90, 0) * 10}%` }"></div>
           </div>
           <div class="mt-3 text-xs">
             <div class="flex justify-between">
@@ -1101,7 +1225,7 @@ function openJobsDetails() {
             </button>
           </div>
           <div class="mt-2 flex items-baseline gap-2">
-            <div class="text-3xl font-black" :class="getLatencyColor(durationP99Ms)">
+            <div class="text-3xl font-black" :class="isLatencyAboveThreshold(durationP99Ms) ? 'text-red-600 dark:text-red-400' : getLatencyColor(durationP99Ms)">
               {{ durationP99Ms ?? '-' }}
             </div>
             <span class="text-xs font-bold text-gray-400">ms (P99)</span>
@@ -1145,13 +1269,13 @@ function openJobsDetails() {
             <button
               class="text-[10px] font-bold text-blue-500 hover:underline"
               type="button"
-              @click="openDetails({ title: 'TTFT' })"
+              @click="openDetails({ title: 'TTFT', sort: 'duration_desc' })"
             >
               {{ t('admin.ops.requestDetails.details') }}
             </button>
           </div>
           <div class="mt-2 flex items-baseline gap-2">
-            <div class="text-3xl font-black" :class="getLatencyColor(ttftP99Ms)">
+            <div class="text-3xl font-black" :class="isTTFTAboveThreshold(ttftP99Ms) ? 'text-red-600 dark:text-red-400' : getLatencyColor(ttftP99Ms)">
               {{ ttftP99Ms ?? '-' }}
             </div>
             <span class="text-xs font-bold text-gray-400">ms (P99)</span>
@@ -1196,7 +1320,7 @@ function openJobsDetails() {
               {{ t('admin.ops.requestDetails.details') }}
             </button>
           </div>
-          <div class="mt-2 text-3xl font-black" :class="(errorRatePercent ?? 0) > 5 ? 'text-red-500' : 'text-gray-900 dark:text-white'">
+          <div class="mt-2 text-3xl font-black" :class="isRequestErrorRateAboveThreshold(errorRatePercent) ? 'text-red-600 dark:text-red-400' : (errorRatePercent ?? 0) > 5 ? 'text-red-500' : 'text-gray-900 dark:text-white'">
             {{ errorRatePercent == null ? '-' : `${errorRatePercent.toFixed(2)}%` }}
           </div>
           <div class="mt-3 space-y-1 text-xs">
@@ -1222,7 +1346,7 @@ function openJobsDetails() {
               {{ t('admin.ops.requestDetails.details') }}
             </button>
           </div>
-          <div class="mt-2 text-3xl font-black" :class="(upstreamErrorRatePercent ?? 0) > 5 ? 'text-red-500' : 'text-gray-900 dark:text-white'">
+          <div class="mt-2 text-3xl font-black" :class="isUpstreamErrorRateAboveThreshold(upstreamErrorRatePercent) ? 'text-red-600 dark:text-red-400' : (upstreamErrorRatePercent ?? 0) > 5 ? 'text-red-500' : 'text-gray-900 dark:text-white'">
             {{ upstreamErrorRatePercent == null ? '-' : `${upstreamErrorRatePercent.toFixed(2)}%` }}
           </div>
           <div class="mt-3 space-y-1 text-xs">
