@@ -1717,6 +1717,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				continue
 			}
 			log.Printf("Stream data interval timeout (antigravity)")
+			// 注意：此函数没有 account 上下文，无法调用 HandleStreamTimeout
 			sendErrorEvent("stream_timeout")
 			return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 		}
@@ -2271,6 +2272,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 				continue
 			}
 			log.Printf("Stream data interval timeout (antigravity)")
+			// 注意：此函数没有 account 上下文，无法调用 HandleStreamTimeout
 			sendErrorEvent("stream_timeout")
 			return &antigravityStreamResult{usage: convertUsage(nil), firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 		}
