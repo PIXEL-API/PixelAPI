@@ -88,6 +88,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
+	// 检查是否为 Claude Code 客户端，设置到 context 中
+	SetClaudeCodeClientContext(c, body)
+
 	setOpsRequestContext(c, "", false, body)
 
 	parsedReq, err := service.ParseGatewayRequest(body)
@@ -286,8 +289,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				return
 			}
 
+			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
+			userAgent := c.GetHeader("User-Agent")
+			clientIP := c.ClientIP()
+
 			// 异步记录使用量（subscription已在函数开头获取）
-			go func(result *service.ForwardResult, usedAccount *service.Account) {
+			go func(result *service.ForwardResult, usedAccount *service.Account, ua, ip string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
@@ -296,10 +303,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					User:         apiKey.User,
 					Account:      usedAccount,
 					Subscription: subscription,
+					UserAgent:    ua,
+					IPAddress:    ip,
 				}); err != nil {
 					log.Printf("Record usage failed: %v", err)
 				}
-			}(result, account)
+			}(result, account, userAgent, clientIP)
 			return
 		}
 	}
@@ -414,8 +423,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			return
 		}
 
+		// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := c.ClientIP()
+
 		// 异步记录使用量（subscription已在函数开头获取）
-		go func(result *service.ForwardResult, usedAccount *service.Account) {
+		go func(result *service.ForwardResult, usedAccount *service.Account, ua, ip string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
@@ -424,10 +437,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				User:         apiKey.User,
 				Account:      usedAccount,
 				Subscription: subscription,
+				UserAgent:    ua,
+				IPAddress:    ip,
 			}); err != nil {
 				log.Printf("Record usage failed: %v", err)
 			}
-		}(result, account)
+		}(result, account, userAgent, clientIP)
 		return
 	}
 }

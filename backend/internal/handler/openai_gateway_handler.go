@@ -263,8 +263,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 
+		// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
+		userAgent := c.GetHeader("User-Agent")
+		clientIP := c.ClientIP()
+
 		// Async record usage
-		go func(result *service.OpenAIForwardResult, usedAccount *service.Account) {
+		go func(result *service.OpenAIForwardResult, usedAccount *service.Account, ua, ip string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -273,10 +277,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				User:         apiKey.User,
 				Account:      usedAccount,
 				Subscription: subscription,
+				UserAgent:    ua,
+				IPAddress:    ip,
 			}); err != nil {
 				log.Printf("Record usage failed: %v", err)
 			}
-		}(result, account)
+		}(result, account, userAgent, clientIP)
 		return
 	}
 }
