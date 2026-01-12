@@ -666,7 +666,6 @@ func (h *SettingHandler) GetStreamTimeoutSettings(c *gin.Context) {
 
 	response.Success(c, dto.StreamTimeoutSettings{
 		Enabled:                settings.Enabled,
-		TimeoutSeconds:         settings.TimeoutSeconds,
 		Action:                 settings.Action,
 		TempUnschedMinutes:     settings.TempUnschedMinutes,
 		ThresholdCount:         settings.ThresholdCount,
@@ -677,7 +676,6 @@ func (h *SettingHandler) GetStreamTimeoutSettings(c *gin.Context) {
 // UpdateStreamTimeoutSettingsRequest 更新流超时配置请求
 type UpdateStreamTimeoutSettingsRequest struct {
 	Enabled                bool   `json:"enabled"`
-	TimeoutSeconds         int    `json:"timeout_seconds"`
 	Action                 string `json:"action"`
 	TempUnschedMinutes     int    `json:"temp_unsched_minutes"`
 	ThresholdCount         int    `json:"threshold_count"`
@@ -695,7 +693,6 @@ func (h *SettingHandler) UpdateStreamTimeoutSettings(c *gin.Context) {
 
 	settings := &service.StreamTimeoutSettings{
 		Enabled:                req.Enabled,
-		TimeoutSeconds:         req.TimeoutSeconds,
 		Action:                 req.Action,
 		TempUnschedMinutes:     req.TempUnschedMinutes,
 		ThresholdCount:         req.ThresholdCount,
@@ -716,7 +713,6 @@ func (h *SettingHandler) UpdateStreamTimeoutSettings(c *gin.Context) {
 
 	response.Success(c, dto.StreamTimeoutSettings{
 		Enabled:                updatedSettings.Enabled,
-		TimeoutSeconds:         updatedSettings.TimeoutSeconds,
 		Action:                 updatedSettings.Action,
 		TempUnschedMinutes:     updatedSettings.TempUnschedMinutes,
 		ThresholdCount:         updatedSettings.ThresholdCount,

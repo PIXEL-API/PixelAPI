@@ -696,15 +696,6 @@ func (s *SettingService) GetStreamTimeoutSettings(ctx context.Context) (*StreamT
 	}
 
 	// 验证并修正配置值
-	if settings.TimeoutSeconds < 0 {
-		settings.TimeoutSeconds = 0
-	}
-	if settings.TimeoutSeconds > 0 && settings.TimeoutSeconds < 30 {
-		settings.TimeoutSeconds = 30
-	}
-	if settings.TimeoutSeconds > 300 {
-		settings.TimeoutSeconds = 300
-	}
 	if settings.TempUnschedMinutes < 1 {
 		settings.TempUnschedMinutes = 1
 	}
@@ -742,12 +733,6 @@ func (s *SettingService) SetStreamTimeoutSettings(ctx context.Context, settings 
 	}
 
 	// 验证配置值
-	if settings.TimeoutSeconds < 0 {
-		return fmt.Errorf("timeout_seconds must be non-negative")
-	}
-	if settings.TimeoutSeconds > 0 && (settings.TimeoutSeconds < 30 || settings.TimeoutSeconds > 300) {
-		return fmt.Errorf("timeout_seconds must be 0 or between 30-300")
-	}
 	if settings.TempUnschedMinutes < 1 || settings.TempUnschedMinutes > 60 {
 		return fmt.Errorf("temp_unsched_minutes must be between 1-60")
 	}

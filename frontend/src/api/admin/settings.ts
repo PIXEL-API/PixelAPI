@@ -206,7 +206,6 @@ export async function deleteAdminApiKey(): Promise<{ message: string }> {
  */
 export interface StreamTimeoutSettings {
   enabled: boolean
-  timeout_seconds: number
   action: 'temp_unsched' | 'error' | 'none'
   temp_unsched_minutes: number
   threshold_count: number
