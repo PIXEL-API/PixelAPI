@@ -368,6 +368,9 @@ func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 		Aggregation: OpsAggregationSettings{
 			AggregationEnabled: false,
 		},
+		IgnoreCountTokensErrors: false,
+		AutoRefreshEnabled:      false,
+		AutoRefreshIntervalSec:  30,
 	}
 }
 
@@ -388,6 +391,10 @@ func normalizeOpsAdvancedSettings(cfg *OpsAdvancedSettings) {
 	if cfg.DataRetention.HourlyMetricsRetentionDays <= 0 {
 		cfg.DataRetention.HourlyMetricsRetentionDays = 30
 	}
+	// Normalize auto refresh interval (default 30 seconds)
+	if cfg.AutoRefreshIntervalSec <= 0 {
+		cfg.AutoRefreshIntervalSec = 30
+	}
 }
 
 func validateOpsAdvancedSettings(cfg *OpsAdvancedSettings) error {
@@ -402,6 +409,9 @@ func validateOpsAdvancedSettings(cfg *OpsAdvancedSettings) error {
 	}
 	if cfg.DataRetention.HourlyMetricsRetentionDays < 1 || cfg.DataRetention.HourlyMetricsRetentionDays > 365 {
 		return errors.New("hourly_metrics_retention_days must be between 1 and 365")
+	}
+	if cfg.AutoRefreshIntervalSec < 15 || cfg.AutoRefreshIntervalSec > 300 {
+		return errors.New("auto_refresh_interval_seconds must be between 15 and 300")
 	}
 	return nil
 }
