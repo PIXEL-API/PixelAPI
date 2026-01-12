@@ -86,6 +86,22 @@ func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountReposi
 	return svc
 }
 
+// ProvideRateLimitService creates RateLimitService with optional dependencies.
+func ProvideRateLimitService(
+	accountRepo AccountRepository,
+	usageRepo UsageLogRepository,
+	cfg *config.Config,
+	geminiQuotaService *GeminiQuotaService,
+	tempUnschedCache TempUnschedCache,
+	timeoutCounterCache TimeoutCounterCache,
+	settingService *SettingService,
+) *RateLimitService {
+	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
+	svc.SetTimeoutCounterCache(timeoutCounterCache)
+	svc.SetSettingService(settingService)
+	return svc
+}
+
 // ProvideOpsMetricsCollector creates and starts OpsMetricsCollector.
 func ProvideOpsMetricsCollector(
 	opsRepo OpsRepository,
@@ -186,7 +202,7 @@ var ProviderSet = wire.NewSet(
 	NewGeminiMessagesCompatService,
 	NewAntigravityTokenProvider,
 	NewAntigravityGatewayService,
-	NewRateLimitService,
+	ProvideRateLimitService,
 	NewAccountUsageService,
 	NewAccountTestService,
 	NewSettingService,

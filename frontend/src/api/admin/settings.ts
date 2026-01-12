@@ -201,6 +201,42 @@ export async function deleteAdminApiKey(): Promise<{ message: string }> {
   return data
 }
 
+/**
+ * Stream timeout settings interface
+ */
+export interface StreamTimeoutSettings {
+  enabled: boolean
+  timeout_seconds: number
+  action: 'temp_unsched' | 'error' | 'none'
+  temp_unsched_minutes: number
+  threshold_count: number
+  threshold_window_minutes: number
+}
+
+/**
+ * Get stream timeout settings
+ * @returns Stream timeout settings
+ */
+export async function getStreamTimeoutSettings(): Promise<StreamTimeoutSettings> {
+  const { data } = await apiClient.get<StreamTimeoutSettings>('/admin/settings/stream-timeout')
+  return data
+}
+
+/**
+ * Update stream timeout settings
+ * @param settings - Stream timeout settings to update
+ * @returns Updated settings
+ */
+export async function updateStreamTimeoutSettings(
+  settings: StreamTimeoutSettings
+): Promise<StreamTimeoutSettings> {
+  const { data } = await apiClient.put<StreamTimeoutSettings>(
+    '/admin/settings/stream-timeout',
+    settings
+  )
+  return data
+}
+
 export const settingsAPI = {
   getSettings,
   updateSettings,
@@ -208,7 +244,9 @@ export const settingsAPI = {
   sendTestEmail,
   getAdminApiKey,
   regenerateAdminApiKey,
-  deleteAdminApiKey
+  deleteAdminApiKey,
+  getStreamTimeoutSettings,
+  updateStreamTimeoutSettings
 }
 
 export default settingsAPI
