@@ -7,19 +7,15 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { adminAPI } from '@/api'
-import { opsAPI, type OpsDashboardOverview, type OpsWSStatus, type OpsMetricThresholds, type OpsRealtimeTrafficSummary } from '@/api/admin/ops'
+import { opsAPI, type OpsDashboardOverview, type OpsMetricThresholds, type OpsRealtimeTrafficSummary } from '@/api/admin/ops'
 import type { OpsRequestDetailsPreset } from './OpsRequestDetailsModal.vue'
+import { useAdminSettingsStore } from '@/stores'
 import { formatNumber } from '@/utils/format'
 
 type RealtimeWindow = '1min' | '5min' | '30min' | '1h'
 
 interface Props {
   overview?: OpsDashboardOverview | null
-  wsStatus: OpsWSStatus
-  wsReconnectInMs?: number | null
-  wsHasData?: boolean
-  realTimeQps: number
-  realTimeTps: number
   platform: string
   groupId: number | null
   timeRange: string
@@ -45,6 +41,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
+const adminSettingsStore = useAdminSettingsStore()
 
 const realtimeWindow = ref<RealtimeWindow>('1min')
 
@@ -76,6 +73,8 @@ watch(
   () => {
     // The realtime window must be inside the toolbar window; reset to keep UX predictable.
     realtimeWindow.value = '1min'
+    // Keep realtime traffic consistent with toolbar changes even when the window is already 1min.
+    loadRealtimeTrafficSummary()
   }
 )
 
@@ -218,11 +217,32 @@ const totalTokensLabel = computed(() => formatNumber(overview.value?.token_consu
 const realtimeTrafficSummary = ref<OpsRealtimeTrafficSummary | null>(null)
 const realtimeTrafficLoading = ref(false)
 
+function makeZeroRealtimeTrafficSummary(): OpsRealtimeTrafficSummary {
+  const now = new Date().toISOString()
+  return {
+    window: realtimeWindow.value,
+    start_time: now,
+    end_time: now,
+    platform: props.platform,
+    group_id: props.groupId,
+    qps: { current: 0, peak: 0, avg: 0 },
+    tps: { current: 0, peak: 0, avg: 0 }
+  }
+}
+
 async function loadRealtimeTrafficSummary() {
   if (realtimeTrafficLoading.value) return
+  if (!adminSettingsStore.opsRealtimeMonitoringEnabled) {
+    realtimeTrafficSummary.value = makeZeroRealtimeTrafficSummary()
+    return
+  }
   realtimeTrafficLoading.value = true
   try {
-    realtimeTrafficSummary.value = await opsAPI.getRealtimeTrafficSummary(realtimeWindow.value, props.platform, props.groupId)
+    const res = await opsAPI.getRealtimeTrafficSummary(realtimeWindow.value, props.platform, props.groupId)
+    if (res && res.enabled === false) {
+      adminSettingsStore.setOpsRealtimeMonitoringEnabledLocal(false)
+    }
+    realtimeTrafficSummary.value = res?.summary ?? null
   } catch (err) {
     console.error('[OpsDashboardHeader] Failed to load realtime traffic summary', err)
     realtimeTrafficSummary.value = null
@@ -247,9 +267,19 @@ const { pause: pauseRealtimeTrafficRefresh, resume: resumeRealtimeTrafficRefresh
   { immediate: false }
 )
 
-onMounted(() => {
-  resumeRealtimeTrafficRefresh()
-})
+watch(
+  () => adminSettingsStore.opsRealtimeMonitoringEnabled,
+  (enabled) => {
+    if (enabled) {
+      resumeRealtimeTrafficRefresh()
+    } else {
+      pauseRealtimeTrafficRefresh()
+      // Keep UI stable when realtime monitoring is turned off.
+      realtimeTrafficSummary.value = makeZeroRealtimeTrafficSummary()
+    }
+  },
+  { immediate: true }
+)
 
 onUnmounted(() => {
   pauseRealtimeTrafficRefresh()
@@ -257,24 +287,12 @@ onUnmounted(() => {
 
 const displayRealTimeQps = computed(() => {
   const v = realtimeTrafficSummary.value?.qps?.current
-  if (typeof v === 'number' && Number.isFinite(v)) return v
-
-  const ov = overview.value
-  if (!ov) return 0
-  const useRealtime = props.wsStatus === 'connected' && !!props.wsHasData
-  const fallback = useRealtime ? props.realTimeQps : ov.qps?.current
-  return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : 0
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
 })
 
 const displayRealTimeTps = computed(() => {
   const v = realtimeTrafficSummary.value?.tps?.current
-  if (typeof v === 'number' && Number.isFinite(v)) return v
-
-  const ov = overview.value
-  if (!ov) return 0
-  const useRealtime = props.wsStatus === 'connected' && !!props.wsHasData
-  const fallback = useRealtime ? props.realTimeTps : ov.tps?.current
-  return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : 0
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
 })
 
 const realtimeQpsPeakLabel = computed(() => {
@@ -343,7 +361,7 @@ const ttftMaxMs = computed(() => overview.value?.ttft?.max_ms ?? null)
 const isSystemIdle = computed(() => {
   const ov = overview.value
   if (!ov) return true
-  const qps = props.wsStatus === 'connected' && props.wsHasData ? props.realTimeQps : ov.qps?.current
+  const qps = ov.qps?.current
   const errorRate = ov.error_rate ?? 0
   return (qps ?? 0) === 0 && errorRate === 0
 })
@@ -786,6 +804,11 @@ const showJobsDetails = ref(false)
 function openJobsDetails() {
   showJobsDetails.value = true
 }
+
+function handleToolbarRefresh() {
+  loadRealtimeTrafficSummary()
+  emit('refresh')
+}
 </script>
 
 <template>
@@ -863,7 +886,7 @@ function openJobsDetails() {
           class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-gray-500 transition-colors hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-400 dark:hover:bg-dark-600"
           :disabled="loading"
           :title="t('common.refresh')"
-          @click="emit('refresh')"
+          @click="handleToolbarRefresh"
         >
           <svg class="h-4 w-4" :class="{ 'animate-spin': loading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
@@ -1125,7 +1148,7 @@ function openJobsDetails() {
         <div class="rounded-2xl bg-gray-50 p-4 dark:bg-dark-900">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-1">
-              <span class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.requests') }}</span>
+              <span class="text-[10px] font-bold uppercase text-gray-400">{{ t('admin.ops.requestsTitle') }}</span>
               <HelpTooltip :content="t('admin.ops.tooltips.totalRequests')" />
             </div>
             <button
