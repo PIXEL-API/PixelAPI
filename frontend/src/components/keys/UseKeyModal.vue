@@ -376,6 +376,10 @@ const currentFiles = computed((): FileConfig[] => {
     const trimmed = `${baseRoot}/antigravity`.replace(/\/+$/, '')
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
   })()
+  const geminiBase = (() => {
+    const trimmed = baseRoot.replace(/\/+$/, '')
+    return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
+  })()
 
   if (activeClientTab.value === 'opencode') {
     switch (props.platform) {
@@ -384,7 +388,7 @@ const currentFiles = computed((): FileConfig[] => {
       case 'openai':
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
       case 'gemini':
-        return [generateOpenCodeConfig('gemini', apiBase, apiKey)]
+        return [generateOpenCodeConfig('gemini', geminiBase, apiKey)]
       case 'antigravity':
         return [
           generateOpenCodeConfig('antigravity-claude', antigravityBase, apiKey, 'opencode.json (Claude)'),
