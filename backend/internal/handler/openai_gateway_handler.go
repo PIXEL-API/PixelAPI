@@ -96,8 +96,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	seedOpenAISessionHeaders(c, reqBody)
-
 	userAgent := c.GetHeader("User-Agent")
 	if !openai.IsCodexCLIRequest(userAgent) {
 		existingInstructions, _ := reqBody["instructions"].(string)
@@ -299,37 +297,6 @@ func (h *OpenAIGatewayHandler) handleConcurrencyError(c *gin.Context, err error,
 func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, statusCode int, streamStarted bool) {
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
-}
-
-func seedOpenAISessionHeaders(c *gin.Context, reqBody map[string]any) {
-	if c.GetHeader("session_id") == "" {
-		if v := firstNonEmptyString(
-			reqBody["prompt_cache_key"],
-			reqBody["session_id"],
-			reqBody["conversation_id"],
-			reqBody["previous_response_id"],
-		); v != "" {
-			c.Request.Header.Set("session_id", v)
-		}
-	}
-	if c.GetHeader("conversation_id") == "" {
-		if v := firstNonEmptyString(reqBody["prompt_cache_key"], reqBody["conversation_id"]); v != "" {
-			c.Request.Header.Set("conversation_id", v)
-		}
-	}
-}
-
-func firstNonEmptyString(values ...any) string {
-	for _, value := range values {
-		s, ok := value.(string)
-		if ok {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				return s
-			}
-		}
-	}
-	return ""
 }
 
 func (h *OpenAIGatewayHandler) mapUpstreamError(statusCode int) (int, string, string) {
