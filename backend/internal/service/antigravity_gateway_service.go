@@ -523,6 +523,9 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		proxyURL = account.Proxy.URL()
 	}
 
+	// Sanitize thinking blocks (clean cache_control and flatten history thinking)
+	sanitizeThinkingBlocks(&claudeReq)
+
 	// 获取转换选项
 	// Antigravity 上游要求必须包含身份提示词，否则会返回 429
 	transformOpts := s.getClaudeTransformOptions(ctx)
@@ -533,6 +536,9 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	if err != nil {
 		return nil, fmt.Errorf("transform request: %w", err)
 	}
+
+	// Safety net: ensure no cache_control leaked into Gemini request
+	geminiBody = cleanCacheControlFromGeminiJSON(geminiBody)
 
 	// Antigravity 上游只支持流式请求，统一使用 streamGenerateContent
 	// 如果客户端请求非流式，在响应处理阶段会收集完整流式响应后转换返回
@@ -901,6 +907,143 @@ func extractAntigravityErrorMessage(body []byte) string {
 	}
 
 	return ""
+}
+
+// cleanCacheControlFromGeminiJSON removes cache_control from Gemini JSON (emergency fix)
+// This should not be needed if transformation is correct, but serves as a safety net
+func cleanCacheControlFromGeminiJSON(body []byte) []byte {
+	// Try a more robust approach: parse and clean
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		log.Printf("[Antigravity] Failed to parse Gemini JSON for cache_control cleaning: %v", err)
+		return body
+	}
+
+	cleaned := removeCacheControlFromAny(data)
+	if !cleaned {
+		return body
+	}
+
+	if result, err := json.Marshal(data); err == nil {
+		log.Printf("[Antigravity] Successfully cleaned cache_control from Gemini JSON")
+		return result
+	}
+
+	return body
+}
+
+// removeCacheControlFromAny recursively removes cache_control fields
+func removeCacheControlFromAny(v any) bool {
+	cleaned := false
+
+	switch val := v.(type) {
+	case map[string]any:
+		for k, child := range val {
+			if k == "cache_control" {
+				delete(val, k)
+				cleaned = true
+			} else if removeCacheControlFromAny(child) {
+				cleaned = true
+			}
+		}
+	case []any:
+		for _, item := range val {
+			if removeCacheControlFromAny(item) {
+				cleaned = true
+			}
+		}
+	}
+
+	return cleaned
+}
+
+// sanitizeThinkingBlocks cleans cache_control and flattens history thinking blocks
+// Thinking blocks do NOT support cache_control field (Anthropic API/Vertex AI requirement)
+// Additionally, history thinking blocks are flattened to text to avoid upstream validation errors
+func sanitizeThinkingBlocks(req *antigravity.ClaudeRequest) {
+	if req == nil {
+		return
+	}
+
+	log.Printf("[Antigravity] sanitizeThinkingBlocks: processing request with %d messages", len(req.Messages))
+
+	// Clean system blocks
+	if len(req.System) > 0 {
+		var systemBlocks []map[string]any
+		if err := json.Unmarshal(req.System, &systemBlocks); err == nil {
+			for i := range systemBlocks {
+				if blockType, _ := systemBlocks[i]["type"].(string); blockType == "thinking" || systemBlocks[i]["thinking"] != nil {
+					if removeCacheControlFromAny(systemBlocks[i]) {
+						log.Printf("[Antigravity] Deep cleaned cache_control from thinking block in system[%d]", i)
+					}
+				}
+			}
+			// Marshal back
+			if cleaned, err := json.Marshal(systemBlocks); err == nil {
+				req.System = cleaned
+			}
+		}
+	}
+
+	// Clean message content blocks and flatten history
+	lastMsgIdx := len(req.Messages) - 1
+	for msgIdx := range req.Messages {
+		raw := req.Messages[msgIdx].Content
+		if len(raw) == 0 {
+			continue
+		}
+
+		// Try to parse as blocks array
+		var blocks []map[string]any
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			continue
+		}
+
+		cleaned := false
+		for blockIdx := range blocks {
+			blockType, _ := blocks[blockIdx]["type"].(string)
+
+			// Check for thinking blocks (typed or untyped)
+			if blockType == "thinking" || blocks[blockIdx]["thinking"] != nil {
+				// 1. Clean cache_control
+				if removeCacheControlFromAny(blocks[blockIdx]) {
+					log.Printf("[Antigravity] Deep cleaned cache_control from thinking block in messages[%d].content[%d]", msgIdx, blockIdx)
+					cleaned = true
+				}
+
+				// 2. Flatten to text if it's a history message (not the last one)
+				if msgIdx < lastMsgIdx {
+					log.Printf("[Antigravity] Flattening history thinking block to text at messages[%d].content[%d]", msgIdx, blockIdx)
+
+					// Extract thinking content
+					var textContent string
+					if t, ok := blocks[blockIdx]["thinking"].(string); ok {
+						textContent = t
+					} else {
+						// Fallback for non-string content (marshal it)
+						if b, err := json.Marshal(blocks[blockIdx]["thinking"]); err == nil {
+							textContent = string(b)
+						}
+					}
+
+					// Convert to text block
+					blocks[blockIdx]["type"] = "text"
+					blocks[blockIdx]["text"] = textContent
+					delete(blocks[blockIdx], "thinking")
+					delete(blocks[blockIdx], "signature")
+					delete(blocks[blockIdx], "cache_control") // Ensure it's gone
+					cleaned = true
+				}
+			}
+		}
+
+		// Marshal back if modified
+		if cleaned {
+			if marshaled, err := json.Marshal(blocks); err == nil {
+				req.Messages[msgIdx].Content = marshaled
+			}
+		}
+	}
 }
 
 // stripThinkingFromClaudeRequest converts thinking blocks to text blocks in a Claude Messages request.
