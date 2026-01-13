@@ -70,6 +70,8 @@ type opencodeCacheMetadata struct {
 
 func applyCodexOAuthTransform(reqBody map[string]any) codexTransformResult {
 	result := codexTransformResult{}
+	// 工具续链需求会影响存储策略与 input 过滤逻辑。
+	needsToolContinuation := NeedsToolContinuation(reqBody)
 
 	model := ""
 	if v, ok := reqBody["model"].(string); ok {
@@ -84,9 +86,17 @@ func applyCodexOAuthTransform(reqBody map[string]any) codexTransformResult {
 		result.NormalizedModel = normalizedModel
 	}
 
-	if v, ok := reqBody["store"].(bool); !ok || v {
-		reqBody["store"] = false
-		result.Modified = true
+	// 续链场景强制启用 store；非续链仍按原策略强制关闭存储。
+	if needsToolContinuation {
+		if v, ok := reqBody["store"].(bool); !ok || !v {
+			reqBody["store"] = true
+			result.Modified = true
+		}
+	} else {
+		if v, ok := reqBody["store"].(bool); !ok || v {
+			reqBody["store"] = false
+			result.Modified = true
+		}
 	}
 	if v, ok := reqBody["stream"].(bool); !ok || !v {
 		reqBody["stream"] = true
@@ -121,8 +131,9 @@ func applyCodexOAuthTransform(reqBody map[string]any) codexTransformResult {
 		}
 	}
 
+	// 续链场景保留 item_reference 与 id，避免 call_id 上下文丢失。
 	if input, ok := reqBody["input"].([]any); ok {
-		input = filterCodexInput(input)
+		input = filterCodexInput(input, needsToolContinuation)
 		reqBody["input"] = input
 		result.Modified = true
 	}
@@ -242,7 +253,9 @@ func GetOpenCodeInstructions() string {
 	return getOpenCodeCodexHeader()
 }
 
-func filterCodexInput(input []any) []any {
+// filterCodexInput 按需过滤 item_reference 与 id。
+// preserveReferences 为 true 时保持引用与 id，以满足续链请求对上下文的依赖。
+func filterCodexInput(input []any, preserveReferences bool) []any {
 	filtered := make([]any, 0, len(input))
 	for _, item := range input {
 		m, ok := item.(map[string]any)
@@ -251,10 +264,19 @@ func filterCodexInput(input []any) []any {
 			continue
 		}
 		if typ, ok := m["type"].(string); ok && typ == "item_reference" {
-			continue
+			if !preserveReferences {
+				continue
+			}
 		}
-		delete(m, "id")
-		filtered = append(filtered, m)
+		newItem := m
+		if !preserveReferences {
+			newItem = make(map[string]any, len(m))
+			for key, value := range m {
+				newItem[key] = value
+			}
+			delete(newItem, "id")
+		}
+		filtered = append(filtered, newItem)
 	}
 	return filtered
 }
