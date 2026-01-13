@@ -1,6 +1,7 @@
 package service
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,9 @@ const (
 	opencodeCodexHeaderURL = "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/session/prompt/codex_header.txt"
 	codexCacheTTL          = 15 * time.Minute
 )
+
+//go:embed prompts/codex_cli_instructions.md
+var codexCLIInstructions string
 
 var codexModelMap = map[string]string{
 	"gpt-5.1-codex":             "gpt-5.1-codex",
@@ -117,6 +121,13 @@ func applyCodexOAuthTransform(reqBody map[string]any) codexTransformResult {
 	if instructions != "" {
 		if existingInstructions != instructions {
 			reqBody["instructions"] = instructions
+			result.Modified = true
+		}
+	} else if existingInstructions == "" {
+		// If no opencode instructions available, try codex CLI instructions
+		codexInstructions := strings.TrimSpace(getCodexCLIInstructions())
+		if codexInstructions != "" {
+			reqBody["instructions"] = codexInstructions
 			result.Modified = true
 		}
 	}
@@ -235,11 +246,67 @@ func getOpenCodeCachedPrompt(url, cacheFileName, metaFileName string) string {
 }
 
 func getOpenCodeCodexHeader() string {
-	return getOpenCodeCachedPrompt(opencodeCodexHeaderURL, "opencode-codex-header.txt", "opencode-codex-header-meta.json")
+	// Try to get from opencode repository first
+	opencodeInstructions := getOpenCodeCachedPrompt(opencodeCodexHeaderURL, "opencode-codex-header.txt", "opencode-codex-header-meta.json")
+
+	// If opencode instructions are available, return them
+	if opencodeInstructions != "" {
+		return opencodeInstructions
+	}
+
+	// Fallback to local codex CLI instructions
+	return getCodexCLIInstructions()
+}
+
+func getCodexCLIInstructions() string {
+	return codexCLIInstructions
 }
 
 func GetOpenCodeInstructions() string {
 	return getOpenCodeCodexHeader()
+}
+
+func GetCodexCLIInstructions() string {
+	return getCodexCLIInstructions()
+}
+
+func ReplaceWithCodexInstructions(reqBody map[string]any) bool {
+	codexInstructions := strings.TrimSpace(getCodexCLIInstructions())
+	if codexInstructions == "" {
+		return false
+	}
+
+	existingInstructions, _ := reqBody["instructions"].(string)
+	if strings.TrimSpace(existingInstructions) != codexInstructions {
+		reqBody["instructions"] = codexInstructions
+		return true
+	}
+
+	return false
+}
+
+func IsInstructionError(errorMessage string) bool {
+	if errorMessage == "" {
+		return false
+	}
+
+	lowerMsg := strings.ToLower(errorMessage)
+	instructionKeywords := []string{
+		"instruction",
+		"instructions",
+		"system prompt",
+		"system message",
+		"invalid prompt",
+		"prompt format",
+	}
+
+	for _, keyword := range instructionKeywords {
+		if strings.Contains(lowerMsg, keyword) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func filterCodexInput(input []any) []any {
@@ -250,13 +317,34 @@ func filterCodexInput(input []any) []any {
 			filtered = append(filtered, item)
 			continue
 		}
-		if typ, ok := m["type"].(string); ok && typ == "item_reference" {
+		typ, _ := m["type"].(string)
+		if typ == "item_reference" {
+			filtered = append(filtered, m)
 			continue
 		}
+		// Strip per-item ids; keep call_id only for tool call items so outputs can match.
+		if isCodexToolCallItemType(typ) {
+			callID, _ := m["call_id"].(string)
+			if strings.TrimSpace(callID) == "" {
+				if id, ok := m["id"].(string); ok && strings.TrimSpace(id) != "" {
+					m["call_id"] = id
+				}
+			}
+		}
 		delete(m, "id")
+		if !isCodexToolCallItemType(typ) {
+			delete(m, "call_id")
+		}
 		filtered = append(filtered, m)
 	}
 	return filtered
+}
+
+func isCodexToolCallItemType(typ string) bool {
+	if typ == "" {
+		return false
+	}
+	return strings.HasSuffix(typ, "_call") || strings.HasSuffix(typ, "_call_output")
 }
 
 func normalizeCodexTools(reqBody map[string]any) bool {
