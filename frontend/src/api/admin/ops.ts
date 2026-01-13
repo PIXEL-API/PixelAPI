@@ -362,6 +362,45 @@ export async function getAccountAvailabilityStats(platform?: string, groupId?: n
   return data
 }
 
+export interface OpsRateSummary {
+  current: number
+  peak: number
+  avg: number
+}
+
+export interface OpsRealtimeTrafficSummary {
+  window: string
+  start_time: string
+  end_time: string
+  platform: string
+  group_id?: number | null
+  qps: OpsRateSummary
+  tps: OpsRateSummary
+}
+
+export interface OpsRealtimeTrafficSummaryResponse {
+  enabled: boolean
+  summary: OpsRealtimeTrafficSummary | null
+  timestamp?: string
+}
+
+export async function getRealtimeTrafficSummary(
+  window: string,
+  platform?: string,
+  groupId?: number | null
+): Promise<OpsRealtimeTrafficSummaryResponse> {
+  const params: Record<string, any> = { window }
+  if (platform) {
+    params.platform = platform
+  }
+  if (typeof groupId === 'number' && groupId > 0) {
+    params.group_id = groupId
+  }
+
+  const { data } = await apiClient.get<OpsRealtimeTrafficSummaryResponse>('/admin/ops/realtime-traffic', { params })
+  return data
+}
+
 /**
  * Subscribe to realtime QPS updates via WebSocket.
  *
@@ -661,6 +700,14 @@ export interface EmailNotificationConfig {
   }
 }
 
+export interface OpsMetricThresholds {
+  sla_percent_min?: number | null                // SLA低于此值变红
+  latency_p99_ms_max?: number | null             // 延迟P99高于此值变红
+  ttft_p99_ms_max?: number | null                // TTFT P99高于此值变红
+  request_error_rate_percent_max?: number | null // 请求错误率高于此值变红
+  upstream_error_rate_percent_max?: number | null // 上游错误率高于此值变红
+}
+
 export interface OpsDistributedLockSettings {
   enabled: boolean
   key: string
@@ -681,11 +728,15 @@ export interface OpsAlertRuntimeSettings {
       reason: string
     }>
   }
+  thresholds: OpsMetricThresholds // 指标阈值配置
 }
 
 export interface OpsAdvancedSettings {
   data_retention: OpsDataRetentionSettings
   aggregation: OpsAggregationSettings
+  ignore_count_tokens_errors: boolean
+  auto_refresh_enabled: boolean
+  auto_refresh_interval_seconds: number
 }
 
 export interface OpsDataRetentionSettings {
@@ -929,6 +980,17 @@ export async function updateAdvancedSettings(config: OpsAdvancedSettings): Promi
   return data
 }
 
+// ==================== Metric Thresholds ====================
+
+async function getMetricThresholds(): Promise<OpsMetricThresholds> {
+  const { data } = await apiClient.get<OpsMetricThresholds>('/admin/ops/settings/metric-thresholds')
+  return data
+}
+
+async function updateMetricThresholds(thresholds: OpsMetricThresholds): Promise<void> {
+  await apiClient.put('/admin/ops/settings/metric-thresholds', thresholds)
+}
+
 export const opsAPI = {
   getDashboardOverview,
   getThroughputTrend,
@@ -937,6 +999,7 @@ export const opsAPI = {
   getErrorDistribution,
   getConcurrencyStats,
   getAccountAvailabilityStats,
+  getRealtimeTrafficSummary,
   subscribeQPS,
   listErrorLogs,
   getErrorLogDetail,
@@ -952,7 +1015,9 @@ export const opsAPI = {
   getAlertRuntimeSettings,
   updateAlertRuntimeSettings,
   getAdvancedSettings,
-  updateAdvancedSettings
+  updateAdvancedSettings,
+  getMetricThresholds,
+  updateMetricThresholds
 }
 
 export default opsAPI

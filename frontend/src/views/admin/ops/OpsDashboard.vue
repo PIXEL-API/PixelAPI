@@ -1,6 +1,6 @@
 <template>
-  <AppLayout>
-    <div class="space-y-6 pb-12">
+  <component :is="isFullscreen ? 'div' : AppLayout" :class="isFullscreen ? 'flex min-h-screen flex-col justify-center bg-gray-50 dark:bg-dark-950' : ''">
+    <div :class="[isFullscreen ? 'p-4 md:p-6' : '', 'space-y-6 pb-12']">
       <div
         v-if="errorMessage"
         class="rounded-2xl bg-red-50 p-4 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400"
@@ -13,17 +13,16 @@
       <OpsDashboardHeader
         v-else-if="opsEnabled"
         :overview="overview"
-        :ws-status="wsStatus"
-        :ws-reconnect-in-ms="wsReconnectInMs"
-        :ws-has-data="wsHasData"
-        :real-time-qps="realTimeQPS"
-        :real-time-tps="realTimeTPS"
         :platform="platform"
         :group-id="groupId"
         :time-range="timeRange"
         :query-mode="queryMode"
         :loading="loading"
         :last-updated="lastUpdated"
+        :thresholds="metricThresholds"
+        :auto-refresh-enabled="autoRefreshEnabled"
+        :auto-refresh-countdown="autoRefreshCountdown"
+        :fullscreen="isFullscreen"
         @update:time-range="onTimeRangeChange"
         @update:platform="onPlatformChange"
         @update:group="onGroupChange"
@@ -33,6 +32,8 @@
         @open-error-details="openErrorDetails"
         @open-settings="showSettingsDialog = true"
         @open-alert-rules="showAlertRulesCard = true"
+        @enter-fullscreen="enterFullscreen"
+        @exit-fullscreen="exitFullscreen"
       />
 
       <!-- Row: Concurrency + Throughput -->
@@ -47,6 +48,7 @@
             :top-groups="throughputTrend?.top_groups ?? []"
             :loading="loadingTrend"
             :time-range="timeRange"
+            :fullscreen="isFullscreen"
             @select-platform="handleThroughputSelectPlatform"
             @select-group="handleThroughputSelectGroup"
             @open-details="handleOpenRequestDetails"
@@ -74,54 +76,54 @@
       <!-- Alert Events -->
       <OpsAlertEventsCard v-if="opsEnabled && !(loading && !hasLoadedOnce)" />
 
-      <!-- Settings Dialog -->
-      <OpsSettingsDialog :show="showSettingsDialog" @close="showSettingsDialog = false" @saved="fetchData" />
+      <!-- Settings Dialog (hidden in fullscreen mode) -->
+      <template v-if="!isFullscreen">
+        <OpsSettingsDialog :show="showSettingsDialog" @close="showSettingsDialog = false" @saved="onSettingsSaved" />
 
-      <!-- Alert Rules Dialog -->
-      <BaseDialog :show="showAlertRulesCard" :title="t('admin.ops.alertRules.title')" width="extra-wide" @close="showAlertRulesCard = false">
-        <OpsAlertRulesCard />
-      </BaseDialog>
+        <BaseDialog :show="showAlertRulesCard" :title="t('admin.ops.alertRules.title')" width="extra-wide" @close="showAlertRulesCard = false">
+          <OpsAlertRulesCard />
+        </BaseDialog>
 
-      <OpsErrorDetailsModal
-        :show="showErrorDetails"
-        :time-range="timeRange"
-        :platform="platform"
-        :group-id="groupId"
-        :error-type="errorDetailsType"
-        @update:show="showErrorDetails = $event"
-        @openErrorDetail="openError"
-      />
+        <OpsErrorDetailsModal
+          :show="showErrorDetails"
+          :time-range="timeRange"
+          :platform="platform"
+          :group-id="groupId"
+          :error-type="errorDetailsType"
+          @update:show="showErrorDetails = $event"
+          @openErrorDetail="openError"
+        />
 
-      <OpsErrorDetailModal v-model:show="showErrorModal" :error-id="selectedErrorId" />
+        <OpsErrorDetailModal v-model:show="showErrorModal" :error-id="selectedErrorId" />
 
-      <OpsRequestDetailsModal
-        v-model="showRequestDetails"
-        :time-range="timeRange"
-        :preset="requestDetailsPreset"
-        :platform="platform"
-        :group-id="groupId"
-        @openErrorDetail="openError"
-      />
+        <OpsRequestDetailsModal
+          v-model="showRequestDetails"
+          :time-range="timeRange"
+          :preset="requestDetailsPreset"
+          :platform="platform"
+          :group-id="groupId"
+          @openErrorDetail="openError"
+        />
+      </template>
     </div>
-  </AppLayout>
+  </component>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useDebounceFn } from '@vueuse/core'
+import { useDebounceFn, useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import {
   opsAPI,
-  OPS_WS_CLOSE_CODES,
-  type OpsWSStatus,
   type OpsDashboardOverview,
   type OpsErrorDistributionResponse,
   type OpsErrorTrendResponse,
   type OpsLatencyHistogramResponse,
-  type OpsThroughputTrendResponse
+  type OpsThroughputTrendResponse,
+  type OpsMetricThresholds
 } from '@/api/admin/ops'
 import { useAdminSettingsStore, useAppStore } from '@/stores'
 import OpsDashboardHeader from './components/OpsDashboardHeader.vue'
@@ -166,19 +168,35 @@ const QUERY_KEYS = {
   timeRange: 'tr',
   platform: 'platform',
   groupId: 'group_id',
-  queryMode: 'mode'
+  queryMode: 'mode',
+  fullscreen: 'fullscreen'
 } as const
 
 const isApplyingRouteQuery = ref(false)
 const isSyncingRouteQuery = ref(false)
 
-// WebSocket for realtime QPS/TPS
-const realTimeQPS = ref(0)
-const realTimeTPS = ref(0)
-const wsStatus = ref<OpsWSStatus>('closed')
-const wsReconnectInMs = ref<number | null>(null)
-const wsHasData = ref(false)
-let unsubscribeQPS: (() => void) | null = null
+// Fullscreen mode
+const isFullscreen = computed(() => {
+  const val = route.query[QUERY_KEYS.fullscreen]
+  return val === '1' || val === 'true'
+})
+
+function exitFullscreen() {
+  const nextQuery = { ...route.query }
+  delete nextQuery[QUERY_KEYS.fullscreen]
+  router.replace({ query: nextQuery })
+}
+
+function enterFullscreen() {
+  const nextQuery = { ...route.query, [QUERY_KEYS.fullscreen]: '1' }
+  router.replace({ query: nextQuery })
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && isFullscreen.value) {
+    exitFullscreen()
+  }
+}
 
 let dashboardFetchController: AbortController | null = null
 let dashboardFetchSeq = 0
@@ -197,50 +215,6 @@ function abortDashboardFetch() {
     dashboardFetchController.abort()
     dashboardFetchController = null
   }
-}
-
-function stopQPSSubscription(options?: { resetMetrics?: boolean }) {
-  wsStatus.value = 'closed'
-  wsReconnectInMs.value = null
-  if (unsubscribeQPS) unsubscribeQPS()
-  unsubscribeQPS = null
-
-  if (options?.resetMetrics) {
-    realTimeQPS.value = 0
-    realTimeTPS.value = 0
-    wsHasData.value = false
-  }
-}
-
-function startQPSSubscription() {
-  stopQPSSubscription()
-  unsubscribeQPS = opsAPI.subscribeQPS(
-    (payload) => {
-      if (payload && typeof payload === 'object' && payload.type === 'qps_update' && payload.data) {
-        realTimeQPS.value = payload.data.qps || 0
-        realTimeTPS.value = payload.data.tps || 0
-        wsHasData.value = true
-      }
-    },
-    {
-      onStatusChange: (status) => {
-        wsStatus.value = status
-        if (status === 'connected') wsReconnectInMs.value = null
-      },
-      onReconnectScheduled: ({ delayMs }) => {
-        wsReconnectInMs.value = delayMs
-      },
-      onFatalClose: (event) => {
-        // Server-side feature flag says realtime is disabled; keep UI consistent and avoid reconnect loops.
-        if (event && event.code === OPS_WS_CLOSE_CODES.REALTIME_DISABLED) {
-          adminSettingsStore.setOpsRealtimeMonitoringEnabledLocal(false)
-          stopQPSSubscription({ resetMetrics: true })
-        }
-      },
-      // QPS updates may be sparse in idle periods; keep the timeout conservative.
-      staleTimeoutMs: 180_000
-    }
-  )
 }
 
 const readQueryString = (key: string): string => {
@@ -314,6 +288,7 @@ const syncQueryToRoute = useDebounceFn(async () => {
 }, 250)
 
 const overview = ref<OpsDashboardOverview | null>(null)
+const metricThresholds = ref<OpsMetricThresholds | null>(null)
 
 const throughputTrend = ref<OpsThroughputTrendResponse | null>(null)
 const loadingTrend = ref(false)
@@ -342,6 +317,45 @@ const requestDetailsPreset = ref<OpsRequestDetailsPreset>({
 
 const showSettingsDialog = ref(false)
 const showAlertRulesCard = ref(false)
+
+// Auto refresh settings
+const autoRefreshEnabled = ref(false)
+const autoRefreshIntervalMs = ref(30000) // default 30 seconds
+const autoRefreshCountdown = ref(0)
+
+// Auto refresh timer
+const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
+  () => {
+    if (autoRefreshEnabled.value && opsEnabled.value && !loading.value) {
+      fetchData()
+    }
+  },
+  autoRefreshIntervalMs,
+  { immediate: false }
+)
+
+// Countdown timer (updates every second)
+const { pause: pauseCountdown, resume: resumeCountdown } = useIntervalFn(
+  () => {
+    if (autoRefreshEnabled.value && autoRefreshCountdown.value > 0) {
+      autoRefreshCountdown.value--
+    }
+  },
+  1000,
+  { immediate: false }
+)
+
+// Load auto refresh settings from backend
+async function loadAutoRefreshSettings() {
+  try {
+    const settings = await opsAPI.getAdvancedSettings()
+    autoRefreshEnabled.value = settings.auto_refresh_enabled
+    autoRefreshIntervalMs.value = settings.auto_refresh_interval_seconds * 1000
+    autoRefreshCountdown.value = settings.auto_refresh_interval_seconds
+  } catch (err) {
+    console.error('[OpsDashboard] Failed to load auto refresh settings', err)
+  }
+}
 
 function handleThroughputSelectPlatform(nextPlatform: string) {
   platform.value = nextPlatform || ''
@@ -374,6 +388,11 @@ function onTimeRangeChange(v: string | number | boolean | null) {
   if (typeof v !== 'string') return
   if (!allowedTimeRanges.has(v as TimeRange)) return
   timeRange.value = v as TimeRange
+}
+
+function onSettingsSaved() {
+  loadThresholds()
+  fetchData()
 }
 
 function onPlatformChange(v: string | number | boolean | null) {
@@ -561,6 +580,10 @@ async function fetchData() {
     ])
     if (fetchSeq !== dashboardFetchSeq) return
     lastUpdated.value = new Date()
+    // Reset auto refresh countdown after successful fetch
+    if (autoRefreshEnabled.value) {
+      autoRefreshCountdown.value = Math.floor(autoRefreshIntervalMs.value / 1000)
+    }
   } catch (err) {
     if (!isOpsDisabledError(err)) {
       console.error('[ops] failed to fetch dashboard data', err)
@@ -609,37 +632,66 @@ watch(
 )
 
 onMounted(async () => {
+  // Fullscreen mode: listen for ESC key
+  window.addEventListener('keydown', handleKeydown)
+
   await adminSettingsStore.fetch()
   if (!adminSettingsStore.opsMonitoringEnabled) {
     await router.replace('/admin/settings')
     return
   }
 
-  if (adminSettingsStore.opsRealtimeMonitoringEnabled) {
-    startQPSSubscription()
-  } else {
-    stopQPSSubscription({ resetMetrics: true })
-  }
+  // Load thresholds configuration
+  loadThresholds()
+
+  // Load auto refresh settings
+  await loadAutoRefreshSettings()
 
   if (opsEnabled.value) {
     await fetchData()
   }
+
+  // Start auto refresh if enabled
+  if (autoRefreshEnabled.value) {
+    resumeAutoRefresh()
+    resumeCountdown()
+  }
 })
+
+async function loadThresholds() {
+  try {
+    const settings = await opsAPI.getAlertRuntimeSettings()
+    metricThresholds.value = settings.thresholds || null
+  } catch (err) {
+    console.warn('[OpsDashboard] Failed to load thresholds', err)
+    metricThresholds.value = null
+  }
+}
 
 onUnmounted(() => {
-  stopQPSSubscription()
+  window.removeEventListener('keydown', handleKeydown)
   abortDashboardFetch()
+  pauseAutoRefresh()
+  pauseCountdown()
 })
 
-watch(
-  () => adminSettingsStore.opsRealtimeMonitoringEnabled,
-  (enabled) => {
-    if (!opsEnabled.value) return
-    if (enabled) {
-      startQPSSubscription()
-    } else {
-      stopQPSSubscription({ resetMetrics: true })
-    }
+// Watch auto refresh settings changes
+watch(autoRefreshEnabled, (enabled) => {
+  if (enabled) {
+    autoRefreshCountdown.value = Math.floor(autoRefreshIntervalMs.value / 1000)
+    resumeAutoRefresh()
+    resumeCountdown()
+  } else {
+    pauseAutoRefresh()
+    pauseCountdown()
+    autoRefreshCountdown.value = 0
   }
-)
+})
+
+// Reload auto refresh settings after settings dialog is closed
+watch(showSettingsDialog, async (show) => {
+  if (!show) {
+    await loadAutoRefreshSettings()
+  }
+})
 </script>

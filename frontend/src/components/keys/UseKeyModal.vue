@@ -376,6 +376,10 @@ const currentFiles = computed((): FileConfig[] => {
     const trimmed = `${baseRoot}/antigravity`.replace(/\/+$/, '')
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
   })()
+  const geminiBase = (() => {
+    const trimmed = baseRoot.replace(/\/+$/, '')
+    return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
+  })()
 
   if (activeClientTab.value === 'opencode') {
     switch (props.platform) {
@@ -384,7 +388,7 @@ const currentFiles = computed((): FileConfig[] => {
       case 'openai':
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
       case 'gemini':
-        return [generateOpenCodeConfig('gemini', apiBase, apiKey)]
+        return [generateOpenCodeConfig('gemini', geminiBase, apiKey)]
       case 'antigravity':
         return [
           generateOpenCodeConfig('antigravity-claude', antigravityBase, apiKey, 'opencode.json (Claude)'),
@@ -525,14 +529,16 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     [platform]: {
       options: {
         baseURL: baseUrl,
-        apiKey,
-        ...(platform === 'openai' ? { store: false } : {})
+        apiKey
       }
     }
   }
   const openaiModels = {
     'gpt-5.2-codex': {
       name: 'GPT-5.2 Codex',
+      options: {
+        store: false
+      },
       variants: {
         low: {},
         medium: {},
@@ -574,9 +580,26 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     provider[platform].models = openaiModels
   }
 
+  const agent =
+    platform === 'openai'
+      ? {
+          build: {
+            options: {
+              store: false
+            }
+          },
+          plan: {
+            options: {
+              store: false
+            }
+          }
+        }
+      : undefined
+
   const content = JSON.stringify(
     {
       provider,
+      ...(agent ? { agent } : {}),
       $schema: 'https://opencode.ai/config.json'
     },
     null,

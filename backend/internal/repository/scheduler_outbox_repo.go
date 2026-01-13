@@ -80,17 +80,17 @@ func enqueueSchedulerOutbox(ctx context.Context, exec sqlExecutor, eventType str
 	if exec == nil {
 		return nil
 	}
-	var payloadJSON []byte
+	var payloadArg any
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
-		payloadJSON = encoded
+		payloadArg = encoded
 	}
 	_, err := exec.ExecContext(ctx, `
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		VALUES ($1, $2, $3, $4)
-	`, eventType, accountID, groupID, payloadJSON)
+	`, eventType, accountID, groupID, payloadArg)
 	return err
 }
