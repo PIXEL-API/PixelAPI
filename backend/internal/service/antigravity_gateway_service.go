@@ -1219,6 +1219,7 @@ urlFallbackLoop:
 		if contentType == "" {
 			contentType = "application/json"
 		}
+		log.Printf("[antigravity-Forward] upstream error status=%d body=%s", resp.StatusCode, truncateForLog(respBody, 500))
 		c.Data(resp.StatusCode, contentType, unwrapped)
 		return nil, fmt.Errorf("antigravity upstream error: %d", resp.StatusCode)
 	}
@@ -1534,6 +1535,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	var firstTokenMs *int
 	var last map[string]any
 	var lastWithParts map[string]any
+	var collectedImageParts []map[string]any // 收集所有包含图片的 parts
 
 	type scanEvent struct {
 		line string
@@ -1636,6 +1638,13 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 			// 保留最后一个有 parts 的响应
 			if parts := extractGeminiParts(parsed); len(parts) > 0 {
 				lastWithParts = parsed
+				// 收集包含图片的 parts
+				for _, part := range parts {
+					if inlineData, ok := part["inlineData"].(map[string]any); ok {
+						collectedImageParts = append(collectedImageParts, part)
+						_ = inlineData // 避免 unused 警告
+					}
+				}
 			}
 
 		case <-intervalCh:
@@ -1657,6 +1666,11 @@ returnResponse:
 		log.Printf("[antigravity-Forward] warning: empty stream response, no valid chunks received")
 	}
 
+	// 如果收集到了图片 parts，需要合并到最终响应中
+	if len(collectedImageParts) > 0 {
+		finalResponse = mergeImagePartsToResponse(finalResponse, collectedImageParts)
+	}
+
 	respBody, err := json.Marshal(finalResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
@@ -1664,6 +1678,68 @@ returnResponse:
 	c.Data(http.StatusOK, "application/json", respBody)
 
 	return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+}
+
+// mergeImagePartsToResponse 将收集到的图片 parts 合并到 Gemini 响应中
+// 这是因为流式响应中，图片可能在某个 chunk 返回，而最终 chunk 可能不包含图片
+func mergeImagePartsToResponse(response map[string]any, imageParts []map[string]any) map[string]any {
+	if len(imageParts) == 0 {
+		return response
+	}
+
+	// 深拷贝 response 避免修改原始数据
+	result := make(map[string]any)
+	for k, v := range response {
+		result[k] = v
+	}
+
+	// 获取或创建 candidates
+	candidates, ok := result["candidates"].([]any)
+	if !ok || len(candidates) == 0 {
+		candidates = []any{map[string]any{}}
+	}
+
+	// 获取第一个 candidate
+	candidate, ok := candidates[0].(map[string]any)
+	if !ok {
+		candidate = make(map[string]any)
+		candidates[0] = candidate
+	}
+
+	// 获取或创建 content
+	content, ok := candidate["content"].(map[string]any)
+	if !ok {
+		content = map[string]any{"role": "model"}
+		candidate["content"] = content
+	}
+
+	// 获取现有 parts
+	existingParts, ok := content["parts"].([]any)
+	if !ok {
+		existingParts = []any{}
+	}
+
+	// 检查现有 parts 中是否已经有图片
+	hasExistingImage := false
+	for _, p := range existingParts {
+		if pm, ok := p.(map[string]any); ok {
+			if _, hasInline := pm["inlineData"]; hasInline {
+				hasExistingImage = true
+				break
+			}
+		}
+	}
+
+	// 如果没有现有图片，添加收集到的图片 parts
+	if !hasExistingImage {
+		for _, imgPart := range imageParts {
+			existingParts = append(existingParts, imgPart)
+		}
+		content["parts"] = existingParts
+	}
+
+	result["candidates"] = candidates
+	return result
 }
 
 func (s *AntigravityGatewayService) writeClaudeError(c *gin.Context, status int, errType, message string) error {
