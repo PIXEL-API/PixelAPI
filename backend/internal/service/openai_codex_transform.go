@@ -317,13 +317,34 @@ func filterCodexInput(input []any) []any {
 			filtered = append(filtered, item)
 			continue
 		}
-		if typ, ok := m["type"].(string); ok && typ == "item_reference" {
+		typ, _ := m["type"].(string)
+		if typ == "item_reference" {
+			filtered = append(filtered, m)
 			continue
 		}
+		// Strip per-item ids; keep call_id only for tool call items so outputs can match.
+		if isCodexToolCallItemType(typ) {
+			callID, _ := m["call_id"].(string)
+			if strings.TrimSpace(callID) == "" {
+				if id, ok := m["id"].(string); ok && strings.TrimSpace(id) != "" {
+					m["call_id"] = id
+				}
+			}
+		}
 		delete(m, "id")
+		if !isCodexToolCallItemType(typ) {
+			delete(m, "call_id")
+		}
 		filtered = append(filtered, m)
 	}
 	return filtered
+}
+
+func isCodexToolCallItemType(typ string) bool {
+	if typ == "" {
+		return false
+	}
+	return strings.HasSuffix(typ, "_call") || strings.HasSuffix(typ, "_call_output")
 }
 
 func normalizeCodexTools(reqBody map[string]any) bool {
