@@ -236,6 +236,17 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 				continue
 			}
 
+			// Scoped silencing: if a matching silence exists, skip creating a firing event.
+			if s.opsService != nil {
+				platform := strings.TrimSpace(scopePlatform)
+				region := (*string)(nil)
+				if platform != "" {
+					if ok, err := s.opsService.IsAlertSilenced(ctx, rule.ID, platform, scopeGroupID, region, now); err == nil && ok {
+						continue
+					}
+				}
+			}
+
 			latestEvent, err := s.opsRepo.GetLatestAlertEvent(ctx, rule.ID)
 			if err != nil {
 				log.Printf("[OpsAlertEvaluator] get latest event failed (rule=%d): %v", rule.ID, err)
