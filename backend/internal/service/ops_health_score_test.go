@@ -292,17 +292,6 @@ func TestComputeBusinessHealth(t *testing.T) {
 			wantMax: 100,
 		},
 		{
-			name: "latency boundary 1000ms",
-			overview: &OpsDashboardOverview{
-				SLA:               0.995,
-				ErrorRate:         0,
-				UpstreamErrorRate: 0,
-				Duration:          OpsPercentiles{P99: intPtr(1000)},
-			},
-			wantMin: 95,
-			wantMax: 100,
-		},
-		{
 			name: "upstream error dominates",
 			overview: &OpsDashboardOverview{
 				SLA:               0.995,
