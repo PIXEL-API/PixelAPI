@@ -54,6 +54,7 @@ export type OpsUpstreamErrorEvent = {
   account_name?: string
   upstream_status_code?: number
   upstream_request_id?: string
+  upstream_request_body?: string
   kind?: string
   message?: string
   detail?: string
@@ -944,7 +945,9 @@ export async function getErrorDistribution(
   return data
 }
 
-export async function listErrorLogs(params: {
+export type OpsErrorListView = 'errors' | 'excluded' | 'all'
+
+export type OpsErrorListQueryParams = {
   page?: number
   page_size?: number
   time_range?: string
@@ -958,10 +961,14 @@ export async function listErrorLogs(params: {
   error_owner?: string
   error_source?: string
   resolved?: string
+  view?: OpsErrorListView
 
   q?: string
   status_codes?: string
-}): Promise<OpsErrorLogsResponse> {
+}
+
+// Legacy unified endpoints
+export async function listErrorLogs(params: OpsErrorListQueryParams): Promise<OpsErrorLogsResponse> {
   const { data } = await apiClient.get<OpsErrorLogsResponse>('/admin/ops/errors', { params })
   return data
 }
@@ -983,6 +990,50 @@ export async function listRetryAttempts(errorId: number, limit = 50): Promise<Op
 
 export async function updateErrorResolved(errorId: number, resolved: boolean): Promise<void> {
   await apiClient.put(`/admin/ops/errors/${errorId}/resolve`, { resolved })
+}
+
+// New split endpoints
+export async function listRequestErrors(params: OpsErrorListQueryParams): Promise<OpsErrorLogsResponse> {
+  const { data } = await apiClient.get<OpsErrorLogsResponse>('/admin/ops/request-errors', { params })
+  return data
+}
+
+export async function listUpstreamErrors(params: OpsErrorListQueryParams): Promise<OpsErrorLogsResponse> {
+  const { data } = await apiClient.get<OpsErrorLogsResponse>('/admin/ops/upstream-errors', { params })
+  return data
+}
+
+export async function getRequestErrorDetail(id: number): Promise<OpsErrorDetail> {
+  const { data } = await apiClient.get<OpsErrorDetail>(`/admin/ops/request-errors/${id}`)
+  return data
+}
+
+export async function getUpstreamErrorDetail(id: number): Promise<OpsErrorDetail> {
+  const { data } = await apiClient.get<OpsErrorDetail>(`/admin/ops/upstream-errors/${id}`)
+  return data
+}
+
+export async function retryRequestErrorClient(id: number): Promise<OpsRetryResult> {
+  const { data } = await apiClient.post<OpsRetryResult>(`/admin/ops/request-errors/${id}/retry-client`, {})
+  return data
+}
+
+export async function retryRequestErrorUpstreamEvent(id: number, idx: number): Promise<OpsRetryResult> {
+  const { data } = await apiClient.post<OpsRetryResult>(`/admin/ops/request-errors/${id}/upstream-errors/${idx}/retry`, {})
+  return data
+}
+
+export async function retryUpstreamError(id: number): Promise<OpsRetryResult> {
+  const { data } = await apiClient.post<OpsRetryResult>(`/admin/ops/upstream-errors/${id}/retry`, {})
+  return data
+}
+
+export async function updateRequestErrorResolved(errorId: number, resolved: boolean): Promise<void> {
+  await apiClient.put(`/admin/ops/request-errors/${errorId}/resolve`, { resolved })
+}
+
+export async function updateUpstreamErrorResolved(errorId: number, resolved: boolean): Promise<void> {
+  await apiClient.put(`/admin/ops/upstream-errors/${errorId}/resolve`, { resolved })
 }
 
 export async function listRequestDetails(params: OpsRequestDetailsParams): Promise<OpsRequestDetailsResponse> {
@@ -1103,11 +1154,25 @@ export const opsAPI = {
   getAccountAvailabilityStats,
   getRealtimeTrafficSummary,
   subscribeQPS,
+
+  // Legacy unified endpoints
   listErrorLogs,
   getErrorLogDetail,
   retryErrorRequest,
   listRetryAttempts,
   updateErrorResolved,
+
+  // New split endpoints
+  listRequestErrors,
+  listUpstreamErrors,
+  getRequestErrorDetail,
+  getUpstreamErrorDetail,
+  retryRequestErrorClient,
+  retryRequestErrorUpstreamEvent,
+  retryUpstreamError,
+  updateRequestErrorResolved,
+  updateUpstreamErrorResolved,
+
   listRequestDetails,
   listAlertRules,
   createAlertRule,
