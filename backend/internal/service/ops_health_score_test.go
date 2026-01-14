@@ -127,8 +127,8 @@ func TestComputeDashboardHealthScore_Comprehensive(t *testing.T) {
 					MemoryUsagePercent: float64Ptr(75),
 				},
 			},
-			wantMin: 61,
-			wantMax: 62,
+			wantMin: 96,
+			wantMax: 97,
 		},
 		{
 			name: "DB failure",
@@ -203,8 +203,8 @@ func TestComputeDashboardHealthScore_Comprehensive(t *testing.T) {
 					MemoryUsagePercent: float64Ptr(30),
 				},
 			},
-			wantMin: 25,
-			wantMax: 50,
+			wantMin: 84,
+			wantMax: 85,
 		},
 		{
 			name: "combined failures - business healthy + infra degraded",
@@ -303,15 +303,15 @@ func TestComputeBusinessHealth(t *testing.T) {
 			wantMax: 78,
 		},
 		{
-			name: "latency boundary 2s",
+			name: "TTFT boundary 2s",
 			overview: &OpsDashboardOverview{
 				SLA:               0.99,
 				ErrorRate:         0,
 				UpstreamErrorRate: 0,
-				Duration:          OpsPercentiles{P99: intPtr(2000)},
+				TTFT:              OpsPercentiles{P99: intPtr(2000)},
 			},
-			wantMin: 50,
-			wantMax: 50,
+			wantMin: 75,
+			wantMax: 75,
 		},
 		{
 			name: "upstream error dominates",
