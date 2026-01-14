@@ -832,28 +832,30 @@ func normalizeOpsErrorType(errType string, code string) string {
 
 func classifyOpsPhase(errType, message, code string) string {
 	msg := strings.ToLower(message)
+	// Standardized phases: request|auth|routing|upstream|network|internal
+	// Map billing/concurrency/response => request; scheduling => routing.
 	switch strings.TrimSpace(code) {
 	case "INSUFFICIENT_BALANCE", "USAGE_LIMIT_EXCEEDED", "SUBSCRIPTION_NOT_FOUND", "SUBSCRIPTION_INVALID":
-		return "billing"
+		return "request"
 	}
 
 	switch errType {
 	case "authentication_error":
 		return "auth"
 	case "billing_error", "subscription_error":
-		return "billing"
+		return "request"
 	case "rate_limit_error":
 		if strings.Contains(msg, "concurrency") || strings.Contains(msg, "pending") || strings.Contains(msg, "queue") {
-			return "concurrency"
+			return "request"
 		}
 		return "upstream"
 	case "invalid_request_error":
-		return "response"
+		return "request"
 	case "upstream_error", "overloaded_error":
 		return "upstream"
 	case "api_error":
 		if strings.Contains(msg, "no available accounts") {
-			return "scheduling"
+			return "routing"
 		}
 		return "internal"
 	default:
@@ -914,34 +916,38 @@ func classifyOpsIsBusinessLimited(errType, phase, code string, status int, messa
 }
 
 func classifyOpsErrorOwner(phase string, message string) string {
+	// Standardized owners: client|provider|platform
 	switch phase {
 	case "upstream", "network":
 		return "provider"
-	case "billing", "concurrency", "auth", "response":
+	case "request", "auth":
 		return "client"
+	case "routing", "internal":
+		return "platform"
 	default:
 		if strings.Contains(strings.ToLower(message), "upstream") {
 			return "provider"
 		}
-		return "sub2api"
+		return "platform"
 	}
 }
 
 func classifyOpsErrorSource(phase string, message string) string {
+	// Standardized sources: client_request|upstream_http|gateway
 	switch phase {
 	case "upstream":
 		return "upstream_http"
 	case "network":
-		return "upstream_network"
-	case "billing":
-		return "billing"
-	case "concurrency":
-		return "concurrency"
+		return "gateway"
+	case "request", "auth":
+		return "client_request"
+	case "routing", "internal":
+		return "gateway"
 	default:
 		if strings.Contains(strings.ToLower(message), "upstream") {
 			return "upstream_http"
 		}
-		return "internal"
+		return "gateway"
 	}
 }
 
