@@ -2224,6 +2224,9 @@ export default {
           resolvedRetryId: '解决重试ID',
           retryCount: '重试次数'
         },
+        source: {
+          upstream_http: '上游 HTTP'
+        },
         upstreamKeys: {
           status: '状态码',
           message: '消息',

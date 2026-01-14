@@ -30,123 +30,178 @@
           >
             {{ t('admin.ops.errorDetail.markResolved') }}
           </button>
-          <button
-            v-else
-            type="button"
-            class="btn btn-secondary btn-sm"
-            :disabled="loading"
-            @click="markResolved(false)"
-          >
+          <button v-else type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="markResolved(false)">
             {{ t('admin.ops.errorDetail.markUnresolved') }}
           </button>
         </div>
       </div>
 
       <!-- Tabs -->
-      <div class="flex flex-wrap gap-2 border-b border-gray-200 pb-3 dark:border-dark-700">
-        <button type="button" class="btn btn-secondary btn-sm" :class="activeTab==='overview' ? 'opacity-100' : 'opacity-70'" @click="activeTab='overview'">{{ t('admin.ops.errorDetail.tabOverview') }}</button>
-        <button type="button" class="btn btn-secondary btn-sm" :class="activeTab==='retries' ? 'opacity-100' : 'opacity-70'" @click="activeTab='retries'">{{ t('admin.ops.errorDetail.tabRetries') }}</button>
-        <button type="button" class="btn btn-secondary btn-sm" :class="activeTab==='request' ? 'opacity-100' : 'opacity-70'" @click="activeTab='request'">{{ t('admin.ops.errorDetail.tabRequest') }}</button>
-        <button type="button" class="btn btn-secondary btn-sm" :class="activeTab==='response' ? 'opacity-100' : 'opacity-70'" @click="activeTab='response'">{{ t('admin.ops.errorDetail.tabResponse') }}</button>
+      <div class="flex flex-wrap items-center gap-2 border-b border-gray-200 pb-3 dark:border-dark-700">
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :class="activeTab === 'overview' ? 'opacity-100' : 'opacity-70'"
+          @click="activeTab = 'overview'"
+        >
+          {{ t('admin.ops.errorDetail.tabOverview') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :class="activeTab === 'retries' ? 'opacity-100' : 'opacity-70'"
+          @click="activeTab = 'retries'"
+        >
+          {{ t('admin.ops.errorDetail.tabRetries') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :class="activeTab === 'request' ? 'opacity-100' : 'opacity-70'"
+          @click="activeTab = 'request'"
+        >
+          {{ t('admin.ops.errorDetail.tabRequest') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :class="activeTab === 'response' ? 'opacity-100' : 'opacity-70'"
+          @click="activeTab = 'response'"
+        >
+          {{ t('admin.ops.errorDetail.tabResponse') }}
+        </button>
+        <button
+          v-if="hasUpstreamErrorContent"
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :class="activeTab === 'upstreamErrors' ? 'opacity-100' : 'opacity-70'"
+          @click="activeTab = 'upstreamErrors'"
+        >
+          {{ t('admin.ops.errorDetails.upstreamErrors') }}
+        </button>
       </div>
 
-      <div v-if="activeTab==='overview'">
+      <!-- Overview -->
+      <div v-if="activeTab === 'overview'" class="space-y-6">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
-        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
-          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.requestId') }}</div>
-          <div class="mt-1 break-all font-mono text-sm font-medium text-gray-900 dark:text-white">
-            {{ detail.request_id || detail.client_request_id || '—' }}
+          <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+            <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.requestId') }}</div>
+            <div class="mt-1 break-all font-mono text-sm font-medium text-gray-900 dark:text-white">
+              {{ detail.request_id || detail.client_request_id || '—' }}
+            </div>
+          </div>
+
+          <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+            <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.time') }}</div>
+            <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
+              {{ formatDateTime(detail.created_at) }}
+            </div>
+          </div>
+
+          <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+            <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.phase') }}</div>
+            <div class="mt-1 text-sm font-bold uppercase text-gray-900 dark:text-white">
+              {{ detail.phase || '—' }}
+            </div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ detail.type || '—' }}
+            </div>
+          </div>
+
+          <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+            <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.status') }}</div>
+            <div class="mt-1 flex flex-wrap items-center gap-2">
+              <span :class="['inline-flex items-center rounded-lg px-2 py-1 text-xs font-black ring-1 ring-inset shadow-sm', statusClass]">
+                {{ detail.status_code }}
+              </span>
+              <span v-if="detail.severity" :class="['rounded-md px-2 py-0.5 text-[10px] font-black shadow-sm', severityClass]">
+                {{ detail.severity }}
+              </span>
+            </div>
           </div>
         </div>
 
-        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
-          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.time') }}</div>
-          <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
-            {{ formatDateTime(detail.created_at) }}
+        <!-- Message + retry (right aligned) -->
+        <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
+          <div class="flex items-start justify-between gap-4">
+            <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">
+              {{ t('admin.ops.errorDetail.message') }}
+            </h3>
+
+            <div class="flex flex-wrap justify-end gap-2">
+              <template v-if="(detail as any).is_retryable">
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="retrying" @click="openRetryConfirm('client')">
+                  {{ t('admin.ops.errorDetail.retryClient') }}
+                </button>
+                <button
+                  v-if="props.errorType === 'upstream'"
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  :disabled="retrying"
+                  @click="openRetryConfirm('upstream')"
+                >
+                  {{ t('admin.ops.errorDetail.retryUpstream') }}
+                </button>
+              </template>
+              <template v-else>
+                <span class="text-xs font-semibold text-amber-700 dark:text-amber-300">{{ t('admin.ops.errorDetail.notRetryable') }}</span>
+              </template>
+            </div>
+          </div>
+
+          <div class="mt-3 break-words text-sm font-medium text-gray-800 dark:text-gray-200">
+            {{ detail.message || '—' }}
           </div>
         </div>
 
-        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
-          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.phase') }}</div>
-          <div class="mt-1 text-sm font-bold uppercase text-gray-900 dark:text-white">
-            {{ detail.phase || '—' }}
-          </div>
-          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ detail.type || '—' }}
-          </div>
-        </div>
-
-        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
-          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.status') }}</div>
-          <div class="mt-1 flex flex-wrap items-center gap-2">
-            <span :class="['inline-flex items-center rounded-lg px-2 py-1 text-xs font-black ring-1 ring-inset shadow-sm', statusClass]">
-              {{ detail.status_code }}
+        <!-- Tags (classification) -->
+        <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
+          <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">
+            {{ t('admin.ops.errorDetail.classification') }}
+          </h3>
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700">
+              {{ t('admin.ops.errorDetail.classificationKeys.phase') }}:
+              <span class="ml-1 font-mono">{{ phaseLabel }}</span>
+            </span>
+            <span class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700">
+              {{ t('admin.ops.errorDetail.classificationKeys.owner') }}:
+              <span class="ml-1 font-mono">{{ ownerLabel }}</span>
+            </span>
+            <span class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700">
+              {{ t('admin.ops.errorDetail.classificationKeys.source') }}:
+              <span class="ml-1 font-mono">{{ sourceLabel }}</span>
+            </span>
+            <span class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700">
+              {{ t('admin.ops.errorDetail.classificationKeys.retryable') }}:
+              <span class="ml-1 font-mono">{{ (detail as any).is_retryable ? t('common.yes') : t('common.no') }}</span>
             </span>
             <span
-              v-if="detail.severity"
-              :class="['rounded-md px-2 py-0.5 text-[10px] font-black shadow-sm', severityClass]"
+              v-if="(detail as any).resolved_at"
+              class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700"
             >
-              {{ detail.severity }}
+              {{ t('admin.ops.errorDetail.classificationKeys.resolvedAt') }}: <span class="ml-1 font-mono">{{ (detail as any).resolved_at }}</span>
             </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Message -->
-      <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
-        <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.message') }}</h3>
-        <div class="text-sm font-medium text-gray-800 dark:text-gray-200 break-words">
-          {{ detail.message || '—' }}
-        </div>
-      </div>
-
-      <!-- Suggestion -->
-      <div v-if="handlingSuggestion" class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
-        <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.suggestion') }}</h3>
-        <div class="text-sm font-medium text-gray-800 dark:text-gray-200 break-words">
-          {{ handlingSuggestion }}
-        </div>
-      </div>
-
-        <!-- Classification -->
-        <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
-          <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.classification') }}</h3>
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.phase') }}</div>
-              <div class="mt-1 text-sm font-bold uppercase text-gray-900 dark:text-white">{{ detail.phase || '—' }}</div>
-            </div>
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.owner') }}</div>
-              <div class="mt-1 text-sm font-bold uppercase text-gray-900 dark:text-white">{{ (detail as any).error_owner || '—' }}</div>
-            </div>
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.source') }}</div>
-              <div class="mt-1 text-sm font-bold uppercase text-gray-900 dark:text-white">{{ (detail as any).error_source || '—' }}</div>
-            </div>
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.retryable') }}</div>
-              <div class="mt-1 text-sm font-bold text-gray-900 dark:text-white">{{ (detail as any).is_retryable ? t('common.yes') : t('common.no') }}</div>
-            </div>
-          </div>
-
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.resolvedAt') }}</div>
-              <div class="mt-1 font-mono text-xs text-gray-700 dark:text-gray-200">{{ (detail as any).resolved_at || '—' }}</div>
-            </div>
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.resolvedBy') }}</div>
-              <div class="mt-1 font-mono text-xs text-gray-700 dark:text-gray-200">{{ (detail as any).resolved_by_user_id ?? '—' }}</div>
-            </div>
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.resolvedRetryId') }}</div>
-              <div class="mt-1 font-mono text-xs text-gray-700 dark:text-gray-200">{{ (detail as any).resolved_retry_id ?? '—' }}</div>
-            </div>
-            <div>
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.classificationKeys.retryCount') }}</div>
-              <div class="mt-1 font-mono text-xs text-gray-700 dark:text-gray-200">{{ (detail as any).retry_count ?? '—' }}</div>
-            </div>
+            <span
+              v-if="(detail as any).resolved_by_user_id != null"
+              class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700"
+            >
+              {{ t('admin.ops.errorDetail.classificationKeys.resolvedBy') }}:
+              <span class="ml-1 font-mono">{{ (detail as any).resolved_by_user_id }}</span>
+            </span>
+            <span
+              v-if="(detail as any).resolved_retry_id != null"
+              class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700"
+            >
+              {{ t('admin.ops.errorDetail.classificationKeys.resolvedRetryId') }}:
+              <span class="ml-1 font-mono">{{ (detail as any).resolved_retry_id }}</span>
+            </span>
+            <span
+              v-if="(detail as any).retry_count != null"
+              class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-gray-700 ring-1 ring-gray-200 dark:bg-dark-800 dark:text-gray-200 dark:ring-dark-700"
+            >
+              {{ t('admin.ops.errorDetail.classificationKeys.retryCount') }}: <span class="ml-1 font-mono">{{ (detail as any).retry_count }}</span>
+            </span>
           </div>
         </div>
 
@@ -154,254 +209,187 @@
         <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
           <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.basicInfo') }}</h3>
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.platform') }}</div>
-            <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ detail.platform || '—' }}</div>
-          </div>
-          <div>
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.model') }}</div>
-            <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ detail.model || '—' }}</div>
-          </div>
-          <div>
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.group') }}</div>
-            <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
-              <el-tooltip v-if="detail.group_id" :content="t('admin.ops.errorLog.id') + ' ' + detail.group_id" placement="top">
-                <span>{{ detail.group_name || detail.group_id }}</span>
-              </el-tooltip>
-              <span v-else>—</span>
+            <div>
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.platform') }}</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ detail.platform || '—' }}</div>
             </div>
-          </div>
-          <div>
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.account') }}</div>
-            <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
-              <el-tooltip v-if="detail.account_id" :content="t('admin.ops.errorLog.id') + ' ' + detail.account_id" placement="top">
-                <span>{{ detail.account_name || detail.account_id }}</span>
-              </el-tooltip>
-              <span v-else>—</span>
+            <div>
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.model') }}</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ detail.model || '—' }}</div>
             </div>
-          </div>
-          <div>
-            <div class="text-xs font-bold uppercase text-gray-400">TTFT</div>
-            <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
-              {{ detail.time_to_first_token_ms != null ? `${detail.time_to_first_token_ms}ms` : '—' }}
+            <div>
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.group') }}</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
+                <el-tooltip v-if="detail.group_id" :content="t('admin.ops.errorLog.id') + ' ' + detail.group_id" placement="top">
+                  <span>{{ detail.group_name || detail.group_id }}</span>
+                </el-tooltip>
+                <span v-else>—</span>
+              </div>
             </div>
-          </div>
-          <div>
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.businessLimited') }}</div>
-            <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
-              {{ detail.is_business_limited ? 'true' : 'false' }}
+            <div>
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.account') }}</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
+                <el-tooltip v-if="detail.account_id" :content="t('admin.ops.errorLog.id') + ' ' + detail.account_id" placement="top">
+                  <span>{{ detail.account_name || detail.account_id }}</span>
+                </el-tooltip>
+                <span v-else>—</span>
+              </div>
             </div>
-          </div>
-          <div class="lg:col-span-2">
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.requestPath') }}</div>
-            <div class="mt-1 font-mono text-xs text-gray-700 dark:text-gray-200 break-all">
-              {{ detail.request_path || '—' }}
+            <div>
+              <div class="text-xs font-bold uppercase text-gray-400">TTFT</div>
+              <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
+                {{ detail.time_to_first_token_ms != null ? `${detail.time_to_first_token_ms}ms` : '—' }}
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Timings (best-effort fields) -->
-      <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
-        <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.timings') }}</h3>
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.auth') }}</div>
-            <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
-              {{ detail.auth_latency_ms != null ? `${detail.auth_latency_ms}ms` : '—' }}
+            <div>
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.businessLimited') }}</div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
+                {{ detail.is_business_limited ? 'true' : 'false' }}
+              </div>
             </div>
-          </div>
-          <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.routing') }}</div>
-            <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
-              {{ detail.routing_latency_ms != null ? `${detail.routing_latency_ms}ms` : '—' }}
-            </div>
-          </div>
-          <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstream') }}</div>
-            <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
-              {{ detail.upstream_latency_ms != null ? `${detail.upstream_latency_ms}ms` : '—' }}
-            </div>
-          </div>
-          <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.response') }}</div>
-            <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
-              {{ detail.response_latency_ms != null ? `${detail.response_latency_ms}ms` : '—' }}
+            <div class="lg:col-span-2">
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.requestPath') }}</div>
+              <div class="mt-1 break-all font-mono text-xs text-gray-700 dark:text-gray-200">
+                {{ detail.request_path || '—' }}
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-       <!-- Retry -->
-       <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
-         <div class="flex flex-col justify-between gap-4 md:flex-row md:items-start">
-           <div class="space-y-1">
-             <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.retry') }}</h3>
-             <div class="text-xs text-gray-500 dark:text-gray-400">
-               {{ t('admin.ops.errorDetail.retryNote1') }}
-             </div>
-           </div>
-           <div class="flex flex-wrap gap-2">
-             <template v-if="(detail as any).is_retryable">
-               <button type="button" class="btn btn-secondary btn-sm" :disabled="retrying" @click="openRetryConfirm('client')">
-                 {{ t('admin.ops.errorDetail.retryClient') }}
-               </button>
-               <button
-                 v-if="props.errorType === 'upstream'"
-                 type="button"
-                 class="btn btn-secondary btn-sm"
-                 :disabled="retrying"
-                 @click="openRetryConfirm('upstream')"
-               >
-                 {{ t('admin.ops.errorDetail.retryUpstream') }}
-               </button>
-             </template>
-             <template v-else>
-               <span class="text-xs font-semibold text-amber-700 dark:text-amber-300">{{ t('admin.ops.errorDetail.notRetryable') }}</span>
-             </template>
-           </div>
-         </div>
-
-
-        <div v-if="props.errorType === 'upstream'" class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div class="md:col-span-1">
-            <label class="mb-1 block text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.pinnedAccountId') }}</label>
-            <input v-model="pinnedAccountIdInput" type="text" class="input font-mono text-sm" disabled />
-            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-               {{ t('admin.ops.errorDetail.pinnedToOriginalAccountId') }}
-            </div>
-          </div>
-          <div class="md:col-span-2">
+        <!-- Timings -->
+        <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
+          <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.timings') }}</h3>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
-              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.retryNotes') }}</div>
-              <ul class="mt-2 list-disc space-y-1 pl-5 text-xs text-gray-600 dark:text-gray-300">
-                <li>{{ t('admin.ops.errorDetail.retryNote3') }}</li>
-                <li>{{ t('admin.ops.errorDetail.retryNote4') }}</li>
-              </ul>
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.auth') }}</div>
+              <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
+                {{ detail.auth_latency_ms != null ? `${detail.auth_latency_ms}ms` : '—' }}
+              </div>
+            </div>
+            <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.routing') }}</div>
+              <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
+                {{ detail.routing_latency_ms != null ? `${detail.routing_latency_ms}ms` : '—' }}
+              </div>
+            </div>
+            <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstream') }}</div>
+              <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
+                {{ detail.upstream_latency_ms != null ? `${detail.upstream_latency_ms}ms` : '—' }}
+              </div>
+            </div>
+            <div class="rounded-lg bg-white p-4 shadow-sm dark:bg-dark-800">
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.response') }}</div>
+              <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
+                {{ detail.response_latency_ms != null ? `${detail.response_latency_ms}ms` : '—' }}
+              </div>
             </div>
           </div>
+        </div>
+
+        <div v-if="props.errorType === 'upstream'" class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
+          <label class="mb-1 block text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.pinnedAccountId') }}</label>
+          <input v-model="pinnedAccountIdInput" type="text" class="input font-mono text-sm" disabled />
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.errorDetail.pinnedToOriginalAccountId') }}</div>
         </div>
       </div>
 
-      <!-- Upstream errors -->
-      <div
-        v-if="detail.upstream_status_code || detail.upstream_error_message || detail.upstream_error_detail || detail.upstream_errors"
-        class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900"
-      >
-        <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">
-          {{ t('admin.ops.errorDetails.upstreamErrors') }}
-        </h3>
+      <!-- Upstream Errors Tab -->
+      <div v-else-if="activeTab === 'upstreamErrors'" class="space-y-6">
+        <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
+          <h3 class="mb-4 text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">
+            {{ t('admin.ops.errorDetails.upstreamErrors') }}
+          </h3>
 
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div>
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.status') }}</div>
-            <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
-              {{ detail.upstream_status_code != null ? detail.upstream_status_code : '—' }}
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.status') }}</div>
+              <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
+                {{ detail.upstream_status_code != null ? detail.upstream_status_code : '—' }}
+              </div>
+            </div>
+            <div class="sm:col-span-2">
+              <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.message') }}</div>
+              <div class="mt-1 break-words text-sm font-medium text-gray-900 dark:text-white">
+                {{ detail.upstream_error_message || '—' }}
+              </div>
             </div>
           </div>
-          <div class="sm:col-span-2">
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.message') }}</div>
-            <div class="mt-1 break-words text-sm font-medium text-gray-900 dark:text-white">
-              {{ detail.upstream_error_message || '—' }}
-            </div>
+
+          <div v-if="detail.upstream_error_detail" class="mt-4">
+            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.detail') }}</div>
+            <pre
+              class="mt-2 max-h-[240px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"
+            ><code>{{ prettyJSON(detail.upstream_error_detail) }}</code></pre>
           </div>
-        </div>
 
-        <div v-if="detail.upstream_error_detail" class="mt-4">
-          <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.detail') }}</div>
-          <pre
-            class="mt-2 max-h-[240px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"
-          ><code>{{ prettyJSON(detail.upstream_error_detail) }}</code></pre>
-        </div>
+          <div v-if="detail.upstream_errors" class="mt-5">
+            <div class="mb-2 text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.upstreamErrors') }}</div>
 
-        <div v-if="detail.upstream_errors" class="mt-5">
-          <div class="mb-2 text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.upstreamKeys.upstreamErrors') }}</div>
-
-          <div v-if="upstreamErrors.length" class="space-y-3">
-            <div
-              v-for="(ev, idx) in upstreamErrors"
-              :key="idx"
-              class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800"
-            >
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <div class="text-xs font-black text-gray-800 dark:text-gray-100">
-                  #{{ idx + 1 }} <span v-if="ev.kind" class="font-mono">{{ ev.kind }}</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <button
-                    v-if="props.errorType !== 'upstream'"
-                    type="button"
-                    class="rounded-md bg-gray-100 px-2 py-1 text-[10px] font-bold text-gray-700 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-200 dark:hover:bg-dark-600"
-                    :disabled="retrying || !ev.upstream_request_body"
-                    :title="ev.upstream_request_body ? '' : t('admin.ops.errorDetail.missingUpstreamRequestBody')"
-                    @click.stop="retryUpstreamEvent(idx)"
-                  >
-                    {{ t('admin.ops.errorDetail.retryUpstream') }} #{{ idx + 1 }}
-                  </button>
-                  <div class="font-mono text-xs text-gray-500 dark:text-gray-400">
-                    {{ ev.at_unix_ms ? formatDateTime(new Date(ev.at_unix_ms)) : '' }}
+            <div v-if="upstreamErrors.length" class="space-y-3">
+              <div
+                v-for="(ev, idx) in upstreamErrors"
+                :key="idx"
+                class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-xs font-black text-gray-800 dark:text-gray-100">#{{ idx + 1 }} <span v-if="ev.kind" class="font-mono">{{ ev.kind }}</span></div>
+                  <div class="flex items-center gap-2">
+                    <button
+                      v-if="props.errorType !== 'upstream'"
+                      type="button"
+                      class="rounded-md bg-gray-100 px-2 py-1 text-[10px] font-bold text-gray-700 hover:bg-gray-200 dark:bg-dark-700 dark:text-gray-200 dark:hover:bg-dark-600"
+                      :disabled="retrying || !ev.upstream_request_body"
+                      :title="ev.upstream_request_body ? '' : t('admin.ops.errorDetail.missingUpstreamRequestBody')"
+                      @click.stop="retryUpstreamEvent(idx)"
+                    >
+                      {{ t('admin.ops.errorDetail.retryUpstream') }} #{{ idx + 1 }}
+                    </button>
+                    <div class="font-mono text-xs text-gray-500 dark:text-gray-400">
+                      {{ ev.at_unix_ms ? formatDateTime(new Date(ev.at_unix_ms)) : '' }}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div class="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-2">
-                <div>
-                  <span class="text-gray-400">{{ t('admin.ops.errorDetail.upstreamEvent.account') }}:</span>
-                  <el-tooltip v-if="ev.account_id" :content="t('admin.ops.errorLog.id') + ' ' + ev.account_id" placement="top">
-                    <span class="font-medium text-gray-900 dark:text-white ml-1">{{ ev.account_name || ev.account_id }}</span>
-                  </el-tooltip>
-                  <span v-else class="ml-1">—</span>
+                <div class="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-2">
+                  <div>
+                    <span class="text-gray-400">{{ t('admin.ops.errorDetail.upstreamEvent.account') }}:</span>
+                    <el-tooltip v-if="ev.account_id" :content="t('admin.ops.errorLog.id') + ' ' + ev.account_id" placement="top">
+                      <span class="ml-1 font-medium text-gray-900 dark:text-white">{{ ev.account_name || ev.account_id }}</span>
+                    </el-tooltip>
+                    <span v-else class="ml-1">—</span>
+                  </div>
+                  <div>
+                    <span class="text-gray-400">{{ t('admin.ops.errorDetail.upstreamEvent.status') }}:</span>
+                    <span class="ml-1 font-mono">{{ ev.upstream_status_code ?? '—' }}</span>
+                  </div>
+                  <div class="sm:col-span-2 break-all">
+                    <span class="text-gray-400">{{ t('admin.ops.errorDetail.upstreamEvent.requestId') }}:</span>
+                    <span class="ml-1 font-mono">{{ ev.upstream_request_id || '—' }}</span>
+                  </div>
                 </div>
-                <div><span class="text-gray-400">{{ t('admin.ops.errorDetail.upstreamEvent.status') }}:</span> <span class="font-mono ml-1">{{ ev.upstream_status_code ?? '—' }}</span></div>
-                <div class="sm:col-span-2 break-all">
-                  <span class="text-gray-400">{{ t('admin.ops.errorDetail.upstreamEvent.requestId') }}:</span> <span class="font-mono ml-1">{{ ev.upstream_request_id || '—' }}</span>
+
+                <div v-if="ev.message" class="mt-2 break-words text-sm font-medium text-gray-900 dark:text-white">
+                  {{ ev.message }}
                 </div>
-              </div>
 
-              <div v-if="ev.message" class="mt-2 break-words text-sm font-medium text-gray-900 dark:text-white">
-                {{ ev.message }}
+                <pre
+                  v-if="ev.detail"
+                  class="mt-3 max-h-[240px] overflow-auto rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-100"
+                ><code>{{ prettyJSON(ev.detail) }}</code></pre>
               </div>
-
-              <pre
-                v-if="ev.detail"
-                class="mt-3 max-h-[240px] overflow-auto rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-100"
-              ><code>{{ prettyJSON(ev.detail) }}</code></pre>
             </div>
-          </div>
 
-          <pre
-            v-else
-            class="max-h-[420px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"
-          ><code>{{ prettyJSON(detail.upstream_errors) }}</code></pre>
-        </div>
-      </div>
-
-      <!-- Request body -->
-      <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
-        <div class="flex items-center justify-between">
-          <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.requestBody') }}</h3>
-          <div
-            v-if="detail.request_body_truncated"
-            class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-          >
-            {{ t('admin.ops.errorDetail.trimmed') }}
+            <pre
+              v-else
+              class="max-h-[420px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"
+            ><code>{{ prettyJSON(detail.upstream_errors) }}</code></pre>
           </div>
         </div>
-        <pre
-          class="mt-4 max-h-[420px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"
-        ><code>{{ prettyJSON(detail.request_body) }}</code></pre>
       </div>
 
-       <!-- Error body -->
-       <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
-         <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.errorBody') }}</h3>
-         <pre
-           class="mt-4 max-h-[420px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"
-         ><code>{{ prettyJSON(detail.error_body) }}</code></pre>
-       </div>
-      </div>
-
-      <div v-else-if="activeTab==='retries'">
+      <!-- Retries -->
+      <div v-else-if="activeTab === 'retries'">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.errorDetail.retryHistory') }}</div>
           <div class="flex flex-wrap gap-2">
@@ -434,8 +422,8 @@
               <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
                 <div class="text-xs font-black text-gray-900 dark:text-white">{{ selectedA ? `#${selectedA.id} · ${selectedA.mode} · ${selectedA.status}` : '—' }}</div>
                 <div class="mt-2 text-xs text-gray-600 dark:text-gray-300">
-                  HTTP: <span class="font-mono">{{ selectedA?.http_status_code ?? '—' }}</span> ·
-                  {{ t('admin.ops.errorDetail.retryMeta.used') }}: <span class="font-mono">
+                  HTTP: <span class="font-mono">{{ selectedA?.http_status_code ?? '—' }}</span> · {{ t('admin.ops.errorDetail.retryMeta.used') }}:
+                  <span class="font-mono">
                     <el-tooltip v-if="selectedA?.used_account_id" :content="'ID: ' + selectedA.used_account_id" placement="top">
                       <span class="font-medium">{{ selectedA.used_account_name || selectedA.used_account_id }}</span>
                     </el-tooltip>
@@ -445,11 +433,12 @@
                 <pre class="mt-3 max-h-[320px] overflow-auto rounded-lg bg-gray-50 p-3 text-xs text-gray-800 dark:bg-dark-900 dark:text-gray-100"><code>{{ selectedA?.response_preview || '' }}</code></pre>
                 <div v-if="selectedA?.error_message" class="mt-2 text-xs text-red-600 dark:text-red-400">{{ selectedA.error_message }}</div>
               </div>
+
               <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
                 <div class="text-xs font-black text-gray-900 dark:text-white">{{ selectedB ? `#${selectedB.id} · ${selectedB.mode} · ${selectedB.status}` : '—' }}</div>
                 <div class="mt-2 text-xs text-gray-600 dark:text-gray-300">
-                  HTTP: <span class="font-mono">{{ selectedB?.http_status_code ?? '—' }}</span> ·
-                  {{ t('admin.ops.errorDetail.retryMeta.used') }}: <span class="font-mono">
+                  HTTP: <span class="font-mono">{{ selectedB?.http_status_code ?? '—' }}</span> · {{ t('admin.ops.errorDetail.retryMeta.used') }}:
+                  <span class="font-mono">
                     <el-tooltip v-if="selectedB?.used_account_id" :content="'ID: ' + selectedB.used_account_id" placement="top">
                       <span class="font-medium">{{ selectedB.used_account_name || selectedB.used_account_id }}</span>
                     </el-tooltip>
@@ -468,7 +457,9 @@
                   <div class="font-mono text-xs text-gray-500 dark:text-gray-400">{{ a.created_at }}</div>
                 </div>
                 <div class="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-4">
-                  <div><span class="text-gray-400">{{ t('admin.ops.errorDetail.retryMeta.success') }}:</span> <span class="font-mono">{{ a.success ?? '—' }}</span></div>
+                  <div>
+                    <span class="text-gray-400">{{ t('admin.ops.errorDetail.retryMeta.success') }}:</span> <span class="font-mono">{{ a.success ?? '—' }}</span>
+                  </div>
                   <div><span class="text-gray-400">HTTP:</span> <span class="font-mono">{{ a.http_status_code ?? '—' }}</span></div>
                   <div>
                     <span class="text-gray-400">{{ t('admin.ops.errorDetail.retryMeta.pinned') }}:</span>
@@ -493,25 +484,26 @@
         </div>
       </div>
 
-      <div v-else-if="activeTab==='request'">
+      <!-- Request tab -->
+      <div v-else-if="activeTab === 'request'">
         <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
           <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.requestBody') }}</h3>
-          <pre class="mt-4 max-h-[520px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(detail.request_body) }}</code></pre>
+          <pre class="mt-4 max-h-[520px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(detail.request_body || '') }}</code></pre>
         </div>
       </div>
 
-      <div v-else-if="activeTab==='response'">
+      <!-- Response tab -->
+      <div v-else-if="activeTab === 'response'">
         <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
           <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.responseBody') }}</h3>
           <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {{ responseTabHint }}
           </div>
-          <pre class="mt-4 max-h-[520px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(responseTabBody) }}</code></pre>
+          <pre class="mt-4 max-h-[520px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(responseTabBody || '') }}</code></pre>
         </div>
       </div>
-     </div>
-   </BaseDialog>
-
+    </div>
+  </BaseDialog>
 
   <ConfirmDialog
     :show="showRetryConfirm"
@@ -529,7 +521,6 @@
       </label>
     </div>
   </div>
-
 </template>
 
 <script setup lang="ts">
@@ -561,7 +552,42 @@ const appStore = useAppStore()
 const loading = ref(false)
 const detail = ref<OpsErrorDetail | null>(null)
 
-const activeTab = ref<'overview' | 'retries' | 'request' | 'response'>('overview')
+const activeTab = ref<'overview' | 'retries' | 'request' | 'response' | 'upstreamErrors'>('overview')
+
+const hasUpstreamErrorContent = computed(() => {
+  const d = detail.value as any
+  return !!(d?.upstream_status_code || d?.upstream_error_message || d?.upstream_error_detail || d?.upstream_errors)
+})
+
+function normalizeEnum(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+}
+
+const phaseLabel = computed(() => {
+  const phase = normalizeEnum(detail.value?.phase)
+  if (!phase) return '—'
+  const key = `admin.ops.errorDetails.phase.${phase}`
+  const translated = t(key)
+  return translated === key ? phase : translated
+})
+
+const ownerLabel = computed(() => {
+  const owner = normalizeEnum((detail.value as any)?.error_owner)
+  if (!owner) return '—'
+  const key = `admin.ops.errorDetails.owner.${owner}`
+  const translated = t(key)
+  return translated === key ? owner : translated
+})
+
+const sourceLabel = computed(() => {
+  const source = normalizeEnum((detail.value as any)?.error_source)
+  if (!source) return '—'
+  const key = `admin.ops.errorDetail.source.${source}`
+  const translated = t(key)
+  return translated === key ? source : translated
+})
 
 const retrying = ref(false)
 const showRetryConfirm = ref(false)
@@ -570,7 +596,6 @@ const pendingRetryMode = ref<'client' | 'upstream' | 'upstream_event'>('client')
 const forceRetryAck = ref(false)
 const retryHistory = ref<OpsRetryAttempt[]>([])
 const retryHistoryLoading = ref(false)
-const showRetryHistory = ref(false)
 
 const compareA = ref<number | null>(null)
 const compareB = ref<number | null>(null)
@@ -621,31 +646,6 @@ function prettyJSON(raw?: string): string {
   }
 }
 
-const handlingSuggestion = computed(() => {
-  const d: any = detail.value
-  if (!d) return ''
-
-  const owner = String(d.error_owner || '').toLowerCase()
-  const phase = String(d.phase || '').toLowerCase()
-
-  if (owner === 'provider' && phase === 'upstream') {
-    if (retryHistory.value.some((r) => r.success === true) && d.resolved) {
-      return t('admin.ops.errorDetail.suggestUpstreamResolved')
-    }
-    return t('admin.ops.errorDetail.suggestUpstream')
-  }
-  if (owner === 'client' && phase === 'request') {
-    return t('admin.ops.errorDetail.suggestRequest')
-  }
-  if (owner === 'client' && phase === 'auth') {
-    return t('admin.ops.errorDetail.suggestAuth')
-  }
-  if (owner === 'platform') {
-    return t('admin.ops.errorDetail.suggestPlatform')
-  }
-  return t('admin.ops.errorDetail.suggestGeneric')
-})
-
 async function fetchDetail(id: number) {
   loading.value = true
   try {
@@ -670,7 +670,6 @@ watch(
       detail.value = null
       retryHistory.value = []
       retryHistoryLoading.value = false
-      showRetryHistory.value = false
       activeTab.value = 'overview'
       return
     }
@@ -730,7 +729,7 @@ const responseTabBody = computed(() => {
 const responseTabHint = computed(() => {
   const succeeded = bestSucceededAttempt.value
   if (succeeded?.response_preview) {
-    return t('admin.ops.errorDetail.responseHintSucceeded', { id: String(succeeded.id) }) || `Showing succeeded retry response_preview (#${succeeded.id})`
+    return t('admin.ops.errorDetail.responseHintSucceeded', { id: String(succeeded.id) })
   }
   return t('admin.ops.errorDetail.responseHintFallback')
 })
@@ -795,13 +794,13 @@ async function runConfirmedRetry() {
     if (kind === 'upstream') {
       // Upstream error retries always pin the original account_id.
       res = await opsAPI.retryUpstreamError(props.errorId)
+    } else {
+      if (mode === 'client') {
+        res = await opsAPI.retryRequestErrorClient(props.errorId)
       } else {
-        if (mode === 'client') {
-          res = await opsAPI.retryRequestErrorClient(props.errorId)
-        } else {
-          throw new Error(t('admin.ops.errorDetail.unsupportedRetryMode'))
-        }
+        throw new Error(t('admin.ops.errorDetail.unsupportedRetryMode'))
       }
+    }
 
     const summary = res.status === 'succeeded' ? t('admin.ops.errorDetail.retrySuccess') : t('admin.ops.errorDetail.retryFailed')
     appStore.showSuccess(summary)
