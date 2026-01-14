@@ -262,11 +262,11 @@ func TestAPIContracts(t *testing.T) {
 			name: "GET /api/v1/admin/settings",
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
-					deps.settingRepo.SetAll(map[string]string{
-						service.SettingKeyRegistrationEnabled: "true",
-						service.SettingKeyEmailVerifyEnabled:  "false",
+				deps.settingRepo.SetAll(map[string]string{
+					service.SettingKeyRegistrationEnabled: "true",
+					service.SettingKeyEmailVerifyEnabled:  "false",
 
-						service.SettingKeySMTPHost:     "smtp.example.com",
+					service.SettingKeySMTPHost:     "smtp.example.com",
 					service.SettingKeySMTPPort:     "587",
 					service.SettingKeySMTPUsername: "user",
 					service.SettingKeySMTPPassword: "secret",
@@ -285,15 +285,15 @@ func TestAPIContracts(t *testing.T) {
 					service.SettingKeyContactInfo:  "support",
 					service.SettingKeyDocURL:       "https://docs.example.com",
 
-						service.SettingKeyDefaultConcurrency: "5",
-						service.SettingKeyDefaultBalance:     "1.25",
+					service.SettingKeyDefaultConcurrency: "5",
+					service.SettingKeyDefaultBalance:     "1.25",
 
-						service.SettingKeyOpsMonitoringEnabled:         "false",
-						service.SettingKeyOpsRealtimeMonitoringEnabled: "true",
-						service.SettingKeyOpsQueryModeDefault:          "auto",
-						service.SettingKeyOpsMetricsIntervalSeconds:    "60",
-					})
-				},
+					service.SettingKeyOpsMonitoringEnabled:         "false",
+					service.SettingKeyOpsRealtimeMonitoringEnabled: "true",
+					service.SettingKeyOpsQueryModeDefault:          "auto",
+					service.SettingKeyOpsMetricsIntervalSeconds:    "60",
+				})
+			},
 			method:     http.MethodGet,
 			path:       "/api/v1/admin/settings",
 			wantStatus: http.StatusOK,
@@ -435,7 +435,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService)
