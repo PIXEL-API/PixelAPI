@@ -181,7 +181,7 @@
             </div>
           </div>
           <div>
-            <div class="text-xs font-bold uppercase text-gray-400">{{ t('admin.ops.errorDetail.ttft') }}</div>
+            <div class="text-xs font-bold uppercase text-gray-400">TTFT</div>
             <div class="mt-1 font-mono text-sm font-bold text-gray-900 dark:text-white">
               {{ detail.time_to_first_token_ms != null ? `${detail.time_to_first_token_ms}ms` : '—' }}
             </div>
@@ -434,7 +434,7 @@
               <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
                 <div class="text-xs font-black text-gray-900 dark:text-white">{{ selectedA ? `#${selectedA.id} · ${selectedA.mode} · ${selectedA.status}` : '—' }}</div>
                 <div class="mt-2 text-xs text-gray-600 dark:text-gray-300">
-                  {{ t('admin.ops.errorDetail.retryMeta.http') }}: <span class="font-mono">{{ selectedA?.http_status_code ?? '—' }}</span> ·
+                  HTTP: <span class="font-mono">{{ selectedA?.http_status_code ?? '—' }}</span> ·
                   {{ t('admin.ops.errorDetail.retryMeta.used') }}: <span class="font-mono">
                     <el-tooltip v-if="selectedA?.used_account_id" :content="'ID: ' + selectedA.used_account_id" placement="top">
                       <span class="font-medium">{{ selectedA.used_account_name || selectedA.used_account_id }}</span>
@@ -448,7 +448,7 @@
               <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
                 <div class="text-xs font-black text-gray-900 dark:text-white">{{ selectedB ? `#${selectedB.id} · ${selectedB.mode} · ${selectedB.status}` : '—' }}</div>
                 <div class="mt-2 text-xs text-gray-600 dark:text-gray-300">
-                  {{ t('admin.ops.errorDetail.retryMeta.http') }}: <span class="font-mono">{{ selectedB?.http_status_code ?? '—' }}</span> ·
+                  HTTP: <span class="font-mono">{{ selectedB?.http_status_code ?? '—' }}</span> ·
                   {{ t('admin.ops.errorDetail.retryMeta.used') }}: <span class="font-mono">
                     <el-tooltip v-if="selectedB?.used_account_id" :content="'ID: ' + selectedB.used_account_id" placement="top">
                       <span class="font-medium">{{ selectedB.used_account_name || selectedB.used_account_id }}</span>
@@ -469,7 +469,7 @@
                 </div>
                 <div class="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-4">
                   <div><span class="text-gray-400">{{ t('admin.ops.errorDetail.retryMeta.success') }}:</span> <span class="font-mono">{{ a.success ?? '—' }}</span></div>
-                  <div><span class="text-gray-400">{{ t('admin.ops.errorDetail.retryMeta.http') }}:</span> <span class="font-mono">{{ a.http_status_code ?? '—' }}</span></div>
+                  <div><span class="text-gray-400">HTTP:</span> <span class="font-mono">{{ a.http_status_code ?? '—' }}</span></div>
                   <div>
                     <span class="text-gray-400">{{ t('admin.ops.errorDetail.retryMeta.pinned') }}:</span>
                     <el-tooltip v-if="a.pinned_account_id" :content="'ID: ' + a.pinned_account_id" placement="top">
@@ -613,7 +613,7 @@ function close() {
 }
 
 function prettyJSON(raw?: string): string {
-  if (!raw) return t('admin.ops.errorDetail.na')
+  if (!raw) return 'N/A'
   try {
     return JSON.stringify(JSON.parse(raw), null, 2)
   } catch {
