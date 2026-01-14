@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAppStore } from '@/stores'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import OpsErrorLogTable from './OpsErrorLogTable.vue'
@@ -22,23 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const appStore = useAppStore()
 
-const retryingUpstream = ref<number | null>(null)
-async function retryUpstreamError(id: number) {
-  try {
-    retryingUpstream.value = id
-    const res = await opsAPI.retryUpstreamError(id)
-    const summary = res.status === 'succeeded' ? t('admin.ops.errorDetail.retrySuccess') : t('admin.ops.errorDetail.retryFailed')
-    appStore.showSuccess(summary)
-    page.value = 1
-    await fetchErrorLogs()
-  } catch (err: any) {
-    appStore.showError(err?.message || t('admin.ops.retryFailed'))
-  } finally {
-    retryingUpstream.value = null
-  }
-}
 
 const loading = ref(false)
 const rows = ref<OpsErrorLog[]>([])
@@ -50,7 +33,6 @@ const q = ref('')
 const statusCode = ref<number | 'other' | null>(null)
 const phase = ref<string>('')
 const errorOwner = ref<string>('')
-const resolvedStatus = ref<string>('unresolved')
 const viewMode = ref<'errors' | 'excluded' | 'all'>('errors')
 
 
@@ -76,13 +58,6 @@ const ownerSelectOptions = computed(() => {
   ]
 })
 
-const resolvedSelectOptions = computed(() => {
-  return [
-    { value: 'unresolved', label: t('admin.ops.errorDetails.unresolved') || 'unresolved' },
-    { value: 'all', label: t('common.all') },
-    { value: 'resolved', label: t('admin.ops.errorDetails.resolved') || 'resolved' }
-  ]
-})
 
 const viewModeSelectOptions = computed(() => {
   return [
@@ -135,10 +110,6 @@ async function fetchErrorLogs() {
     const ownerVal = String(errorOwner.value || '').trim()
     if (ownerVal) params.error_owner = ownerVal
 
-    const resolvedVal = String(resolvedStatus.value || '').trim()
-    if (resolvedVal === 'resolved') params.resolved = 'true'
-    else if (resolvedVal === 'unresolved') params.resolved = 'false'
-    // 'all' -> omit
 
     const res = props.errorType === 'upstream'
       ? await opsAPI.listUpstreamErrors(params)
@@ -159,7 +130,6 @@ async function fetchErrorLogs() {
     statusCode.value = null
     phase.value = props.errorType === 'upstream' ? 'upstream' : ''
     errorOwner.value = ''
-    resolvedStatus.value = 'unresolved'
     viewMode.value = 'errors'
     page.value = 1
     fetchErrorLogs()
@@ -207,7 +177,7 @@ watch(
 )
 
 watch(
-  () => [statusCode.value, phase.value, errorOwner.value, resolvedStatus.value, viewMode.value] as const,
+  () => [statusCode.value, phase.value, errorOwner.value, viewMode.value] as const,
   () => {
     if (!props.show) return
     page.value = 1
@@ -255,9 +225,7 @@ watch(
             <Select :model-value="errorOwner" :options="ownerSelectOptions" @update:model-value="errorOwner = String($event ?? '')" />
           </div>
 
-          <div class="compact-select">
-            <Select :model-value="resolvedStatus" :options="resolvedSelectOptions" @update:model-value="resolvedStatus = String($event ?? 'unresolved')" />
-          </div>
+
 
           <div class="compact-select">
             <Select :model-value="viewMode" :options="viewModeSelectOptions" @update:model-value="viewMode = $event as any" />
@@ -285,7 +253,7 @@ watch(
             :page="page"
             :page-size="pageSize"
             @openErrorDetail="emit('openErrorDetail', $event)"
-            @retryUpstream="retryUpstreamError"
+
             @update:page="page = $event"
             @update:pageSize="pageSize = $event"
           />

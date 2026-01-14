@@ -400,11 +400,17 @@ function handleOpenRequestDetails(preset?: OpsRequestDetailsPreset) {
 
   requestDetailsPreset.value = { ...basePreset, ...(preset ?? {}) }
   if (!requestDetailsPreset.value.title) requestDetailsPreset.value.title = basePreset.title
+  // Ensure only one modal visible at a time.
+  showErrorDetails.value = false
+  showErrorModal.value = false
   showRequestDetails.value = true
 }
 
 function openErrorDetails(kind: 'request' | 'upstream') {
   errorDetailsType.value = kind
+  // Ensure only one modal visible at a time.
+  showRequestDetails.value = false
+  showErrorModal.value = false
   showErrorDetails.value = true
 }
 
@@ -446,6 +452,9 @@ function onQueryModeChange(v: string | number | boolean | null) {
 
 function openError(id: number) {
   selectedErrorId.value = id
+  // Ensure only one modal visible at a time.
+  showErrorDetails.value = false
+  showRequestDetails.value = false
   showErrorModal.value = true
 }
 

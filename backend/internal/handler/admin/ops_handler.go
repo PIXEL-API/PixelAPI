@@ -19,6 +19,34 @@ type OpsHandler struct {
 	opsService *service.OpsService
 }
 
+// GetErrorLogByID returns ops error log detail.
+// GET /api/v1/admin/ops/errors/:id
+func (h *OpsHandler) GetErrorLogByID(c *gin.Context) {
+	if h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return
+	}
+	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	idStr := strings.TrimSpace(c.Param("id"))
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid error id")
+		return
+	}
+
+	detail, err := h.opsService.GetErrorLogByID(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, detail)
+}
+
 const (
 	opsListViewErrors   = "errors"
 	opsListViewExcluded = "excluded"
@@ -70,15 +98,24 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		return
 	}
 
-	filter := &service.OpsErrorLogFilter{
-		Page:     page,
-		PageSize: pageSize,
-	}
+	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+
 	if !startTime.IsZero() {
 		filter.StartTime = &startTime
 	}
 	if !endTime.IsZero() {
 		filter.EndTime = &endTime
+	}
+	filter.View = parseOpsViewParam(c)
+	filter.Phase = strings.TrimSpace(c.Query("phase"))
+	filter.Owner = strings.TrimSpace(c.Query("error_owner"))
+	filter.Source = strings.TrimSpace(c.Query("error_source"))
+	filter.Query = strings.TrimSpace(c.Query("q"))
+
+	// Force request errors: client-visible status >= 400.
+	// buildOpsErrorLogsWhere already applies this for non-upstream phase.
+	if strings.EqualFold(strings.TrimSpace(filter.Phase), "upstream") {
+		filter.Phase = ""
 	}
 
 	if platform := strings.TrimSpace(c.Query("platform")); platform != "" {
@@ -100,22 +137,7 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		}
 		filter.AccountID = &id
 	}
-	if phase := strings.TrimSpace(c.Query("phase")); phase != "" {
-		filter.Phase = phase
-	}
-	if owner := strings.TrimSpace(c.Query("error_owner")); owner != "" {
-		filter.Owner = owner
-	}
-	if source := strings.TrimSpace(c.Query("error_source")); source != "" {
-		filter.Source = source
-	}
-	filter.View = parseOpsViewParam(c)
 
-	// Legacy endpoint default: unresolved only (backward-compatible).
-	{
-		b := false
-		filter.Resolved = &b
-	}
 	if v := strings.TrimSpace(c.Query("resolved")); v != "" {
 		switch strings.ToLower(v) {
 		case "1", "true", "yes":
@@ -128,9 +150,6 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 			response.BadRequest(c, "Invalid resolved")
 			return
 		}
-	}
-	if q := strings.TrimSpace(c.Query("q")); q != "" {
-		filter.Query = q
 	}
 	if statusCodesStr := strings.TrimSpace(c.Query("status_codes")); statusCodesStr != "" {
 		parts := strings.Split(statusCodesStr, ",")
@@ -149,56 +168,14 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		}
 		filter.StatusCodes = out
 	}
-	if v := strings.TrimSpace(c.Query("status_codes_other")); v != "" {
-		switch strings.ToLower(v) {
-		case "1", "true", "yes":
-			filter.StatusCodesOther = true
-		case "0", "false", "no":
-			filter.StatusCodesOther = false
-		default:
-			response.BadRequest(c, "Invalid status_codes_other")
-			return
-		}
-	}
 
 	result, err := h.opsService.GetErrorLogs(c.Request.Context(), filter)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-
 	response.Paginated(c, result.Errors, int64(result.Total), result.Page, result.PageSize)
 }
-
-// GetErrorLogByID returns a single error log detail.
-// GET /api/v1/admin/ops/errors/:id
-func (h *OpsHandler) GetErrorLogByID(c *gin.Context) {
-	if h.opsService == nil {
-		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
-		return
-	}
-	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	idStr := strings.TrimSpace(c.Param("id"))
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || id <= 0 {
-		response.BadRequest(c, "Invalid error id")
-		return
-	}
-
-	detail, err := h.opsService.GetErrorLogByID(c.Request.Context(), id)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	response.Success(c, detail)
-}
-
-// ==================== New split endpoints ====================
 
 // ListRequestErrors lists client-visible request errors.
 // GET /api/v1/admin/ops/request-errors
@@ -305,6 +282,104 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 func (h *OpsHandler) GetRequestError(c *gin.Context) {
 	// same storage; just proxy to existing detail
 	h.GetErrorLogByID(c)
+}
+
+// ListRequestErrorUpstreamErrors lists upstream error logs correlated to a request error.
+// GET /api/v1/admin/ops/request-errors/:id/upstream-errors
+func (h *OpsHandler) ListRequestErrorUpstreamErrors(c *gin.Context) {
+	if h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return
+	}
+	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	idStr := strings.TrimSpace(c.Param("id"))
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid error id")
+		return
+	}
+
+	// Load request error to get correlation keys.
+	detail, err := h.opsService.GetErrorLogByID(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	// Correlate by request_id/client_request_id.
+	requestID := strings.TrimSpace(detail.RequestID)
+	clientRequestID := strings.TrimSpace(detail.ClientRequestID)
+	if requestID == "" && clientRequestID == "" {
+		response.Paginated(c, []*service.OpsErrorLog{}, 0, 1, 10)
+		return
+	}
+
+	page, pageSize := response.ParsePagination(c)
+	if pageSize > 500 {
+		pageSize = 500
+	}
+
+	// Keep correlation window wide enough so linked upstream errors
+	// are discoverable even when UI defaults to 1h elsewhere.
+	startTime, endTime, err := parseOpsTimeRange(c, "30d")
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+	if !startTime.IsZero() {
+		filter.StartTime = &startTime
+	}
+	if !endTime.IsZero() {
+		filter.EndTime = &endTime
+	}
+	filter.View = "all"
+	filter.Phase = "upstream"
+	filter.Owner = "provider"
+	filter.Source = strings.TrimSpace(c.Query("error_source"))
+	filter.Query = strings.TrimSpace(c.Query("q"))
+
+	if platform := strings.TrimSpace(c.Query("platform")); platform != "" {
+		filter.Platform = platform
+	}
+
+	// Prefer exact match on request_id; if missing, fall back to client_request_id.
+	if requestID != "" {
+		filter.RequestID = requestID
+	} else {
+		filter.ClientRequestID = clientRequestID
+	}
+
+	result, err := h.opsService.GetErrorLogs(c.Request.Context(), filter)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	// If client asks for details, expand each upstream error log to include upstream response fields.
+	includeDetail := strings.TrimSpace(c.Query("include_detail"))
+	if includeDetail == "1" || strings.EqualFold(includeDetail, "true") || strings.EqualFold(includeDetail, "yes") {
+		details := make([]*service.OpsErrorLogDetail, 0, len(result.Errors))
+		for _, item := range result.Errors {
+			if item == nil {
+				continue
+			}
+			d, err := h.opsService.GetErrorLogByID(c.Request.Context(), item.ID)
+			if err != nil || d == nil {
+				continue
+			}
+			details = append(details, d)
+		}
+		response.Paginated(c, details, int64(result.Total), result.Page, result.PageSize)
+		return
+	}
+
+	response.Paginated(c, result.Errors, int64(result.Total), result.Page, result.PageSize)
 }
 
 // RetryRequestErrorClient retries the client request based on stored request body.

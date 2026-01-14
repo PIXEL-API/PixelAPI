@@ -1037,6 +1037,17 @@ export async function updateUpstreamErrorResolved(errorId: number, resolved: boo
   await apiClient.put(`/admin/ops/upstream-errors/${errorId}/resolve`, { resolved })
 }
 
+export async function listRequestErrorUpstreamErrors(
+  id: number,
+  params: OpsErrorListQueryParams = {},
+  options: { include_detail?: boolean } = {}
+): Promise<PaginatedResponse<OpsErrorDetail>> {
+  const query: Record<string, any> = { ...params }
+  if (options.include_detail) query.include_detail = '1'
+  const { data } = await apiClient.get<PaginatedResponse<OpsErrorDetail>>(`/admin/ops/request-errors/${id}/upstream-errors`, { params: query })
+  return data
+}
+
 export async function listRequestDetails(params: OpsRequestDetailsParams): Promise<OpsRequestDetailsResponse> {
   const { data } = await apiClient.get<OpsRequestDetailsResponse>('/admin/ops/requests', { params })
   return data
@@ -1173,6 +1184,7 @@ export const opsAPI = {
   retryUpstreamError,
   updateRequestErrorResolved,
   updateUpstreamErrorResolved,
+  listRequestErrorUpstreamErrors,
 
   listRequestDetails,
   listAlertRules,
