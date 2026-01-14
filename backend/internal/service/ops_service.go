@@ -611,4 +611,3 @@ func sanitizeErrorBodyForStorage(raw string, maxBytes int) (sanitized string, tr
 	}
 	return raw, false
 }
-
