@@ -239,9 +239,10 @@ func TestAPIContracts(t *testing.T) {
 							"cache_creation_cost": 0,
 							"cache_read_cost": 0,
 							"total_cost": 0.5,
-							"actual_cost": 0.5,
-							"rate_multiplier": 1,
-							"billing_type": 0,
+						"actual_cost": 0.5,
+						"rate_multiplier": 1,
+						"account_rate_multiplier": null,
+						"billing_type": 0,
 							"stream": true,
 							"duration_ms": 100,
 							"first_token_ms": 50,
@@ -262,11 +263,11 @@ func TestAPIContracts(t *testing.T) {
 			name: "GET /api/v1/admin/settings",
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
-					deps.settingRepo.SetAll(map[string]string{
-						service.SettingKeyRegistrationEnabled: "true",
-						service.SettingKeyEmailVerifyEnabled:  "false",
+				deps.settingRepo.SetAll(map[string]string{
+					service.SettingKeyRegistrationEnabled: "true",
+					service.SettingKeyEmailVerifyEnabled:  "false",
 
-						service.SettingKeySMTPHost:     "smtp.example.com",
+					service.SettingKeySMTPHost:     "smtp.example.com",
 					service.SettingKeySMTPPort:     "587",
 					service.SettingKeySMTPUsername: "user",
 					service.SettingKeySMTPPassword: "secret",
@@ -285,15 +286,15 @@ func TestAPIContracts(t *testing.T) {
 					service.SettingKeyContactInfo:  "support",
 					service.SettingKeyDocURL:       "https://docs.example.com",
 
-						service.SettingKeyDefaultConcurrency: "5",
-						service.SettingKeyDefaultBalance:     "1.25",
+					service.SettingKeyDefaultConcurrency: "5",
+					service.SettingKeyDefaultBalance:     "1.25",
 
-						service.SettingKeyOpsMonitoringEnabled:         "false",
-						service.SettingKeyOpsRealtimeMonitoringEnabled: "true",
-						service.SettingKeyOpsQueryModeDefault:          "auto",
-						service.SettingKeyOpsMetricsIntervalSeconds:    "60",
-					})
-				},
+					service.SettingKeyOpsMonitoringEnabled:         "false",
+					service.SettingKeyOpsRealtimeMonitoringEnabled: "true",
+					service.SettingKeyOpsQueryModeDefault:          "auto",
+					service.SettingKeyOpsMetricsIntervalSeconds:    "60",
+				})
+			},
 			method:     http.MethodGet,
 			path:       "/api/v1/admin/settings",
 			wantStatus: http.StatusOK,
