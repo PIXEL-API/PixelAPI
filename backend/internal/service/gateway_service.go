@@ -511,6 +511,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		if isExcluded(acc.ID) {
 			continue
 		}
+		// Scheduler snapshots can be temporarily stale (bucket rebuild is throttled);
+		// re-check schedulability here so recently rate-limited/overloaded accounts
+		// are not selected again before the bucket is rebuilt.
+		if !acc.IsSchedulable() {
+			continue
+		}
 		if !s.isAccountAllowedForPlatform(acc, platform, useMixed) {
 			continue
 		}
@@ -893,6 +899,11 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		if _, excluded := excludedIDs[acc.ID]; excluded {
 			continue
 		}
+		// Scheduler snapshots can be temporarily stale; re-check schedulability here to
+		// avoid selecting accounts that were recently rate-limited/overloaded.
+		if !acc.IsSchedulable() {
+			continue
+		}
 		if !acc.IsSchedulableForModel(requestedModel) {
 			continue
 		}
@@ -975,6 +986,11 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	for i := range accounts {
 		acc := &accounts[i]
 		if _, excluded := excludedIDs[acc.ID]; excluded {
+			continue
+		}
+		// Scheduler snapshots can be temporarily stale; re-check schedulability here to
+		// avoid selecting accounts that were recently rate-limited/overloaded.
+		if !acc.IsSchedulable() {
 			continue
 		}
 		// 过滤：原生平台直接通过，antigravity 需要启用混合调度
