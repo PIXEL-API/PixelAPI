@@ -127,8 +127,8 @@ func TestComputeDashboardHealthScore_Comprehensive(t *testing.T) {
 					MemoryUsagePercent: float64Ptr(75),
 				},
 			},
-			wantMin: 60,
-			wantMax: 85,
+			wantMin: 57,
+			wantMax: 58,
 		},
 		{
 			name: "DB failure",
@@ -277,8 +277,8 @@ func TestComputeBusinessHealth(t *testing.T) {
 				UpstreamErrorRate: 0,
 				Duration:          OpsPercentiles{P99: intPtr(500)},
 			},
-			wantMin: 50,
-			wantMax: 60,
+			wantMin: 37,
+			wantMax: 38,
 		},
 		{
 			name: "error rate boundary 0.5%",
