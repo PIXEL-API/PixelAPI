@@ -2086,7 +2086,9 @@ export default {
         '30m': '近30分钟',
         '1h': '近1小时',
         '6h': '近6小时',
-        '24h': '近24小时'
+        '24h': '近24小时',
+        '7d': '近7天',
+        '30d': '近30天'
       },
       fullscreen: {
         enter: '进入全屏'
@@ -2158,6 +2160,7 @@ export default {
       // Error Log
       errorLog: {
         timeId: '时间 / ID',
+        type: '类型',
         context: '上下文',
         status: '状态码',
         message: '消息',
@@ -2173,6 +2176,8 @@ export default {
       errorDetails: {
         upstreamErrors: '上游错误',
         requestErrors: '请求错误',
+        unresolved: '未解决',
+        resolved: '已解决',
         total: '总计：',
         searchPlaceholder: '搜索 request_id / client_request_id / message',
         accountIdPlaceholder: 'account_id'
@@ -2197,6 +2202,8 @@ export default {
         routing: '路由',
         upstream: '上游',
         response: '响应',
+        classification: '错误分类',
+        notRetryable: '此错误不建议重试',
         retry: '重试',
         retryClient: '重试（客户端）',
         retryUpstream: '重试（上游固定）',
@@ -2217,7 +2224,31 @@ export default {
         retryNote2: '如果原请求失败是因为账号问题，固定重试可能仍会失败',
         retryNote3: '客户端重试会重新选择账号',
         confirmRetryMessage: '确认要重试该请求吗？',
-        confirmRetryHint: '将使用相同的请求参数重新发送'
+        confirmRetryHint: '将使用相同的请求参数重新发送',
+        forceRetry: '我已确认并理解强制重试风险',
+        forceRetryHint: '此错误类型通常不可通过重试解决；如仍需重试请勾选确认',
+        forceRetryNeedAck: '请先勾选确认再强制重试',
+        markResolved: '标记已解决',
+        markUnresolved: '标记未解决',
+        viewRetries: '重试历史',
+        retryHistory: '重试历史',
+        tabOverview: '概览',
+        tabRetries: '重试历史',
+        tabRequest: '请求详情',
+        tabResponse: '响应详情',
+        responseBody: '响应详情',
+        compareA: '对比 A',
+        compareB: '对比 B',
+        retrySummary: '重试摘要',
+        responseHintSucceeded: '展示重试成功的 response_preview（#{id}）',
+        responseHintFallback: '没有成功的重试结果，展示存储的 error_body',
+        suggestion: '处理建议',
+        suggestUpstreamResolved: '✓ 上游错误已通过重试解决，无需人工介入',
+        suggestUpstream: '⚠️ 上游服务不稳定，建议：检查上游账号状态 / 考虑切换账号 / 再次重试',
+        suggestRequest: '⚠️ 客户端请求错误，建议：联系客户修正请求参数 / 手动标记已解决',
+        suggestAuth: '⚠️ 认证失败，建议：检查 API Key 是否有效 / 联系客户更新凭证',
+        suggestPlatform: '🚨 平台错误，建议立即排查修复',
+        suggestGeneric: '查看详情了解更多信息'
       },
       requestDetails: {
         title: '请求明细',
@@ -2253,13 +2284,46 @@ export default {
         loading: '加载中...',
         empty: '暂无告警事件',
         loadFailed: '加载告警事件失败',
+        status: {
+          firing: '告警中',
+          resolved: '已恢复',
+          manualResolved: '手动已解决'
+        },
+        detail: {
+          title: '告警详情',
+          loading: '加载详情中...',
+          empty: '暂无详情',
+          loadFailed: '加载告警详情失败',
+          manualResolve: '标记为已解决',
+          manualResolvedSuccess: '已标记为手动解决',
+          manualResolvedFailed: '标记为手动解决失败',
+          silence: '忽略此告警',
+          silenceSuccess: '已静默该告警',
+          silenceFailed: '静默失败',
+          viewRule: '查看规则',
+          viewLogs: '查看相关日志',
+          firedAt: '触发时间',
+          resolvedAt: '解决时间',
+          ruleId: '规则 ID',
+          dimensions: '维度信息',
+          historyTitle: '历史记录',
+          historyHint: '同一规则 + 相同维度的最近事件',
+          historyLoading: '加载历史中...',
+          historyEmpty: '暂无历史记录'
+        },
         table: {
           time: '时间',
           status: '状态',
           severity: '级别',
+          platform: '平台',
+          ruleId: '规则ID',
           title: '标题',
+          duration: '持续时间',
           metric: '指标 / 阈值',
-          email: '邮件已发送'
+          dimensions: '维度',
+          email: '邮件已发送',
+          emailSent: '已发送',
+          emailIgnored: '已忽略'
         }
       },
       alertRules: {
