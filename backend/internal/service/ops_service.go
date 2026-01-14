@@ -208,6 +208,25 @@ func (s *OpsService) RecordError(ctx context.Context, entry *OpsInsertErrorLogIn
 				out.Detail = ""
 			}
 
+			out.UpstreamRequestBody = strings.TrimSpace(out.UpstreamRequestBody)
+			if out.UpstreamRequestBody != "" {
+				// Reuse the same sanitization/trimming strategy as request body storage.
+				// Keep it small so it is safe to persist in ops_error_logs JSON.
+				sanitized, truncated, _ := sanitizeAndTrimRequestBody([]byte(out.UpstreamRequestBody), 10*1024)
+				if sanitized != "" {
+					out.UpstreamRequestBody = sanitized
+					if truncated {
+						out.Kind = strings.TrimSpace(out.Kind)
+						if out.Kind == "" {
+							out.Kind = "upstream"
+						}
+						out.Kind = out.Kind + ":request_body_truncated"
+					}
+				} else {
+					out.UpstreamRequestBody = ""
+				}
+			}
+
 			// Drop fully-empty events (can happen if only status code was known).
 			if out.UpstreamStatusCode == 0 && out.Message == "" && out.Detail == "" {
 				continue
