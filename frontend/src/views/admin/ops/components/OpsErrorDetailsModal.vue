@@ -29,7 +29,7 @@ const page = ref(1)
 const pageSize = ref(20)
 
 const q = ref('')
-const statusCode = ref<number | null>(null)
+const statusCode = ref<number | 'other' | null>(null)
 const phase = ref<string>('')
 const errorOwner = ref<string>('')
   const resolvedStatus = ref<string>('unresolved')
@@ -44,16 +44,17 @@ const statusCodeSelectOptions = computed(() => {
   const codes = [400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504, 529]
   return [
     { value: null, label: t('common.all') },
-    ...codes.map((c) => ({ value: c, label: String(c) }))
+    ...codes.map((c) => ({ value: c, label: String(c) })),
+    { value: 'other', label: t('admin.ops.errorDetails.statusCodeOther') || 'Other' }
   ]
 })
 
 const ownerSelectOptions = computed(() => {
   return [
     { value: '', label: t('common.all') },
-    { value: 'provider', label: 'provider' },
-    { value: 'client', label: 'client' },
-    { value: 'platform', label: 'platform' }
+    { value: 'provider', label: t('admin.ops.errorDetails.owner.provider') || 'provider' },
+    { value: 'client', label: t('admin.ops.errorDetails.owner.client') || 'client' },
+    { value: 'platform', label: t('admin.ops.errorDetails.owner.platform') || 'platform' }
   ]
 })
 
@@ -76,12 +77,12 @@ const viewModeSelectOptions = computed(() => {
 const phaseSelectOptions = computed(() => {
   const options = [
     { value: '', label: t('common.all') },
-    { value: 'request', label: 'request' },
-    { value: 'auth', label: 'auth' },
-    { value: 'routing', label: 'routing' },
-    { value: 'upstream', label: 'upstream' },
-    { value: 'network', label: 'network' },
-    { value: 'internal', label: 'internal' }
+    { value: 'request', label: t('admin.ops.errorDetails.phase.request') || 'request' },
+    { value: 'auth', label: t('admin.ops.errorDetails.phase.auth') || 'auth' },
+    { value: 'routing', label: t('admin.ops.errorDetails.phase.routing') || 'routing' },
+    { value: 'upstream', label: t('admin.ops.errorDetails.phase.upstream') || 'upstream' },
+    { value: 'network', label: t('admin.ops.errorDetails.phase.network') || 'network' },
+    { value: 'internal', label: t('admin.ops.errorDetails.phase.internal') || 'internal' }
   ]
   return options
 })
@@ -107,7 +108,8 @@ async function fetchErrorLogs() {
     if (typeof props.groupId === 'number' && props.groupId > 0) params.group_id = props.groupId
 
     if (q.value.trim()) params.q = q.value.trim()
-    if (typeof statusCode.value === 'number') params.status_codes = String(statusCode.value)
+    if (statusCode.value === 'other') params.status_codes_other = '1'
+    else if (typeof statusCode.value === 'number') params.status_codes = String(statusCode.value)
 
     const phaseVal = String(phase.value || '').trim()
     if (phaseVal) params.phase = phaseVal

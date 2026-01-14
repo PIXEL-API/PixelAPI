@@ -157,16 +157,16 @@ const validation = computed(() => {
 
   // 验证指标阈值
   if (metricThresholds.value.sla_percent_min != null && (metricThresholds.value.sla_percent_min < 0 || metricThresholds.value.sla_percent_min > 100)) {
-    errors.push('SLA最低百分比必须在0-100之间')
+    errors.push(t('admin.ops.settings.validation.slaMinPercentRange'))
   }
   if (metricThresholds.value.ttft_p99_ms_max != null && metricThresholds.value.ttft_p99_ms_max < 0) {
-    errors.push('TTFT P99最大值必须大于等于0')
+    errors.push(t('admin.ops.settings.validation.ttftP99MaxRange'))
   }
   if (metricThresholds.value.request_error_rate_percent_max != null && (metricThresholds.value.request_error_rate_percent_max < 0 || metricThresholds.value.request_error_rate_percent_max > 100)) {
-    errors.push('请求错误率最大值必须在0-100之间')
+    errors.push(t('admin.ops.settings.validation.requestErrorRateMaxRange'))
   }
   if (metricThresholds.value.upstream_error_rate_percent_max != null && (metricThresholds.value.upstream_error_rate_percent_max < 0 || metricThresholds.value.upstream_error_rate_percent_max > 100)) {
-    errors.push('上游错误率最大值必须在0-100之间')
+    errors.push(t('admin.ops.settings.validation.upstreamErrorRateMaxRange'))
   }
 
   return { valid: errors.length === 0, errors }
@@ -472,15 +472,15 @@ async function saveAllSettings() {
             </div>
           </div>
 
-          <!-- 错误过滤 -->
+          <!-- Error Filtering -->
           <div class="space-y-3">
-            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">错误过滤</h5>
+            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.errorFiltering') }}</h5>
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">忽略 count_tokens 错误</label>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.ignoreCountTokensErrors') }}</label>
                 <p class="mt-1 text-xs text-gray-500">
-                  启用后，count_tokens 请求的错误将不会写入错误日志
+                  {{ t('admin.ops.settings.ignoreCountTokensErrorsHint') }}
                 </p>
               </div>
               <Toggle v-model="advancedSettings.ignore_count_tokens_errors" />
@@ -488,9 +488,9 @@ async function saveAllSettings() {
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">忽略客户端断连错误</label>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.ignoreContextCanceled') }}</label>
                 <p class="mt-1 text-xs text-gray-500">
-                  启用后，客户端主动断开连接（context canceled）的错误将不会写入错误日志
+                  {{ t('admin.ops.settings.ignoreContextCanceledHint') }}
                 </p>
               </div>
               <Toggle v-model="advancedSettings.ignore_context_canceled" />
@@ -498,37 +498,37 @@ async function saveAllSettings() {
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">忽略无可用账号错误</label>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.ignoreNoAvailableAccounts') }}</label>
                 <p class="mt-1 text-xs text-gray-500">
-                  启用后，"No available accounts" 错误将不会写入错误日志（不推荐，这通常是配置问题）
+                  {{ t('admin.ops.settings.ignoreNoAvailableAccountsHint') }}
                 </p>
               </div>
               <Toggle v-model="advancedSettings.ignore_no_available_accounts" />
             </div>
           </div>
 
-          <!-- 自动刷新 -->
+          <!-- Auto Refresh -->
           <div class="space-y-3">
-            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">自动刷新</h5>
+            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.autoRefresh') }}</h5>
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">启用自动刷新</label>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.enableAutoRefresh') }}</label>
                 <p class="mt-1 text-xs text-gray-500">
-                  自动刷新仪表板数据，启用后会定期拉取最新数据
+                  {{ t('admin.ops.settings.enableAutoRefreshHint') }}
                 </p>
               </div>
               <Toggle v-model="advancedSettings.auto_refresh_enabled" />
             </div>
 
             <div v-if="advancedSettings.auto_refresh_enabled">
-              <label class="input-label">刷新间隔</label>
+              <label class="input-label">{{ t('admin.ops.settings.refreshInterval') }}</label>
               <Select
                 v-model="advancedSettings.auto_refresh_interval_seconds"
                 :options="[
-                  { value: 15, label: '15 秒' },
-                  { value: 30, label: '30 秒' },
-                  { value: 60, label: '60 秒' }
+                  { value: 15, label: t('admin.ops.settings.refreshInterval15s') },
+                  { value: 30, label: t('admin.ops.settings.refreshInterval30s') },
+                  { value: 60, label: t('admin.ops.settings.refreshInterval60s') }
                 ]"
               />
             </div>

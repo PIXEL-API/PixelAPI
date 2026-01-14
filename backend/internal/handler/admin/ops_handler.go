@@ -110,6 +110,12 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		filter.Source = source
 	}
 	filter.View = parseOpsViewParam(c)
+
+	// Legacy endpoint default: unresolved only (backward-compatible).
+	{
+		b := false
+		filter.Resolved = &b
+	}
 	if v := strings.TrimSpace(c.Query("resolved")); v != "" {
 		switch strings.ToLower(v) {
 		case "1", "true", "yes":
@@ -142,6 +148,17 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 			out = append(out, n)
 		}
 		filter.StatusCodes = out
+	}
+	if v := strings.TrimSpace(c.Query("status_codes_other")); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes":
+			filter.StatusCodesOther = true
+		case "0", "false", "no":
+			filter.StatusCodesOther = false
+		default:
+			response.BadRequest(c, "Invalid status_codes_other")
+			return
+		}
 	}
 
 	result, err := h.opsService.GetErrorLogs(c.Request.Context(), filter)
