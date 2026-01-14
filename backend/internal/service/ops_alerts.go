@@ -208,7 +208,11 @@ func (s *OpsService) UpdateAlertEventStatus(ctx context.Context, eventID int64, 
 	if eventID <= 0 {
 		return infraerrors.BadRequest("INVALID_EVENT_ID", "invalid event id")
 	}
-	if strings.TrimSpace(status) == "" {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return infraerrors.BadRequest("INVALID_STATUS", "invalid status")
+	}
+	if status != OpsAlertStatusResolved && status != OpsAlertStatusManualResolved {
 		return infraerrors.BadRequest("INVALID_STATUS", "invalid status")
 	}
 	return s.opsRepo.UpdateAlertEventStatus(ctx, eventID, status, resolvedAt)

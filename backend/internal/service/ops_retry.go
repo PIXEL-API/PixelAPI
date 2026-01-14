@@ -220,11 +220,8 @@ func (s *OpsService) RetryError(ctx context.Context, requestedByUserID int64, er
 		msg := result.ErrorMessage
 		updateErrMsg = &msg
 	}
+	// Keep legacy result_request_id empty; use upstream_request_id instead.
 	var resultRequestID *string
-	if strings.TrimSpace(result.UpstreamRequestID) != "" {
-		v := result.UpstreamRequestID
-		resultRequestID = &v
-	}
 
 	finalStatus := result.Status
 	if strings.TrimSpace(finalStatus) == "" {
