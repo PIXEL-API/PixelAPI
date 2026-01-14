@@ -640,6 +640,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
+		AccountName:        account.Name,
 			UpstreamStatusCode: 0,
 			Kind:               "request_error",
 			Message:            safeErr,
@@ -674,6 +675,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
+		AccountName:        account.Name,
 				UpstreamStatusCode: resp.StatusCode,
 				UpstreamRequestID:  resp.Header.Get("x-request-id"),
 				Kind:               "failover",
@@ -834,6 +836,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *ht
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
+		AccountName:        account.Name,
 			UpstreamStatusCode: resp.StatusCode,
 			UpstreamRequestID:  resp.Header.Get("x-request-id"),
 			Kind:               "http_error",
@@ -864,6 +867,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *ht
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:           account.Platform,
 		AccountID:          account.ID,
+		AccountName:        account.Name,
 		UpstreamStatusCode: resp.StatusCode,
 		UpstreamRequestID:  resp.Header.Get("x-request-id"),
 		Kind:               kind,
