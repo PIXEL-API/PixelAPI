@@ -177,6 +177,10 @@ func (s *OpsScheduledReportService) runOnce() {
 		return
 	}
 
+	reportsTotal := len(reports)
+	reportsDue := 0
+	sentAttempts := 0
+
 	for _, report := range reports {
 		if report == nil || !report.Enabled {
 			continue
@@ -184,14 +188,18 @@ func (s *OpsScheduledReportService) runOnce() {
 		if report.NextRunAt.After(now) {
 			continue
 		}
+		reportsDue++
 
-		if err := s.runReport(ctx, report, now); err != nil {
+		attempts, err := s.runReport(ctx, report, now)
+		if err != nil {
 			s.recordHeartbeatError(runAt, time.Since(startedAt), err)
 			return
 		}
+		sentAttempts += attempts
 	}
 
-	s.recordHeartbeatSuccess(runAt, time.Since(startedAt))
+	result := truncateString(fmt.Sprintf("reports=%d due=%d send_attempts=%d", reportsTotal, reportsDue, sentAttempts), 2048)
+	s.recordHeartbeatSuccess(runAt, time.Since(startedAt), result)
 }
 
 type opsScheduledReport struct {
@@ -297,9 +305,9 @@ func (s *OpsScheduledReportService) listScheduledReports(ctx context.Context, no
 	return out
 }
 
-func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsScheduledReport, now time.Time) error {
+func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsScheduledReport, now time.Time) (int, error) {
 	if s == nil || s.opsService == nil || s.emailService == nil || report == nil {
-		return nil
+		return 0, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -310,11 +318,11 @@ func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsSc
 
 	content, err := s.generateReportHTML(ctx, report, now)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if strings.TrimSpace(content) == "" {
 		// Skip sending when the report decides not to emit content (e.g., digest below min count).
-		return nil
+		return 0, nil
 	}
 
 	recipients := report.Recipients
@@ -325,22 +333,24 @@ func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsSc
 		}
 	}
 	if len(recipients) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	subject := fmt.Sprintf("[Ops Report] %s", strings.TrimSpace(report.Name))
 
+	attempts := 0
 	for _, to := range recipients {
 		addr := strings.TrimSpace(to)
 		if addr == "" {
 			continue
 		}
+		attempts++
 		if err := s.emailService.SendEmail(ctx, addr, subject, content); err != nil {
 			// Ignore per-recipient failures; continue best-effort.
 			continue
 		}
 	}
-	return nil
+	return attempts, nil
 }
 
 func (s *OpsScheduledReportService) generateReportHTML(ctx context.Context, report *opsScheduledReport, now time.Time) (string, error) {
@@ -650,7 +660,7 @@ func (s *OpsScheduledReportService) setLastRunAt(ctx context.Context, reportType
 	_ = s.redisClient.Set(ctx, key, strconv.FormatInt(t.UTC().Unix(), 10), 14*24*time.Hour).Err()
 }
 
-func (s *OpsScheduledReportService) recordHeartbeatSuccess(runAt time.Time, duration time.Duration) {
+func (s *OpsScheduledReportService) recordHeartbeatSuccess(runAt time.Time, duration time.Duration, result string) {
 	if s == nil || s.opsService == nil || s.opsService.opsRepo == nil {
 		return
 	}
@@ -658,11 +668,17 @@ func (s *OpsScheduledReportService) recordHeartbeatSuccess(runAt time.Time, dura
 	durMs := duration.Milliseconds()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	msg := strings.TrimSpace(result)
+	if msg == "" {
+		msg = "ok"
+	}
+	msg = truncateString(msg, 2048)
 	_ = s.opsService.opsRepo.UpsertJobHeartbeat(ctx, &OpsUpsertJobHeartbeatInput{
 		JobName:        opsScheduledReportJobName,
 		LastRunAt:      &runAt,
 		LastSuccessAt:  &now,
 		LastDurationMs: &durMs,
+		LastResult:     &msg,
 	})
 }
 
