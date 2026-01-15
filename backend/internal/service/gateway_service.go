@@ -159,6 +159,7 @@ type GatewayService struct {
 	httpUpstream        HTTPUpstream
 	deferredService     *DeferredService
 	concurrencyService  *ConcurrencyService
+	claudeTokenProvider *ClaudeTokenProvider
 }
 
 // NewGatewayService creates a new GatewayService
@@ -178,6 +179,7 @@ func NewGatewayService(
 	identityService *IdentityService,
 	httpUpstream HTTPUpstream,
 	deferredService *DeferredService,
+	claudeTokenProvider *ClaudeTokenProvider,
 ) *GatewayService {
 	return &GatewayService{
 		accountRepo:         accountRepo,
@@ -195,6 +197,7 @@ func NewGatewayService(
 		identityService:     identityService,
 		httpUpstream:        httpUpstream,
 		deferredService:     deferredService,
+		claudeTokenProvider: claudeTokenProvider,
 	}
 }
 
@@ -1079,6 +1082,16 @@ func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (
 }
 
 func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (string, string, error) {
+	// 对于 Anthropic OAuth 账号，使用 ClaudeTokenProvider 获取缓存的 token
+	if account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth && s.claudeTokenProvider != nil {
+		accessToken, err := s.claudeTokenProvider.GetAccessToken(ctx, account)
+		if err != nil {
+			return "", "", err
+		}
+		return accessToken, "oauth", nil
+	}
+
+	// 其他情况（Gemini 有自己的 TokenProvider，setup-token 类型等）直接从账号读取
 	accessToken := account.GetCredential("access_token")
 	if accessToken == "" {
 		return "", "", errors.New("access_token not found in credentials")
