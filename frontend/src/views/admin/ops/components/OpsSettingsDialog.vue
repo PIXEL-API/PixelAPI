@@ -32,7 +32,6 @@ const advancedSettings = ref<OpsAdvancedSettings | null>(null)
 // 指标阈值配置
 const metricThresholds = ref<OpsMetricThresholds>({
   sla_percent_min: 99.5,
-  latency_p99_ms_max: 2000,
   ttft_p99_ms_max: 500,
   request_error_rate_percent_max: 5,
   upstream_error_rate_percent_max: 5
@@ -53,13 +52,12 @@ async function loadAllSettings() {
     advancedSettings.value = advanced
     // 如果后端返回了阈值，使用后端的值；否则保持默认值
     if (thresholds && Object.keys(thresholds).length > 0) {
-      metricThresholds.value = {
-        sla_percent_min: thresholds.sla_percent_min ?? 99.5,
-        latency_p99_ms_max: thresholds.latency_p99_ms_max ?? 2000,
-        ttft_p99_ms_max: thresholds.ttft_p99_ms_max ?? 500,
-        request_error_rate_percent_max: thresholds.request_error_rate_percent_max ?? 5,
-        upstream_error_rate_percent_max: thresholds.upstream_error_rate_percent_max ?? 5
-      }
+        metricThresholds.value = {
+          sla_percent_min: thresholds.sla_percent_min ?? 99.5,
+          ttft_p99_ms_max: thresholds.ttft_p99_ms_max ?? 500,
+          request_error_rate_percent_max: thresholds.request_error_rate_percent_max ?? 5,
+          upstream_error_rate_percent_max: thresholds.upstream_error_rate_percent_max ?? 5
+        }
     }
   } catch (err: any) {
     console.error('[OpsSettingsDialog] Failed to load settings', err)
@@ -159,19 +157,16 @@ const validation = computed(() => {
 
   // 验证指标阈值
   if (metricThresholds.value.sla_percent_min != null && (metricThresholds.value.sla_percent_min < 0 || metricThresholds.value.sla_percent_min > 100)) {
-    errors.push('SLA最低百分比必须在0-100之间')
-  }
-  if (metricThresholds.value.latency_p99_ms_max != null && metricThresholds.value.latency_p99_ms_max < 0) {
-    errors.push('延迟P99最大值必须大于等于0')
+    errors.push(t('admin.ops.settings.validation.slaMinPercentRange'))
   }
   if (metricThresholds.value.ttft_p99_ms_max != null && metricThresholds.value.ttft_p99_ms_max < 0) {
-    errors.push('TTFT P99最大值必须大于等于0')
+    errors.push(t('admin.ops.settings.validation.ttftP99MaxRange'))
   }
   if (metricThresholds.value.request_error_rate_percent_max != null && (metricThresholds.value.request_error_rate_percent_max < 0 || metricThresholds.value.request_error_rate_percent_max > 100)) {
-    errors.push('请求错误率最大值必须在0-100之间')
+    errors.push(t('admin.ops.settings.validation.requestErrorRateMaxRange'))
   }
   if (metricThresholds.value.upstream_error_rate_percent_max != null && (metricThresholds.value.upstream_error_rate_percent_max < 0 || metricThresholds.value.upstream_error_rate_percent_max > 100)) {
-    errors.push('上游错误率最大值必须在0-100之间')
+    errors.push(t('admin.ops.settings.validation.upstreamErrorRateMaxRange'))
   }
 
   return { valid: errors.length === 0, errors }
@@ -362,17 +357,6 @@ async function saveAllSettings() {
             <p class="mt-1 text-xs text-gray-500">{{ t('admin.ops.settings.slaMinPercentHint') }}</p>
           </div>
 
-          <div>
-            <label class="input-label">{{ t('admin.ops.settings.latencyP99MaxMs') }}</label>
-            <input
-              v-model.number="metricThresholds.latency_p99_ms_max"
-              type="number"
-              min="0"
-              step="100"
-              class="input"
-            />
-            <p class="mt-1 text-xs text-gray-500">{{ t('admin.ops.settings.latencyP99MaxMsHint') }}</p>
-          </div>
 
           <div>
             <label class="input-label">{{ t('admin.ops.settings.ttftP99MaxMs') }}</label>
@@ -488,43 +472,63 @@ async function saveAllSettings() {
             </div>
           </div>
 
-          <!-- 错误过滤 -->
+          <!-- Error Filtering -->
           <div class="space-y-3">
-            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">错误过滤</h5>
+            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.errorFiltering') }}</h5>
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">忽略 count_tokens 错误</label>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.ignoreCountTokensErrors') }}</label>
                 <p class="mt-1 text-xs text-gray-500">
-                  启用后，count_tokens 请求的错误将不计入运维监控的统计和告警中（但仍会存储在数据库中）
+                  {{ t('admin.ops.settings.ignoreCountTokensErrorsHint') }}
                 </p>
               </div>
               <Toggle v-model="advancedSettings.ignore_count_tokens_errors" />
             </div>
-          </div>
-
-          <!-- 自动刷新 -->
-          <div class="space-y-3">
-            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">自动刷新</h5>
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">启用自动刷新</label>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.ignoreContextCanceled') }}</label>
                 <p class="mt-1 text-xs text-gray-500">
-                  自动刷新仪表板数据，启用后会定期拉取最新数据
+                  {{ t('admin.ops.settings.ignoreContextCanceledHint') }}
+                </p>
+              </div>
+              <Toggle v-model="advancedSettings.ignore_context_canceled" />
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.ignoreNoAvailableAccounts') }}</label>
+                <p class="mt-1 text-xs text-gray-500">
+                  {{ t('admin.ops.settings.ignoreNoAvailableAccountsHint') }}
+                </p>
+              </div>
+              <Toggle v-model="advancedSettings.ignore_no_available_accounts" />
+            </div>
+          </div>
+
+          <!-- Auto Refresh -->
+          <div class="space-y-3">
+            <h5 class="text-xs font-semibold text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.autoRefresh') }}</h5>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.enableAutoRefresh') }}</label>
+                <p class="mt-1 text-xs text-gray-500">
+                  {{ t('admin.ops.settings.enableAutoRefreshHint') }}
                 </p>
               </div>
               <Toggle v-model="advancedSettings.auto_refresh_enabled" />
             </div>
 
             <div v-if="advancedSettings.auto_refresh_enabled">
-              <label class="input-label">刷新间隔</label>
+              <label class="input-label">{{ t('admin.ops.settings.refreshInterval') }}</label>
               <Select
                 v-model="advancedSettings.auto_refresh_interval_seconds"
                 :options="[
-                  { value: 15, label: '15 秒' },
-                  { value: 30, label: '30 秒' },
-                  { value: 60, label: '60 秒' }
+                  { value: 15, label: t('admin.ops.settings.refreshInterval15s') },
+                  { value: 30, label: t('admin.ops.settings.refreshInterval30s') },
+                  { value: 60, label: t('admin.ops.settings.refreshInterval60s') }
                 ]"
               />
             </div>
