@@ -186,6 +186,11 @@ func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.C
 		if _, excluded := excludedIDs[acc.ID]; excluded {
 			continue
 		}
+		// Scheduler snapshots can be temporarily stale; re-check schedulability here to
+		// avoid selecting accounts that were recently rate-limited/overloaded.
+		if !acc.IsSchedulable() {
+			continue
+		}
 		// Check model support
 		if requestedModel != "" && !acc.IsModelSupported(requestedModel) {
 			continue
@@ -330,6 +335,12 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 	for i := range accounts {
 		acc := &accounts[i]
 		if isExcluded(acc.ID) {
+			continue
+		}
+		// Scheduler snapshots can be temporarily stale (bucket rebuild is throttled);
+		// re-check schedulability here so recently rate-limited/overloaded accounts
+		// are not selected again before the bucket is rebuilt.
+		if !acc.IsSchedulable() {
 			continue
 		}
 		if requestedModel != "" && !acc.IsModelSupported(requestedModel) {
@@ -1432,28 +1443,30 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// Create usage log
 	durationMs := int(result.Duration.Milliseconds())
+	accountRateMultiplier := account.BillingRateMultiplier()
 	usageLog := &UsageLog{
-		UserID:              user.ID,
-		APIKeyID:            apiKey.ID,
-		AccountID:           account.ID,
-		RequestID:           result.RequestID,
-		Model:               result.Model,
-		InputTokens:         actualInputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		InputCost:           cost.InputCost,
-		OutputCost:          cost.OutputCost,
-		CacheCreationCost:   cost.CacheCreationCost,
-		CacheReadCost:       cost.CacheReadCost,
-		TotalCost:           cost.TotalCost,
-		ActualCost:          cost.ActualCost,
-		RateMultiplier:      multiplier,
-		BillingType:         billingType,
-		Stream:              result.Stream,
-		DurationMs:          &durationMs,
-		FirstTokenMs:        result.FirstTokenMs,
-		CreatedAt:           time.Now(),
+		UserID:                user.ID,
+		APIKeyID:              apiKey.ID,
+		AccountID:             account.ID,
+		RequestID:             result.RequestID,
+		Model:                 result.Model,
+		InputTokens:           actualInputTokens,
+		OutputTokens:          result.Usage.OutputTokens,
+		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:       result.Usage.CacheReadInputTokens,
+		InputCost:             cost.InputCost,
+		OutputCost:            cost.OutputCost,
+		CacheCreationCost:     cost.CacheCreationCost,
+		CacheReadCost:         cost.CacheReadCost,
+		TotalCost:             cost.TotalCost,
+		ActualCost:            cost.ActualCost,
+		RateMultiplier:        multiplier,
+		AccountRateMultiplier: &accountRateMultiplier,
+		BillingType:           billingType,
+		Stream:                result.Stream,
+		DurationMs:            &durationMs,
+		FirstTokenMs:          result.FirstTokenMs,
+		CreatedAt:             time.Now(),
 	}
 
 	// 添加 UserAgent

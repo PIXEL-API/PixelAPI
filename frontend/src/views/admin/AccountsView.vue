@@ -61,6 +61,11 @@
           <template #cell-usage="{ row }">
             <AccountUsageCell :account="row" />
           </template>
+          <template #cell-rate_multiplier="{ row }">
+            <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
+              {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
+            </span>
+          </template>
           <template #cell-priority="{ value }">
             <span class="text-sm text-gray-700 dark:text-gray-300">{{ value }}</span>
           </template>
@@ -190,10 +195,11 @@ const cols = computed(() => {
   if (!authStore.isSimpleMode) {
     c.push({ key: 'groups', label: t('admin.accounts.columns.groups'), sortable: false })
   }
-  c.push(
-    { key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false },
-    { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
-    { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
+    c.push(
+      { key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false },
+      { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
+      { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
+      { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
     { key: 'notes', label: t('admin.accounts.columns.notes'), sortable: false },
     { key: 'actions', label: t('admin.accounts.columns.actions'), sortable: false }

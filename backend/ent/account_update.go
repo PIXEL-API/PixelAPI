@@ -193,6 +193,27 @@ func (_u *AccountUpdate) AddPriority(v int) *AccountUpdate {
 	return _u
 }
 
+// SetRateMultiplier sets the "rate_multiplier" field.
+func (_u *AccountUpdate) SetRateMultiplier(v float64) *AccountUpdate {
+	_u.mutation.ResetRateMultiplier()
+	_u.mutation.SetRateMultiplier(v)
+	return _u
+}
+
+// SetNillableRateMultiplier sets the "rate_multiplier" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableRateMultiplier(v *float64) *AccountUpdate {
+	if v != nil {
+		_u.SetRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddRateMultiplier adds value to the "rate_multiplier" field.
+func (_u *AccountUpdate) AddRateMultiplier(v float64) *AccountUpdate {
+	_u.mutation.AddRateMultiplier(v)
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *AccountUpdate) SetStatus(v string) *AccountUpdate {
 	_u.mutation.SetStatus(v)
@@ -629,6 +650,12 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedPriority(); ok {
 		_spec.AddField(account.FieldPriority, field.TypeInt, value)
 	}
+	if value, ok := _u.mutation.RateMultiplier(); ok {
+		_spec.SetField(account.FieldRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
+		_spec.AddField(account.FieldRateMultiplier, field.TypeFloat64, value)
+	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)
 	}
@@ -1002,6 +1029,27 @@ func (_u *AccountUpdateOne) SetNillablePriority(v *int) *AccountUpdateOne {
 // AddPriority adds value to the "priority" field.
 func (_u *AccountUpdateOne) AddPriority(v int) *AccountUpdateOne {
 	_u.mutation.AddPriority(v)
+	return _u
+}
+
+// SetRateMultiplier sets the "rate_multiplier" field.
+func (_u *AccountUpdateOne) SetRateMultiplier(v float64) *AccountUpdateOne {
+	_u.mutation.ResetRateMultiplier()
+	_u.mutation.SetRateMultiplier(v)
+	return _u
+}
+
+// SetNillableRateMultiplier sets the "rate_multiplier" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableRateMultiplier(v *float64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddRateMultiplier adds value to the "rate_multiplier" field.
+func (_u *AccountUpdateOne) AddRateMultiplier(v float64) *AccountUpdateOne {
+	_u.mutation.AddRateMultiplier(v)
 	return _u
 }
 
@@ -1470,6 +1518,12 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.AddedPriority(); ok {
 		_spec.AddField(account.FieldPriority, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.RateMultiplier(); ok {
+		_spec.SetField(account.FieldRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
+		_spec.AddField(account.FieldRateMultiplier, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)
