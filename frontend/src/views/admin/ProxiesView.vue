@@ -117,6 +117,21 @@
             <code class="code text-xs">{{ row.host }}:{{ row.port }}</code>
           </template>
 
+          <template #cell-location="{ row }">
+            <div class="flex items-center gap-2">
+              <img
+                v-if="row.country_code"
+                :src="flagUrl(row.country_code)"
+                :alt="row.country || row.country_code"
+                class="h-4 w-6 rounded-sm"
+              />
+              <span v-if="formatLocation(row)" class="text-sm text-gray-700 dark:text-gray-200">
+                {{ formatLocation(row) }}
+              </span>
+              <span v-else class="text-sm text-gray-400">-</span>
+            </div>
+          </template>
+
           <template #cell-account_count="{ row, value }">
             <button
               v-if="(value || 0) > 0"
@@ -665,6 +680,7 @@ const columns = computed<Column[]>(() => [
   { key: 'name', label: t('admin.proxies.columns.name'), sortable: true },
   { key: 'protocol', label: t('admin.proxies.columns.protocol'), sortable: true },
   { key: 'address', label: t('admin.proxies.columns.address'), sortable: false },
+  { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
   { key: 'account_count', label: t('admin.proxies.columns.accounts'), sortable: true },
   { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: false },
   { key: 'status', label: t('admin.proxies.columns.status'), sortable: true },
@@ -1058,19 +1074,46 @@ const handleUpdateProxy = async () => {
 
 const applyLatencyResult = (
   proxyId: number,
-  result: { success: boolean; latency_ms?: number; message?: string }
+  result: {
+    success: boolean
+    latency_ms?: number
+    message?: string
+    ip_address?: string
+    country?: string
+    country_code?: string
+    region?: string
+    city?: string
+  }
 ) => {
   const target = proxies.value.find((proxy) => proxy.id === proxyId)
   if (!target) return
   if (result.success) {
     target.latency_status = 'success'
     target.latency_ms = result.latency_ms
+    target.ip_address = result.ip_address
+    target.country = result.country
+    target.country_code = result.country_code
+    target.region = result.region
+    target.city = result.city
   } else {
     target.latency_status = 'failed'
     target.latency_ms = undefined
+    target.ip_address = undefined
+    target.country = undefined
+    target.country_code = undefined
+    target.region = undefined
+    target.city = undefined
   }
   target.latency_message = result.message
 }
+
+const formatLocation = (proxy: Proxy) => {
+  const parts = [proxy.country, proxy.city].filter(Boolean) as string[]
+  return parts.join(' · ')
+}
+
+const flagUrl = (code: string) =>
+  `https://unpkg.com/flag-icons/flags/4x3/${code.toLowerCase()}.svg`
 
 const startTestingProxy = (proxyId: number) => {
   testingProxyIds.value = new Set([...testingProxyIds.value, proxyId])
