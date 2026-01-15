@@ -73,10 +73,8 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		return false
 	}
 
-	isOAuth401 := statusCode == 401 && account.Type == AccountTypeOAuth &&
-		(account.Platform == PlatformAntigravity || account.Platform == PlatformGemini)
 	tempMatched := false
-	if !isOAuth401 || account.IsTempUnschedulableEnabled() {
+	if statusCode != 401 {
 		tempMatched = s.tryTempUnschedulable(ctx, account, statusCode, responseBody)
 	}
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody))
@@ -87,18 +85,13 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 
 	switch statusCode {
 	case 401:
-		if isOAuth401 {
-			if tempMatched {
-				if s.tokenCacheInvalidator != nil {
-					if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
-						slog.Warn("oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
-					}
+		if account.Type == AccountTypeOAuth &&
+			(account.Platform == PlatformAntigravity || account.Platform == PlatformGemini) {
+			if s.tokenCacheInvalidator != nil {
+				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
+					slog.Warn("oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
 				}
-				shouldDisable = true
-			} else {
-				shouldDisable = s.handleOAuth401TempUnschedulable(ctx, account, upstreamMsg)
 			}
-			break
 		}
 		msg := "Authentication failed (401): invalid or expired credentials"
 		if upstreamMsg != "" {
@@ -148,63 +141,6 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		return true
 	}
 	return shouldDisable
-}
-
-func (s *RateLimitService) handleOAuth401TempUnschedulable(ctx context.Context, account *Account, upstreamMsg string) bool {
-	if account == nil {
-		return false
-	}
-
-	if s.tokenCacheInvalidator != nil {
-		if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
-			slog.Warn("oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
-		}
-	}
-
-	now := time.Now()
-	until := now.Add(s.oauth401Cooldown())
-	msg := "Authentication failed (401): invalid or expired credentials"
-	if upstreamMsg != "" {
-		msg = "Authentication failed (401): " + upstreamMsg
-	}
-
-	state := &TempUnschedState{
-		UntilUnix:       until.Unix(),
-		TriggeredAtUnix: now.Unix(),
-		StatusCode:      401,
-		MatchedKeyword:  "oauth_401",
-		RuleIndex:       -1, // -1 表示非规则触发，而是 OAuth 401 特殊处理
-		ErrorMessage:    msg,
-	}
-
-	reason := ""
-	if raw, err := json.Marshal(state); err == nil {
-		reason = string(raw)
-	}
-	if reason == "" {
-		reason = msg
-	}
-
-	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
-		slog.Warn("oauth_401_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
-		return false
-	}
-
-	if s.tempUnschedCache != nil {
-		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
-			slog.Warn("oauth_401_set_temp_unsched_cache_failed", "account_id", account.ID, "error", err)
-		}
-	}
-
-	slog.Info("oauth_401_temp_unschedulable", "account_id", account.ID, "until", until)
-	return true
-}
-
-func (s *RateLimitService) oauth401Cooldown() time.Duration {
-	if s != nil && s.cfg != nil && s.cfg.RateLimit.OAuth401CooldownMinutes > 0 {
-		return time.Duration(s.cfg.RateLimit.OAuth401CooldownMinutes) * time.Minute
-	}
-	return 5 * time.Minute
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.
