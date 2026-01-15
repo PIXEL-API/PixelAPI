@@ -88,6 +88,29 @@ func (s *OpsService) ListAlertEvents(ctx context.Context, filter *OpsAlertEventF
 	return s.opsRepo.ListAlertEvents(ctx, filter)
 }
 
+func (s *OpsService) GetAlertEventByID(ctx context.Context, eventID int64) (*OpsAlertEvent, error) {
+	if err := s.RequireMonitoringEnabled(ctx); err != nil {
+		return nil, err
+	}
+	if s.opsRepo == nil {
+		return nil, infraerrors.ServiceUnavailable("OPS_REPO_UNAVAILABLE", "Ops repository not available")
+	}
+	if eventID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_EVENT_ID", "invalid event id")
+	}
+	ev, err := s.opsRepo.GetAlertEventByID(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, infraerrors.NotFound("OPS_ALERT_EVENT_NOT_FOUND", "alert event not found")
+		}
+		return nil, err
+	}
+	if ev == nil {
+		return nil, infraerrors.NotFound("OPS_ALERT_EVENT_NOT_FOUND", "alert event not found")
+	}
+	return ev, nil
+}
+
 func (s *OpsService) GetActiveAlertEvent(ctx context.Context, ruleID int64) (*OpsAlertEvent, error) {
 	if err := s.RequireMonitoringEnabled(ctx); err != nil {
 		return nil, err
@@ -99,6 +122,49 @@ func (s *OpsService) GetActiveAlertEvent(ctx context.Context, ruleID int64) (*Op
 		return nil, infraerrors.BadRequest("INVALID_RULE_ID", "invalid rule id")
 	}
 	return s.opsRepo.GetActiveAlertEvent(ctx, ruleID)
+}
+
+func (s *OpsService) CreateAlertSilence(ctx context.Context, input *OpsAlertSilence) (*OpsAlertSilence, error) {
+	if err := s.RequireMonitoringEnabled(ctx); err != nil {
+		return nil, err
+	}
+	if s.opsRepo == nil {
+		return nil, infraerrors.ServiceUnavailable("OPS_REPO_UNAVAILABLE", "Ops repository not available")
+	}
+	if input == nil {
+		return nil, infraerrors.BadRequest("INVALID_SILENCE", "invalid silence")
+	}
+	if input.RuleID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_RULE_ID", "invalid rule id")
+	}
+	if strings.TrimSpace(input.Platform) == "" {
+		return nil, infraerrors.BadRequest("INVALID_PLATFORM", "invalid platform")
+	}
+	if input.Until.IsZero() {
+		return nil, infraerrors.BadRequest("INVALID_UNTIL", "invalid until")
+	}
+
+	created, err := s.opsRepo.CreateAlertSilence(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+func (s *OpsService) IsAlertSilenced(ctx context.Context, ruleID int64, platform string, groupID *int64, region *string, now time.Time) (bool, error) {
+	if err := s.RequireMonitoringEnabled(ctx); err != nil {
+		return false, err
+	}
+	if s.opsRepo == nil {
+		return false, infraerrors.ServiceUnavailable("OPS_REPO_UNAVAILABLE", "Ops repository not available")
+	}
+	if ruleID <= 0 {
+		return false, infraerrors.BadRequest("INVALID_RULE_ID", "invalid rule id")
+	}
+	if strings.TrimSpace(platform) == "" {
+		return false, nil
+	}
+	return s.opsRepo.IsAlertSilenced(ctx, ruleID, platform, groupID, region, now)
 }
 
 func (s *OpsService) GetLatestAlertEvent(ctx context.Context, ruleID int64) (*OpsAlertEvent, error) {
@@ -142,7 +208,11 @@ func (s *OpsService) UpdateAlertEventStatus(ctx context.Context, eventID int64, 
 	if eventID <= 0 {
 		return infraerrors.BadRequest("INVALID_EVENT_ID", "invalid event id")
 	}
-	if strings.TrimSpace(status) == "" {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return infraerrors.BadRequest("INVALID_STATUS", "invalid status")
+	}
+	if status != OpsAlertStatusResolved && status != OpsAlertStatusManualResolved {
 		return infraerrors.BadRequest("INVALID_STATUS", "invalid status")
 	}
 	return s.opsRepo.UpdateAlertEventStatus(ctx, eventID, status, resolvedAt)
