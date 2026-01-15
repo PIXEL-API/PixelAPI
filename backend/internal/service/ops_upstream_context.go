@@ -15,6 +15,11 @@ const (
 	OpsUpstreamErrorMessageKey = "ops_upstream_error_message"
 	OpsUpstreamErrorDetailKey  = "ops_upstream_error_detail"
 	OpsUpstreamErrorsKey       = "ops_upstream_errors"
+
+	// Best-effort capture of the current upstream request body so ops can
+	// retry the specific upstream attempt (not just the client request).
+	// This value is sanitized+trimmed before being persisted.
+	OpsUpstreamRequestBodyKey = "ops_upstream_request_body"
 )
 
 func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage, upstreamDetail string) {
@@ -38,12 +43,20 @@ type OpsUpstreamErrorEvent struct {
 	AtUnixMs int64 `json:"at_unix_ms,omitempty"`
 
 	// Context
-	Platform  string `json:"platform,omitempty"`
-	AccountID int64  `json:"account_id,omitempty"`
+	Platform    string `json:"platform,omitempty"`
+	AccountID   int64  `json:"account_id,omitempty"`
+	AccountName string `json:"account_name,omitempty"`
 
 	// Outcome
 	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
 	UpstreamRequestID  string `json:"upstream_request_id,omitempty"`
+
+	// Best-effort upstream request capture (sanitized+trimmed).
+	// Required for retrying a specific upstream attempt.
+	UpstreamRequestBody string `json:"upstream_request_body,omitempty"`
+
+	// Best-effort upstream response capture (sanitized+trimmed).
+	UpstreamResponseBody string `json:"upstream_response_body,omitempty"`
 
 	// Kind: http_error | request_error | retry_exhausted | failover
 	Kind string `json:"kind,omitempty"`
@@ -61,11 +74,23 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	}
 	ev.Platform = strings.TrimSpace(ev.Platform)
 	ev.UpstreamRequestID = strings.TrimSpace(ev.UpstreamRequestID)
+	ev.UpstreamRequestBody = strings.TrimSpace(ev.UpstreamRequestBody)
+	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)
 	ev.Kind = strings.TrimSpace(ev.Kind)
 	ev.Message = strings.TrimSpace(ev.Message)
 	ev.Detail = strings.TrimSpace(ev.Detail)
 	if ev.Message != "" {
 		ev.Message = sanitizeUpstreamErrorMessage(ev.Message)
+	}
+
+	// If the caller didn't explicitly pass upstream request body but the gateway
+	// stored it on the context, attach it so ops can retry this specific attempt.
+	if ev.UpstreamRequestBody == "" {
+		if v, ok := c.Get(OpsUpstreamRequestBodyKey); ok {
+			if s, ok := v.(string); ok {
+				ev.UpstreamRequestBody = strings.TrimSpace(s)
+			}
+		}
 	}
 
 	var existing []*OpsUpstreamErrorEvent
@@ -91,4 +116,16 @@ func marshalOpsUpstreamErrors(events []*OpsUpstreamErrorEvent) *string {
 	}
 	s := string(raw)
 	return &s
+}
+
+func ParseOpsUpstreamErrors(raw string) ([]*OpsUpstreamErrorEvent, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []*OpsUpstreamErrorEvent{}, nil
+	}
+	var out []*OpsUpstreamErrorEvent
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
