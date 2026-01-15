@@ -22,7 +22,7 @@ func TestGeminiTokenCacheKey(t *testing.T) {
 					"project_id": "my-project-123",
 				},
 			},
-			expected: "my-project-123",
+			expected: "gemini:my-project-123",
 		},
 		{
 			name: "project_id_with_whitespace",
@@ -32,7 +32,7 @@ func TestGeminiTokenCacheKey(t *testing.T) {
 					"project_id": "  project-with-spaces  ",
 				},
 			},
-			expected: "project-with-spaces",
+			expected: "gemini:project-with-spaces",
 		},
 		{
 			name: "empty_project_id_fallback_to_account_id",
@@ -42,7 +42,7 @@ func TestGeminiTokenCacheKey(t *testing.T) {
 					"project_id": "",
 				},
 			},
-			expected: "account:102",
+			expected: "gemini:account:102",
 		},
 		{
 			name: "whitespace_only_project_id_fallback_to_account_id",
@@ -52,7 +52,7 @@ func TestGeminiTokenCacheKey(t *testing.T) {
 					"project_id": "   ",
 				},
 			},
-			expected: "account:103",
+			expected: "gemini:account:103",
 		},
 		{
 			name: "no_project_id_key_fallback_to_account_id",
@@ -60,7 +60,7 @@ func TestGeminiTokenCacheKey(t *testing.T) {
 				ID:          104,
 				Credentials: map[string]any{},
 			},
-			expected: "account:104",
+			expected: "gemini:account:104",
 		},
 		{
 			name: "nil_credentials_fallback_to_account_id",
@@ -68,7 +68,7 @@ func TestGeminiTokenCacheKey(t *testing.T) {
 				ID:          105,
 				Credentials: nil,
 			},
-			expected: "account:105",
+			expected: "gemini:account:105",
 		},
 	}
 
