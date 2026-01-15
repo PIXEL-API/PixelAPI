@@ -80,19 +80,20 @@ type OpenAIForwardResult struct {
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
-	accountRepo         AccountRepository
-	usageLogRepo        UsageLogRepository
-	userRepo            UserRepository
-	userSubRepo         UserSubscriptionRepository
-	cache               GatewayCache
-	cfg                 *config.Config
-	schedulerSnapshot   *SchedulerSnapshotService
-	concurrencyService  *ConcurrencyService
-	billingService      *BillingService
-	rateLimitService    *RateLimitService
-	billingCacheService *BillingCacheService
-	httpUpstream        HTTPUpstream
-	deferredService     *DeferredService
+	accountRepo          AccountRepository
+	usageLogRepo         UsageLogRepository
+	userRepo             UserRepository
+	userSubRepo          UserSubscriptionRepository
+	cache                GatewayCache
+	cfg                  *config.Config
+	schedulerSnapshot    *SchedulerSnapshotService
+	concurrencyService   *ConcurrencyService
+	billingService       *BillingService
+	rateLimitService     *RateLimitService
+	billingCacheService  *BillingCacheService
+	httpUpstream         HTTPUpstream
+	deferredService      *DeferredService
+	openAITokenProvider  *OpenAITokenProvider
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -110,21 +111,23 @@ func NewOpenAIGatewayService(
 	billingCacheService *BillingCacheService,
 	httpUpstream HTTPUpstream,
 	deferredService *DeferredService,
+	openAITokenProvider *OpenAITokenProvider,
 ) *OpenAIGatewayService {
 	return &OpenAIGatewayService{
-		accountRepo:         accountRepo,
-		usageLogRepo:        usageLogRepo,
-		userRepo:            userRepo,
-		userSubRepo:         userSubRepo,
-		cache:               cache,
-		cfg:                 cfg,
-		schedulerSnapshot:   schedulerSnapshot,
-		concurrencyService:  concurrencyService,
-		billingService:      billingService,
-		rateLimitService:    rateLimitService,
-		billingCacheService: billingCacheService,
-		httpUpstream:        httpUpstream,
-		deferredService:     deferredService,
+		accountRepo:          accountRepo,
+		usageLogRepo:         usageLogRepo,
+		userRepo:             userRepo,
+		userSubRepo:          userSubRepo,
+		cache:                cache,
+		cfg:                  cfg,
+		schedulerSnapshot:    schedulerSnapshot,
+		concurrencyService:   concurrencyService,
+		billingService:       billingService,
+		rateLimitService:     rateLimitService,
+		billingCacheService:  billingCacheService,
+		httpUpstream:         httpUpstream,
+		deferredService:      deferredService,
+		openAITokenProvider:  openAITokenProvider,
 	}
 }
 
@@ -503,6 +506,15 @@ func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig
 func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
 	switch account.Type {
 	case AccountTypeOAuth:
+		// 使用 TokenProvider 获取缓存的 token
+		if s.openAITokenProvider != nil {
+			accessToken, err := s.openAITokenProvider.GetAccessToken(ctx, account)
+			if err != nil {
+				return "", "", err
+			}
+			return accessToken, "oauth", nil
+		}
+		// 降级：TokenProvider 未配置时直接从账号读取
 		accessToken := account.GetOpenAIAccessToken()
 		if accessToken == "" {
 			return "", "", errors.New("access_token not found in credentials")
