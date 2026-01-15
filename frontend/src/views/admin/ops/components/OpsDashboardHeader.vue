@@ -1277,7 +1277,7 @@ function handleToolbarRefresh() {
               v-if="!props.fullscreen"
               class="text-[10px] font-bold text-blue-500 hover:underline"
               type="button"
-              @click="openDetails({ title: t('admin.ops.latencyDuration'), sort: 'duration_desc', min_duration_ms: Math.max(Number(durationP99Ms ?? 0), 0) })"
+              @click="openDetails({ title: t('admin.ops.latencyDuration'), sort: 'duration_desc' })"
             >
               {{ t('admin.ops.requestDetails.details') }}
             </button>
