@@ -206,7 +206,7 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 			continue
 		}
 
-		scopePlatform, scopeGroupID := parseOpsAlertRuleScope(rule.Filters)
+		scopePlatform, scopeGroupID, scopeRegion := parseOpsAlertRuleScope(rule.Filters)
 
 		windowMinutes := rule.WindowMinutes
 		if windowMinutes <= 0 {
@@ -234,6 +234,17 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 		if breachedNow && consecutive >= required {
 			if activeEvent != nil {
 				continue
+			}
+
+			// Scoped silencing: if a matching silence exists, skip creating a firing event.
+			if s.opsService != nil {
+				platform := strings.TrimSpace(scopePlatform)
+				region := scopeRegion
+				if platform != "" {
+					if ok, err := s.opsService.IsAlertSilenced(ctx, rule.ID, platform, scopeGroupID, region, now); err == nil && ok {
+						continue
+					}
+				}
 			}
 
 			latestEvent, err := s.opsRepo.GetLatestAlertEvent(ctx, rule.ID)
@@ -359,9 +370,9 @@ func requiredSustainedBreaches(sustainedMinutes int, interval time.Duration) int
 	return required
 }
 
-func parseOpsAlertRuleScope(filters map[string]any) (platform string, groupID *int64) {
+func parseOpsAlertRuleScope(filters map[string]any) (platform string, groupID *int64, region *string) {
 	if filters == nil {
-		return "", nil
+		return "", nil, nil
 	}
 	if v, ok := filters["platform"]; ok {
 		if s, ok := v.(string); ok {
@@ -392,7 +403,15 @@ func parseOpsAlertRuleScope(filters map[string]any) (platform string, groupID *i
 			}
 		}
 	}
-	return platform, groupID
+	if v, ok := filters["region"]; ok {
+		if s, ok := v.(string); ok {
+			vv := strings.TrimSpace(s)
+			if vv != "" {
+				region = &vv
+			}
+		}
+	}
+	return platform, groupID, region
 }
 
 func (s *OpsAlertEvaluatorService) computeRuleMetric(
@@ -504,16 +523,6 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 			return 0, false
 		}
 		return overview.UpstreamErrorRate * 100, true
-	case "p95_latency_ms":
-		if overview.Duration.P95 == nil {
-			return 0, false
-		}
-		return float64(*overview.Duration.P95), true
-	case "p99_latency_ms":
-		if overview.Duration.P99 == nil {
-			return 0, false
-		}
-		return float64(*overview.Duration.P99), true
 	default:
 		return 0, false
 	}
