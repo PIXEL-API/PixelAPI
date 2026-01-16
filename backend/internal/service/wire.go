@@ -65,10 +65,13 @@ func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpirySe
 }
 
 // ProvideTimingWheelService creates and starts TimingWheelService
-func ProvideTimingWheelService() *TimingWheelService {
-	svc := NewTimingWheelService()
+func ProvideTimingWheelService() (*TimingWheelService, error) {
+	svc, err := NewTimingWheelService()
+	if err != nil {
+		return nil, err
+	}
 	svc.Start()
-	return svc
+	return svc, nil
 }
 
 // ProvideDeferredService creates and starts DeferredService
