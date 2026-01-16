@@ -99,6 +99,10 @@ func (s *accountRepoStub) SetError(ctx context.Context, id int64, errorMsg strin
 	panic("unexpected SetError call")
 }
 
+func (s *accountRepoStub) ClearError(ctx context.Context, id int64) error {
+	panic("unexpected ClearError call")
+}
+
 func (s *accountRepoStub) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
 	panic("unexpected SetSchedulable call")
 }
