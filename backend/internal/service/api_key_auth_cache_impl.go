@@ -221,6 +221,8 @@ func (s *APIKeyService) snapshotFromAPIKey(apiKey *APIKey) *APIKeyAuthSnapshot {
 			ImagePrice4K:     apiKey.Group.ImagePrice4K,
 			ClaudeCodeOnly:   apiKey.Group.ClaudeCodeOnly,
 			FallbackGroupID:  apiKey.Group.FallbackGroupID,
+			ModelRouting:     apiKey.Group.ModelRouting,
+			ModelRoutingEnabled: apiKey.Group.ModelRoutingEnabled,
 		}
 	}
 	return snapshot
@@ -263,6 +265,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			ImagePrice4K:     snapshot.Group.ImagePrice4K,
 			ClaudeCodeOnly:   snapshot.Group.ClaudeCodeOnly,
 			FallbackGroupID:  snapshot.Group.FallbackGroupID,
+			ModelRouting:        snapshot.Group.ModelRouting,
+			ModelRoutingEnabled: snapshot.Group.ModelRoutingEnabled,
 		}
 	}
 	return apiKey
