@@ -462,7 +462,7 @@ func (h *AccountHandler) Refresh(c *gin.Context) {
 				return
 			}
 			// 标记账户为 error
-			if setErr := h.adminService.SetAccountError(c.Request.Context(), accountID, "账户缺少project id，可能无法使用Antigravity"); setErr != nil {
+			if setErr := h.adminService.SetAccountError(c.Request.Context(), accountID, "missing_project_id: 账户缺少project id，可能无法使用Antigravity"); setErr != nil {
 				response.InternalError(c, "Failed to set account error: "+setErr.Error())
 				return
 			}
@@ -471,6 +471,14 @@ func (h *AccountHandler) Refresh(c *gin.Context) {
 				"warning": "missing_project_id",
 			})
 			return
+		}
+
+		// 成功获取到 project_id，如果之前是 missing_project_id 错误则清除
+		if account.Status == service.StatusError && strings.HasPrefix(account.ErrorMessage, "missing_project_id:") {
+			if _, clearErr := h.adminService.ClearAccountError(c.Request.Context(), accountID); clearErr != nil {
+				response.InternalError(c, "Failed to clear account error: "+clearErr.Error())
+				return
+			}
 		}
 	} else {
 		// Use Anthropic/Claude OAuth service to refresh token
