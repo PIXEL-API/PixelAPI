@@ -358,6 +358,8 @@ func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadC
 		var rawResp map[string]any
 		_ = json.Unmarshal(respBodyBytes, &rawResp)
 
+		// 标记成功的 URL，下次优先使用
+		DefaultURLAvailability.MarkSuccess(baseURL)
 		return &loadResp, rawResp, nil
 	}
 
@@ -449,6 +451,8 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		var rawResp map[string]any
 		_ = json.Unmarshal(respBodyBytes, &rawResp)
 
+		// 标记成功的 URL，下次优先使用
+		DefaultURLAvailability.MarkSuccess(baseURL)
 		return &modelsResp, rawResp, nil
 	}
 
