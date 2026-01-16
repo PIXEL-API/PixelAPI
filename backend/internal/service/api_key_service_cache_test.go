@@ -172,12 +172,12 @@ func TestAPIKeyService_GetByKey_UsesL2Cache(t *testing.T) {
 				Concurrency: 3,
 			},
 			Group: &APIKeyAuthGroupSnapshot{
-				ID:               groupID,
-				Name:             "g",
-				Platform:         PlatformAnthropic,
-				Status:           StatusActive,
-				SubscriptionType: SubscriptionTypeStandard,
-				RateMultiplier:   1,
+				ID:                  groupID,
+				Name:                "g",
+				Platform:            PlatformAnthropic,
+				Status:              StatusActive,
+				SubscriptionType:    SubscriptionTypeStandard,
+				RateMultiplier:      1,
 				ModelRoutingEnabled: true,
 				ModelRouting: map[string][]int64{
 					"claude-opus-*": {1, 2},

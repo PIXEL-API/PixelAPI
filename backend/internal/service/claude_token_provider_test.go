@@ -696,11 +696,11 @@ func TestClaudeTokenProvider_RefreshPreservesExistingCredentials(t *testing.T) {
 		Platform: PlatformAnthropic,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token":   "old-access-token",
-			"refresh_token":  "old-refresh-token",
-			"expires_at":     expiresAt,
-			"custom_field":   "should-be-preserved",
-			"organization":   "test-org",
+			"access_token":  "old-access-token",
+			"refresh_token": "old-refresh-token",
+			"expires_at":    expiresAt,
+			"custom_field":  "should-be-preserved",
+			"organization":  "test-org",
 		},
 	}
 	accountRepo.account = account
