@@ -136,6 +136,8 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldImagePrice4k,
 				group.FieldClaudeCodeOnly,
 				group.FieldFallbackGroupID,
+				group.FieldModelRoutingEnabled,
+				group.FieldModelRouting,
 			)
 		}).
 		Only(ctx)
@@ -422,6 +424,8 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		DefaultValidityDays: g.DefaultValidityDays,
 		ClaudeCodeOnly:      g.ClaudeCodeOnly,
 		FallbackGroupID:     g.FallbackGroupID,
+		ModelRouting:        g.ModelRouting,
+		ModelRoutingEnabled: g.ModelRoutingEnabled,
 		CreatedAt:           g.CreatedAt,
 		UpdatedAt:           g.UpdatedAt,
 	}
