@@ -129,7 +129,7 @@ urlFallbackLoop:
 				_ = resp.Body.Close()
 
 				// "Resource has been exhausted" 是 URL 级别限流，切换 URL
-				if isURLLevelRateLimit(respBody) && urlIdx < len(availableURLs)-1 {
+				if isURLLevelRateLimit(respBody) {
 					upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 					upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 					appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
@@ -142,9 +142,18 @@ urlFallbackLoop:
 						Message:            upstreamMsg,
 						Detail:             getUpstreamDetail(respBody),
 					})
-					antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
-					log.Printf("%s URL fallback (HTTP 429): %s -> %s body=%s", p.prefix, baseURL, availableURLs[urlIdx+1], truncateForLog(respBody, 200))
-					continue urlFallbackLoop
+					if urlIdx < len(availableURLs)-1 {
+						log.Printf("%s URL fallback (HTTP 429): %s -> %s body=%s", p.prefix, baseURL, availableURLs[urlIdx+1], truncateForLog(respBody, 200))
+						continue urlFallbackLoop
+					}
+					log.Printf("%s status=429 url_rate_limited base_url=%s body=%s", p.prefix, baseURL, truncateForLog(respBody, 200))
+					resp = &http.Response{
+						StatusCode: resp.StatusCode,
+						Header:     resp.Header.Clone(),
+						Body:       io.NopCloser(bytes.NewReader(respBody)),
+						Request:    resp.Request,
+					}
+					break urlFallbackLoop
 				}
 
 				// 账户/模型配额限流，重试 3 次（指数退避）
@@ -932,9 +941,15 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 
 		// 处理错误响应（重试后仍失败或不触发重试）
 		if resp.StatusCode >= 400 {
-			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope)
+			urlLevelRateLimit := resp.StatusCode == http.StatusTooManyRequests && isURLLevelRateLimit(respBody)
+			if !urlLevelRateLimit {
+				s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope)
+			}
 
 			if s.shouldFailoverUpstreamError(resp.StatusCode) {
+				if urlLevelRateLimit {
+					return nil, s.writeMappedClaudeError(c, account, resp.StatusCode, resp.Header.Get("x-request-id"), respBody)
+				}
 				upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 				upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 				logBody := s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Gateway.LogUpstreamErrorBody
@@ -1534,8 +1549,6 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			goto handleSuccess
 		}
 
-		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope)
-
 		requestID := resp.Header.Get("x-request-id")
 		if requestID != "" {
 			c.Header("x-request-id", requestID)
@@ -1545,6 +1558,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		unwrappedForOps := unwrapped
 		if unwrapErr != nil || len(unwrappedForOps) == 0 {
 			unwrappedForOps = respBody
+		}
+		urlLevelRateLimit := resp.StatusCode == http.StatusTooManyRequests && isURLLevelRateLimit(unwrappedForOps)
+		if !urlLevelRateLimit {
+			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope)
 		}
 		upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(unwrappedForOps))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -1563,6 +1580,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			if urlLevelRateLimit {
+				return nil, s.writeGoogleError(c, resp.StatusCode, upstreamMsg)
+			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
