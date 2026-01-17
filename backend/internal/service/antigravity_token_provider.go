@@ -45,7 +45,7 @@ func (p *AntigravityTokenProvider) GetAccessToken(ctx context.Context, account *
 		return "", errors.New("not an antigravity oauth account")
 	}
 
-	cacheKey := antigravityTokenCacheKey(account)
+	cacheKey := AntigravityTokenCacheKey(account)
 
 	// 1. 先尝试缓存
 	if p.tokenCache != nil {
@@ -121,7 +121,7 @@ func (p *AntigravityTokenProvider) GetAccessToken(ctx context.Context, account *
 	return accessToken, nil
 }
 
-func antigravityTokenCacheKey(account *Account) string {
+func AntigravityTokenCacheKey(account *Account) string {
 	projectID := strings.TrimSpace(account.GetCredential("project_id"))
 	if projectID != "" {
 		return "ag:" + projectID

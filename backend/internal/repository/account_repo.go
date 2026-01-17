@@ -80,6 +80,10 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 		SetSchedulable(account.Schedulable).
 		SetAutoPauseOnExpired(account.AutoPauseOnExpired)
 
+	if account.RateMultiplier != nil {
+		builder.SetRateMultiplier(*account.RateMultiplier)
+	}
+
 	if account.ProxyID != nil {
 		builder.SetProxyID(*account.ProxyID)
 	}
@@ -290,6 +294,10 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 		SetErrorMessage(account.ErrorMessage).
 		SetSchedulable(account.Schedulable).
 		SetAutoPauseOnExpired(account.AutoPauseOnExpired)
+
+	if account.RateMultiplier != nil {
+		builder.SetRateMultiplier(*account.RateMultiplier)
+	}
 
 	if account.ProxyID != nil {
 		builder.SetProxyID(*account.ProxyID)
@@ -786,6 +794,46 @@ func (r *accountRepository) SetAntigravityQuotaScopeLimit(ctx context.Context, i
 	return nil
 }
 
+func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time) error {
+	if scope == "" {
+		return nil
+	}
+	now := time.Now().UTC()
+	payload := map[string]string{
+		"rate_limited_at":     now.Format(time.RFC3339),
+		"rate_limit_reset_at": resetAt.UTC().Format(time.RFC3339),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	path := "{model_rate_limits," + scope + "}"
+	client := clientFromContext(ctx, r.client)
+	result, err := client.ExecContext(
+		ctx,
+		"UPDATE accounts SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), $1::text[], $2::jsonb, true), updated_at = NOW() WHERE id = $3 AND deleted_at IS NULL",
+		path,
+		raw,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrAccountNotFound
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		log.Printf("[SchedulerOutbox] enqueue model rate limit failed: account=%d err=%v", id, err)
+	}
+	return nil
+}
+
 func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
@@ -873,6 +921,30 @@ func (r *accountRepository) ClearAntigravityQuotaScopes(ctx context.Context, id 
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		log.Printf("[SchedulerOutbox] enqueue clear quota scopes failed: account=%d err=%v", id, err)
+	}
+	return nil
+}
+
+func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) error {
+	client := clientFromContext(ctx, r.client)
+	result, err := client.ExecContext(
+		ctx,
+		"UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) - 'model_rate_limits', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
+		id,
+	)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrAccountNotFound
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		log.Printf("[SchedulerOutbox] enqueue clear model rate limit failed: account=%d err=%v", id, err)
 	}
 	return nil
 }
@@ -997,6 +1069,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if updates.Priority != nil {
 		setClauses = append(setClauses, "priority = $"+itoa(idx))
 		args = append(args, *updates.Priority)
+		idx++
+	}
+	if updates.RateMultiplier != nil {
+		setClauses = append(setClauses, "rate_multiplier = $"+itoa(idx))
+		args = append(args, *updates.RateMultiplier)
 		idx++
 	}
 	if updates.Status != nil {
@@ -1347,6 +1424,8 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		return nil
 	}
 
+	rateMultiplier := m.RateMultiplier
+
 	return &service.Account{
 		ID:                  m.ID,
 		Name:                m.Name,
@@ -1358,6 +1437,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		ProxyID:             m.ProxyID,
 		Concurrency:         m.Concurrency,
 		Priority:            m.Priority,
+		RateMultiplier:      &rateMultiplier,
 		Status:              m.Status,
 		ErrorMessage:        derefString(m.ErrorMessage),
 		LastUsedAt:          m.LastUsedAt,

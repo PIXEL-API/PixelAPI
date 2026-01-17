@@ -153,6 +153,20 @@ func (_c *AccountCreate) SetNillablePriority(v *int) *AccountCreate {
 	return _c
 }
 
+// SetRateMultiplier sets the "rate_multiplier" field.
+func (_c *AccountCreate) SetRateMultiplier(v float64) *AccountCreate {
+	_c.mutation.SetRateMultiplier(v)
+	return _c
+}
+
+// SetNillableRateMultiplier sets the "rate_multiplier" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableRateMultiplier(v *float64) *AccountCreate {
+	if v != nil {
+		_c.SetRateMultiplier(*v)
+	}
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *AccountCreate) SetStatus(v string) *AccountCreate {
 	_c.mutation.SetStatus(v)
@@ -429,6 +443,10 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultPriority
 		_c.mutation.SetPriority(v)
 	}
+	if _, ok := _c.mutation.RateMultiplier(); !ok {
+		v := account.DefaultRateMultiplier
+		_c.mutation.SetRateMultiplier(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := account.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -487,6 +505,9 @@ func (_c *AccountCreate) check() error {
 	}
 	if _, ok := _c.mutation.Priority(); !ok {
 		return &ValidationError{Name: "priority", err: errors.New(`ent: missing required field "Account.priority"`)}
+	}
+	if _, ok := _c.mutation.RateMultiplier(); !ok {
+		return &ValidationError{Name: "rate_multiplier", err: errors.New(`ent: missing required field "Account.rate_multiplier"`)}
 	}
 	if _, ok := _c.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "Account.status"`)}
@@ -577,6 +598,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Priority(); ok {
 		_spec.SetField(account.FieldPriority, field.TypeInt, value)
 		_node.Priority = value
+	}
+	if value, ok := _c.mutation.RateMultiplier(); ok {
+		_spec.SetField(account.FieldRateMultiplier, field.TypeFloat64, value)
+		_node.RateMultiplier = value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)
@@ -890,6 +915,24 @@ func (u *AccountUpsert) UpdatePriority() *AccountUpsert {
 // AddPriority adds v to the "priority" field.
 func (u *AccountUpsert) AddPriority(v int) *AccountUpsert {
 	u.Add(account.FieldPriority, v)
+	return u
+}
+
+// SetRateMultiplier sets the "rate_multiplier" field.
+func (u *AccountUpsert) SetRateMultiplier(v float64) *AccountUpsert {
+	u.Set(account.FieldRateMultiplier, v)
+	return u
+}
+
+// UpdateRateMultiplier sets the "rate_multiplier" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateRateMultiplier() *AccountUpsert {
+	u.SetExcluded(account.FieldRateMultiplier)
+	return u
+}
+
+// AddRateMultiplier adds v to the "rate_multiplier" field.
+func (u *AccountUpsert) AddRateMultiplier(v float64) *AccountUpsert {
+	u.Add(account.FieldRateMultiplier, v)
 	return u
 }
 
@@ -1322,6 +1365,27 @@ func (u *AccountUpsertOne) AddPriority(v int) *AccountUpsertOne {
 func (u *AccountUpsertOne) UpdatePriority() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdatePriority()
+	})
+}
+
+// SetRateMultiplier sets the "rate_multiplier" field.
+func (u *AccountUpsertOne) SetRateMultiplier(v float64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetRateMultiplier(v)
+	})
+}
+
+// AddRateMultiplier adds v to the "rate_multiplier" field.
+func (u *AccountUpsertOne) AddRateMultiplier(v float64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddRateMultiplier(v)
+	})
+}
+
+// UpdateRateMultiplier sets the "rate_multiplier" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateRateMultiplier() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateRateMultiplier()
 	})
 }
 
@@ -1953,6 +2017,27 @@ func (u *AccountUpsertBulk) AddPriority(v int) *AccountUpsertBulk {
 func (u *AccountUpsertBulk) UpdatePriority() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdatePriority()
+	})
+}
+
+// SetRateMultiplier sets the "rate_multiplier" field.
+func (u *AccountUpsertBulk) SetRateMultiplier(v float64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetRateMultiplier(v)
+	})
+}
+
+// AddRateMultiplier adds v to the "rate_multiplier" field.
+func (u *AccountUpsertBulk) AddRateMultiplier(v float64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddRateMultiplier(v)
+	})
+}
+
+// UpdateRateMultiplier sets the "rate_multiplier" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateRateMultiplier() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateRateMultiplier()
 	})
 }
 

@@ -395,6 +395,32 @@ func (_u *GroupUpdate) ClearFallbackGroupID() *GroupUpdate {
 	return _u
 }
 
+// SetModelRouting sets the "model_routing" field.
+func (_u *GroupUpdate) SetModelRouting(v map[string][]int64) *GroupUpdate {
+	_u.mutation.SetModelRouting(v)
+	return _u
+}
+
+// ClearModelRouting clears the value of the "model_routing" field.
+func (_u *GroupUpdate) ClearModelRouting() *GroupUpdate {
+	_u.mutation.ClearModelRouting()
+	return _u
+}
+
+// SetModelRoutingEnabled sets the "model_routing_enabled" field.
+func (_u *GroupUpdate) SetModelRoutingEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetModelRoutingEnabled(v)
+	return _u
+}
+
+// SetNillableModelRoutingEnabled sets the "model_routing_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableModelRoutingEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetModelRoutingEnabled(*v)
+	}
+	return _u
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_u *GroupUpdate) AddAPIKeyIDs(ids ...int64) *GroupUpdate {
 	_u.mutation.AddAPIKeyIDs(ids...)
@@ -802,6 +828,15 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.FallbackGroupIDCleared() {
 		_spec.ClearField(group.FieldFallbackGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.ModelRouting(); ok {
+		_spec.SetField(group.FieldModelRouting, field.TypeJSON, value)
+	}
+	if _u.mutation.ModelRoutingCleared() {
+		_spec.ClearField(group.FieldModelRouting, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.ModelRoutingEnabled(); ok {
+		_spec.SetField(group.FieldModelRoutingEnabled, field.TypeBool, value)
 	}
 	if _u.mutation.APIKeysCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1478,6 +1513,32 @@ func (_u *GroupUpdateOne) ClearFallbackGroupID() *GroupUpdateOne {
 	return _u
 }
 
+// SetModelRouting sets the "model_routing" field.
+func (_u *GroupUpdateOne) SetModelRouting(v map[string][]int64) *GroupUpdateOne {
+	_u.mutation.SetModelRouting(v)
+	return _u
+}
+
+// ClearModelRouting clears the value of the "model_routing" field.
+func (_u *GroupUpdateOne) ClearModelRouting() *GroupUpdateOne {
+	_u.mutation.ClearModelRouting()
+	return _u
+}
+
+// SetModelRoutingEnabled sets the "model_routing_enabled" field.
+func (_u *GroupUpdateOne) SetModelRoutingEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetModelRoutingEnabled(v)
+	return _u
+}
+
+// SetNillableModelRoutingEnabled sets the "model_routing_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableModelRoutingEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetModelRoutingEnabled(*v)
+	}
+	return _u
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_u *GroupUpdateOne) AddAPIKeyIDs(ids ...int64) *GroupUpdateOne {
 	_u.mutation.AddAPIKeyIDs(ids...)
@@ -1915,6 +1976,15 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.FallbackGroupIDCleared() {
 		_spec.ClearField(group.FieldFallbackGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.ModelRouting(); ok {
+		_spec.SetField(group.FieldModelRouting, field.TypeJSON, value)
+	}
+	if _u.mutation.ModelRoutingCleared() {
+		_spec.ClearField(group.FieldModelRouting, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.ModelRoutingEnabled(); ok {
+		_spec.SetField(group.FieldModelRoutingEnabled, field.TypeBool, value)
 	}
 	if _u.mutation.APIKeysCleared() {
 		edge := &sqlgraph.EdgeSpec{

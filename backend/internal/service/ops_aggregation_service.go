@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -235,11 +236,13 @@ func (s *OpsAggregationService) aggregateHourly() {
 	successAt := finishedAt
 	hbCtx, hbCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer hbCancel()
+	result := truncateString(fmt.Sprintf("window=%s..%s", start.Format(time.RFC3339), end.Format(time.RFC3339)), 2048)
 	_ = s.opsRepo.UpsertJobHeartbeat(hbCtx, &OpsUpsertJobHeartbeatInput{
 		JobName:        opsAggHourlyJobName,
 		LastRunAt:      &runAt,
 		LastSuccessAt:  &successAt,
 		LastDurationMs: &dur,
+		LastResult:     &result,
 	})
 }
 
@@ -331,11 +334,13 @@ func (s *OpsAggregationService) aggregateDaily() {
 	successAt := finishedAt
 	hbCtx, hbCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer hbCancel()
+	result := truncateString(fmt.Sprintf("window=%s..%s", start.Format(time.RFC3339), end.Format(time.RFC3339)), 2048)
 	_ = s.opsRepo.UpsertJobHeartbeat(hbCtx, &OpsUpsertJobHeartbeatInput{
 		JobName:        opsAggDailyJobName,
 		LastRunAt:      &runAt,
 		LastSuccessAt:  &successAt,
 		LastDurationMs: &dur,
+		LastResult:     &result,
 	})
 }
 

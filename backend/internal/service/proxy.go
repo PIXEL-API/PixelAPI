@@ -31,5 +31,21 @@ func (p *Proxy) URL() string {
 
 type ProxyWithAccountCount struct {
 	Proxy
-	AccountCount int64
+	AccountCount   int64
+	LatencyMs      *int64
+	LatencyStatus  string
+	LatencyMessage string
+	IPAddress      string
+	Country        string
+	CountryCode    string
+	Region         string
+	City           string
+}
+
+type ProxyAccountSummary struct {
+	ID       int64
+	Name     string
+	Platform string
+	Type     string
+	Notes    *string
 }

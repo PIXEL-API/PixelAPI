@@ -73,25 +73,27 @@ func GroupFromServiceShallow(g *service.Group) *Group {
 		return nil
 	}
 	return &Group{
-		ID:               g.ID,
-		Name:             g.Name,
-		Description:      g.Description,
-		Platform:         g.Platform,
-		RateMultiplier:   g.RateMultiplier,
-		IsExclusive:      g.IsExclusive,
-		Status:           g.Status,
-		SubscriptionType: g.SubscriptionType,
-		DailyLimitUSD:    g.DailyLimitUSD,
-		WeeklyLimitUSD:   g.WeeklyLimitUSD,
-		MonthlyLimitUSD:  g.MonthlyLimitUSD,
-		ImagePrice1K:     g.ImagePrice1K,
-		ImagePrice2K:     g.ImagePrice2K,
-		ImagePrice4K:     g.ImagePrice4K,
-		ClaudeCodeOnly:   g.ClaudeCodeOnly,
-		FallbackGroupID:  g.FallbackGroupID,
-		CreatedAt:        g.CreatedAt,
-		UpdatedAt:        g.UpdatedAt,
-		AccountCount:     g.AccountCount,
+		ID:                  g.ID,
+		Name:                g.Name,
+		Description:         g.Description,
+		Platform:            g.Platform,
+		RateMultiplier:      g.RateMultiplier,
+		IsExclusive:         g.IsExclusive,
+		Status:              g.Status,
+		SubscriptionType:    g.SubscriptionType,
+		DailyLimitUSD:       g.DailyLimitUSD,
+		WeeklyLimitUSD:      g.WeeklyLimitUSD,
+		MonthlyLimitUSD:     g.MonthlyLimitUSD,
+		ImagePrice1K:        g.ImagePrice1K,
+		ImagePrice2K:        g.ImagePrice2K,
+		ImagePrice4K:        g.ImagePrice4K,
+		ClaudeCodeOnly:      g.ClaudeCodeOnly,
+		FallbackGroupID:     g.FallbackGroupID,
+		ModelRouting:        g.ModelRouting,
+		ModelRoutingEnabled: g.ModelRoutingEnabled,
+		CreatedAt:           g.CreatedAt,
+		UpdatedAt:           g.UpdatedAt,
+		AccountCount:        g.AccountCount,
 	}
 }
 
@@ -114,7 +116,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	if a == nil {
 		return nil
 	}
-	return &Account{
+	out := &Account{
 		ID:                      a.ID,
 		Name:                    a.Name,
 		Notes:                   a.Notes,
@@ -125,6 +127,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		ProxyID:                 a.ProxyID,
 		Concurrency:             a.Concurrency,
 		Priority:                a.Priority,
+		RateMultiplier:          a.BillingRateMultiplier(),
 		Status:                  a.Status,
 		ErrorMessage:            a.ErrorMessage,
 		LastUsedAt:              a.LastUsedAt,
@@ -143,6 +146,24 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		SessionWindowStatus:     a.SessionWindowStatus,
 		GroupIDs:                a.GroupIDs,
 	}
+
+	// 提取 5h 窗口费用控制和会话数量控制配置（仅 Anthropic OAuth/SetupToken 账号有效）
+	if a.IsAnthropicOAuthOrSetupToken() {
+		if limit := a.GetWindowCostLimit(); limit > 0 {
+			out.WindowCostLimit = &limit
+		}
+		if reserve := a.GetWindowCostStickyReserve(); reserve > 0 {
+			out.WindowCostStickyReserve = &reserve
+		}
+		if maxSessions := a.GetMaxSessions(); maxSessions > 0 {
+			out.MaxSessions = &maxSessions
+		}
+		if idleTimeout := a.GetSessionIdleTimeoutMinutes(); idleTimeout > 0 {
+			out.SessionIdleTimeoutMin = &idleTimeout
+		}
+	}
+
+	return out
 }
 
 func AccountFromService(a *service.Account) *Account {
@@ -212,8 +233,29 @@ func ProxyWithAccountCountFromService(p *service.ProxyWithAccountCount) *ProxyWi
 		return nil
 	}
 	return &ProxyWithAccountCount{
-		Proxy:        *ProxyFromService(&p.Proxy),
-		AccountCount: p.AccountCount,
+		Proxy:          *ProxyFromService(&p.Proxy),
+		AccountCount:   p.AccountCount,
+		LatencyMs:      p.LatencyMs,
+		LatencyStatus:  p.LatencyStatus,
+		LatencyMessage: p.LatencyMessage,
+		IPAddress:      p.IPAddress,
+		Country:        p.Country,
+		CountryCode:    p.CountryCode,
+		Region:         p.Region,
+		City:           p.City,
+	}
+}
+
+func ProxyAccountSummaryFromService(a *service.ProxyAccountSummary) *ProxyAccountSummary {
+	if a == nil {
+		return nil
+	}
+	return &ProxyAccountSummary{
+		ID:       a.ID,
+		Name:     a.Name,
+		Platform: a.Platform,
+		Type:     a.Type,
+		Notes:    a.Notes,
 	}
 }
 
@@ -279,6 +321,7 @@ func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary, inclu
 		TotalCost:             l.TotalCost,
 		ActualCost:            l.ActualCost,
 		RateMultiplier:        l.RateMultiplier,
+		AccountRateMultiplier: l.AccountRateMultiplier,
 		BillingType:           l.BillingType,
 		Stream:                l.Stream,
 		DurationMs:            l.DurationMs,

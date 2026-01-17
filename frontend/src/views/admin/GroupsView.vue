@@ -460,6 +460,149 @@
           </div>
         </div>
 
+        <!-- 模型路由配置（仅 anthropic 平台） -->
+        <div v-if="createForm.platform === 'anthropic'" class="border-t pt-4">
+          <div class="mb-1.5 flex items-center gap-1">
+            <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t('admin.groups.modelRouting.title') }}
+            </label>
+            <!-- Help Tooltip -->
+            <div class="group relative inline-flex">
+              <Icon
+                name="questionCircle"
+                size="sm"
+                :stroke-width="2"
+                class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
+              />
+              <div class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-80 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100">
+                <div class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800">
+                  <p class="text-xs leading-relaxed text-gray-300">
+                    {{ t('admin.groups.modelRouting.tooltip') }}
+                  </p>
+                  <div class="absolute -bottom-1.5 left-3 h-3 w-3 rotate-45 bg-gray-900 dark:bg-gray-800"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- 启用开关 -->
+          <div class="flex items-center gap-3 mb-3">
+            <button
+              type="button"
+              @click="createForm.model_routing_enabled = !createForm.model_routing_enabled"
+              :class="[
+                'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                createForm.model_routing_enabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  createForm.model_routing_enabled ? 'translate-x-6' : 'translate-x-1'
+                ]"
+              />
+            </button>
+            <span class="text-sm text-gray-500 dark:text-gray-400">
+              {{ createForm.model_routing_enabled ? t('admin.groups.modelRouting.enabled') : t('admin.groups.modelRouting.disabled') }}
+            </span>
+          </div>
+          <p v-if="!createForm.model_routing_enabled" class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t('admin.groups.modelRouting.disabledHint') }}
+          </p>
+          <p v-else class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t('admin.groups.modelRouting.noRulesHint') }}
+          </p>
+          <!-- 路由规则列表（仅在启用时显示） -->
+          <div v-if="createForm.model_routing_enabled" class="space-y-3">
+            <div
+              v-for="(rule, index) in createModelRoutingRules"
+              :key="index"
+              class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
+            >
+              <div class="flex items-start gap-3">
+                <div class="flex-1 space-y-2">
+                  <div>
+                    <label class="input-label text-xs">{{ t('admin.groups.modelRouting.modelPattern') }}</label>
+                    <input
+                      v-model="rule.pattern"
+                      type="text"
+                      class="input text-sm"
+                      :placeholder="t('admin.groups.modelRouting.modelPatternPlaceholder')"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label text-xs">{{ t('admin.groups.modelRouting.accounts') }}</label>
+                    <!-- 已选账号标签 -->
+                    <div v-if="rule.accounts.length > 0" class="flex flex-wrap gap-1.5 mb-2">
+                      <span
+                        v-for="account in rule.accounts"
+                        :key="account.id"
+                        class="inline-flex items-center gap-1 rounded-full bg-primary-100 px-2.5 py-1 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+                      >
+                        {{ account.name }}
+                        <button
+                          type="button"
+                          @click="removeSelectedAccount(index, account.id, false)"
+                          class="ml-0.5 text-primary-500 hover:text-primary-700 dark:hover:text-primary-200"
+                        >
+                          <Icon name="x" size="xs" />
+                        </button>
+                      </span>
+                    </div>
+                    <!-- 账号搜索输入框 -->
+                    <div class="relative account-search-container">
+                      <input
+                        v-model="accountSearchKeyword[`create-${index}`]"
+                        type="text"
+                        class="input text-sm"
+                        :placeholder="t('admin.groups.modelRouting.searchAccountPlaceholder')"
+                        @input="searchAccounts(`create-${index}`)"
+                        @focus="onAccountSearchFocus(index, false)"
+                      />
+                      <!-- 搜索结果下拉框 -->
+                      <div
+                        v-if="showAccountDropdown[`create-${index}`] && accountSearchResults[`create-${index}`]?.length > 0"
+                        class="absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
+                      >
+                        <button
+                          v-for="account in accountSearchResults[`create-${index}`]"
+                          :key="account.id"
+                          type="button"
+                          @click="selectAccount(index, account, false)"
+                          class="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-dark-700"
+                          :class="{ 'opacity-50': rule.accounts.some(a => a.id === account.id) }"
+                          :disabled="rule.accounts.some(a => a.id === account.id)"
+                        >
+                          <span>{{ account.name }}</span>
+                          <span class="ml-2 text-xs text-gray-400">#{{ account.id }}</span>
+                        </button>
+                      </div>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">{{ t('admin.groups.modelRouting.accountsHint') }}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  @click="removeCreateRoutingRule(index)"
+                  class="mt-5 p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                  :title="t('admin.groups.modelRouting.removeRule')"
+                >
+                  <Icon name="trash" size="sm" />
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- 添加规则按钮（仅在启用时显示） -->
+          <button
+            v-if="createForm.model_routing_enabled"
+            type="button"
+            @click="addCreateRoutingRule"
+            class="mt-3 flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+          >
+            <Icon name="plus" size="sm" />
+            {{ t('admin.groups.modelRouting.addRule') }}
+          </button>
+        </div>
+
       </form>
 
       <template #footer>
@@ -761,6 +904,149 @@
           </div>
         </div>
 
+        <!-- 模型路由配置（仅 anthropic 平台） -->
+        <div v-if="editForm.platform === 'anthropic'" class="border-t pt-4">
+          <div class="mb-1.5 flex items-center gap-1">
+            <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t('admin.groups.modelRouting.title') }}
+            </label>
+            <!-- Help Tooltip -->
+            <div class="group relative inline-flex">
+              <Icon
+                name="questionCircle"
+                size="sm"
+                :stroke-width="2"
+                class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
+              />
+              <div class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-80 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100">
+                <div class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800">
+                  <p class="text-xs leading-relaxed text-gray-300">
+                    {{ t('admin.groups.modelRouting.tooltip') }}
+                  </p>
+                  <div class="absolute -bottom-1.5 left-3 h-3 w-3 rotate-45 bg-gray-900 dark:bg-gray-800"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- 启用开关 -->
+          <div class="flex items-center gap-3 mb-3">
+            <button
+              type="button"
+              @click="editForm.model_routing_enabled = !editForm.model_routing_enabled"
+              :class="[
+                'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                editForm.model_routing_enabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  editForm.model_routing_enabled ? 'translate-x-6' : 'translate-x-1'
+                ]"
+              />
+            </button>
+            <span class="text-sm text-gray-500 dark:text-gray-400">
+              {{ editForm.model_routing_enabled ? t('admin.groups.modelRouting.enabled') : t('admin.groups.modelRouting.disabled') }}
+            </span>
+          </div>
+          <p v-if="!editForm.model_routing_enabled" class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t('admin.groups.modelRouting.disabledHint') }}
+          </p>
+          <p v-else class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t('admin.groups.modelRouting.noRulesHint') }}
+          </p>
+          <!-- 路由规则列表（仅在启用时显示） -->
+          <div v-if="editForm.model_routing_enabled" class="space-y-3">
+            <div
+              v-for="(rule, index) in editModelRoutingRules"
+              :key="index"
+              class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
+            >
+              <div class="flex items-start gap-3">
+                <div class="flex-1 space-y-2">
+                  <div>
+                    <label class="input-label text-xs">{{ t('admin.groups.modelRouting.modelPattern') }}</label>
+                    <input
+                      v-model="rule.pattern"
+                      type="text"
+                      class="input text-sm"
+                      :placeholder="t('admin.groups.modelRouting.modelPatternPlaceholder')"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label text-xs">{{ t('admin.groups.modelRouting.accounts') }}</label>
+                    <!-- 已选账号标签 -->
+                    <div v-if="rule.accounts.length > 0" class="flex flex-wrap gap-1.5 mb-2">
+                      <span
+                        v-for="account in rule.accounts"
+                        :key="account.id"
+                        class="inline-flex items-center gap-1 rounded-full bg-primary-100 px-2.5 py-1 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+                      >
+                        {{ account.name }}
+                        <button
+                          type="button"
+                          @click="removeSelectedAccount(index, account.id, true)"
+                          class="ml-0.5 text-primary-500 hover:text-primary-700 dark:hover:text-primary-200"
+                        >
+                          <Icon name="x" size="xs" />
+                        </button>
+                      </span>
+                    </div>
+                    <!-- 账号搜索输入框 -->
+                    <div class="relative account-search-container">
+                      <input
+                        v-model="accountSearchKeyword[`edit-${index}`]"
+                        type="text"
+                        class="input text-sm"
+                        :placeholder="t('admin.groups.modelRouting.searchAccountPlaceholder')"
+                        @input="searchAccounts(`edit-${index}`)"
+                        @focus="onAccountSearchFocus(index, true)"
+                      />
+                      <!-- 搜索结果下拉框 -->
+                      <div
+                        v-if="showAccountDropdown[`edit-${index}`] && accountSearchResults[`edit-${index}`]?.length > 0"
+                        class="absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
+                      >
+                        <button
+                          v-for="account in accountSearchResults[`edit-${index}`]"
+                          :key="account.id"
+                          type="button"
+                          @click="selectAccount(index, account, true)"
+                          class="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-dark-700"
+                          :class="{ 'opacity-50': rule.accounts.some(a => a.id === account.id) }"
+                          :disabled="rule.accounts.some(a => a.id === account.id)"
+                        >
+                          <span>{{ account.name }}</span>
+                          <span class="ml-2 text-xs text-gray-400">#{{ account.id }}</span>
+                        </button>
+                      </div>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">{{ t('admin.groups.modelRouting.accountsHint') }}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  @click="removeEditRoutingRule(index)"
+                  class="mt-5 p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                  :title="t('admin.groups.modelRouting.removeRule')"
+                >
+                  <Icon name="trash" size="sm" />
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- 添加规则按钮（仅在启用时显示） -->
+          <button
+            v-if="editForm.model_routing_enabled"
+            type="button"
+            @click="addEditRoutingRule"
+            class="mt-3 flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+          >
+            <Icon name="plus" size="sm" />
+            {{ t('admin.groups.modelRouting.addRule') }}
+          </button>
+        </div>
+
       </form>
 
       <template #footer>
@@ -816,7 +1102,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useOnboardingStore } from '@/stores/onboarding'
@@ -956,8 +1242,159 @@ const createForm = reactive({
   image_price_4k: null as number | null,
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
-  fallback_group_id: null as number | null
+  fallback_group_id: null as number | null,
+  // 模型路由开关
+  model_routing_enabled: false
 })
+
+// 简单账号类型（用于模型路由选择）
+interface SimpleAccount {
+  id: number
+  name: string
+}
+
+// 模型路由规则类型
+interface ModelRoutingRule {
+  pattern: string
+  accounts: SimpleAccount[] // 选中的账号对象数组
+}
+
+// 创建表单的模型路由规则
+const createModelRoutingRules = ref<ModelRoutingRule[]>([])
+
+// 编辑表单的模型路由规则
+const editModelRoutingRules = ref<ModelRoutingRule[]>([])
+
+// 账号搜索相关状态
+const accountSearchKeyword = ref<Record<string, string>>({}) // 每个规则的搜索关键词 (key: "create-0" 或 "edit-0")
+const accountSearchResults = ref<Record<string, SimpleAccount[]>>({}) // 每个规则的搜索结果
+const showAccountDropdown = ref<Record<string, boolean>>({}) // 每个规则的下拉框显示状态
+let accountSearchTimeout: ReturnType<typeof setTimeout> | null = null
+
+// 搜索账号（仅限 anthropic 平台）
+const searchAccounts = async (key: string) => {
+  if (accountSearchTimeout) clearTimeout(accountSearchTimeout)
+  accountSearchTimeout = setTimeout(async () => {
+    const keyword = accountSearchKeyword.value[key] || ''
+    try {
+      const res = await adminAPI.accounts.list(1, 20, {
+        search: keyword,
+        platform: 'anthropic'
+      })
+      accountSearchResults.value[key] = res.items.map((a) => ({ id: a.id, name: a.name }))
+    } catch {
+      accountSearchResults.value[key] = []
+    }
+  }, 300)
+}
+
+// 选择账号
+const selectAccount = (ruleIndex: number, account: SimpleAccount, isEdit: boolean = false) => {
+  const rules = isEdit ? editModelRoutingRules.value : createModelRoutingRules.value
+  const rule = rules[ruleIndex]
+  if (!rule) return
+
+  // 检查是否已选择
+  if (!rule.accounts.some(a => a.id === account.id)) {
+    rule.accounts.push(account)
+  }
+
+  // 清空搜索
+  const key = `${isEdit ? 'edit' : 'create'}-${ruleIndex}`
+  accountSearchKeyword.value[key] = ''
+  showAccountDropdown.value[key] = false
+}
+
+// 移除已选账号
+const removeSelectedAccount = (ruleIndex: number, accountId: number, isEdit: boolean = false) => {
+  const rules = isEdit ? editModelRoutingRules.value : createModelRoutingRules.value
+  const rule = rules[ruleIndex]
+  if (!rule) return
+
+  rule.accounts = rule.accounts.filter(a => a.id !== accountId)
+}
+
+// 处理账号搜索输入框聚焦
+const onAccountSearchFocus = (ruleIndex: number, isEdit: boolean = false) => {
+  const key = `${isEdit ? 'edit' : 'create'}-${ruleIndex}`
+  showAccountDropdown.value[key] = true
+  // 如果没有搜索结果，触发一次搜索
+  if (!accountSearchResults.value[key]?.length) {
+    searchAccounts(key)
+  }
+}
+
+// 添加创建表单的路由规则
+const addCreateRoutingRule = () => {
+  createModelRoutingRules.value.push({ pattern: '', accounts: [] })
+}
+
+// 删除创建表单的路由规则
+const removeCreateRoutingRule = (index: number) => {
+  createModelRoutingRules.value.splice(index, 1)
+  // 清理相关的搜索状态
+  const key = `create-${index}`
+  delete accountSearchKeyword.value[key]
+  delete accountSearchResults.value[key]
+  delete showAccountDropdown.value[key]
+}
+
+// 添加编辑表单的路由规则
+const addEditRoutingRule = () => {
+  editModelRoutingRules.value.push({ pattern: '', accounts: [] })
+}
+
+// 删除编辑表单的路由规则
+const removeEditRoutingRule = (index: number) => {
+  editModelRoutingRules.value.splice(index, 1)
+  // 清理相关的搜索状态
+  const key = `edit-${index}`
+  delete accountSearchKeyword.value[key]
+  delete accountSearchResults.value[key]
+  delete showAccountDropdown.value[key]
+}
+
+// 将 UI 格式的路由规则转换为 API 格式
+const convertRoutingRulesToApiFormat = (rules: ModelRoutingRule[]): Record<string, number[]> | null => {
+  const result: Record<string, number[]> = {}
+  let hasValidRules = false
+
+  for (const rule of rules) {
+    const pattern = rule.pattern.trim()
+    if (!pattern) continue
+
+    const accountIds = rule.accounts.map(a => a.id).filter(id => id > 0)
+
+    if (accountIds.length > 0) {
+      result[pattern] = accountIds
+      hasValidRules = true
+    }
+  }
+
+  return hasValidRules ? result : null
+}
+
+// 将 API 格式的路由规则转换为 UI 格式（需要加载账号名称）
+const convertApiFormatToRoutingRules = async (apiFormat: Record<string, number[]> | null): Promise<ModelRoutingRule[]> => {
+  if (!apiFormat) return []
+
+  const rules: ModelRoutingRule[] = []
+  for (const [pattern, accountIds] of Object.entries(apiFormat)) {
+    // 加载账号信息
+    const accounts: SimpleAccount[] = []
+    for (const id of accountIds) {
+      try {
+        const account = await adminAPI.accounts.getById(id)
+        accounts.push({ id: account.id, name: account.name })
+      } catch {
+        // 如果账号不存在，仍然显示 ID
+        accounts.push({ id, name: `#${id}` })
+      }
+    }
+    rules.push({ pattern, accounts })
+  }
+  return rules
+}
 
 const editForm = reactive({
   name: '',
@@ -976,7 +1413,9 @@ const editForm = reactive({
   image_price_4k: null as number | null,
   // Claude Code 客户端限制（仅 anthropic 平台使用）
   claude_code_only: false,
-  fallback_group_id: null as number | null
+  fallback_group_id: null as number | null,
+  // 模型路由开关
+  model_routing_enabled: false
 })
 
 // 根据分组类型返回不同的删除确认消息
@@ -1058,6 +1497,7 @@ const closeCreateModal = () => {
   createForm.image_price_4k = null
   createForm.claude_code_only = false
   createForm.fallback_group_id = null
+  createModelRoutingRules.value = []
 }
 
 const handleCreateGroup = async () => {
@@ -1067,7 +1507,12 @@ const handleCreateGroup = async () => {
   }
   submitting.value = true
   try {
-    await adminAPI.groups.create(createForm)
+    // 构建请求数据，包含模型路由配置
+    const requestData = {
+      ...createForm,
+      model_routing: convertRoutingRulesToApiFormat(createModelRoutingRules.value)
+    }
+    await adminAPI.groups.create(requestData)
     appStore.showSuccess(t('admin.groups.groupCreated'))
     closeCreateModal()
     loadGroups()
@@ -1084,7 +1529,7 @@ const handleCreateGroup = async () => {
   }
 }
 
-const handleEdit = (group: Group) => {
+const handleEdit = async (group: Group) => {
   editingGroup.value = group
   editForm.name = group.name
   editForm.description = group.description || ''
@@ -1101,12 +1546,16 @@ const handleEdit = (group: Group) => {
   editForm.image_price_4k = group.image_price_4k
   editForm.claude_code_only = group.claude_code_only || false
   editForm.fallback_group_id = group.fallback_group_id
+  editForm.model_routing_enabled = group.model_routing_enabled || false
+  // 加载模型路由规则（异步加载账号名称）
+  editModelRoutingRules.value = await convertApiFormatToRoutingRules(group.model_routing)
   showEditModal.value = true
 }
 
 const closeEditModal = () => {
   showEditModal.value = false
   editingGroup.value = null
+  editModelRoutingRules.value = []
 }
 
 const handleUpdateGroup = async () => {
@@ -1121,7 +1570,8 @@ const handleUpdateGroup = async () => {
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
-      fallback_group_id: editForm.fallback_group_id === null ? 0 : editForm.fallback_group_id
+      fallback_group_id: editForm.fallback_group_id === null ? 0 : editForm.fallback_group_id,
+      model_routing: convertRoutingRulesToApiFormat(editModelRoutingRules.value)
     }
     await adminAPI.groups.update(editingGroup.value.id, payload)
     appStore.showSuccess(t('admin.groups.groupUpdated'))
@@ -1166,7 +1616,23 @@ watch(
   }
 )
 
+// 点击外部关闭账号搜索下拉框
+const handleClickOutside = (event: MouseEvent) => {
+  const target = event.target as HTMLElement
+  // 检查是否点击在下拉框或输入框内
+  if (!target.closest('.account-search-container')) {
+    Object.keys(showAccountDropdown.value).forEach(key => {
+      showAccountDropdown.value[key] = false
+    })
+  }
+}
+
 onMounted(() => {
   loadGroups()
+  document.addEventListener('click', handleClickOutside)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside)
 })
 </script>

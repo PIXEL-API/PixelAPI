@@ -34,15 +34,8 @@
           <template #cell-platform_type="{ row }">
             <PlatformTypeBadge :platform="row.platform" :type="row.type" />
           </template>
-          <template #cell-concurrency="{ row }">
-            <div class="flex items-center gap-1.5">
-              <span :class="['inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium', (row.current_concurrency || 0) >= row.concurrency ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : (row.current_concurrency || 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400']">
-                <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /></svg>
-                <span class="font-mono">{{ row.current_concurrency || 0 }}</span>
-                <span class="text-gray-400 dark:text-gray-500">/</span>
-                <span class="font-mono">{{ row.concurrency }}</span>
-              </span>
-            </div>
+          <template #cell-capacity="{ row }">
+            <AccountCapacityCell :account="row" />
           </template>
           <template #cell-status="{ row }">
             <AccountStatusIndicator :account="row" @show-temp-unsched="handleShowTempUnsched" />
@@ -60,6 +53,11 @@
           </template>
           <template #cell-usage="{ row }">
             <AccountUsageCell :account="row" />
+          </template>
+          <template #cell-rate_multiplier="{ row }">
+            <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
+              {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
+            </span>
           </template>
           <template #cell-priority="{ value }">
             <span class="text-sm text-gray-700 dark:text-gray-300">{{ value }}</span>
@@ -120,7 +118,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -143,6 +141,7 @@ import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
+import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import type { Account, Proxy, Group } from '@/types'
@@ -182,7 +181,7 @@ const cols = computed(() => {
     { key: 'select', label: '', sortable: false },
     { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
     { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false },
-    { key: 'concurrency', label: t('admin.accounts.columns.concurrencyStatus'), sortable: false },
+    { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
     { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
@@ -190,10 +189,11 @@ const cols = computed(() => {
   if (!authStore.isSimpleMode) {
     c.push({ key: 'groups', label: t('admin.accounts.columns.groups'), sortable: false })
   }
-  c.push(
-    { key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false },
-    { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
-    { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
+    c.push(
+      { key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false },
+      { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
+      { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
+      { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
     { key: 'notes', label: t('admin.accounts.columns.notes'), sortable: false },
     { key: 'actions', label: t('admin.accounts.columns.actions'), sortable: false }
@@ -202,7 +202,56 @@ const cols = computed(() => {
 })
 
 const handleEdit = (a: Account) => { edAcc.value = a; showEdit.value = true }
-const openMenu = (a: Account, e: MouseEvent) => { menu.acc = a; menu.pos = { top: e.clientY, left: e.clientX - 200 }; menu.show = true }
+const openMenu = (a: Account, e: MouseEvent) => {
+  menu.acc = a
+
+  const target = e.currentTarget as HTMLElement
+  if (target) {
+    const rect = target.getBoundingClientRect()
+    const menuWidth = 200
+    const menuHeight = 240
+    const padding = 8
+    const viewportWidth = window.innerWidth
+    const viewportHeight = window.innerHeight
+
+    let left, top
+
+    if (viewportWidth < 768) {
+      // 居中显示,水平位置
+      left = Math.max(padding, Math.min(
+        rect.left + rect.width / 2 - menuWidth / 2,
+        viewportWidth - menuWidth - padding
+      ))
+
+      // 优先显示在按钮下方
+      top = rect.bottom + 4
+
+      // 如果下方空间不够,显示在上方
+      if (top + menuHeight > viewportHeight - padding) {
+        top = rect.top - menuHeight - 4
+        // 如果上方也不够,就贴在视口顶部
+        if (top < padding) {
+          top = padding
+        }
+      }
+    } else {
+      left = Math.max(padding, Math.min(
+        e.clientX - menuWidth,
+        viewportWidth - menuWidth - padding
+      ))
+      top = e.clientY
+      if (top + menuHeight > viewportHeight - padding) {
+        top = viewportHeight - menuHeight - padding
+      }
+    }
+
+    menu.pos = { top, left }
+  } else {
+    menu.pos = { top: e.clientY, left: e.clientX - 200 }
+  }
+
+  menu.show = true
+}
 const toggleSel = (id: number) => { const i = selIds.value.indexOf(id); if(i === -1) selIds.value.push(id); else selIds.value.splice(i, 1) }
 const selectPage = () => { selIds.value = [...new Set([...selIds.value, ...accounts.value.map(a => a.id)])] }
 const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return; try { await Promise.all(selIds.value.map(id => adminAPI.accounts.delete(id))); selIds.value = []; reload() } catch (error) { console.error('Failed to bulk delete accounts:', error) } }
@@ -302,9 +351,6 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
     } else {
       selIds.value = hasIds ? [] : accountIds
     }
-    load().catch((error) => {
-      console.error('Failed to refresh accounts:', error)
-    })
   } catch (error) {
     console.error('Failed to bulk toggle schedulable:', error)
     appStore.showError(t('common.error'))
@@ -328,9 +374,6 @@ const handleToggleSchedulable = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.setSchedulable(a.id, nextSchedulable)
     updateSchedulableInList([a.id], updated?.schedulable ?? nextSchedulable)
-    load().catch((error) => {
-      console.error('Failed to refresh accounts:', error)
-    })
   } catch (error) {
     console.error('Failed to toggle schedulable:', error)
     appStore.showError(t('admin.accounts.failedToToggleSchedulable'))
@@ -360,5 +403,24 @@ const isExpired = (value: number | null) => {
   return value * 1000 <= Date.now()
 }
 
-onMounted(async () => { load(); try { const [p, g] = await Promise.all([adminAPI.proxies.getAll(), adminAPI.groups.getAll()]); proxies.value = p; groups.value = g } catch (error) { console.error('Failed to load proxies/groups:', error) } })
+// 滚动时关闭菜单
+const handleScroll = () => {
+  menu.show = false
+}
+
+onMounted(async () => {
+  load()
+  try {
+    const [p, g] = await Promise.all([adminAPI.proxies.getAll(), adminAPI.groups.getAll()])
+    proxies.value = p
+    groups.value = g
+  } catch (error) {
+    console.error('Failed to load proxies/groups:', error)
+  }
+  window.addEventListener('scroll', handleScroll, true)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scroll', handleScroll, true)
+})
 </script>
