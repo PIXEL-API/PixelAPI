@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,13 +15,16 @@ import (
 
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
-	accountRepo        AccountRepository
-	usageRepo          UsageLogRepository
-	cfg                *config.Config
-	geminiQuotaService *GeminiQuotaService
-	tempUnschedCache   TempUnschedCache
-	usageCacheMu       sync.RWMutex
-	usageCache         map[int64]*geminiUsageCacheEntry
+	accountRepo           AccountRepository
+	usageRepo             UsageLogRepository
+	cfg                   *config.Config
+	geminiQuotaService    *GeminiQuotaService
+	tempUnschedCache      TempUnschedCache
+	timeoutCounterCache   TimeoutCounterCache
+	settingService        *SettingService
+	tokenCacheInvalidator TokenCacheInvalidator
+	usageCacheMu          sync.RWMutex
+	usageCache            map[int64]*geminiUsageCacheEntry
 }
 
 type geminiUsageCacheEntry struct {
@@ -44,43 +47,105 @@ func NewRateLimitService(accountRepo AccountRepository, usageRepo UsageLogReposi
 	}
 }
 
+// SetTimeoutCounterCache 设置超时计数器缓存（可选依赖）
+func (s *RateLimitService) SetTimeoutCounterCache(cache TimeoutCounterCache) {
+	s.timeoutCounterCache = cache
+}
+
+// SetSettingService 设置系统设置服务（可选依赖）
+func (s *RateLimitService) SetSettingService(settingService *SettingService) {
+	s.settingService = settingService
+}
+
+// SetTokenCacheInvalidator 设置 token 缓存清理器（可选依赖）
+func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvalidator) {
+	s.tokenCacheInvalidator = invalidator
+}
+
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) (shouldDisable bool) {
 	// apikey 类型账号：检查自定义错误码配置
 	// 如果启用且错误码不在列表中，则不处理（不停止调度、不标记限流/过载）
+	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 	if !account.ShouldHandleErrorCode(statusCode) {
-		log.Printf("Account %d: error %d skipped (not in custom error codes)", account.ID, statusCode)
+		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
 	}
 
-	tempMatched := s.tryTempUnschedulable(ctx, account, statusCode, responseBody)
+	tempMatched := false
+	if statusCode != 401 {
+		tempMatched = s.tryTempUnschedulable(ctx, account, statusCode, responseBody)
+	}
+	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody))
+	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+	if upstreamMsg != "" {
+		upstreamMsg = truncateForLog([]byte(upstreamMsg), 512)
+	}
 
 	switch statusCode {
 	case 401:
-		// 认证失败：停止调度，记录错误
-		s.handleAuthError(ctx, account, "Authentication failed (401): invalid or expired credentials")
+		// 对所有 OAuth 账号在 401 错误时调用缓存失效并强制下次刷新
+		if account.Type == AccountTypeOAuth {
+			// 1. 失效缓存
+			if s.tokenCacheInvalidator != nil {
+				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
+					slog.Warn("oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
+				}
+			}
+			// 2. 设置 expires_at 为当前时间，强制下次请求刷新 token
+			if account.Credentials == nil {
+				account.Credentials = make(map[string]any)
+			}
+			account.Credentials["expires_at"] = time.Now().Format(time.RFC3339)
+			if err := s.accountRepo.Update(ctx, account); err != nil {
+				slog.Warn("oauth_401_force_refresh_update_failed", "account_id", account.ID, "error", err)
+			} else {
+				slog.Info("oauth_401_force_refresh_set", "account_id", account.ID, "platform", account.Platform)
+			}
+		}
+		msg := "Authentication failed (401): invalid or expired credentials"
+		if upstreamMsg != "" {
+			msg = "Authentication failed (401): " + upstreamMsg
+		}
+		s.handleAuthError(ctx, account, msg)
 		shouldDisable = true
 	case 402:
 		// 支付要求：余额不足或计费问题，停止调度
-		s.handleAuthError(ctx, account, "Payment required (402): insufficient balance or billing issue")
+		msg := "Payment required (402): insufficient balance or billing issue"
+		if upstreamMsg != "" {
+			msg = "Payment required (402): " + upstreamMsg
+		}
+		s.handleAuthError(ctx, account, msg)
 		shouldDisable = true
 	case 403:
 		// 禁止访问：停止调度，记录错误
-		s.handleAuthError(ctx, account, "Access forbidden (403): account may be suspended or lack permissions")
+		msg := "Access forbidden (403): account may be suspended or lack permissions"
+		if upstreamMsg != "" {
+			msg = "Access forbidden (403): " + upstreamMsg
+		}
+		s.handleAuthError(ctx, account, msg)
 		shouldDisable = true
 	case 429:
-		s.handle429(ctx, account, headers)
+		s.handle429(ctx, account, headers, responseBody)
 		shouldDisable = false
 	case 529:
 		s.handle529(ctx, account)
 		shouldDisable = false
 	default:
-		// 其他5xx错误：记录但不停止调度
-		if statusCode >= 500 {
-			log.Printf("Account %d received upstream error %d", account.ID, statusCode)
+		// 自定义错误码启用时：在列表中的错误码都应该停止调度
+		if customErrorCodesEnabled {
+			msg := "Custom error code triggered"
+			if upstreamMsg != "" {
+				msg = upstreamMsg
+			}
+			s.handleCustomErrorCode(ctx, account, statusCode, msg)
+			shouldDisable = true
+		} else if statusCode >= 500 {
+			// 未启用自定义错误码时：仅记录5xx错误
+			slog.Warn("account_upstream_error", "account_id", account.ID, "status_code", statusCode)
+			shouldDisable = false
 		}
-		shouldDisable = false
 	}
 
 	if tempMatched {
@@ -125,7 +190,7 @@ func (s *RateLimitService) PreCheckUsage(ctx context.Context, account *Account, 
 			start := geminiDailyWindowStart(now)
 			totals, ok := s.getGeminiUsageTotals(account.ID, start, now)
 			if !ok {
-				stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, start, now, 0, 0, account.ID)
+				stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, start, now, 0, 0, account.ID, 0, nil)
 				if err != nil {
 					return true, err
 				}
@@ -150,7 +215,7 @@ func (s *RateLimitService) PreCheckUsage(ctx context.Context, account *Account, 
 				// NOTE:
 				// - This is a local precheck to reduce upstream 429s.
 				// - Do NOT mark the account as rate-limited here; rate_limit_reset_at should reflect real upstream 429s.
-				log.Printf("[Gemini PreCheck] Account %d reached daily quota (%d/%d), skip until %v", account.ID, used, limit, resetAt)
+				slog.Info("gemini_precheck_daily_quota_reached", "account_id", account.ID, "used", used, "limit", limit, "reset_at", resetAt)
 				return false, nil
 			}
 		}
@@ -172,7 +237,7 @@ func (s *RateLimitService) PreCheckUsage(ctx context.Context, account *Account, 
 
 		if limit > 0 {
 			start := now.Truncate(time.Minute)
-			stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, start, now, 0, 0, account.ID)
+			stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, start, now, 0, 0, account.ID, 0, nil)
 			if err != nil {
 				return true, err
 			}
@@ -193,7 +258,7 @@ func (s *RateLimitService) PreCheckUsage(ctx context.Context, account *Account, 
 			if used >= limit {
 				resetAt := start.Add(time.Minute)
 				// Do not persist "rate limited" status from local precheck. See note above.
-				log.Printf("[Gemini PreCheck] Account %d reached minute quota (%d/%d), skip until %v", account.ID, used, limit, resetAt)
+				slog.Info("gemini_precheck_minute_quota_reached", "account_id", account.ID, "used", used, "limit", limit, "reset_at", resetAt)
 				return false, nil
 			}
 		}
@@ -250,22 +315,40 @@ func (s *RateLimitService) GeminiCooldown(ctx context.Context, account *Account)
 // handleAuthError 处理认证类错误(401/403)，停止账号调度
 func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account, errorMsg string) {
 	if err := s.accountRepo.SetError(ctx, account.ID, errorMsg); err != nil {
-		log.Printf("SetError failed for account %d: %v", account.ID, err)
+		slog.Warn("account_set_error_failed", "account_id", account.ID, "error", err)
 		return
 	}
-	log.Printf("Account %d disabled due to auth error: %s", account.ID, errorMsg)
+	slog.Warn("account_disabled_auth_error", "account_id", account.ID, "error", errorMsg)
+}
+
+// handleCustomErrorCode 处理自定义错误码，停止账号调度
+func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *Account, statusCode int, errorMsg string) {
+	msg := "Custom error code " + strconv.Itoa(statusCode) + ": " + errorMsg
+	if err := s.accountRepo.SetError(ctx, account.ID, msg); err != nil {
+		slog.Warn("account_set_error_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		return
+	}
+	slog.Warn("account_disabled_custom_error", "account_id", account.ID, "status_code", statusCode, "error", errorMsg)
 }
 
 // handle429 处理429限流错误
 // 解析响应头获取重置时间，标记账号为限流状态
-func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header) {
+func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
 	// 解析重置时间戳
 	resetTimestamp := headers.Get("anthropic-ratelimit-unified-reset")
 	if resetTimestamp == "" {
 		// 没有重置时间，使用默认5分钟
 		resetAt := time.Now().Add(5 * time.Minute)
+		if s.shouldScopeClaudeSonnetRateLimit(account, responseBody) {
+			if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelRateLimitScopeClaudeSonnet, resetAt); err != nil {
+				slog.Warn("model_rate_limit_set_failed", "account_id", account.ID, "scope", modelRateLimitScopeClaudeSonnet, "error", err)
+			} else {
+				slog.Info("account_model_rate_limited", "account_id", account.ID, "scope", modelRateLimitScopeClaudeSonnet, "reset_at", resetAt)
+			}
+			return
+		}
 		if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
-			log.Printf("SetRateLimited failed for account %d: %v", account.ID, err)
+			slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 		}
 		return
 	}
@@ -273,19 +356,36 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	// 解析Unix时间戳
 	ts, err := strconv.ParseInt(resetTimestamp, 10, 64)
 	if err != nil {
-		log.Printf("Parse reset timestamp failed: %v", err)
+		slog.Warn("rate_limit_reset_parse_failed", "reset_timestamp", resetTimestamp, "error", err)
 		resetAt := time.Now().Add(5 * time.Minute)
+		if s.shouldScopeClaudeSonnetRateLimit(account, responseBody) {
+			if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelRateLimitScopeClaudeSonnet, resetAt); err != nil {
+				slog.Warn("model_rate_limit_set_failed", "account_id", account.ID, "scope", modelRateLimitScopeClaudeSonnet, "error", err)
+			} else {
+				slog.Info("account_model_rate_limited", "account_id", account.ID, "scope", modelRateLimitScopeClaudeSonnet, "reset_at", resetAt)
+			}
+			return
+		}
 		if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
-			log.Printf("SetRateLimited failed for account %d: %v", account.ID, err)
+			slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 		}
 		return
 	}
 
 	resetAt := time.Unix(ts, 0)
 
+	if s.shouldScopeClaudeSonnetRateLimit(account, responseBody) {
+		if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelRateLimitScopeClaudeSonnet, resetAt); err != nil {
+			slog.Warn("model_rate_limit_set_failed", "account_id", account.ID, "scope", modelRateLimitScopeClaudeSonnet, "error", err)
+			return
+		}
+		slog.Info("account_model_rate_limited", "account_id", account.ID, "scope", modelRateLimitScopeClaudeSonnet, "reset_at", resetAt)
+		return
+	}
+
 	// 标记限流状态
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
-		log.Printf("SetRateLimited failed for account %d: %v", account.ID, err)
+		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
 
@@ -293,10 +393,21 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	windowEnd := resetAt
 	windowStart := resetAt.Add(-5 * time.Hour)
 	if err := s.accountRepo.UpdateSessionWindow(ctx, account.ID, &windowStart, &windowEnd, "rejected"); err != nil {
-		log.Printf("UpdateSessionWindow failed for account %d: %v", account.ID, err)
+		slog.Warn("rate_limit_update_session_window_failed", "account_id", account.ID, "error", err)
 	}
 
-	log.Printf("Account %d rate limited until %v", account.ID, resetAt)
+	slog.Info("account_rate_limited", "account_id", account.ID, "reset_at", resetAt)
+}
+
+func (s *RateLimitService) shouldScopeClaudeSonnetRateLimit(account *Account, responseBody []byte) bool {
+	if account == nil || account.Platform != PlatformAnthropic {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "sonnet")
 }
 
 // handle529 处理529过载错误
@@ -309,11 +420,11 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 
 	until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
 	if err := s.accountRepo.SetOverloaded(ctx, account.ID, until); err != nil {
-		log.Printf("SetOverloaded failed for account %d: %v", account.ID, err)
+		slog.Warn("overload_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
 
-	log.Printf("Account %d overloaded until %v", account.ID, until)
+	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
 }
 
 // UpdateSessionWindow 从成功响应更新5h窗口状态
@@ -336,17 +447,17 @@ func (s *RateLimitService) UpdateSessionWindow(ctx context.Context, account *Acc
 		end := start.Add(5 * time.Hour)
 		windowStart = &start
 		windowEnd = &end
-		log.Printf("Account %d: initializing 5h window from %v to %v (status: %s)", account.ID, start, end, status)
+		slog.Info("account_session_window_initialized", "account_id", account.ID, "window_start", start, "window_end", end, "status", status)
 	}
 
 	if err := s.accountRepo.UpdateSessionWindow(ctx, account.ID, windowStart, windowEnd, status); err != nil {
-		log.Printf("UpdateSessionWindow failed for account %d: %v", account.ID, err)
+		slog.Warn("session_window_update_failed", "account_id", account.ID, "error", err)
 	}
 
 	// 如果状态为allowed且之前有限流，说明窗口已重置，清除限流状态
 	if status == "allowed" && account.IsRateLimited() {
 		if err := s.ClearRateLimit(ctx, account.ID); err != nil {
-			log.Printf("ClearRateLimit failed for account %d: %v", account.ID, err)
+			slog.Warn("rate_limit_clear_failed", "account_id", account.ID, "error", err)
 		}
 	}
 }
@@ -356,7 +467,10 @@ func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) 
 	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
 		return err
 	}
-	return s.accountRepo.ClearAntigravityQuotaScopes(ctx, accountID)
+	if err := s.accountRepo.ClearAntigravityQuotaScopes(ctx, accountID); err != nil {
+		return err
+	}
+	return s.accountRepo.ClearModelRateLimits(ctx, accountID)
 }
 
 func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID int64) error {
@@ -365,7 +479,7 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	}
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.DeleteTempUnsched(ctx, accountID); err != nil {
-			log.Printf("DeleteTempUnsched failed for account %d: %v", accountID, err)
+			slog.Warn("temp_unsched_cache_delete_failed", "account_id", accountID, "error", err)
 		}
 	}
 	return nil
@@ -412,7 +526,7 @@ func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID i
 
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, accountID, state); err != nil {
-			log.Printf("SetTempUnsched failed for account %d: %v", accountID, err)
+			slog.Warn("temp_unsched_cache_set_failed", "account_id", accountID, "error", err)
 		}
 	}
 
@@ -515,17 +629,17 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 	}
 
 	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
-		log.Printf("SetTempUnschedulable failed for account %d: %v", account.ID, err)
+		slog.Warn("temp_unsched_set_failed", "account_id", account.ID, "error", err)
 		return false
 	}
 
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
-			log.Printf("SetTempUnsched cache failed for account %d: %v", account.ID, err)
+			slog.Warn("temp_unsched_cache_set_failed", "account_id", account.ID, "error", err)
 		}
 	}
 
-	log.Printf("Account %d temp unschedulable until %v (rule %d, code %d)", account.ID, until, ruleIndex, statusCode)
+	slog.Info("account_temp_unschedulable", "account_id", account.ID, "until", until, "rule_index", ruleIndex, "status_code", statusCode)
 	return true
 }
 
@@ -537,4 +651,125 @@ func truncateTempUnschedMessage(body []byte, maxBytes int) string {
 		body = body[:maxBytes]
 	}
 	return strings.TrimSpace(string(body))
+}
+
+// HandleStreamTimeout 处理流数据超时
+// 根据系统设置决定是否标记账户为临时不可调度或错误状态
+// 返回是否应该停止该账号的调度
+func (s *RateLimitService) HandleStreamTimeout(ctx context.Context, account *Account, model string) bool {
+	if account == nil {
+		return false
+	}
+
+	// 获取系统设置
+	if s.settingService == nil {
+		slog.Warn("stream_timeout_setting_service_missing", "account_id", account.ID)
+		return false
+	}
+
+	settings, err := s.settingService.GetStreamTimeoutSettings(ctx)
+	if err != nil {
+		slog.Warn("stream_timeout_get_settings_failed", "account_id", account.ID, "error", err)
+		return false
+	}
+
+	if !settings.Enabled {
+		return false
+	}
+
+	if settings.Action == StreamTimeoutActionNone {
+		return false
+	}
+
+	// 增加超时计数
+	var count int64 = 1
+	if s.timeoutCounterCache != nil {
+		count, err = s.timeoutCounterCache.IncrementTimeoutCount(ctx, account.ID, settings.ThresholdWindowMinutes)
+		if err != nil {
+			slog.Warn("stream_timeout_increment_count_failed", "account_id", account.ID, "error", err)
+			// 继续处理，使用 count=1
+			count = 1
+		}
+	}
+
+	slog.Info("stream_timeout_count", "account_id", account.ID, "count", count, "threshold", settings.ThresholdCount, "window_minutes", settings.ThresholdWindowMinutes, "model", model)
+
+	// 检查是否达到阈值
+	if count < int64(settings.ThresholdCount) {
+		return false
+	}
+
+	// 达到阈值，执行相应操作
+	switch settings.Action {
+	case StreamTimeoutActionTempUnsched:
+		return s.triggerStreamTimeoutTempUnsched(ctx, account, settings, model)
+	case StreamTimeoutActionError:
+		return s.triggerStreamTimeoutError(ctx, account, model)
+	default:
+		return false
+	}
+}
+
+// triggerStreamTimeoutTempUnsched 触发流超时临时不可调度
+func (s *RateLimitService) triggerStreamTimeoutTempUnsched(ctx context.Context, account *Account, settings *StreamTimeoutSettings, model string) bool {
+	now := time.Now()
+	until := now.Add(time.Duration(settings.TempUnschedMinutes) * time.Minute)
+
+	state := &TempUnschedState{
+		UntilUnix:       until.Unix(),
+		TriggeredAtUnix: now.Unix(),
+		StatusCode:      0, // 超时没有状态码
+		MatchedKeyword:  "stream_timeout",
+		RuleIndex:       -1, // 表示系统级规则
+		ErrorMessage:    "Stream data interval timeout for model: " + model,
+	}
+
+	reason := ""
+	if raw, err := json.Marshal(state); err == nil {
+		reason = string(raw)
+	}
+	if reason == "" {
+		reason = state.ErrorMessage
+	}
+
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("stream_timeout_set_temp_unsched_failed", "account_id", account.ID, "error", err)
+		return false
+	}
+
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
+			slog.Warn("stream_timeout_set_temp_unsched_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
+	// 重置超时计数
+	if s.timeoutCounterCache != nil {
+		if err := s.timeoutCounterCache.ResetTimeoutCount(ctx, account.ID); err != nil {
+			slog.Warn("stream_timeout_reset_count_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
+	slog.Info("stream_timeout_temp_unschedulable", "account_id", account.ID, "until", until, "model", model)
+	return true
+}
+
+// triggerStreamTimeoutError 触发流超时错误状态
+func (s *RateLimitService) triggerStreamTimeoutError(ctx context.Context, account *Account, model string) bool {
+	errorMsg := "Stream data interval timeout (repeated failures) for model: " + model
+
+	if err := s.accountRepo.SetError(ctx, account.ID, errorMsg); err != nil {
+		slog.Warn("stream_timeout_set_error_failed", "account_id", account.ID, "error", err)
+		return false
+	}
+
+	// 重置超时计数
+	if s.timeoutCounterCache != nil {
+		if err := s.timeoutCounterCache.ResetTimeoutCount(ctx, account.ID); err != nil {
+			slog.Warn("stream_timeout_reset_count_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
+	slog.Warn("stream_timeout_account_error", "account_id", account.ID, "model", model)
+	return true
 }

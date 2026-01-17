@@ -147,6 +147,10 @@ func (s *accountRepoStub) SetAntigravityQuotaScopeLimit(ctx context.Context, id 
 	panic("unexpected SetAntigravityQuotaScopeLimit call")
 }
 
+func (s *accountRepoStub) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time) error {
+	panic("unexpected SetModelRateLimit call")
+}
+
 func (s *accountRepoStub) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
 	panic("unexpected SetOverloaded call")
 }
@@ -165,6 +169,10 @@ func (s *accountRepoStub) ClearRateLimit(ctx context.Context, id int64) error {
 
 func (s *accountRepoStub) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
 	panic("unexpected ClearAntigravityQuotaScopes call")
+}
+
+func (s *accountRepoStub) ClearModelRateLimits(ctx context.Context, id int64) error {
+	panic("unexpected ClearModelRateLimits call")
 }
 
 func (s *accountRepoStub) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {

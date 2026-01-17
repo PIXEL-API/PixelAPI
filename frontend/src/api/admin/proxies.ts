@@ -4,7 +4,13 @@
  */
 
 import { apiClient } from '../client'
-import type { Proxy, CreateProxyRequest, UpdateProxyRequest, PaginatedResponse } from '@/types'
+import type {
+  Proxy,
+  ProxyAccountSummary,
+  CreateProxyRequest,
+  UpdateProxyRequest,
+  PaginatedResponse
+} from '@/types'
 
 /**
  * List all proxies with pagination
@@ -120,6 +126,7 @@ export async function testProxy(id: number): Promise<{
   city?: string
   region?: string
   country?: string
+  country_code?: string
 }> {
   const { data } = await apiClient.post<{
     success: boolean
@@ -129,6 +136,7 @@ export async function testProxy(id: number): Promise<{
     city?: string
     region?: string
     country?: string
+    country_code?: string
   }>(`/admin/proxies/${id}/test`)
   return data
 }
@@ -160,8 +168,8 @@ export async function getStats(id: number): Promise<{
  * @param id - Proxy ID
  * @returns List of accounts using the proxy
  */
-export async function getProxyAccounts(id: number): Promise<PaginatedResponse<any>> {
-  const { data } = await apiClient.get<PaginatedResponse<any>>(`/admin/proxies/${id}/accounts`)
+export async function getProxyAccounts(id: number): Promise<ProxyAccountSummary[]> {
+  const { data } = await apiClient.get<ProxyAccountSummary[]>(`/admin/proxies/${id}/accounts`)
   return data
 }
 
@@ -189,6 +197,17 @@ export async function batchCreate(
   return data
 }
 
+export async function batchDelete(ids: number[]): Promise<{
+  deleted_ids: number[]
+  skipped: Array<{ id: number; reason: string }>
+}> {
+  const { data } = await apiClient.post<{
+    deleted_ids: number[]
+    skipped: Array<{ id: number; reason: string }>
+  }>('/admin/proxies/batch-delete', { ids })
+  return data
+}
+
 export const proxiesAPI = {
   list,
   getAll,
@@ -201,7 +220,8 @@ export const proxiesAPI = {
   testProxy,
   getStats,
   getProxyAccounts,
-  batchCreate
+  batchCreate,
+  batchDelete
 }
 
 export default proxiesAPI

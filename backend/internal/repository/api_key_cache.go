@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -13,11 +14,16 @@ import (
 const (
 	apiKeyRateLimitKeyPrefix = "apikey:ratelimit:"
 	apiKeyRateLimitDuration  = 24 * time.Hour
+	apiKeyAuthCachePrefix    = "apikey:auth:"
 )
 
 // apiKeyRateLimitKey generates the Redis key for API key creation rate limiting.
 func apiKeyRateLimitKey(userID int64) string {
 	return fmt.Sprintf("%s%d", apiKeyRateLimitKeyPrefix, userID)
+}
+
+func apiKeyAuthCacheKey(key string) string {
+	return fmt.Sprintf("%s%s", apiKeyAuthCachePrefix, key)
 }
 
 type apiKeyCache struct {
@@ -57,4 +63,31 @@ func (c *apiKeyCache) IncrementDailyUsage(ctx context.Context, apiKey string) er
 
 func (c *apiKeyCache) SetDailyUsageExpiry(ctx context.Context, apiKey string, ttl time.Duration) error {
 	return c.rdb.Expire(ctx, apiKey, ttl).Err()
+}
+
+func (c *apiKeyCache) GetAuthCache(ctx context.Context, key string) (*service.APIKeyAuthCacheEntry, error) {
+	val, err := c.rdb.Get(ctx, apiKeyAuthCacheKey(key)).Bytes()
+	if err != nil {
+		return nil, err
+	}
+	var entry service.APIKeyAuthCacheEntry
+	if err := json.Unmarshal(val, &entry); err != nil {
+		return nil, err
+	}
+	return &entry, nil
+}
+
+func (c *apiKeyCache) SetAuthCache(ctx context.Context, key string, entry *service.APIKeyAuthCacheEntry, ttl time.Duration) error {
+	if entry == nil {
+		return nil
+	}
+	payload, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	return c.rdb.Set(ctx, apiKeyAuthCacheKey(key), payload, ttl).Err()
+}
+
+func (c *apiKeyCache) DeleteAuthCache(ctx context.Context, key string) error {
+	return c.rdb.Del(ctx, apiKeyAuthCacheKey(key)).Err()
 }

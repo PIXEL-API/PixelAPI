@@ -144,10 +144,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
+import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
 import VersionBadge from '@/components/common/VersionBadge.vue'
 
 const { t } = useI18n()
@@ -156,6 +156,7 @@ const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const onboardingStore = useOnboardingStore()
+const adminSettingsStore = useAdminSettingsStore()
 
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
@@ -442,12 +443,16 @@ const personalNavItems = computed(() => {
 const adminNavItems = computed(() => {
   const baseItems = [
     { path: '/admin/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
+    ...(adminSettingsStore.opsMonitoringEnabled
+      ? [{ path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon }]
+      : []),
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
     { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
+    { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
   ]
 
@@ -510,6 +515,23 @@ if (
   isDark.value = true
   document.documentElement.classList.add('dark')
 }
+
+// Fetch admin settings (for feature-gated nav items like Ops).
+watch(
+  isAdmin,
+  (v) => {
+    if (v) {
+      adminSettingsStore.fetch()
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(() => {
+  if (isAdmin.value) {
+    adminSettingsStore.fetch()
+  }
+})
 </script>
 
 <style scoped>

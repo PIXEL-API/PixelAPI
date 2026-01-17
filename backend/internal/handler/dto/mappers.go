@@ -53,16 +53,18 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		return nil
 	}
 	return &APIKey{
-		ID:        k.ID,
-		UserID:    k.UserID,
-		Key:       k.Key,
-		Name:      k.Name,
-		GroupID:   k.GroupID,
-		Status:    k.Status,
-		CreatedAt: k.CreatedAt,
-		UpdatedAt: k.UpdatedAt,
-		User:      UserFromServiceShallow(k.User),
-		Group:     GroupFromServiceShallow(k.Group),
+		ID:          k.ID,
+		UserID:      k.UserID,
+		Key:         k.Key,
+		Name:        k.Name,
+		GroupID:     k.GroupID,
+		Status:      k.Status,
+		IPWhitelist: k.IPWhitelist,
+		IPBlacklist: k.IPBlacklist,
+		CreatedAt:   k.CreatedAt,
+		UpdatedAt:   k.UpdatedAt,
+		User:        UserFromServiceShallow(k.User),
+		Group:       GroupFromServiceShallow(k.Group),
 	}
 }
 
@@ -71,25 +73,27 @@ func GroupFromServiceShallow(g *service.Group) *Group {
 		return nil
 	}
 	return &Group{
-		ID:               g.ID,
-		Name:             g.Name,
-		Description:      g.Description,
-		Platform:         g.Platform,
-		RateMultiplier:   g.RateMultiplier,
-		IsExclusive:      g.IsExclusive,
-		Status:           g.Status,
-		SubscriptionType: g.SubscriptionType,
-		DailyLimitUSD:    g.DailyLimitUSD,
-		WeeklyLimitUSD:   g.WeeklyLimitUSD,
-		MonthlyLimitUSD:  g.MonthlyLimitUSD,
-		ImagePrice1K:     g.ImagePrice1K,
-		ImagePrice2K:     g.ImagePrice2K,
-		ImagePrice4K:     g.ImagePrice4K,
-		ClaudeCodeOnly:   g.ClaudeCodeOnly,
-		FallbackGroupID:  g.FallbackGroupID,
-		CreatedAt:        g.CreatedAt,
-		UpdatedAt:        g.UpdatedAt,
-		AccountCount:     g.AccountCount,
+		ID:                  g.ID,
+		Name:                g.Name,
+		Description:         g.Description,
+		Platform:            g.Platform,
+		RateMultiplier:      g.RateMultiplier,
+		IsExclusive:         g.IsExclusive,
+		Status:              g.Status,
+		SubscriptionType:    g.SubscriptionType,
+		DailyLimitUSD:       g.DailyLimitUSD,
+		WeeklyLimitUSD:      g.WeeklyLimitUSD,
+		MonthlyLimitUSD:     g.MonthlyLimitUSD,
+		ImagePrice1K:        g.ImagePrice1K,
+		ImagePrice2K:        g.ImagePrice2K,
+		ImagePrice4K:        g.ImagePrice4K,
+		ClaudeCodeOnly:      g.ClaudeCodeOnly,
+		FallbackGroupID:     g.FallbackGroupID,
+		ModelRouting:        g.ModelRouting,
+		ModelRoutingEnabled: g.ModelRoutingEnabled,
+		CreatedAt:           g.CreatedAt,
+		UpdatedAt:           g.UpdatedAt,
+		AccountCount:        g.AccountCount,
 	}
 }
 
@@ -112,7 +116,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	if a == nil {
 		return nil
 	}
-	return &Account{
+	out := &Account{
 		ID:                      a.ID,
 		Name:                    a.Name,
 		Notes:                   a.Notes,
@@ -123,6 +127,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		ProxyID:                 a.ProxyID,
 		Concurrency:             a.Concurrency,
 		Priority:                a.Priority,
+		RateMultiplier:          a.BillingRateMultiplier(),
 		Status:                  a.Status,
 		ErrorMessage:            a.ErrorMessage,
 		LastUsedAt:              a.LastUsedAt,
@@ -141,6 +146,24 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		SessionWindowStatus:     a.SessionWindowStatus,
 		GroupIDs:                a.GroupIDs,
 	}
+
+	// 提取 5h 窗口费用控制和会话数量控制配置（仅 Anthropic OAuth/SetupToken 账号有效）
+	if a.IsAnthropicOAuthOrSetupToken() {
+		if limit := a.GetWindowCostLimit(); limit > 0 {
+			out.WindowCostLimit = &limit
+		}
+		if reserve := a.GetWindowCostStickyReserve(); reserve > 0 {
+			out.WindowCostStickyReserve = &reserve
+		}
+		if maxSessions := a.GetMaxSessions(); maxSessions > 0 {
+			out.MaxSessions = &maxSessions
+		}
+		if idleTimeout := a.GetSessionIdleTimeoutMinutes(); idleTimeout > 0 {
+			out.SessionIdleTimeoutMin = &idleTimeout
+		}
+	}
+
+	return out
 }
 
 func AccountFromService(a *service.Account) *Account {
@@ -210,8 +233,29 @@ func ProxyWithAccountCountFromService(p *service.ProxyWithAccountCount) *ProxyWi
 		return nil
 	}
 	return &ProxyWithAccountCount{
-		Proxy:        *ProxyFromService(&p.Proxy),
-		AccountCount: p.AccountCount,
+		Proxy:          *ProxyFromService(&p.Proxy),
+		AccountCount:   p.AccountCount,
+		LatencyMs:      p.LatencyMs,
+		LatencyStatus:  p.LatencyStatus,
+		LatencyMessage: p.LatencyMessage,
+		IPAddress:      p.IPAddress,
+		Country:        p.Country,
+		CountryCode:    p.CountryCode,
+		Region:         p.Region,
+		City:           p.City,
+	}
+}
+
+func ProxyAccountSummaryFromService(a *service.ProxyAccountSummary) *ProxyAccountSummary {
+	if a == nil {
+		return nil
+	}
+	return &ProxyAccountSummary{
+		ID:       a.ID,
+		Name:     a.Name,
+		Platform: a.Platform,
+		Type:     a.Type,
+		Notes:    a.Notes,
 	}
 }
 
@@ -250,11 +294,12 @@ func AccountSummaryFromService(a *service.Account) *AccountSummary {
 
 // usageLogFromServiceBase is a helper that converts service UsageLog to DTO.
 // The account parameter allows caller to control what Account info is included.
-func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary) *UsageLog {
+// The includeIPAddress parameter controls whether to include the IP address (admin-only).
+func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary, includeIPAddress bool) *UsageLog {
 	if l == nil {
 		return nil
 	}
-	return &UsageLog{
+	result := &UsageLog{
 		ID:                    l.ID,
 		UserID:                l.UserID,
 		APIKeyID:              l.APIKeyID,
@@ -276,6 +321,7 @@ func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary) *Usag
 		TotalCost:             l.TotalCost,
 		ActualCost:            l.ActualCost,
 		RateMultiplier:        l.RateMultiplier,
+		AccountRateMultiplier: l.AccountRateMultiplier,
 		BillingType:           l.BillingType,
 		Stream:                l.Stream,
 		DurationMs:            l.DurationMs,
@@ -290,21 +336,26 @@ func usageLogFromServiceBase(l *service.UsageLog, account *AccountSummary) *Usag
 		Group:                 GroupFromServiceShallow(l.Group),
 		Subscription:          UserSubscriptionFromService(l.Subscription),
 	}
+	// IP 地址仅对管理员可见
+	if includeIPAddress {
+		result.IPAddress = l.IPAddress
+	}
+	return result
 }
 
 // UsageLogFromService converts a service UsageLog to DTO for regular users.
-// It excludes Account details - users should not see account information.
+// It excludes Account details and IP address - users should not see these.
 func UsageLogFromService(l *service.UsageLog) *UsageLog {
-	return usageLogFromServiceBase(l, nil)
+	return usageLogFromServiceBase(l, nil, false)
 }
 
 // UsageLogFromServiceAdmin converts a service UsageLog to DTO for admin users.
-// It includes minimal Account info (ID, Name only).
+// It includes minimal Account info (ID, Name only) and IP address.
 func UsageLogFromServiceAdmin(l *service.UsageLog) *UsageLog {
 	if l == nil {
 		return nil
 	}
-	return usageLogFromServiceBase(l, AccountSummaryFromService(l.Account))
+	return usageLogFromServiceBase(l, AccountSummaryFromService(l.Account), true)
 }
 
 func SettingFromService(s *service.Setting) *Setting {
@@ -360,5 +411,37 @@ func BulkAssignResultFromService(r *service.BulkAssignResult) *BulkAssignResult 
 		FailedCount:   r.FailedCount,
 		Subscriptions: subs,
 		Errors:        r.Errors,
+	}
+}
+
+func PromoCodeFromService(pc *service.PromoCode) *PromoCode {
+	if pc == nil {
+		return nil
+	}
+	return &PromoCode{
+		ID:          pc.ID,
+		Code:        pc.Code,
+		BonusAmount: pc.BonusAmount,
+		MaxUses:     pc.MaxUses,
+		UsedCount:   pc.UsedCount,
+		Status:      pc.Status,
+		ExpiresAt:   pc.ExpiresAt,
+		Notes:       pc.Notes,
+		CreatedAt:   pc.CreatedAt,
+		UpdatedAt:   pc.UpdatedAt,
+	}
+}
+
+func PromoCodeUsageFromService(u *service.PromoCodeUsage) *PromoCodeUsage {
+	if u == nil {
+		return nil
+	}
+	return &PromoCodeUsage{
+		ID:          u.ID,
+		PromoCodeID: u.PromoCodeID,
+		UserID:      u.UserID,
+		BonusAmount: u.BonusAmount,
+		UsedAt:      u.UsedAt,
+		User:        UserFromServiceShallow(u.User),
 	}
 }

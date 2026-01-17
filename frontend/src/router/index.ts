@@ -5,6 +5,9 @@
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores/app'
+import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
+import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 
 /**
  * Route definitions with lazy loading
@@ -173,6 +176,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/ops',
+    name: 'AdminOps',
+    component: () => import('@/views/admin/ops/OpsDashboard.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Ops Monitoring',
+      titleKey: 'admin.ops.title',
+      descriptionKey: 'admin.ops.description'
+    }
+  },
+  {
     path: '/admin/users',
     name: 'AdminUsers',
     component: () => import('@/views/admin/UsersView.vue'),
@@ -245,6 +260,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/promo-codes',
+    name: 'AdminPromoCodes',
+    component: () => import('@/views/admin/PromoCodesView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Promo Code Management',
+      titleKey: 'admin.promo.title',
+      descriptionKey: 'admin.promo.description'
+    }
+  },
+  {
     path: '/admin/settings',
     name: 'AdminSettings',
     component: () => import('@/views/admin/SettingsView.vue'),
@@ -301,7 +328,15 @@ const router = createRouter({
  */
 let authInitialized = false
 
+// 初始化导航加载状态和预加载
+const navigationLoading = useNavigationLoadingState()
+// 延迟初始化预加载，传入 router 实例
+let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
+
 router.beforeEach((to, _from, next) => {
+  // 开始导航加载状态
+  navigationLoading.startNavigation()
+
   const authStore = useAuthStore()
 
   // Restore auth state from localStorage on first navigation (page refresh)
@@ -311,10 +346,12 @@ router.beforeEach((to, _from, next) => {
   }
 
   // Set page title
+  const appStore = useAppStore()
+  const siteName = appStore.siteName || 'Sub2API'
   if (to.meta.title) {
-    document.title = `${to.meta.title} - Sub2API`
+    document.title = `${to.meta.title} - ${siteName}`
   } else {
-    document.title = 'Sub2API'
+    document.title = siteName
   }
 
   // Check if route requires authentication
@@ -372,10 +409,49 @@ router.beforeEach((to, _from, next) => {
 })
 
 /**
+ * Navigation guard: End loading and trigger prefetch
+ */
+router.afterEach((to) => {
+  // 结束导航加载状态
+  navigationLoading.endNavigation()
+
+  // 懒初始化预加载（首次导航时创建，传入 router 实例）
+  if (!routePrefetch) {
+    routePrefetch = useRoutePrefetch(router)
+  }
+  // 触发路由预加载（在浏览器空闲时执行）
+  routePrefetch.triggerPrefetch(to)
+})
+
+/**
  * Navigation guard: Error handling
+ * Handles dynamic import failures caused by deployment updates
  */
 router.onError((error) => {
   console.error('Router error:', error)
+
+  // Check if this is a dynamic import failure (chunk loading error)
+  const isChunkLoadError =
+    error.message?.includes('Failed to fetch dynamically imported module') ||
+    error.message?.includes('Loading chunk') ||
+    error.message?.includes('Loading CSS chunk') ||
+    error.name === 'ChunkLoadError'
+
+  if (isChunkLoadError) {
+    // Avoid infinite reload loop by checking sessionStorage
+    const reloadKey = 'chunk_reload_attempted'
+    const lastReload = sessionStorage.getItem(reloadKey)
+    const now = Date.now()
+
+    // Allow reload if never attempted or more than 10 seconds ago
+    if (!lastReload || now - parseInt(lastReload) > 10000) {
+      sessionStorage.setItem(reloadKey, now.toString())
+      console.warn('Chunk load error detected, reloading page to fetch latest version...')
+      window.location.reload()
+    } else {
+      console.error('Chunk load error persists after reload. Please clear browser cache.')
+    }
+  }
 })
 
 export default router

@@ -51,6 +51,24 @@
             >
               <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
             </button>
+            <button
+              @click="handleBatchTest"
+              :disabled="batchTesting || loading"
+              class="btn btn-secondary"
+              :title="t('admin.proxies.testConnection')"
+            >
+              <Icon name="play" size="md" class="mr-2" />
+              {{ t('admin.proxies.testConnection') }}
+            </button>
+            <button
+              @click="openBatchDelete"
+              :disabled="selectedCount === 0"
+              class="btn btn-danger"
+              :title="t('admin.proxies.batchDeleteAction')"
+            >
+              <Icon name="trash" size="md" class="mr-2" />
+              {{ t('admin.proxies.batchDeleteAction') }}
+            </button>
             <button @click="showCreateModal = true" class="btn btn-primary">
               <Icon name="plus" size="md" class="mr-2" />
               {{ t('admin.proxies.createProxy') }}
@@ -61,6 +79,26 @@
 
       <template #table>
         <DataTable :columns="columns" :data="proxies" :loading="loading">
+          <template #header-select>
+            <input
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="allVisibleSelected"
+              @click.stop
+              @change="toggleSelectAllVisible($event)"
+            />
+          </template>
+
+          <template #cell-select="{ row }">
+            <input
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="selectedProxyIds.has(row.id)"
+              @click.stop
+              @change="toggleSelectRow(row.id, $event)"
+            />
+          </template>
+
           <template #cell-name="{ value }">
             <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
           </template>
@@ -79,17 +117,58 @@
             <code class="code text-xs">{{ row.host }}:{{ row.port }}</code>
           </template>
 
-          <template #cell-status="{ value }">
-            <span :class="['badge', value === 'active' ? 'badge-success' : 'badge-danger']">
-              {{ t('admin.accounts.status.' + value) }}
+          <template #cell-location="{ row }">
+            <div class="flex items-center gap-2">
+              <img
+                v-if="row.country_code"
+                :src="flagUrl(row.country_code)"
+                :alt="row.country || row.country_code"
+                class="h-4 w-6 rounded-sm"
+              />
+              <span v-if="formatLocation(row)" class="text-sm text-gray-700 dark:text-gray-200">
+                {{ formatLocation(row) }}
+              </span>
+              <span v-else class="text-sm text-gray-400">-</span>
+            </div>
+          </template>
+
+          <template #cell-account_count="{ row, value }">
+            <button
+              v-if="(value || 0) > 0"
+              type="button"
+              class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-primary-700 hover:bg-gray-200 dark:bg-dark-600 dark:text-primary-300 dark:hover:bg-dark-500"
+              @click="openAccountsModal(row)"
+            >
+              {{ t('admin.groups.accountsCount', { count: value || 0 }) }}
+            </button>
+            <span
+              v-else
+              class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-800 dark:bg-dark-600 dark:text-gray-300"
+            >
+              {{ t('admin.groups.accountsCount', { count: 0 }) }}
             </span>
           </template>
 
-          <template #cell-account_count="{ value }">
+          <template #cell-latency="{ row }">
             <span
-              class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-800 dark:bg-dark-600 dark:text-gray-300"
+              v-if="row.latency_status === 'failed'"
+              class="badge badge-danger"
+              :title="row.latency_message || undefined"
             >
-              {{ t('admin.groups.accountsCount', { count: value || 0 }) }}
+              {{ t('admin.proxies.latencyFailed') }}
+            </span>
+            <span
+              v-else-if="typeof row.latency_ms === 'number'"
+              :class="['badge', row.latency_ms < 200 ? 'badge-success' : 'badge-warning']"
+            >
+              {{ row.latency_ms }}ms
+            </span>
+            <span v-else class="text-sm text-gray-400">-</span>
+          </template>
+
+          <template #cell-status="{ value }">
+            <span :class="['badge', value === 'active' ? 'badge-success' : 'badge-danger']">
+              {{ t('admin.accounts.status.' + value) }}
             </span>
           </template>
 
@@ -515,6 +594,63 @@
       @confirm="confirmDelete"
       @cancel="showDeleteDialog = false"
     />
+
+    <!-- Batch Delete Confirmation Dialog -->
+    <ConfirmDialog
+      :show="showBatchDeleteDialog"
+      :title="t('admin.proxies.batchDelete')"
+      :message="t('admin.proxies.batchDeleteConfirm', { count: selectedCount })"
+      :confirm-text="t('common.delete')"
+      :cancel-text="t('common.cancel')"
+      :danger="true"
+      @confirm="confirmBatchDelete"
+      @cancel="showBatchDeleteDialog = false"
+    />
+
+    <!-- Proxy Accounts Dialog -->
+    <BaseDialog
+      :show="showAccountsModal"
+      :title="t('admin.proxies.accountsTitle', { name: accountsProxy?.name || '' })"
+      width="normal"
+      @close="closeAccountsModal"
+    >
+      <div v-if="accountsLoading" class="flex items-center justify-center py-8 text-sm text-gray-500">
+        <Icon name="refresh" size="md" class="mr-2 animate-spin" />
+        {{ t('common.loading') }}
+      </div>
+      <div v-else-if="proxyAccounts.length === 0" class="py-6 text-center text-sm text-gray-500">
+        {{ t('admin.proxies.accountsEmpty') }}
+      </div>
+      <div v-else class="max-h-80 overflow-auto">
+        <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-dark-700">
+          <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-dark-400">
+            <tr>
+              <th class="px-4 py-2 text-left">{{ t('admin.proxies.accountName') }}</th>
+              <th class="px-4 py-2 text-left">{{ t('admin.accounts.columns.platformType') }}</th>
+              <th class="px-4 py-2 text-left">{{ t('admin.proxies.accountNotes') }}</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
+            <tr v-for="account in proxyAccounts" :key="account.id">
+              <td class="px-4 py-2 font-medium text-gray-900 dark:text-white">{{ account.name }}</td>
+              <td class="px-4 py-2">
+                <PlatformTypeBadge :platform="account.platform" :type="account.type" />
+              </td>
+              <td class="px-4 py-2 text-gray-600 dark:text-gray-300">
+                {{ account.notes || '-' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <template #footer>
+        <div class="flex justify-end">
+          <button @click="closeAccountsModal" class="btn btn-secondary">
+            {{ t('common.close') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -523,7 +659,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyProtocol } from '@/types'
+import type { Proxy, ProxyAccountSummary, ProxyProtocol } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -534,15 +670,19 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
+import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 
 const columns = computed<Column[]>(() => [
+  { key: 'select', label: '', sortable: false },
   { key: 'name', label: t('admin.proxies.columns.name'), sortable: true },
   { key: 'protocol', label: t('admin.proxies.columns.protocol'), sortable: true },
   { key: 'address', label: t('admin.proxies.columns.address'), sortable: false },
+  { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
   { key: 'account_count', label: t('admin.proxies.columns.accounts'), sortable: true },
+  { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: false },
   { key: 'status', label: t('admin.proxies.columns.status'), sortable: true },
   { key: 'actions', label: t('admin.proxies.columns.actions'), sortable: false }
 ])
@@ -592,10 +732,23 @@ const pagination = reactive({
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showDeleteDialog = ref(false)
+const showBatchDeleteDialog = ref(false)
+const showAccountsModal = ref(false)
 const submitting = ref(false)
 const testingProxyIds = ref<Set<number>>(new Set())
+const batchTesting = ref(false)
+const selectedProxyIds = ref<Set<number>>(new Set())
+const accountsProxy = ref<Proxy | null>(null)
+const proxyAccounts = ref<ProxyAccountSummary[]>([])
+const accountsLoading = ref(false)
 const editingProxy = ref<Proxy | null>(null)
 const deletingProxy = ref<Proxy | null>(null)
+
+const selectedCount = computed(() => selectedProxyIds.value.size)
+const allVisibleSelected = computed(() => {
+  if (proxies.value.length === 0) return false
+  return proxies.value.every((proxy) => selectedProxyIds.value.has(proxy.id))
+})
 
 // Batch import state
 const createMode = ref<'standard' | 'batch'>('standard')
@@ -639,6 +792,30 @@ const isAbortError = (error: unknown) => {
   if (!error || typeof error !== 'object') return false
   const maybeError = error as { name?: string; code?: string }
   return maybeError.name === 'AbortError' || maybeError.code === 'ERR_CANCELED'
+}
+
+const toggleSelectRow = (id: number, event: Event) => {
+  const target = event.target as HTMLInputElement
+  const next = new Set(selectedProxyIds.value)
+  if (target.checked) {
+    next.add(id)
+  } else {
+    next.delete(id)
+  }
+  selectedProxyIds.value = next
+}
+
+const toggleSelectAllVisible = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const next = new Set(selectedProxyIds.value)
+  for (const proxy of proxies.value) {
+    if (target.checked) {
+      next.add(proxy.id)
+    } else {
+      next.delete(proxy.id)
+    }
+  }
+  selectedProxyIds.value = next
 }
 
 const loadProxies = async () => {
@@ -895,33 +1072,176 @@ const handleUpdateProxy = async () => {
   }
 }
 
-const handleTestConnection = async (proxy: Proxy) => {
-  // Create new Set to trigger reactivity
-  testingProxyIds.value = new Set([...testingProxyIds.value, proxy.id])
+const applyLatencyResult = (
+  proxyId: number,
+  result: {
+    success: boolean
+    latency_ms?: number
+    message?: string
+    ip_address?: string
+    country?: string
+    country_code?: string
+    region?: string
+    city?: string
+  }
+) => {
+  const target = proxies.value.find((proxy) => proxy.id === proxyId)
+  if (!target) return
+  if (result.success) {
+    target.latency_status = 'success'
+    target.latency_ms = result.latency_ms
+    target.ip_address = result.ip_address
+    target.country = result.country
+    target.country_code = result.country_code
+    target.region = result.region
+    target.city = result.city
+  } else {
+    target.latency_status = 'failed'
+    target.latency_ms = undefined
+    target.ip_address = undefined
+    target.country = undefined
+    target.country_code = undefined
+    target.region = undefined
+    target.city = undefined
+  }
+  target.latency_message = result.message
+}
+
+const formatLocation = (proxy: Proxy) => {
+  const parts = [proxy.country, proxy.city].filter(Boolean) as string[]
+  return parts.join(' · ')
+}
+
+const flagUrl = (code: string) =>
+  `https://unpkg.com/flag-icons/flags/4x3/${code.toLowerCase()}.svg`
+
+const startTestingProxy = (proxyId: number) => {
+  testingProxyIds.value = new Set([...testingProxyIds.value, proxyId])
+}
+
+const stopTestingProxy = (proxyId: number) => {
+  const next = new Set(testingProxyIds.value)
+  next.delete(proxyId)
+  testingProxyIds.value = next
+}
+
+const runProxyTest = async (proxyId: number, notify: boolean) => {
+  startTestingProxy(proxyId)
   try {
-    const result = await adminAPI.proxies.testProxy(proxy.id)
-    if (result.success) {
-      const message = result.latency_ms
-        ? t('admin.proxies.proxyWorkingWithLatency', { latency: result.latency_ms })
-        : t('admin.proxies.proxyWorking')
-      appStore.showSuccess(message)
-    } else {
-      appStore.showError(result.message || t('admin.proxies.proxyTestFailed'))
+    const result = await adminAPI.proxies.testProxy(proxyId)
+    applyLatencyResult(proxyId, result)
+    if (notify) {
+      if (result.success) {
+        const message = result.latency_ms
+          ? t('admin.proxies.proxyWorkingWithLatency', { latency: result.latency_ms })
+          : t('admin.proxies.proxyWorking')
+        appStore.showSuccess(message)
+      } else {
+        appStore.showError(result.message || t('admin.proxies.proxyTestFailed'))
+      }
     }
+    return result
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToTest'))
+    const message = error.response?.data?.detail || t('admin.proxies.failedToTest')
+    applyLatencyResult(proxyId, { success: false, message })
+    if (notify) {
+      appStore.showError(message)
+    }
     console.error('Error testing proxy:', error)
+    return null
   } finally {
-    // Create new Set without this proxy id to trigger reactivity
-    const newSet = new Set(testingProxyIds.value)
-    newSet.delete(proxy.id)
-    testingProxyIds.value = newSet
+    stopTestingProxy(proxyId)
+  }
+}
+
+const handleTestConnection = async (proxy: Proxy) => {
+  await runProxyTest(proxy.id, true)
+}
+
+const fetchAllProxiesForBatch = async (): Promise<Proxy[]> => {
+  const pageSize = 200
+  const result: Proxy[] = []
+  let page = 1
+  let totalPages = 1
+
+  while (page <= totalPages) {
+    const response = await adminAPI.proxies.list(
+      page,
+      pageSize,
+      {
+        protocol: filters.protocol || undefined,
+        status: filters.status as any,
+        search: searchQuery.value || undefined
+      }
+    )
+    result.push(...response.items)
+    totalPages = response.pages || 1
+    page++
+  }
+
+  return result
+}
+
+const runBatchProxyTests = async (ids: number[]) => {
+  if (ids.length === 0) return
+  const concurrency = 5
+  let index = 0
+
+  const worker = async () => {
+    while (index < ids.length) {
+      const current = ids[index]
+      index++
+      await runProxyTest(current, false)
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, ids.length) }, () => worker())
+  await Promise.all(workers)
+}
+
+const handleBatchTest = async () => {
+  if (batchTesting.value) return
+
+  batchTesting.value = true
+  try {
+    let ids: number[] = []
+    if (selectedCount.value > 0) {
+      ids = Array.from(selectedProxyIds.value)
+    } else {
+      const allProxies = await fetchAllProxiesForBatch()
+      ids = allProxies.map((proxy) => proxy.id)
+    }
+
+    if (ids.length === 0) {
+      appStore.showInfo(t('admin.proxies.batchTestEmpty'))
+      return
+    }
+
+    await runBatchProxyTests(ids)
+    appStore.showSuccess(t('admin.proxies.batchTestDone', { count: ids.length }))
+    loadProxies()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.proxies.batchTestFailed'))
+    console.error('Error batch testing proxies:', error)
+  } finally {
+    batchTesting.value = false
   }
 }
 
 const handleDelete = (proxy: Proxy) => {
+  if ((proxy.account_count || 0) > 0) {
+    appStore.showError(t('admin.proxies.deleteBlockedInUse'))
+    return
+  }
   deletingProxy.value = proxy
   showDeleteDialog.value = true
+}
+
+const openBatchDelete = () => {
+  if (selectedCount.value === 0) {
+    return
+  }
+  showBatchDeleteDialog.value = true
 }
 
 const confirmDelete = async () => {
@@ -931,12 +1251,66 @@ const confirmDelete = async () => {
     await adminAPI.proxies.delete(deletingProxy.value.id)
     appStore.showSuccess(t('admin.proxies.proxyDeleted'))
     showDeleteDialog.value = false
+    if (selectedProxyIds.value.has(deletingProxy.value.id)) {
+      const next = new Set(selectedProxyIds.value)
+      next.delete(deletingProxy.value.id)
+      selectedProxyIds.value = next
+    }
     deletingProxy.value = null
     loadProxies()
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.proxies.failedToDelete'))
     console.error('Error deleting proxy:', error)
   }
+}
+
+const confirmBatchDelete = async () => {
+  const ids = Array.from(selectedProxyIds.value)
+  if (ids.length === 0) {
+    showBatchDeleteDialog.value = false
+    return
+  }
+
+  try {
+    const result = await adminAPI.proxies.batchDelete(ids)
+    const deleted = result.deleted_ids?.length || 0
+    const skipped = result.skipped?.length || 0
+
+    if (deleted > 0) {
+      appStore.showSuccess(t('admin.proxies.batchDeleteDone', { deleted, skipped }))
+    } else if (skipped > 0) {
+      appStore.showInfo(t('admin.proxies.batchDeleteSkipped', { skipped }))
+    }
+
+    selectedProxyIds.value = new Set()
+    showBatchDeleteDialog.value = false
+    loadProxies()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.proxies.batchDeleteFailed'))
+    console.error('Error batch deleting proxies:', error)
+  }
+}
+
+const openAccountsModal = async (proxy: Proxy) => {
+  accountsProxy.value = proxy
+  proxyAccounts.value = []
+  accountsLoading.value = true
+  showAccountsModal.value = true
+
+  try {
+    proxyAccounts.value = await adminAPI.proxies.getProxyAccounts(proxy.id)
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.proxies.accountsFailed'))
+    console.error('Error loading proxy accounts:', error)
+  } finally {
+    accountsLoading.value = false
+  }
+}
+
+const closeAccountsModal = () => {
+  showAccountsModal.value = false
+  accountsProxy.value = null
+  proxyAccounts.value = []
 }
 
 onMounted(() => {

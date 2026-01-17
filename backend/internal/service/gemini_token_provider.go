@@ -40,7 +40,7 @@ func (p *GeminiTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		return "", errors.New("not a gemini oauth account")
 	}
 
-	cacheKey := geminiTokenCacheKey(account)
+	cacheKey := GeminiTokenCacheKey(account)
 
 	// 1) Try cache first.
 	if p.tokenCache != nil {
@@ -151,10 +151,10 @@ func (p *GeminiTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	return accessToken, nil
 }
 
-func geminiTokenCacheKey(account *Account) string {
+func GeminiTokenCacheKey(account *Account) string {
 	projectID := strings.TrimSpace(account.GetCredential("project_id"))
 	if projectID != "" {
-		return projectID
+		return "gemini:" + projectID
 	}
-	return "account:" + strconv.FormatInt(account.ID, 10)
+	return "gemini:account:" + strconv.FormatInt(account.ID, 10)
 }

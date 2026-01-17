@@ -61,11 +61,13 @@ type UserEdges struct {
 	UsageLogs []*UsageLog `json:"usage_logs,omitempty"`
 	// AttributeValues holds the value of the attribute_values edge.
 	AttributeValues []*UserAttributeValue `json:"attribute_values,omitempty"`
+	// PromoCodeUsages holds the value of the promo_code_usages edge.
+	PromoCodeUsages []*PromoCodeUsage `json:"promo_code_usages,omitempty"`
 	// UserAllowedGroups holds the value of the user_allowed_groups edge.
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [8]bool
+	loadedTypes [9]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -131,10 +133,19 @@ func (e UserEdges) AttributeValuesOrErr() ([]*UserAttributeValue, error) {
 	return nil, &NotLoadedError{edge: "attribute_values"}
 }
 
+// PromoCodeUsagesOrErr returns the PromoCodeUsages value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) PromoCodeUsagesOrErr() ([]*PromoCodeUsage, error) {
+	if e.loadedTypes[7] {
+		return e.PromoCodeUsages, nil
+	}
+	return nil, &NotLoadedError{edge: "promo_code_usages"}
+}
+
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[7] {
+	if e.loadedTypes[8] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -287,6 +298,11 @@ func (_m *User) QueryUsageLogs() *UsageLogQuery {
 // QueryAttributeValues queries the "attribute_values" edge of the User entity.
 func (_m *User) QueryAttributeValues() *UserAttributeValueQuery {
 	return NewUserClient(_m.config).QueryAttributeValues(_m)
+}
+
+// QueryPromoCodeUsages queries the "promo_code_usages" edge of the User entity.
+func (_m *User) QueryPromoCodeUsages() *PromoCodeUsageQuery {
+	return NewUserClient(_m.config).QueryPromoCodeUsages(_m)
 }
 
 // QueryUserAllowedGroups queries the "user_allowed_groups" edge of the User entity.
