@@ -1046,8 +1046,9 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 	// 仅发送一次错误事件，避免多次写入导致协议混乱（写失败时尽力通知客户端）
 	errorEventSent := false
+	clientDisconnected := false // 客户端断开后继续 drain 上游以收集 usage
 	sendErrorEvent := func(reason string) {
-		if errorEventSent {
+		if errorEventSent || clientDisconnected {
 			return
 		}
 		errorEventSent = true
@@ -1064,6 +1065,17 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 			}
 			if ev.err != nil {
+				// 客户端断开/取消请求时，上游读取往往会返回 context canceled。
+				// /v1/responses 的 SSE 事件必须符合 OpenAI 协议；这里不注入自定义 error event，避免下游 SDK 解析失败。
+				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
+					log.Printf("Context canceled during streaming, returning collected usage")
+					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+				}
+				// 客户端已断开时，上游出错仅影响体验，不影响计费；返回已收集 usage
+				if clientDisconnected {
+					log.Printf("Upstream read error after client disconnect: %v, returning collected usage", ev.err)
+					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+				}
 				if errors.Is(ev.err, bufio.ErrTooLong) {
 					log.Printf("SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, ev.err)
 					sendErrorEvent("response_too_large")
@@ -1085,12 +1097,15 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 					line = s.replaceModelInSSELine(line, mappedModel, originalModel)
 				}
 
-				// Forward line
-				if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-					sendErrorEvent("write_failed")
-					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, err
+				// 写入客户端（客户端断开后继续 drain 上游）
+				if !clientDisconnected {
+					if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
+						clientDisconnected = true
+						log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+					} else {
+						flusher.Flush()
+					}
 				}
-				flusher.Flush()
 
 				// Record first token time
 				if firstTokenMs == nil && data != "" && data != "[DONE]" {
@@ -1100,17 +1115,24 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				s.parseSSEUsage(data, usage)
 			} else {
 				// Forward non-data lines as-is
-				if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-					sendErrorEvent("write_failed")
-					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, err
+				if !clientDisconnected {
+					if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
+						clientDisconnected = true
+						log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+					} else {
+						flusher.Flush()
+					}
 				}
-				flusher.Flush()
 			}
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
 			if time.Since(lastRead) < streamInterval {
 				continue
+			}
+			if clientDisconnected {
+				log.Printf("Upstream timeout after client disconnect, returning collected usage")
+				return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 			}
 			log.Printf("Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
 			// 处理流超时，可能标记账户为临时不可调度或错误状态
@@ -1121,11 +1143,16 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
+			if clientDisconnected {
+				continue
+			}
 			if time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
 			if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
-				return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, err
+				clientDisconnected = true
+				log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+				continue
 			}
 			flusher.Flush()
 		}
