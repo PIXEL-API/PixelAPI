@@ -420,7 +420,7 @@ func toPascalCase(value string) string {
 		}
 		runes := []rune(lower)
 		runes[0] = unicode.ToUpper(runes[0])
-		builder.WriteString(string(runes))
+		_, _ = builder.WriteString(string(runes))
 	}
 	return builder.String()
 }
@@ -704,12 +704,8 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		}
 	}
 
-	if _, ok := req["temperature"]; ok {
-		delete(req, "temperature")
-	}
-	if _, ok := req["tool_choice"]; ok {
-		delete(req, "tool_choice")
-	}
+	delete(req, "temperature")
+	delete(req, "tool_choice")
 
 	newBody, err := json.Marshal(req)
 	if err != nil {
