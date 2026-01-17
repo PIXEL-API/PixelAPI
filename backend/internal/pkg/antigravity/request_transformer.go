@@ -389,10 +389,13 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 					ID:   block.ID,
 				},
 			}
-			// 只有 Gemini 模型使用 dummy signature
-			// Claude 模型不设置 signature（避免验证问题）
+			// tool_use 的 signature 处理：
+			// - Gemini 模型：使用 dummy signature（跳过 thought_signature 校验）
+			// - Claude 模型：透传上游返回的真实 signature（Vertex/Google 需要完整签名链路）
 			if allowDummyThought {
 				part.ThoughtSignature = dummyThoughtSignature
+			} else if block.Signature != "" && block.Signature != dummyThoughtSignature {
+				part.ThoughtSignature = block.Signature
 			}
 			parts = append(parts, part)
 
