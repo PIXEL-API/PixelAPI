@@ -871,6 +871,13 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 
 				retryBody, _ := io.ReadAll(io.LimitReader(retryResp.Body, 2<<20))
 				_ = retryResp.Body.Close()
+				if retryResp.StatusCode == http.StatusTooManyRequests {
+					retryBaseURL := ""
+					if retryReq.URL != nil {
+						retryBaseURL = retryReq.URL.Scheme + "://" + retryReq.URL.Host
+					}
+					log.Printf("%s status=429 rate_limited base_url=%s retry_stage=%s body=%s", prefix, retryBaseURL, stage.name, truncateForLog(retryBody, 200))
+				}
 				kind := "signature_retry"
 				if strings.TrimSpace(stage.name) != "" {
 					kind = "signature_retry_" + strings.ReplaceAll(stage.name, "+", "_")
