@@ -325,7 +325,6 @@ func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadC
 		if err != nil {
 			lastErr = fmt.Errorf("loadCodeAssist 请求失败: %w", err)
 			if shouldFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
-				DefaultURLAvailability.MarkUnavailable(baseURL)
 				log.Printf("[antigravity] loadCodeAssist URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
 				continue
 			}
@@ -340,7 +339,6 @@ func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadC
 
 		// 检查是否需要 URL 降级
 		if shouldFallbackToNextURL(nil, resp.StatusCode) && urlIdx < len(availableURLs)-1 {
-			DefaultURLAvailability.MarkUnavailable(baseURL)
 			log.Printf("[antigravity] loadCodeAssist URL fallback (HTTP %d): %s -> %s", resp.StatusCode, baseURL, availableURLs[urlIdx+1])
 			continue
 		}
@@ -418,7 +416,6 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		if err != nil {
 			lastErr = fmt.Errorf("fetchAvailableModels 请求失败: %w", err)
 			if shouldFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
-				DefaultURLAvailability.MarkUnavailable(baseURL)
 				log.Printf("[antigravity] fetchAvailableModels URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
 				continue
 			}
@@ -433,7 +430,6 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 
 		// 检查是否需要 URL 降级
 		if shouldFallbackToNextURL(nil, resp.StatusCode) && urlIdx < len(availableURLs)-1 {
-			DefaultURLAvailability.MarkUnavailable(baseURL)
 			log.Printf("[antigravity] fetchAvailableModels URL fallback (HTTP %d): %s -> %s", resp.StatusCode, baseURL, availableURLs[urlIdx+1])
 			continue
 		}

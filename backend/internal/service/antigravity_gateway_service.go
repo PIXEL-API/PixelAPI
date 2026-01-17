@@ -106,7 +106,6 @@ urlFallbackLoop:
 					Message:            safeErr,
 				})
 				if shouldAntigravityFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
-					antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
 					log.Printf("%s URL fallback (connection error): %s -> %s", p.prefix, baseURL, availableURLs[urlIdx+1])
 					continue urlFallbackLoop
 				}
@@ -130,7 +129,6 @@ urlFallbackLoop:
 
 				// "Resource has been exhausted" 是 URL 级别限流，切换 URL
 				if isURLLevelRateLimit(respBody) && urlIdx < len(availableURLs)-1 {
-					antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
 					log.Printf("%s URL fallback (429): %s -> %s", p.prefix, baseURL, availableURLs[urlIdx+1])
 					continue urlFallbackLoop
 				}
@@ -442,7 +440,6 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		if err != nil {
 			lastErr = fmt.Errorf("请求失败: %w", err)
 			if shouldAntigravityFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
-				antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
 				log.Printf("[antigravity-Test] URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
 				continue
 			}
@@ -458,7 +455,6 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 
 		// 检查是否需要 URL 降级
 		if shouldAntigravityFallbackToNextURL(nil, resp.StatusCode) && urlIdx < len(availableURLs)-1 {
-			antigravity.DefaultURLAvailability.MarkUnavailable(baseURL)
 			log.Printf("[antigravity-Test] URL fallback (HTTP %d): %s -> %s", resp.StatusCode, baseURL, availableURLs[urlIdx+1])
 			continue
 		}
