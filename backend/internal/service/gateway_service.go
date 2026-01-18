@@ -1293,18 +1293,6 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 	return allowed
 }
 
-// extractSessionUUID 从 metadata.user_id 中提取会话 UUID
-// 格式: user_{64位hex}_account__session_{uuid}
-func extractSessionUUID(metadataUserID string) string {
-	if metadataUserID == "" {
-		return ""
-	}
-	if match := sessionIDRegex.FindStringSubmatch(metadataUserID); len(match) > 1 {
-		return match[1]
-	}
-	return ""
-}
-
 func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
 	if s.schedulerSnapshot != nil {
 		return s.schedulerSnapshot.GetAccount(ctx, accountID)
