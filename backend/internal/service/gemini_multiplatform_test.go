@@ -599,7 +599,7 @@ func TestGeminiMessagesCompatService_isModelSupportedByAccount(t *testing.T) {
 			name: "Gemini平台-有映射配置-只支持配置的模型",
 			account: &Account{
 				Platform:    PlatformGemini,
-				Credentials: map[string]any{"model_mapping": map[string]any{"gemini-1.5-pro": "x"}},
+				Credentials: map[string]any{"model_mapping": map[string]any{"gemini-2.5-pro": "x"}},
 			},
 			model:    "gemini-2.5-flash",
 			expected: false,
