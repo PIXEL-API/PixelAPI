@@ -5,6 +5,7 @@ package mixins
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"entgo.io/ent"
@@ -122,7 +123,7 @@ func (d SoftDeleteMixin) Hooks() []ent.Hook {
 				mx.SetOp(ent.OpUpdate)
 				// 设置删除时间为当前时间
 				mx.SetDeletedAt(time.Now())
-				return next.Mutate(ctx, m)
+				return mutateWithClient(ctx, m, next)
 			})
 		},
 	}
@@ -134,4 +135,37 @@ func (d SoftDeleteMixin) applyPredicate(w interface{ WhereP(...func(*sql.Selecto
 	w.WhereP(
 		sql.FieldIsNull(d.Fields()[0].Descriptor().Name),
 	)
+}
+
+func mutateWithClient(ctx context.Context, m ent.Mutation, fallback ent.Mutator) (ent.Value, error) {
+	clientMethod := reflect.ValueOf(m).MethodByName("Client")
+	if !clientMethod.IsValid() || clientMethod.Type().NumIn() != 0 || clientMethod.Type().NumOut() != 1 {
+		return nil, fmt.Errorf("soft delete: mutation client method not found for %T", m)
+	}
+	client := clientMethod.Call(nil)[0]
+	mutateMethod := client.MethodByName("Mutate")
+	if !mutateMethod.IsValid() {
+		return nil, fmt.Errorf("soft delete: mutation client missing Mutate for %T", m)
+	}
+	if mutateMethod.Type().NumIn() != 2 || mutateMethod.Type().NumOut() != 2 {
+		return nil, fmt.Errorf("soft delete: mutation client signature mismatch for %T", m)
+	}
+
+	results := mutateMethod.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(m)})
+	value := results[0].Interface()
+	var err error
+	if !results[1].IsNil() {
+		err = results[1].Interface().(error)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if value == nil {
+		return nil, fmt.Errorf("soft delete: mutation client returned nil for %T", m)
+	}
+	v, ok := value.(ent.Value)
+	if !ok {
+		return nil, fmt.Errorf("soft delete: unexpected value type %T for %T", value, m)
+	}
+	return v, nil
 }
