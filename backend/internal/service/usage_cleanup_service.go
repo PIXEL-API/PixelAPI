@@ -151,20 +151,24 @@ func (s *UsageCleanupService) CreateTask(ctx context.Context, filters UsageClean
 }
 
 func (s *UsageCleanupService) runOnce() {
-	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+	svc := s
+	if svc == nil {
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&svc.running, 0, 1) {
 		log.Printf("[UsageCleanup] run_once skipped: already_running=true")
 		return
 	}
-	defer atomic.StoreInt32(&s.running, 0)
+	defer atomic.StoreInt32(&svc.running, 0)
 
 	parent := context.Background()
-	if s != nil && s.workerCtx != nil {
-		parent = s.workerCtx
+	if svc.workerCtx != nil {
+		parent = svc.workerCtx
 	}
-	ctx, cancel := context.WithTimeout(parent, s.taskTimeout())
+	ctx, cancel := context.WithTimeout(parent, svc.taskTimeout())
 	defer cancel()
 
-	task, err := s.repo.ClaimNextPendingTask(ctx, int64(s.taskTimeout().Seconds()))
+	task, err := svc.repo.ClaimNextPendingTask(ctx, int64(svc.taskTimeout().Seconds()))
 	if err != nil {
 		log.Printf("[UsageCleanup] claim pending task failed: %v", err)
 		return
@@ -175,7 +179,7 @@ func (s *UsageCleanupService) runOnce() {
 	}
 
 	log.Printf("[UsageCleanup] task claimed: task=%d status=%s created_by=%d deleted_rows=%d %s", task.ID, task.Status, task.CreatedBy, task.DeletedRows, describeUsageCleanupFilters(task.Filters))
-	s.executeTask(ctx, task)
+	svc.executeTask(ctx, task)
 }
 
 func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanupTask) {
