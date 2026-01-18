@@ -571,7 +571,10 @@ export default {
     previous: 'Previous',
     next: 'Next',
     perPage: 'Per page',
-    goToPage: 'Go to page {page}'
+    goToPage: 'Go to page {page}',
+    jumpTo: 'Jump to',
+    jumpPlaceholder: 'Page',
+    jumpAction: 'Go'
   },
 
   // Errors
