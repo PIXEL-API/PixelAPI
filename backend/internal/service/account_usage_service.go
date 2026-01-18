@@ -575,3 +575,9 @@ func buildGeminiUsageProgress(used, limit int64, resetAt time.Time, tokens int64
 		},
 	}
 }
+
+// GetAccountWindowStats 获取账号在指定时间窗口内的使用统计
+// 用于账号列表页面显示当前窗口费用
+func (s *AccountUsageService) GetAccountWindowStats(ctx context.Context, accountID int64, startTime time.Time) (*usagestats.AccountStats, error) {
+	return s.usageLogRepo.GetAccountWindowStats(ctx, accountID, startTime)
+}

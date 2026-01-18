@@ -116,7 +116,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	if a == nil {
 		return nil
 	}
-	return &Account{
+	out := &Account{
 		ID:                      a.ID,
 		Name:                    a.Name,
 		Notes:                   a.Notes,
@@ -146,6 +146,24 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		SessionWindowStatus:     a.SessionWindowStatus,
 		GroupIDs:                a.GroupIDs,
 	}
+
+	// 提取 5h 窗口费用控制和会话数量控制配置（仅 Anthropic OAuth/SetupToken 账号有效）
+	if a.IsAnthropicOAuthOrSetupToken() {
+		if limit := a.GetWindowCostLimit(); limit > 0 {
+			out.WindowCostLimit = &limit
+		}
+		if reserve := a.GetWindowCostStickyReserve(); reserve > 0 {
+			out.WindowCostStickyReserve = &reserve
+		}
+		if maxSessions := a.GetMaxSessions(); maxSessions > 0 {
+			out.MaxSessions = &maxSessions
+		}
+		if idleTimeout := a.GetSessionIdleTimeoutMinutes(); idleTimeout > 0 {
+			out.SessionIdleTimeoutMin = &idleTimeout
+		}
+	}
+
+	return out
 }
 
 func AccountFromService(a *service.Account) *Account {
