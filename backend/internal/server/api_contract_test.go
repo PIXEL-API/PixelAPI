@@ -237,6 +237,47 @@ func TestAPIContracts(t *testing.T) {
 			}`,
 		},
 		{
+			name: "GET /api/v1/redeem/history",
+			setup: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				// 普通用户兑换历史不应包含 notes 等内部字段。
+				deps.redeemRepo.SetByUser(1, []service.RedeemCode{
+					{
+						ID:        900,
+						Code:      "CODE-123",
+						Type:      service.RedeemTypeBalance,
+						Value:     1.25,
+						Status:    service.StatusUsed,
+						UsedBy:    ptr(int64(1)),
+						UsedAt:    ptr(deps.now),
+						Notes:     "internal-note",
+						CreatedAt: deps.now,
+					},
+				})
+			},
+			method:     http.MethodGet,
+			path:       "/api/v1/redeem/history",
+			wantStatus: http.StatusOK,
+			wantJSON: `{
+				"code": 0,
+				"message": "success",
+				"data": [
+					{
+						"id": 900,
+						"code": "CODE-123",
+						"type": "balance",
+						"value": 1.25,
+						"status": "used",
+						"used_by": 1,
+						"used_at": "2025-01-02T03:04:05Z",
+						"created_at": "2025-01-02T03:04:05Z",
+						"group_id": null,
+						"validity_days": 0
+					}
+				]
+			}`,
+		},
+		{
 			name: "GET /api/v1/usage/stats",
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
@@ -494,6 +535,7 @@ type contractDeps struct {
 	userSubRepo *stubUserSubscriptionRepo
 	usageRepo   *stubUsageLogRepo
 	settingRepo *stubSettingRepo
+	redeemRepo  *stubRedeemCodeRepo
 }
 
 func newContractDeps(t *testing.T) *contractDeps {
@@ -542,6 +584,9 @@ func newContractDeps(t *testing.T) *contractDeps {
 
 	subscriptionService := service.NewSubscriptionService(groupRepo, userSubRepo, nil)
 	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionService)
+
+	redeemService := service.NewRedeemService(redeemRepo, userRepo, subscriptionService, nil, nil, nil, nil)
+	redeemHandler := handler.NewRedeemHandler(redeemService)
 
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
@@ -593,6 +638,10 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Subs.Use(jwtAuth)
 	v1Subs.GET("/subscriptions", subscriptionHandler.List)
 
+	v1Redeem := v1.Group("")
+	v1Redeem.Use(jwtAuth)
+	v1Redeem.GET("/redeem/history", redeemHandler.GetHistory)
+
 	v1Admin := v1.Group("/admin")
 	v1Admin.Use(adminAuth)
 	v1Admin.GET("/settings", adminSettingHandler.GetSettings)
@@ -606,6 +655,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 		userSubRepo: userSubRepo,
 		usageRepo:   usageRepo,
 		settingRepo: settingRepo,
+		redeemRepo:  redeemRepo,
 	}
 }
 
@@ -1013,7 +1063,16 @@ func (stubProxyRepo) ListAccountSummariesByProxyID(ctx context.Context, proxyID 
 	return nil, errors.New("not implemented")
 }
 
-type stubRedeemCodeRepo struct{}
+type stubRedeemCodeRepo struct {
+	byUser map[int64][]service.RedeemCode
+}
+
+func (r *stubRedeemCodeRepo) SetByUser(userID int64, codes []service.RedeemCode) {
+	if r.byUser == nil {
+		r.byUser = make(map[int64][]service.RedeemCode)
+	}
+	r.byUser[userID] = append([]service.RedeemCode(nil), codes...)
+}
 
 func (stubRedeemCodeRepo) Create(ctx context.Context, code *service.RedeemCode) error {
 	return errors.New("not implemented")
@@ -1051,8 +1110,15 @@ func (stubRedeemCodeRepo) ListWithFilters(ctx context.Context, params pagination
 	return nil, nil, errors.New("not implemented")
 }
 
-func (stubRedeemCodeRepo) ListByUser(ctx context.Context, userID int64, limit int) ([]service.RedeemCode, error) {
-	return nil, errors.New("not implemented")
+func (r *stubRedeemCodeRepo) ListByUser(ctx context.Context, userID int64, limit int) ([]service.RedeemCode, error) {
+	if r.byUser == nil {
+		return nil, nil
+	}
+	codes := r.byUser[userID]
+	if limit > 0 && len(codes) > limit {
+		codes = codes[:limit]
+	}
+	return append([]service.RedeemCode(nil), codes...), nil
 }
 
 type stubUserSubscriptionRepo struct {
