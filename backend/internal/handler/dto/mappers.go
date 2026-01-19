@@ -15,7 +15,6 @@ func UserFromServiceShallow(u *service.User) *User {
 		ID:            u.ID,
 		Email:         u.Email,
 		Username:      u.Username,
-		Notes:         u.Notes,
 		Role:          u.Role,
 		Balance:       u.Balance,
 		Concurrency:   u.Concurrency,
@@ -46,6 +45,22 @@ func UserFromService(u *service.User) *User {
 		}
 	}
 	return out
+}
+
+// UserFromServiceAdmin converts a service User to DTO for admin users.
+// It includes notes - user-facing endpoints must not use this.
+func UserFromServiceAdmin(u *service.User) *AdminUser {
+	if u == nil {
+		return nil
+	}
+	base := UserFromService(u)
+	if base == nil {
+		return nil
+	}
+	return &AdminUser{
+		User:  *base,
+		Notes: u.Notes,
+	}
 }
 
 func APIKeyFromService(k *service.APIKey) *APIKey {

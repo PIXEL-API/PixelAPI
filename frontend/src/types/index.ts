@@ -27,7 +27,6 @@ export interface FetchOptions {
 export interface User {
   id: number
   username: string
-  notes: string
   email: string
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
@@ -37,6 +36,11 @@ export interface User {
   subscriptions?: UserSubscription[] // User's active subscriptions
   created_at: string
   updated_at: string
+}
+
+export interface AdminUser extends User {
+  // 管理员备注（普通用户接口不返回）
+  notes: string
 }
 
 export interface LoginRequest {
