@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from '../client'
-import type { UsageLog, UsageQueryParams, PaginatedResponse } from '@/types'
+import type { AdminUsageLog, UsageQueryParams, PaginatedResponse } from '@/types'
 
 // ==================== Types ====================
 
@@ -85,8 +85,8 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
 export async function list(
   params: AdminUsageQueryParams,
   options?: { signal?: AbortSignal }
-): Promise<PaginatedResponse<UsageLog>> {
-  const { data } = await apiClient.get<PaginatedResponse<UsageLog>>('/admin/usage', {
+): Promise<PaginatedResponse<AdminUsageLog>> {
+  const { data } = await apiClient.get<PaginatedResponse<AdminUsageLog>>('/admin/usage', {
     params,
     signal: options?.signal
   })
