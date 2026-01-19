@@ -960,7 +960,16 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 		builder.SetSessionWindowEnd(*end)
 	}
 	_, err := builder.Save(ctx)
-	return err
+	if err != nil {
+		return err
+	}
+	// 触发调度器缓存更新（仅当窗口时间有变化时）
+	if start != nil || end != nil {
+		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+			log.Printf("[SchedulerOutbox] enqueue session window update failed: account=%d err=%v", id, err)
+		}
+	}
+	return nil
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {

@@ -1228,12 +1228,8 @@ func (s *GatewayService) isAccountSchedulableForWindowCost(ctx context.Context, 
 
 	// 缓存未命中，从数据库查询
 	{
-		var startTime time.Time
-		if account.SessionWindowStart != nil {
-			startTime = *account.SessionWindowStart
-		} else {
-			startTime = time.Now().Add(-5 * time.Hour)
-		}
+		// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
+		startTime := account.GetCurrentWindowStartTime()
 
 		stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, startTime)
 		if err != nil {

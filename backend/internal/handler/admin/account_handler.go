@@ -211,12 +211,8 @@ func (h *AccountHandler) List(c *gin.Context) {
 			}
 			accCopy := acc // 闭包捕获
 			g.Go(func() error {
-				var startTime time.Time
-				if accCopy.SessionWindowStart != nil {
-					startTime = *accCopy.SessionWindowStart
-				} else {
-					startTime = time.Now().Add(-5 * time.Hour)
-				}
+				// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
+				startTime := accCopy.GetCurrentWindowStartTime()
 				stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
 				if err == nil && stats != nil {
 					mu.Lock()
