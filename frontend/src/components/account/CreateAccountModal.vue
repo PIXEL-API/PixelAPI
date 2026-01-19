@@ -1816,7 +1816,7 @@ import {
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
-import type { Proxy, Group, AccountPlatform, AccountType } from '@/types'
+import type { Proxy, AdminGroup, AccountPlatform, AccountType } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -1862,7 +1862,7 @@ const apiKeyHint = computed(() => {
 interface Props {
   show: boolean
   proxies: Proxy[]
-  groups: Group[]
+  groups: AdminGroup[]
 }
 
 const props = defineProps<Props>()
