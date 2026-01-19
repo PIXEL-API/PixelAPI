@@ -151,6 +151,9 @@ func (s *UsageCleanupService) CreateTask(ctx context.Context, filters UsageClean
 }
 
 func (s *UsageCleanupService) runOnce() {
+	if s == nil {
+		return
+	}
 	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
 		log.Printf("[UsageCleanup] run_once skipped: already_running=true")
 		return
@@ -158,7 +161,7 @@ func (s *UsageCleanupService) runOnce() {
 	defer atomic.StoreInt32(&s.running, 0)
 
 	parent := context.Background()
-	if s != nil && s.workerCtx != nil {
+	if s.workerCtx != nil {
 		parent = s.workerCtx
 	}
 	ctx, cancel := context.WithTimeout(parent, s.taskTimeout())

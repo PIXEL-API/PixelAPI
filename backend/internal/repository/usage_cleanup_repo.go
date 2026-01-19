@@ -64,7 +64,9 @@ func (r *usageCleanupRepository) ListTasks(ctx context.Context, params paginatio
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	tasks := make([]service.UsageCleanupTask, 0)
 	for rows.Next() {
@@ -295,7 +297,9 @@ func (r *usageCleanupRepository) DeleteUsageLogsBatch(ctx context.Context, filte
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var deleted int64
 	for rows.Next() {
@@ -357,7 +361,6 @@ func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any)
 	if filters.BillingType != nil {
 		conditions = append(conditions, fmt.Sprintf("billing_type = $%d", idx))
 		args = append(args, *filters.BillingType)
-		idx++
 	}
 	return strings.Join(conditions, " AND "), args
 }
