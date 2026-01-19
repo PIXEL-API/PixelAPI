@@ -44,6 +44,7 @@ type AccountHandler struct {
 	accountTestService      *service.AccountTestService
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
+	sessionLimitCache       service.SessionLimitCache
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -58,6 +59,7 @@ func NewAccountHandler(
 	accountTestService *service.AccountTestService,
 	concurrencyService *service.ConcurrencyService,
 	crsSyncService *service.CRSSyncService,
+	sessionLimitCache service.SessionLimitCache,
 ) *AccountHandler {
 	return &AccountHandler{
 		adminService:            adminService,
@@ -70,6 +72,7 @@ func NewAccountHandler(
 		accountTestService:      accountTestService,
 		concurrencyService:      concurrencyService,
 		crsSyncService:          crsSyncService,
+		sessionLimitCache:       sessionLimitCache,
 	}
 }
 
@@ -130,6 +133,9 @@ type BulkUpdateAccountsRequest struct {
 type AccountWithConcurrency struct {
 	*dto.Account
 	CurrentConcurrency int `json:"current_concurrency"`
+	// 以下字段仅对 Anthropic OAuth/SetupToken 账号有效，且仅在启用相应功能时返回
+	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
+	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
 }
 
 // List handles listing all accounts with pagination
@@ -164,13 +170,89 @@ func (h *AccountHandler) List(c *gin.Context) {
 		concurrencyCounts = make(map[int64]int)
 	}
 
+	// 识别需要查询窗口费用和会话数的账号（Anthropic OAuth/SetupToken 且启用了相应功能）
+	windowCostAccountIDs := make([]int64, 0)
+	sessionLimitAccountIDs := make([]int64, 0)
+	for i := range accounts {
+		acc := &accounts[i]
+		if acc.IsAnthropicOAuthOrSetupToken() {
+			if acc.GetWindowCostLimit() > 0 {
+				windowCostAccountIDs = append(windowCostAccountIDs, acc.ID)
+			}
+			if acc.GetMaxSessions() > 0 {
+				sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
+			}
+		}
+	}
+
+	// 并行获取窗口费用和活跃会话数
+	var windowCosts map[int64]float64
+	var activeSessions map[int64]int
+
+	// 获取活跃会话数（批量查询）
+	if len(sessionLimitAccountIDs) > 0 && h.sessionLimitCache != nil {
+		activeSessions, _ = h.sessionLimitCache.GetActiveSessionCountBatch(c.Request.Context(), sessionLimitAccountIDs)
+		if activeSessions == nil {
+			activeSessions = make(map[int64]int)
+		}
+	}
+
+	// 获取窗口费用（并行查询）
+	if len(windowCostAccountIDs) > 0 {
+		windowCosts = make(map[int64]float64)
+		var mu sync.Mutex
+		g, gctx := errgroup.WithContext(c.Request.Context())
+		g.SetLimit(10) // 限制并发数
+
+		for i := range accounts {
+			acc := &accounts[i]
+			if !acc.IsAnthropicOAuthOrSetupToken() || acc.GetWindowCostLimit() <= 0 {
+				continue
+			}
+			accCopy := acc // 闭包捕获
+			g.Go(func() error {
+				var startTime time.Time
+				if accCopy.SessionWindowStart != nil {
+					startTime = *accCopy.SessionWindowStart
+				} else {
+					startTime = time.Now().Add(-5 * time.Hour)
+				}
+				stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
+				if err == nil && stats != nil {
+					mu.Lock()
+					windowCosts[accCopy.ID] = stats.StandardCost // 使用标准费用
+					mu.Unlock()
+				}
+				return nil // 不返回错误，允许部分失败
+			})
+		}
+		_ = g.Wait()
+	}
+
 	// Build response with concurrency info
 	result := make([]AccountWithConcurrency, len(accounts))
 	for i := range accounts {
-		result[i] = AccountWithConcurrency{
-			Account:            dto.AccountFromService(&accounts[i]),
-			CurrentConcurrency: concurrencyCounts[accounts[i].ID],
+		acc := &accounts[i]
+		item := AccountWithConcurrency{
+			Account:            dto.AccountFromService(acc),
+			CurrentConcurrency: concurrencyCounts[acc.ID],
 		}
+
+		// 添加窗口费用（仅当启用时）
+		if windowCosts != nil {
+			if cost, ok := windowCosts[acc.ID]; ok {
+				item.CurrentWindowCost = &cost
+			}
+		}
+
+		// 添加活跃会话数（仅当启用时）
+		if activeSessions != nil {
+			if count, ok := activeSessions[acc.ID]; ok {
+				item.ActiveSessions = &count
+			}
+		}
+
+		result[i] = item
 	}
 
 	response.Paginated(c, result, total, page, pageSize)
