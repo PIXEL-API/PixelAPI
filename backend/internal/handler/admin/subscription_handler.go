@@ -83,9 +83,9 @@ func (h *SubscriptionHandler) List(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.UserSubscription, 0, len(subscriptions))
+	out := make([]dto.AdminUserSubscription, 0, len(subscriptions))
 	for i := range subscriptions {
-		out = append(out, *dto.UserSubscriptionFromService(&subscriptions[i]))
+		out = append(out, *dto.UserSubscriptionFromServiceAdmin(&subscriptions[i]))
 	}
 	response.PaginatedWithResult(c, out, toResponsePagination(pagination))
 }
@@ -105,7 +105,7 @@ func (h *SubscriptionHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UserSubscriptionFromService(subscription))
+	response.Success(c, dto.UserSubscriptionFromServiceAdmin(subscription))
 }
 
 // GetProgress handles getting subscription usage progress
@@ -150,7 +150,7 @@ func (h *SubscriptionHandler) Assign(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UserSubscriptionFromService(subscription))
+	response.Success(c, dto.UserSubscriptionFromServiceAdmin(subscription))
 }
 
 // BulkAssign handles bulk assigning subscriptions to multiple users
@@ -201,7 +201,7 @@ func (h *SubscriptionHandler) Extend(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UserSubscriptionFromService(subscription))
+	response.Success(c, dto.UserSubscriptionFromServiceAdmin(subscription))
 }
 
 // Revoke handles revoking a subscription
@@ -239,9 +239,9 @@ func (h *SubscriptionHandler) ListByGroup(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.UserSubscription, 0, len(subscriptions))
+	out := make([]dto.AdminUserSubscription, 0, len(subscriptions))
 	for i := range subscriptions {
-		out = append(out, *dto.UserSubscriptionFromService(&subscriptions[i]))
+		out = append(out, *dto.UserSubscriptionFromServiceAdmin(&subscriptions[i]))
 	}
 	response.PaginatedWithResult(c, out, toResponsePagination(pagination))
 }
@@ -261,9 +261,9 @@ func (h *SubscriptionHandler) ListByUser(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.UserSubscription, 0, len(subscriptions))
+	out := make([]dto.AdminUserSubscription, 0, len(subscriptions))
 	for i := range subscriptions {
-		out = append(out, *dto.UserSubscriptionFromService(&subscriptions[i]))
+		out = append(out, *dto.UserSubscriptionFromServiceAdmin(&subscriptions[i]))
 	}
 	response.Success(c, out)
 }
