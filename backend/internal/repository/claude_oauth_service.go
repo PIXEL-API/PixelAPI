@@ -182,7 +182,9 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 
 	resp, err := client.R().
 		SetContext(ctx).
+		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
+		SetHeader("User-Agent", "axios/1.8.4").
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -205,8 +207,6 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
 	client := s.clientFactory(proxyURL)
 
-	// 使用 JSON 格式（与 ExchangeCodeForToken 保持一致）
-	// Anthropic OAuth API 期望 JSON 格式的请求体
 	reqBody := map[string]any{
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
@@ -217,7 +217,9 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 
 	resp, err := client.R().
 		SetContext(ctx).
+		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
+		SetHeader("User-Agent", "axios/1.8.4").
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
