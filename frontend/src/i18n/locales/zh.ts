@@ -1425,6 +1425,10 @@ export default {
         tlsFingerprint: {
           label: 'TLS 指纹模拟',
           hint: '模拟 Node.js/Claude Code 客户端的 TLS 指纹'
+        },
+        sessionIdMasking: {
+          label: '会话 ID 伪装',
+          hint: '启用后将在 15 分钟内固定 metadata.user_id 中的 session ID，使上游认为请求来自同一会话'
         }
       },
       expired: '已过期',

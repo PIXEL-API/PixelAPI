@@ -166,6 +166,11 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 			enabled := true
 			out.EnableTLSFingerprint = &enabled
 		}
+		// 会话ID伪装开关
+		if a.IsSessionIDMaskingEnabled() {
+			enabled := true
+			out.EnableSessionIDMasking = &enabled
+		}
 	}
 
 	return out
