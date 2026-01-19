@@ -2133,6 +2133,8 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 	var firstTokenMs *int
 	var last map[string]any
 	var lastWithParts map[string]any
+	var collectedImageParts []map[string]any // 收集所有包含图片的 parts
+	var collectedTextParts []string          // 收集所有文本片段
 
 	type scanEvent struct {
 		line string
@@ -2230,6 +2232,15 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 			// 保留最后一个有 parts 的响应
 			if parts := extractGeminiParts(parsed); len(parts) > 0 {
 				lastWithParts = parsed
+				// 收集包含图片和文本的 parts
+				for _, part := range parts {
+					if _, ok := part["inlineData"].(map[string]any); ok {
+						collectedImageParts = append(collectedImageParts, part)
+					}
+					if text, ok := part["text"].(string); ok && text != "" {
+						collectedTextParts = append(collectedTextParts, text)
+					}
+				}
 			}
 
 		case <-intervalCh:
@@ -2252,8 +2263,32 @@ returnResponse:
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Empty response from upstream")
 	}
 
+	// 如果收集到了图片 parts，需要合并到最终响应中
+	if len(collectedImageParts) > 0 {
+		finalResponse = mergeImagePartsToResponse(finalResponse, collectedImageParts)
+	}
+
+	// 如果收集到了文本，需要合并到最终响应中
+	if len(collectedTextParts) > 0 {
+		finalResponse = mergeTextPartsToResponse(finalResponse, collectedTextParts)
+	}
+
+	geminiPayload := finalResponse
+	if _, ok := finalResponse["response"]; !ok {
+		wrapped := map[string]any{
+			"response": finalResponse,
+		}
+		if respID, ok := finalResponse["responseId"]; ok {
+			wrapped["responseId"] = respID
+		}
+		if modelVersion, ok := finalResponse["modelVersion"]; ok {
+			wrapped["modelVersion"] = modelVersion
+		}
+		geminiPayload = wrapped
+	}
+
 	// 序列化为 JSON（Gemini 格式）
-	geminiBody, err := json.Marshal(finalResponse)
+	geminiBody, err := json.Marshal(geminiPayload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal gemini response: %w", err)
 	}
