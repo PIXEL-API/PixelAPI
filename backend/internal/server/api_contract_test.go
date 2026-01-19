@@ -132,6 +132,62 @@ func TestAPIContracts(t *testing.T) {
 			}`,
 		},
 		{
+			name: "GET /api/v1/groups/available",
+			setup: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				// 普通用户可见的分组列表不应包含内部字段（如 model_routing/account_count）。
+				deps.groupRepo.SetActive([]service.Group{
+					{
+						ID:                  10,
+						Name:                "Group One",
+						Description:         "desc",
+						Platform:            service.PlatformAnthropic,
+						RateMultiplier:      1.5,
+						IsExclusive:         false,
+						Status:              service.StatusActive,
+						SubscriptionType:    service.SubscriptionTypeStandard,
+						ModelRoutingEnabled: true,
+						ModelRouting: map[string][]int64{
+							"claude-3-*": []int64{101, 102},
+						},
+						AccountCount: 2,
+						CreatedAt:    deps.now,
+						UpdatedAt:    deps.now,
+					},
+				})
+				deps.userSubRepo.SetActiveByUserID(1, nil)
+			},
+			method:     http.MethodGet,
+			path:       "/api/v1/groups/available",
+			wantStatus: http.StatusOK,
+			wantJSON: `{
+				"code": 0,
+				"message": "success",
+				"data": [
+					{
+						"id": 10,
+						"name": "Group One",
+						"description": "desc",
+						"platform": "anthropic",
+						"rate_multiplier": 1.5,
+						"is_exclusive": false,
+						"status": "active",
+						"subscription_type": "standard",
+						"daily_limit_usd": null,
+						"weekly_limit_usd": null,
+						"monthly_limit_usd": null,
+						"image_price_1k": null,
+						"image_price_2k": null,
+						"image_price_4k": null,
+						"claude_code_only": false,
+						"fallback_group_id": null,
+						"created_at": "2025-01-02T03:04:05Z",
+						"updated_at": "2025-01-02T03:04:05Z"
+					}
+				]
+			}`,
+		},
+		{
 			name: "GET /api/v1/usage/stats",
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
@@ -385,6 +441,8 @@ type contractDeps struct {
 	now         time.Time
 	router      http.Handler
 	apiKeyRepo  *stubApiKeyRepo
+	groupRepo   *stubGroupRepo
+	userSubRepo *stubUserSubscriptionRepo
 	usageRepo   *stubUsageLogRepo
 	settingRepo *stubSettingRepo
 }
@@ -414,11 +472,11 @@ func newContractDeps(t *testing.T) *contractDeps {
 
 	apiKeyRepo := newStubApiKeyRepo(now)
 	apiKeyCache := stubApiKeyCache{}
-	groupRepo := stubGroupRepo{}
-	userSubRepo := stubUserSubscriptionRepo{}
+	groupRepo := &stubGroupRepo{}
+	userSubRepo := &stubUserSubscriptionRepo{}
 	accountRepo := stubAccountRepo{}
 	proxyRepo := stubProxyRepo{}
-	redeemRepo := stubRedeemCodeRepo{}
+	redeemRepo := &stubRedeemCodeRepo{}
 
 	cfg := &config.Config{
 		Default: config.DefaultConfig{
@@ -472,6 +530,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Keys.Use(jwtAuth)
 	v1Keys.GET("/keys", apiKeyHandler.List)
 	v1Keys.POST("/keys", apiKeyHandler.Create)
+	v1Keys.GET("/groups/available", apiKeyHandler.GetAvailableGroups)
 
 	v1Usage := v1.Group("")
 	v1Usage.Use(jwtAuth)
@@ -487,6 +546,8 @@ func newContractDeps(t *testing.T) *contractDeps {
 		now:         now,
 		router:      r,
 		apiKeyRepo:  apiKeyRepo,
+		groupRepo:   groupRepo,
+		userSubRepo: userSubRepo,
 		usageRepo:   usageRepo,
 		settingRepo: settingRepo,
 	}
@@ -626,7 +687,13 @@ func (stubApiKeyCache) SubscribeAuthCacheInvalidation(ctx context.Context, handl
 	return nil
 }
 
-type stubGroupRepo struct{}
+type stubGroupRepo struct {
+	active []service.Group
+}
+
+func (r *stubGroupRepo) SetActive(groups []service.Group) {
+	r.active = append([]service.Group(nil), groups...)
+}
 
 func (stubGroupRepo) Create(ctx context.Context, group *service.Group) error {
 	return errors.New("not implemented")
@@ -660,12 +727,19 @@ func (stubGroupRepo) ListWithFilters(ctx context.Context, params pagination.Pagi
 	return nil, nil, errors.New("not implemented")
 }
 
-func (stubGroupRepo) ListActive(ctx context.Context) ([]service.Group, error) {
-	return nil, errors.New("not implemented")
+func (r *stubGroupRepo) ListActive(ctx context.Context) ([]service.Group, error) {
+	return append([]service.Group(nil), r.active...), nil
 }
 
-func (stubGroupRepo) ListActiveByPlatform(ctx context.Context, platform string) ([]service.Group, error) {
-	return nil, errors.New("not implemented")
+func (r *stubGroupRepo) ListActiveByPlatform(ctx context.Context, platform string) ([]service.Group, error) {
+	out := make([]service.Group, 0, len(r.active))
+	for i := range r.active {
+		g := r.active[i]
+		if g.Platform == platform {
+			out = append(out, g)
+		}
+	}
+	return out, nil
 }
 
 func (stubGroupRepo) ExistsByName(ctx context.Context, name string) (bool, error) {
@@ -925,7 +999,24 @@ func (stubRedeemCodeRepo) ListByUser(ctx context.Context, userID int64, limit in
 	return nil, errors.New("not implemented")
 }
 
-type stubUserSubscriptionRepo struct{}
+type stubUserSubscriptionRepo struct {
+	byUser       map[int64][]service.UserSubscription
+	activeByUser map[int64][]service.UserSubscription
+}
+
+func (r *stubUserSubscriptionRepo) SetByUserID(userID int64, subs []service.UserSubscription) {
+	if r.byUser == nil {
+		r.byUser = make(map[int64][]service.UserSubscription)
+	}
+	r.byUser[userID] = append([]service.UserSubscription(nil), subs...)
+}
+
+func (r *stubUserSubscriptionRepo) SetActiveByUserID(userID int64, subs []service.UserSubscription) {
+	if r.activeByUser == nil {
+		r.activeByUser = make(map[int64][]service.UserSubscription)
+	}
+	r.activeByUser[userID] = append([]service.UserSubscription(nil), subs...)
+}
 
 func (stubUserSubscriptionRepo) Create(ctx context.Context, sub *service.UserSubscription) error {
 	return errors.New("not implemented")
@@ -945,11 +1036,17 @@ func (stubUserSubscriptionRepo) Update(ctx context.Context, sub *service.UserSub
 func (stubUserSubscriptionRepo) Delete(ctx context.Context, id int64) error {
 	return errors.New("not implemented")
 }
-func (stubUserSubscriptionRepo) ListByUserID(ctx context.Context, userID int64) ([]service.UserSubscription, error) {
-	return nil, errors.New("not implemented")
+func (r *stubUserSubscriptionRepo) ListByUserID(ctx context.Context, userID int64) ([]service.UserSubscription, error) {
+	if r.byUser == nil {
+		return nil, nil
+	}
+	return append([]service.UserSubscription(nil), r.byUser[userID]...), nil
 }
-func (stubUserSubscriptionRepo) ListActiveByUserID(ctx context.Context, userID int64) ([]service.UserSubscription, error) {
-	return nil, errors.New("not implemented")
+func (r *stubUserSubscriptionRepo) ListActiveByUserID(ctx context.Context, userID int64) ([]service.UserSubscription, error) {
+	if r.activeByUser == nil {
+		return nil, nil
+	}
+	return append([]service.UserSubscription(nil), r.activeByUser[userID]...), nil
 }
 func (stubUserSubscriptionRepo) ListByGroupID(ctx context.Context, groupID int64, params pagination.PaginationParams) ([]service.UserSubscription, *pagination.PaginationResult, error) {
 	return nil, nil, errors.New("not implemented")
