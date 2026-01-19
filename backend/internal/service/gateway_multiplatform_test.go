@@ -105,6 +105,9 @@ func (m *mockAccountRepoForPlatform) BatchUpdateLastUsed(ctx context.Context, up
 func (m *mockAccountRepoForPlatform) SetError(ctx context.Context, id int64, errorMsg string) error {
 	return nil
 }
+func (m *mockAccountRepoForPlatform) ClearError(ctx context.Context, id int64) error {
+	return nil
+}
 func (m *mockAccountRepoForPlatform) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
 	return nil
 }
