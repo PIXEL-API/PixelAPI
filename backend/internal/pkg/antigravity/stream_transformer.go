@@ -27,6 +27,8 @@ type StreamingProcessor struct {
 	pendingSignature  string
 	trailingSignature string
 	originalModel     string
+	webSearchQueries  []string
+	groundingChunks   []GeminiGroundingChunk
 
 	// 累计 usage
 	inputTokens     int
@@ -91,6 +93,10 @@ func (p *StreamingProcessor) ProcessLine(line string) []byte {
 		for _, part := range geminiResp.Candidates[0].Content.Parts {
 			_, _ = result.Write(p.processPart(&part))
 		}
+	}
+
+	if len(geminiResp.Candidates) > 0 {
+		p.captureGrounding(geminiResp.Candidates[0].GroundingMetadata)
 	}
 
 	// 检查是否结束
@@ -198,6 +204,20 @@ func (p *StreamingProcessor) processPart(part *GeminiPart) []byte {
 	}
 
 	return result.Bytes()
+}
+
+func (p *StreamingProcessor) captureGrounding(grounding *GeminiGroundingMetadata) {
+	if grounding == nil {
+		return
+	}
+
+	if len(grounding.WebSearchQueries) > 0 && len(p.webSearchQueries) == 0 {
+		p.webSearchQueries = append([]string(nil), grounding.WebSearchQueries...)
+	}
+
+	if len(grounding.GroundingChunks) > 0 && len(p.groundingChunks) == 0 {
+		p.groundingChunks = append([]GeminiGroundingChunk(nil), grounding.GroundingChunks...)
+	}
 }
 
 // processThinking 处理 thinking
@@ -415,6 +435,23 @@ func (p *StreamingProcessor) emitFinish(finishReason string) []byte {
 	if p.trailingSignature != "" {
 		_, _ = result.Write(p.emitEmptyThinkingWithSignature(p.trailingSignature))
 		p.trailingSignature = ""
+	}
+
+	if len(p.webSearchQueries) > 0 || len(p.groundingChunks) > 0 {
+		groundingText := buildGroundingText(&GeminiGroundingMetadata{
+			WebSearchQueries: p.webSearchQueries,
+			GroundingChunks:  p.groundingChunks,
+		})
+		if groundingText != "" {
+			_, _ = result.Write(p.startBlock(BlockTypeText, map[string]any{
+				"type": "text",
+				"text": "",
+			}))
+			_, _ = result.Write(p.emitDelta("text_delta", map[string]any{
+				"text": groundingText,
+			}))
+			_, _ = result.Write(p.endBlock())
+		}
 	}
 
 	// 确定 stop_reason

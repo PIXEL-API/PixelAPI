@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
+	mathrand "math/rand"
 	"net/http"
 	"os"
 	"regexp"
@@ -445,11 +447,20 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 }
 
 // SelectAccountWithLoadAwareness selects account with load-awareness and wait plan.
-// metadataUserID: 原始 metadata.user_id 字段（用于提取会话 UUID 进行会话数量限制）
+// metadataUserID: 已废弃参数，会话限制现在统一使用 sessionHash
 func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string) (*AccountSelectionResult, error) {
+	// 调试日志：记录调度入口参数
+	excludedIDsList := make([]int64, 0, len(excludedIDs))
+	for id := range excludedIDs {
+		excludedIDsList = append(excludedIDsList, id)
+	}
+	slog.Debug("account_scheduling_starting",
+		"group_id", derefGroupID(groupID),
+		"model", requestedModel,
+		"session", shortSessionHash(sessionHash),
+		"excluded_ids", excludedIDsList)
+
 	cfg := s.schedulingConfig()
-	// 提取会话 UUID（用于会话数量限制）
-	sessionUUID := extractSessionUUID(metadataUserID)
 
 	var stickyAccountID int64
 	if sessionHash != "" && s.cache != nil {
@@ -475,41 +486,63 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	if s.concurrencyService == nil || !cfg.LoadBatchEnabled {
-		account, err := s.SelectAccountForModelWithExclusions(ctx, groupID, sessionHash, requestedModel, excludedIDs)
-		if err != nil {
-			return nil, err
+		// 复制排除列表，用于会话限制拒绝时的重试
+		localExcluded := make(map[int64]struct{})
+		for k, v := range excludedIDs {
+			localExcluded[k] = v
 		}
-		result, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
-		if err == nil && result.Acquired {
-			return &AccountSelectionResult{
-				Account:     account,
-				Acquired:    true,
-				ReleaseFunc: result.ReleaseFunc,
-			}, nil
-		}
-		if stickyAccountID > 0 && stickyAccountID == account.ID && s.concurrencyService != nil {
-			waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, account.ID)
-			if waitingCount < cfg.StickySessionMaxWaiting {
+
+		for {
+			account, err := s.SelectAccountForModelWithExclusions(ctx, groupID, sessionHash, requestedModel, localExcluded)
+			if err != nil {
+				return nil, err
+			}
+
+			result, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+			if err == nil && result.Acquired {
+				// 获取槽位后检查会话限制（使用 sessionHash 作为会话标识符）
+				if !s.checkAndRegisterSession(ctx, account, sessionHash) {
+					result.ReleaseFunc()                   // 释放槽位
+					localExcluded[account.ID] = struct{}{} // 排除此账号
+					continue                               // 重新选择
+				}
 				return &AccountSelectionResult{
-					Account: account,
-					WaitPlan: &AccountWaitPlan{
-						AccountID:      account.ID,
-						MaxConcurrency: account.Concurrency,
-						Timeout:        cfg.StickySessionWaitTimeout,
-						MaxWaiting:     cfg.StickySessionMaxWaiting,
-					},
+					Account:     account,
+					Acquired:    true,
+					ReleaseFunc: result.ReleaseFunc,
 				}, nil
 			}
+
+			// 对于等待计划的情况，也需要先检查会话限制
+			if !s.checkAndRegisterSession(ctx, account, sessionHash) {
+				localExcluded[account.ID] = struct{}{}
+				continue
+			}
+
+			if stickyAccountID > 0 && stickyAccountID == account.ID && s.concurrencyService != nil {
+				waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, account.ID)
+				if waitingCount < cfg.StickySessionMaxWaiting {
+					return &AccountSelectionResult{
+						Account: account,
+						WaitPlan: &AccountWaitPlan{
+							AccountID:      account.ID,
+							MaxConcurrency: account.Concurrency,
+							Timeout:        cfg.StickySessionWaitTimeout,
+							MaxWaiting:     cfg.StickySessionMaxWaiting,
+						},
+					}, nil
+				}
+			}
+			return &AccountSelectionResult{
+				Account: account,
+				WaitPlan: &AccountWaitPlan{
+					AccountID:      account.ID,
+					MaxConcurrency: account.Concurrency,
+					Timeout:        cfg.FallbackWaitTimeout,
+					MaxWaiting:     cfg.FallbackMaxWaiting,
+				},
+			}, nil
 		}
-		return &AccountSelectionResult{
-			Account: account,
-			WaitPlan: &AccountWaitPlan{
-				AccountID:      account.ID,
-				MaxConcurrency: account.Concurrency,
-				Timeout:        cfg.FallbackWaitTimeout,
-				MaxWaiting:     cfg.FallbackMaxWaiting,
-			},
-		}, nil
 	}
 
 	platform, hasForcePlatform, err := s.resolvePlatform(ctx, groupID, group)
@@ -625,7 +658,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 							result, err := s.tryAcquireAccountSlot(ctx, stickyAccountID, stickyAccount.Concurrency)
 							if err == nil && result.Acquired {
 								// 会话数量限制检查
-								if !s.checkAndRegisterSession(ctx, stickyAccount, sessionUUID) {
+								if !s.checkAndRegisterSession(ctx, stickyAccount, sessionHash) {
 									result.ReleaseFunc() // 释放槽位
 									// 继续到负载感知选择
 								} else {
@@ -643,15 +676,20 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 							waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, stickyAccountID)
 							if waitingCount < cfg.StickySessionMaxWaiting {
-								return &AccountSelectionResult{
-									Account: stickyAccount,
-									WaitPlan: &AccountWaitPlan{
-										AccountID:      stickyAccountID,
-										MaxConcurrency: stickyAccount.Concurrency,
-										Timeout:        cfg.StickySessionWaitTimeout,
-										MaxWaiting:     cfg.StickySessionMaxWaiting,
-									},
-								}, nil
+								// 会话数量限制检查（等待计划也需要占用会话配额）
+								if !s.checkAndRegisterSession(ctx, stickyAccount, sessionHash) {
+									// 会话限制已满，继续到负载感知选择
+								} else {
+									return &AccountSelectionResult{
+										Account: stickyAccount,
+										WaitPlan: &AccountWaitPlan{
+											AccountID:      stickyAccountID,
+											MaxConcurrency: stickyAccount.Concurrency,
+											Timeout:        cfg.StickySessionWaitTimeout,
+											MaxWaiting:     cfg.StickySessionMaxWaiting,
+										},
+									}, nil
+								}
 							}
 							// 粘性账号槽位满且等待队列已满，继续使用负载感知选择
 						}
@@ -714,7 +752,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					result, err := s.tryAcquireAccountSlot(ctx, item.account.ID, item.account.Concurrency)
 					if err == nil && result.Acquired {
 						// 会话数量限制检查
-						if !s.checkAndRegisterSession(ctx, item.account, sessionUUID) {
+						if !s.checkAndRegisterSession(ctx, item.account, sessionHash) {
 							result.ReleaseFunc() // 释放槽位，继续尝试下一个账号
 							continue
 						}
@@ -732,20 +770,26 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					}
 				}
 
-				// 5. 所有路由账号槽位满，返回等待计划（选择负载最低的）
-				acc := routingAvailable[0].account
-				if s.debugModelRoutingEnabled() {
-					log.Printf("[ModelRoutingDebug] routed wait: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), acc.ID)
+				// 5. 所有路由账号槽位满，尝试返回等待计划（选择负载最低的）
+				// 遍历找到第一个满足会话限制的账号
+				for _, item := range routingAvailable {
+					if !s.checkAndRegisterSession(ctx, item.account, sessionHash) {
+						continue // 会话限制已满，尝试下一个
+					}
+					if s.debugModelRoutingEnabled() {
+						log.Printf("[ModelRoutingDebug] routed wait: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), item.account.ID)
+					}
+					return &AccountSelectionResult{
+						Account: item.account,
+						WaitPlan: &AccountWaitPlan{
+							AccountID:      item.account.ID,
+							MaxConcurrency: item.account.Concurrency,
+							Timeout:        cfg.StickySessionWaitTimeout,
+							MaxWaiting:     cfg.StickySessionMaxWaiting,
+						},
+					}, nil
 				}
-				return &AccountSelectionResult{
-					Account: acc,
-					WaitPlan: &AccountWaitPlan{
-						AccountID:      acc.ID,
-						MaxConcurrency: acc.Concurrency,
-						Timeout:        cfg.StickySessionWaitTimeout,
-						MaxWaiting:     cfg.StickySessionMaxWaiting,
-					},
-				}, nil
+				// 所有路由账号会话限制都已满，继续到 Layer 2 回退
 			}
 			// 路由列表中的账号都不可用（负载率 >= 100），继续到 Layer 2 回退
 			log.Printf("[ModelRouting] All routed accounts unavailable for model=%s, falling back to normal selection", requestedModel)
@@ -773,7 +817,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					if err == nil && result.Acquired {
 						// 会话数量限制检查
 						// Session count limit check
-						if !s.checkAndRegisterSession(ctx, account, sessionUUID) {
+						if !s.checkAndRegisterSession(ctx, account, sessionHash) {
 							result.ReleaseFunc() // 释放槽位，继续到 Layer 2
 						} else {
 							_ = s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, stickySessionTTL)
@@ -787,15 +831,22 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 					waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, accountID)
 					if waitingCount < cfg.StickySessionMaxWaiting {
-						return &AccountSelectionResult{
-							Account: account,
-							WaitPlan: &AccountWaitPlan{
-								AccountID:      accountID,
-								MaxConcurrency: account.Concurrency,
-								Timeout:        cfg.StickySessionWaitTimeout,
-								MaxWaiting:     cfg.StickySessionMaxWaiting,
-							},
-						}, nil
+						// 会话数量限制检查（等待计划也需要占用会话配额）
+						// Session count limit check (wait plan also requires session quota)
+						if !s.checkAndRegisterSession(ctx, account, sessionHash) {
+							// 会话限制已满，继续到 Layer 2
+							// Session limit full, continue to Layer 2
+						} else {
+							return &AccountSelectionResult{
+								Account: account,
+								WaitPlan: &AccountWaitPlan{
+									AccountID:      accountID,
+									MaxConcurrency: account.Concurrency,
+									Timeout:        cfg.StickySessionWaitTimeout,
+									MaxWaiting:     cfg.StickySessionMaxWaiting,
+								},
+							}, nil
+						}
 					}
 				}
 			}
@@ -845,7 +896,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	loadMap, err := s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
 	if err != nil {
-		if result, ok := s.tryAcquireByLegacyOrder(ctx, candidates, groupID, sessionHash, preferOAuth, sessionUUID); ok {
+		if result, ok := s.tryAcquireByLegacyOrder(ctx, candidates, groupID, sessionHash, preferOAuth); ok {
 			return result, nil
 		}
 	} else {
@@ -895,7 +946,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				result, err := s.tryAcquireAccountSlot(ctx, item.account.ID, item.account.Concurrency)
 				if err == nil && result.Acquired {
 					// 会话数量限制检查
-					if !s.checkAndRegisterSession(ctx, item.account, sessionUUID) {
+					if !s.checkAndRegisterSession(ctx, item.account, sessionHash) {
 						result.ReleaseFunc() // 释放槽位，继续尝试下一个账号
 						continue
 					}
@@ -913,8 +964,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	// ============ Layer 3: 兜底排队 ============
-	sortAccountsByPriorityAndLastUsed(candidates, preferOAuth)
+	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
 	for _, acc := range candidates {
+		// 会话数量限制检查（等待计划也需要占用会话配额）
+		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
+			continue // 会话限制已满，尝试下一个账号
+		}
 		return &AccountSelectionResult{
 			Account: acc,
 			WaitPlan: &AccountWaitPlan{
@@ -928,7 +983,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	return nil, errors.New("no available accounts")
 }
 
-func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool, sessionUUID string) (*AccountSelectionResult, bool) {
+func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool) {
 	ordered := append([]*Account(nil), candidates...)
 	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
 
@@ -936,7 +991,7 @@ func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
 		if err == nil && result.Acquired {
 			// 会话数量限制检查
-			if !s.checkAndRegisterSession(ctx, acc, sessionUUID) {
+			if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
 				result.ReleaseFunc() // 释放槽位，继续尝试下一个账号
 				continue
 			}
@@ -1093,7 +1148,24 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 
 func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
 	if s.schedulerSnapshot != nil {
-		return s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+		if err == nil {
+			slog.Debug("account_scheduling_list_snapshot",
+				"group_id", derefGroupID(groupID),
+				"platform", platform,
+				"use_mixed", useMixed,
+				"count", len(accounts))
+			for _, acc := range accounts {
+				slog.Debug("account_scheduling_account_detail",
+					"account_id", acc.ID,
+					"name", acc.Name,
+					"platform", acc.Platform,
+					"type", acc.Type,
+					"status", acc.Status,
+					"tls_fingerprint", acc.IsTLSFingerprintEnabled())
+			}
+		}
+		return accounts, useMixed, err
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	if useMixed {
@@ -1106,6 +1178,10 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
 		}
 		if err != nil {
+			slog.Debug("account_scheduling_list_failed",
+				"group_id", derefGroupID(groupID),
+				"platform", platform,
+				"error", err)
 			return nil, useMixed, err
 		}
 		filtered := make([]Account, 0, len(accounts))
@@ -1114,6 +1190,20 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				continue
 			}
 			filtered = append(filtered, acc)
+		}
+		slog.Debug("account_scheduling_list_mixed",
+			"group_id", derefGroupID(groupID),
+			"platform", platform,
+			"raw_count", len(accounts),
+			"filtered_count", len(filtered))
+		for _, acc := range filtered {
+			slog.Debug("account_scheduling_account_detail",
+				"account_id", acc.ID,
+				"name", acc.Name,
+				"platform", acc.Platform,
+				"type", acc.Type,
+				"status", acc.Status,
+				"tls_fingerprint", acc.IsTLSFingerprintEnabled())
 		}
 		return filtered, useMixed, nil
 	}
@@ -1129,7 +1219,24 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
 	}
 	if err != nil {
+		slog.Debug("account_scheduling_list_failed",
+			"group_id", derefGroupID(groupID),
+			"platform", platform,
+			"error", err)
 		return nil, useMixed, err
+	}
+	slog.Debug("account_scheduling_list_single",
+		"group_id", derefGroupID(groupID),
+		"platform", platform,
+		"count", len(accounts))
+	for _, acc := range accounts {
+		slog.Debug("account_scheduling_account_detail",
+			"account_id", acc.ID,
+			"name", acc.Name,
+			"platform", acc.Platform,
+			"type", acc.Type,
+			"status", acc.Status,
+			"tls_fingerprint", acc.IsTLSFingerprintEnabled())
 	}
 	return accounts, useMixed, nil
 }
@@ -1196,12 +1303,8 @@ func (s *GatewayService) isAccountSchedulableForWindowCost(ctx context.Context, 
 
 	// 缓存未命中，从数据库查询
 	{
-		var startTime time.Time
-		if account.SessionWindowStart != nil {
-			startTime = *account.SessionWindowStart
-		} else {
-			startTime = time.Now().Add(-5 * time.Hour)
-		}
+		// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
+		startTime := account.GetCurrentWindowStartTime()
 
 		stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, startTime)
 		if err != nil {
@@ -1234,15 +1337,16 @@ checkSchedulability:
 
 // checkAndRegisterSession 检查并注册会话，用于会话数量限制
 // 仅适用于 Anthropic OAuth/SetupToken 账号
+// sessionID: 会话标识符（使用粘性会话的 hash）
 // 返回 true 表示允许（在限制内或会话已存在），false 表示拒绝（超出限制且是新会话）
-func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *Account, sessionUUID string) bool {
+func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *Account, sessionID string) bool {
 	// 只检查 Anthropic OAuth/SetupToken 账号
 	if !account.IsAnthropicOAuthOrSetupToken() {
 		return true
 	}
 
 	maxSessions := account.GetMaxSessions()
-	if maxSessions <= 0 || sessionUUID == "" {
+	if maxSessions <= 0 || sessionID == "" {
 		return true // 未启用会话限制或无会话ID
 	}
 
@@ -1252,24 +1356,12 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 
 	idleTimeout := time.Duration(account.GetSessionIdleTimeoutMinutes()) * time.Minute
 
-	allowed, err := s.sessionLimitCache.RegisterSession(ctx, account.ID, sessionUUID, maxSessions, idleTimeout)
+	allowed, err := s.sessionLimitCache.RegisterSession(ctx, account.ID, sessionID, maxSessions, idleTimeout)
 	if err != nil {
 		// 失败开放：缓存错误时允许通过
 		return true
 	}
 	return allowed
-}
-
-// extractSessionUUID 从 metadata.user_id 中提取会话 UUID
-// 格式: user_{64位hex}_account__session_{uuid}
-func extractSessionUUID(metadataUserID string) string {
-	if metadataUserID == "" {
-		return ""
-	}
-	if match := sessionIDRegex.FindStringSubmatch(metadataUserID); len(match) > 1 {
-		return match[1]
-	}
-	return ""
 }
 
 func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
@@ -1299,6 +1391,56 @@ func sortAccountsByPriorityAndLastUsed(accounts []*Account, preferOAuth bool) {
 			return a.LastUsedAt.Before(*b.LastUsedAt)
 		}
 	})
+}
+
+// sortCandidatesForFallback 根据配置选择排序策略
+// mode: "last_used"(按最后使用时间) 或 "random"(随机)
+func (s *GatewayService) sortCandidatesForFallback(accounts []*Account, preferOAuth bool, mode string) {
+	if mode == "random" {
+		// 先按优先级排序，然后在同优先级内随机打乱
+		sortAccountsByPriorityOnly(accounts, preferOAuth)
+		shuffleWithinPriority(accounts)
+	} else {
+		// 默认按最后使用时间排序
+		sortAccountsByPriorityAndLastUsed(accounts, preferOAuth)
+	}
+}
+
+// sortAccountsByPriorityOnly 仅按优先级排序
+func sortAccountsByPriorityOnly(accounts []*Account, preferOAuth bool) {
+	sort.SliceStable(accounts, func(i, j int) bool {
+		a, b := accounts[i], accounts[j]
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
+		}
+		if preferOAuth && a.Type != b.Type {
+			return a.Type == AccountTypeOAuth
+		}
+		return false
+	})
+}
+
+// shuffleWithinPriority 在同优先级内随机打乱顺序
+func shuffleWithinPriority(accounts []*Account) {
+	if len(accounts) <= 1 {
+		return
+	}
+	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+	start := 0
+	for start < len(accounts) {
+		priority := accounts[start].Priority
+		end := start + 1
+		for end < len(accounts) && accounts[end].Priority == priority {
+			end++
+		}
+		// 对 [start, end) 范围内的账户随机打乱
+		if end-start > 1 {
+			r.Shuffle(end-start, func(i, j int) {
+				accounts[start+i], accounts[start+j] = accounts[start+j], accounts[start+i]
+			})
+		}
+		start = end
+	}
 }
 
 // selectAccountForModelWithPlatform 选择单平台账户（完全隔离）
@@ -2158,6 +2300,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		proxyURL = account.Proxy.URL()
 	}
 
+	// 调试日志：记录即将转发的账号信息
+	log.Printf("[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v Proxy=%s",
+		account.ID, account.Name, account.Platform, account.Type, account.IsTLSFingerprintEnabled(), proxyURL)
+
 	// 重试循环
 	var resp *http.Response
 	retryStart := time.Now()
@@ -2172,7 +2318,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 
 		// 发送请求
-		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
@@ -2246,7 +2392,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					filteredBody := FilterThinkingBlocksForRetry(body)
 					retryReq, buildErr := s.buildUpstreamRequest(ctx, c, account, filteredBody, token, tokenType, reqModel)
 					if buildErr == nil {
-						retryResp, retryErr := s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+						retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
 						if retryErr == nil {
 							if retryResp.StatusCode < 400 {
 								log.Printf("Account %d: signature error retry succeeded (thinking downgraded)", account.ID)
@@ -2278,7 +2424,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									filteredBody2 := FilterSignatureSensitiveBlocksForRetry(body)
 									retryReq2, buildErr2 := s.buildUpstreamRequest(ctx, c, account, filteredBody2, token, tokenType, reqModel)
 									if buildErr2 == nil {
-										retryResp2, retryErr2 := s.httpUpstream.Do(retryReq2, proxyURL, account.ID, account.Concurrency)
+										retryResp2, retryErr2 := s.httpUpstream.DoWithTLS(retryReq2, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
 										if retryErr2 == nil {
 											resp = retryResp2
 											break
@@ -2393,6 +2539,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
+			// 调试日志：打印重试耗尽后的错误响应
+			log.Printf("[Forward] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
+				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
+
 			s.handleRetryExhaustedSideEffects(ctx, resp, account)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -2419,6 +2569,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+		// 调试日志：打印上游错误响应
+		log.Printf("[Forward] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
+			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
 		s.handleFailoverSideEffects(ctx, resp, account)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -2549,9 +2703,10 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			fingerprint = fp
 
 			// 2. 重写metadata.user_id（需要指纹中的ClientID和账号的account_uuid）
+			// 如果启用了会话ID伪装，会在重写后替换 session 部分为固定值
 			accountUUID := account.GetExtraString("account_uuid")
 			if accountUUID != "" && fp.ClientID != "" {
-				if newBody, err := s.identityService.RewriteUserID(body, account.ID, accountUUID, fp.ClientID); err == nil && len(newBody) > 0 {
+				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID); err == nil && len(newBody) > 0 {
 					body = newBody
 				}
 			}
@@ -2769,6 +2924,10 @@ func extractUpstreamErrorMessage(body []byte) string {
 
 func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*ForwardResult, error) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+
+	// 调试日志：打印上游错误响应
+	log.Printf("[Forward] Upstream error (non-retryable): Account=%d(%s) Status=%d RequestID=%s Body=%s",
+		account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(body), 1000))
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -3478,7 +3637,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 发送请求
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
 	if err != nil {
 		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
@@ -3500,7 +3659,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		filteredBody := FilterThinkingBlocksForRetry(body)
 		retryReq, buildErr := s.buildCountTokensRequest(ctx, c, account, filteredBody, token, tokenType, reqModel)
 		if buildErr == nil {
-			retryResp, retryErr := s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+			retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
 			if retryErr == nil {
 				resp = retryResp
 				respBody, err = io.ReadAll(resp.Body)
@@ -3578,12 +3737,13 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 
 	// OAuth 账号：应用统一指纹和重写 userID
+	// 如果启用了会话ID伪装，会在重写后替换 session 部分为固定值
 	if account.IsOAuth() && s.identityService != nil {
 		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
 		if err == nil {
 			accountUUID := account.GetExtraString("account_uuid")
 			if accountUUID != "" && fp.ClientID != "" {
-				if newBody, err := s.identityService.RewriteUserID(body, account.ID, accountUUID, fp.ClientID); err == nil && len(newBody) > 0 {
+				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID); err == nil && len(newBody) > 0 {
 					body = newBody
 				}
 			}
