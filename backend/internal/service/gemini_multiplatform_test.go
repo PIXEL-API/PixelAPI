@@ -81,6 +81,9 @@ func (m *mockAccountRepoForGemini) ListActive(ctx context.Context) ([]Account, e
 func (m *mockAccountRepoForGemini) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return nil, nil
 }
+func (m *mockAccountRepoForGemini) ListByPlatformAndCredentialEmails(ctx context.Context, platform string, emails []string) ([]Account, error) {
+	return nil, nil
+}
 func (m *mockAccountRepoForGemini) UpdateLastUsed(ctx context.Context, id int64) error { return nil }
 func (m *mockAccountRepoForGemini) BatchUpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
 	return nil

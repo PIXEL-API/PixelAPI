@@ -96,6 +96,9 @@ func (m *mockAccountRepoForPlatform) ListActive(ctx context.Context) ([]Account,
 func (m *mockAccountRepoForPlatform) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return nil, nil
 }
+func (m *mockAccountRepoForPlatform) ListByPlatformAndCredentialEmails(ctx context.Context, platform string, emails []string) ([]Account, error) {
+	return nil, nil
+}
 func (m *mockAccountRepoForPlatform) UpdateLastUsed(ctx context.Context, id int64) error {
 	return nil
 }
