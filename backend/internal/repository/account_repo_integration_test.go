@@ -21,11 +21,56 @@ type AccountRepoSuite struct {
 	repo   *accountRepository
 }
 
+type schedulerCacheRecorder struct {
+	setAccounts []*service.Account
+}
+
+func (s *schedulerCacheRecorder) GetSnapshot(ctx context.Context, bucket service.SchedulerBucket) ([]*service.Account, bool, error) {
+	return nil, false, nil
+}
+
+func (s *schedulerCacheRecorder) SetSnapshot(ctx context.Context, bucket service.SchedulerBucket, accounts []service.Account) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) GetAccount(ctx context.Context, accountID int64) (*service.Account, error) {
+	return nil, nil
+}
+
+func (s *schedulerCacheRecorder) SetAccount(ctx context.Context, account *service.Account) error {
+	s.setAccounts = append(s.setAccounts, account)
+	return nil
+}
+
+func (s *schedulerCacheRecorder) DeleteAccount(ctx context.Context, accountID int64) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) TryLockBucket(ctx context.Context, bucket service.SchedulerBucket, ttl time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *schedulerCacheRecorder) ListBuckets(ctx context.Context) ([]service.SchedulerBucket, error) {
+	return nil, nil
+}
+
+func (s *schedulerCacheRecorder) GetOutboxWatermark(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (s *schedulerCacheRecorder) SetOutboxWatermark(ctx context.Context, id int64) error {
+	return nil
+}
+
 func (s *AccountRepoSuite) SetupTest() {
 	s.ctx = context.Background()
 	tx := testEntTx(s.T())
 	s.client = tx.Client()
-	s.repo = newAccountRepositoryWithSQL(s.client, tx)
+	s.repo = newAccountRepositoryWithSQL(s.client, tx, nil)
 }
 
 func TestAccountRepoSuite(t *testing.T) {
@@ -71,6 +116,20 @@ func (s *AccountRepoSuite) TestUpdate() {
 	got, err := s.repo.GetByID(s.ctx, account.ID)
 	s.Require().NoError(err, "GetByID after update")
 	s.Require().Equal("updated", got.Name)
+}
+
+func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnDisabled() {
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "sync-update", Status: service.StatusActive, Schedulable: true})
+	cacheRecorder := &schedulerCacheRecorder{}
+	s.repo.schedulerCache = cacheRecorder
+
+	account.Status = service.StatusDisabled
+	err := s.repo.Update(s.ctx, account)
+	s.Require().NoError(err, "Update")
+
+	s.Require().Len(cacheRecorder.setAccounts, 1)
+	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
+	s.Require().Equal(service.StatusDisabled, cacheRecorder.setAccounts[0].Status)
 }
 
 func (s *AccountRepoSuite) TestDelete() {
@@ -174,7 +233,7 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			// 每个 case 重新获取隔离资源
 			tx := testEntTx(s.T())
 			client := tx.Client()
-			repo := newAccountRepositoryWithSQL(client, tx)
+			repo := newAccountRepositoryWithSQL(client, tx, nil)
 			ctx := context.Background()
 
 			tt.setup(client)
@@ -365,12 +424,38 @@ func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform() {
 
 func (s *AccountRepoSuite) TestSetSchedulable() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-sched", Schedulable: true})
+	cacheRecorder := &schedulerCacheRecorder{}
+	s.repo.schedulerCache = cacheRecorder
 
 	s.Require().NoError(s.repo.SetSchedulable(s.ctx, account.ID, false))
 
 	got, err := s.repo.GetByID(s.ctx, account.ID)
 	s.Require().NoError(err)
 	s.Require().False(got.Schedulable)
+	s.Require().Len(cacheRecorder.setAccounts, 1)
+	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
+}
+
+func (s *AccountRepoSuite) TestBulkUpdate_SyncSchedulerSnapshotOnDisabled() {
+	account1 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "bulk-1", Status: service.StatusActive, Schedulable: true})
+	account2 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "bulk-2", Status: service.StatusActive, Schedulable: true})
+	cacheRecorder := &schedulerCacheRecorder{}
+	s.repo.schedulerCache = cacheRecorder
+
+	disabled := service.StatusDisabled
+	rows, err := s.repo.BulkUpdate(s.ctx, []int64{account1.ID, account2.ID}, service.AccountBulkUpdate{
+		Status: &disabled,
+	})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), rows)
+
+	s.Require().Len(cacheRecorder.setAccounts, 2)
+	ids := map[int64]struct{}{}
+	for _, acc := range cacheRecorder.setAccounts {
+		ids[acc.ID] = struct{}{}
+	}
+	s.Require().Contains(ids, account1.ID)
+	s.Require().Contains(ids, account2.ID)
 }
 
 // --- SetOverloaded / SetRateLimited / ClearRateLimit ---
