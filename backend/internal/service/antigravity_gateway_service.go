@@ -29,7 +29,10 @@ const (
 	antigravityRetryMaxDelay    = 16 * time.Second
 )
 
-const antigravityScopeRateLimitEnv = "GATEWAY_ANTIGRAVITY_429_SCOPE_LIMIT"
+const (
+	antigravityScopeRateLimitEnv = "GATEWAY_ANTIGRAVITY_429_SCOPE_LIMIT"
+	antigravityBillingModelEnv   = "GATEWAY_ANTIGRAVITY_BILL_WITH_MAPPED_MODEL"
+)
 
 // antigravityRetryLoopParams 重试循环的参数
 type antigravityRetryLoopParams struct {
@@ -711,6 +714,10 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	originalModel := claudeReq.Model
 	mappedModel := s.getMappedModel(account, claudeReq.Model)
 	quotaScope, _ := resolveAntigravityQuotaScope(originalModel)
+	billingModel := originalModel
+	if antigravityUseMappedModelForBilling() && strings.TrimSpace(mappedModel) != "" {
+		billingModel = mappedModel
+	}
 
 	// 获取 access_token
 	if s.tokenProvider == nil {
@@ -971,7 +978,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	return &ForwardResult{
 		RequestID:    requestID,
 		Usage:        *usage,
-		Model:        originalModel, // 使用原始模型用于计费和日志
+		Model:        billingModel,
 		Stream:       claudeReq.Stream,
 		Duration:     time.Since(startTime),
 		FirstTokenMs: firstTokenMs,
@@ -1280,6 +1287,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	}
 
 	mappedModel := s.getMappedModel(account, originalModel)
+	billingModel := originalModel
+	if antigravityUseMappedModelForBilling() && strings.TrimSpace(mappedModel) != "" {
+		billingModel = mappedModel
+	}
 
 	// 获取 access_token
 	if s.tokenProvider == nil {
@@ -1478,7 +1489,7 @@ handleSuccess:
 	return &ForwardResult{
 		RequestID:    requestID,
 		Usage:        *usage,
-		Model:        originalModel,
+		Model:        billingModel,
 		Stream:       stream,
 		Duration:     time.Since(startTime),
 		FirstTokenMs: firstTokenMs,
@@ -1522,6 +1533,11 @@ func sleepAntigravityBackoffWithContext(ctx context.Context, attempt int) bool {
 
 func antigravityUseScopeRateLimit() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(antigravityScopeRateLimitEnv)))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+func antigravityUseMappedModelForBilling() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(antigravityBillingModelEnv)))
 	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
