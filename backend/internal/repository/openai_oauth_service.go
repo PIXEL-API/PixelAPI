@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -21,7 +22,7 @@ type openaiOAuthService struct {
 }
 
 func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL string) (*openai.TokenResponse, error) {
-	client := createOpenAIReqClient(proxyURL)
+	client := createOpenAIReqClient(s.tokenURL, proxyURL)
 
 	if redirectURI == "" {
 		redirectURI = openai.DefaultRedirectURI
@@ -54,7 +55,7 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 }
 
 func (s *openaiOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
-	client := createOpenAIReqClient(proxyURL)
+	client := createOpenAIReqClient(s.tokenURL, proxyURL)
 
 	formData := url.Values{}
 	formData.Set("grant_type", "refresh_token")
@@ -81,9 +82,14 @@ func (s *openaiOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 	return &tokenResp, nil
 }
 
-func createOpenAIReqClient(proxyURL string) *req.Client {
+func createOpenAIReqClient(tokenURL, proxyURL string) *req.Client {
+	forceHTTP2 := false
+	if parsedURL, err := url.Parse(tokenURL); err == nil {
+		forceHTTP2 = strings.EqualFold(parsedURL.Scheme, "https")
+	}
 	return getSharedReqClient(reqClientOptions{
-		ProxyURL: proxyURL,
-		Timeout:  60 * time.Second,
+		ProxyURL:   proxyURL,
+		Timeout:    120 * time.Second,
+		ForceHTTP2: forceHTTP2,
 	})
 }
