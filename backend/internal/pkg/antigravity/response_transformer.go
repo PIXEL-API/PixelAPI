@@ -20,6 +20,15 @@ func TransformGeminiToClaude(geminiResp []byte, originalModel string) ([]byte, *
 		v1Resp.Response = directResp
 		v1Resp.ResponseID = directResp.ResponseID
 		v1Resp.ModelVersion = directResp.ModelVersion
+	} else if len(v1Resp.Response.Candidates) == 0 {
+		// 第一次解析成功但 candidates 为空，说明是直接的 GeminiResponse 格式
+		var directResp GeminiResponse
+		if err2 := json.Unmarshal(geminiResp, &directResp); err2 != nil {
+			return nil, nil, fmt.Errorf("parse gemini response as direct: %w", err2)
+		}
+		v1Resp.Response = directResp
+		v1Resp.ResponseID = directResp.ResponseID
+		v1Resp.ModelVersion = directResp.ModelVersion
 	}
 
 	// 使用处理器转换
@@ -174,16 +183,20 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 				p.trailingSignature = ""
 			}
 
-			p.textBuilder += part.Text
-
-			// 非空 text 带签名 - 立即刷新并输出空 thinking 块
+			// 非空 text 带签名 - 特殊处理：先输出 text，再输出空 thinking 块
 			if signature != "" {
-				p.flushText()
+				p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
+					Type: "text",
+					Text: part.Text,
+				})
 				p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
 					Type:      "thinking",
 					Thinking:  "",
 					Signature: signature,
 				})
+			} else {
+				// 普通 text (无签名) - 累积到 builder
+				p.textBuilder += part.Text
 			}
 		}
 	}
