@@ -181,8 +181,8 @@ func (p *ClaudeTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		return "", errors.New("access_token not found in credentials")
 	}
 
-	// 3. 存入缓存
-	if p.tokenCache != nil {
+	// 3. 存入缓存（验证版本后再写入，避免异步刷新任务与请求线程的竞态条件）
+	if p.tokenCache != nil && !IsTokenVersionStale(ctx, account, p.accountRepo) {
 		ttl := 30 * time.Minute
 		if refreshFailed {
 			// 刷新失败时使用短 TTL，避免失效 token 长时间缓存导致 401 抖动
