@@ -166,7 +166,13 @@ export default {
       justNow: '刚刚',
       minutesAgo: '{n}分钟前',
       hoursAgo: '{n}小时前',
-      daysAgo: '{n}天前'
+      daysAgo: '{n}天前',
+      countdown: {
+        daysHours: '{d}d {h}h',
+        hoursMinutes: '{h}h {m}m',
+        minutes: '{m}m',
+        withSuffix: '{time} 后解除'
+      }
     }
   },
 
@@ -1212,6 +1218,8 @@ export default {
         cooldown: '冷却中',
         paused: '暂停',
         limited: '限流',
+        rateLimited: '限流中',
+        overloaded: '过载中',
         tempUnschedulable: '临时不可调度',
         rateLimitedUntil: '限流中，重置时间：{time}',
         overloadedUntil: '负载过重，重置时间：{time}',
