@@ -71,6 +71,26 @@ func (s *emailCacheStub) DeleteVerificationCode(ctx context.Context, email strin
 	return nil
 }
 
+func (s *emailCacheStub) GetPasswordResetToken(ctx context.Context, email string) (*PasswordResetTokenData, error) {
+	return nil, nil
+}
+
+func (s *emailCacheStub) SetPasswordResetToken(ctx context.Context, email string, data *PasswordResetTokenData, ttl time.Duration) error {
+	return nil
+}
+
+func (s *emailCacheStub) DeletePasswordResetToken(ctx context.Context, email string) error {
+	return nil
+}
+
+func (s *emailCacheStub) IsPasswordResetEmailInCooldown(ctx context.Context, email string) bool {
+	return false
+}
+
+func (s *emailCacheStub) SetPasswordResetEmailCooldown(ctx context.Context, email string, ttl time.Duration) error {
+	return nil
+}
+
 func newAuthService(repo *userRepoStub, settings map[string]string, emailCache EmailCache) *AuthService {
 	cfg := &config.Config{
 		JWT: config.JWTConfig{
