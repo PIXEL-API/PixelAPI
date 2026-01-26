@@ -142,12 +142,13 @@ func (s *AntigravityOAuthService) ExchangeCode(ctx context.Context, input *Antig
 		result.Email = userInfo.Email
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
-	loadResp, _, err := client.LoadCodeAssist(ctx, tokenResp.AccessToken)
-	if err != nil {
-		fmt.Printf("[AntigravityOAuth] 警告: 获取 project_id 失败: %v\n", err)
-	} else if loadResp != nil && loadResp.CloudAICompanionProject != "" {
-		result.ProjectID = loadResp.CloudAICompanionProject
+	// 获取 project_id（部分账户类型可能没有），失败时重试
+	projectID, loadErr := s.loadProjectIDWithRetry(ctx, tokenResp.AccessToken, proxyURL, 3)
+	if loadErr != nil {
+		fmt.Printf("[AntigravityOAuth] 警告: 获取 project_id 失败（重试后）: %v\n", loadErr)
+		result.ProjectIDMissing = true
+	} else {
+		result.ProjectID = projectID
 	}
 
 	return result, nil
@@ -237,19 +238,58 @@ func (s *AntigravityOAuthService) RefreshAccountToken(ctx context.Context, accou
 		tokenInfo.Email = existingEmail
 	}
 
-	// 每次刷新都调用 LoadCodeAssist 获取 project_id
-	client := antigravity.NewClient(proxyURL)
-	loadResp, _, err := client.LoadCodeAssist(ctx, tokenInfo.AccessToken)
-	if err != nil || loadResp == nil || loadResp.CloudAICompanionProject == "" {
-		// LoadCodeAssist 失败或返回空，保留原有 project_id，标记缺失
-		existingProjectID := strings.TrimSpace(account.GetCredential("project_id"))
+	// 每次刷新都调用 LoadCodeAssist 获取 project_id，失败时重试
+	existingProjectID := strings.TrimSpace(account.GetCredential("project_id"))
+	projectID, loadErr := s.loadProjectIDWithRetry(ctx, tokenInfo.AccessToken, proxyURL, 3)
+
+	if loadErr != nil {
+		// LoadCodeAssist 失败，保留原有 project_id
 		tokenInfo.ProjectID = existingProjectID
-		tokenInfo.ProjectIDMissing = true
+		// 只有从未获取过 project_id 且本次也获取失败时，才标记为真正缺失
+		// 如果之前有 project_id，本次只是临时故障，不应标记为错误
+		if existingProjectID == "" {
+			tokenInfo.ProjectIDMissing = true
+		}
 	} else {
-		tokenInfo.ProjectID = loadResp.CloudAICompanionProject
+		tokenInfo.ProjectID = projectID
 	}
 
 	return tokenInfo, nil
+}
+
+// loadProjectIDWithRetry 带重试机制获取 project_id
+// 返回 project_id 和错误，失败时会重试指定次数
+func (s *AntigravityOAuthService) loadProjectIDWithRetry(ctx context.Context, accessToken, proxyURL string, maxRetries int) (string, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// 指数退避：1s, 2s, 4s
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			if backoff > 8*time.Second {
+				backoff = 8 * time.Second
+			}
+			time.Sleep(backoff)
+		}
+
+		client := antigravity.NewClient(proxyURL)
+		loadResp, _, err := client.LoadCodeAssist(ctx, accessToken)
+
+		if err == nil && loadResp != nil && loadResp.CloudAICompanionProject != "" {
+			return loadResp.CloudAICompanionProject, nil
+		}
+
+		// 记录错误
+		if err != nil {
+			lastErr = err
+		} else if loadResp == nil {
+			lastErr = fmt.Errorf("LoadCodeAssist 返回空响应")
+		} else {
+			lastErr = fmt.Errorf("LoadCodeAssist 返回空 project_id")
+		}
+	}
+
+	return "", fmt.Errorf("获取 project_id 失败 (重试 %d 次后): %w", maxRetries, lastErr)
 }
 
 // BuildAccountCredentials 构建账户凭证

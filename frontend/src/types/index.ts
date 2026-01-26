@@ -71,6 +71,7 @@ export interface PublicSettings {
   registration_enabled: boolean
   email_verify_enabled: boolean
   promo_code_enabled: boolean
+  password_reset_enabled: boolean
   turnstile_enabled: boolean
   turnstile_site_key: string
   site_name: string
@@ -1106,4 +1107,53 @@ export interface UpdatePromoCodeRequest {
   status?: 'active' | 'disabled'
   expires_at?: number | null
   notes?: string
+}
+
+// ==================== TOTP (2FA) Types ====================
+
+export interface TotpStatus {
+  enabled: boolean
+  enabled_at: number | null  // Unix timestamp in seconds
+  feature_enabled: boolean
+}
+
+export interface TotpSetupRequest {
+  email_code?: string
+  password?: string
+}
+
+export interface TotpSetupResponse {
+  secret: string
+  qr_code_url: string
+  setup_token: string
+  countdown: number
+}
+
+export interface TotpEnableRequest {
+  totp_code: string
+  setup_token: string
+}
+
+export interface TotpEnableResponse {
+  success: boolean
+}
+
+export interface TotpDisableRequest {
+  email_code?: string
+  password?: string
+}
+
+export interface TotpVerificationMethod {
+  method: 'email' | 'password'
+}
+
+export interface TotpLoginResponse {
+  requires_2fa: boolean
+  temp_token?: string
+  user_email_masked?: string
+}
+
+export interface TotpLogin2FARequest {
+  temp_token: string
+  totp_code: string
 }

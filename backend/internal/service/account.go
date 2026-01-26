@@ -197,6 +197,35 @@ func (a *Account) GetCredentialAsTime(key string) *time.Time {
 	return nil
 }
 
+// GetCredentialAsInt64 解析凭证中的 int64 字段
+// 用于读取 _token_version 等内部字段
+func (a *Account) GetCredentialAsInt64(key string) int64 {
+	if a == nil || a.Credentials == nil {
+		return 0
+	}
+	val, ok := a.Credentials[key]
+	if !ok || val == nil {
+		return 0
+	}
+	switch v := val.(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i
+		}
+	case string:
+		if i, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			return i
+		}
+	}
+	return 0
+}
+
 func (a *Account) IsTempUnschedulableEnabled() bool {
 	if a.Credentials == nil {
 		return false
