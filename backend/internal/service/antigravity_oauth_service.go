@@ -142,12 +142,13 @@ func (s *AntigravityOAuthService) ExchangeCode(ctx context.Context, input *Antig
 		result.Email = userInfo.Email
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
-	loadResp, _, err := client.LoadCodeAssist(ctx, tokenResp.AccessToken)
-	if err != nil {
-		fmt.Printf("[AntigravityOAuth] 警告: 获取 project_id 失败: %v\n", err)
-	} else if loadResp != nil && loadResp.CloudAICompanionProject != "" {
-		result.ProjectID = loadResp.CloudAICompanionProject
+	// 获取 project_id（部分账户类型可能没有），失败时重试
+	projectID, loadErr := s.loadProjectIDWithRetry(ctx, tokenResp.AccessToken, proxyURL, 3)
+	if loadErr != nil {
+		fmt.Printf("[AntigravityOAuth] 警告: 获取 project_id 失败（重试后）: %v\n", loadErr)
+		result.ProjectIDMissing = true
+	} else {
+		result.ProjectID = projectID
 	}
 
 	return result, nil
