@@ -320,6 +320,20 @@ func (_c *GroupCreate) SetNillableModelRoutingEnabled(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (_c *GroupCreate) SetMcpXMLInject(v bool) *GroupCreate {
+	_c.mutation.SetMcpXMLInject(v)
+	return _c
+}
+
+// SetNillableMcpXMLInject sets the "mcp_xml_inject" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableMcpXMLInject(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetMcpXMLInject(*v)
+	}
+	return _c
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_c *GroupCreate) AddAPIKeyIDs(ids ...int64) *GroupCreate {
 	_c.mutation.AddAPIKeyIDs(ids...)
@@ -493,6 +507,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultModelRoutingEnabled
 		_c.mutation.SetModelRoutingEnabled(v)
 	}
+	if _, ok := _c.mutation.McpXMLInject(); !ok {
+		v := group.DefaultMcpXMLInject
+		_c.mutation.SetMcpXMLInject(v)
+	}
 	return nil
 }
 
@@ -550,6 +568,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.ModelRoutingEnabled(); !ok {
 		return &ValidationError{Name: "model_routing_enabled", err: errors.New(`ent: missing required field "Group.model_routing_enabled"`)}
+	}
+	if _, ok := _c.mutation.McpXMLInject(); !ok {
+		return &ValidationError{Name: "mcp_xml_inject", err: errors.New(`ent: missing required field "Group.mcp_xml_inject"`)}
 	}
 	return nil
 }
@@ -665,6 +686,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ModelRoutingEnabled(); ok {
 		_spec.SetField(group.FieldModelRoutingEnabled, field.TypeBool, value)
 		_node.ModelRoutingEnabled = value
+	}
+	if value, ok := _c.mutation.McpXMLInject(); ok {
+		_spec.SetField(group.FieldMcpXMLInject, field.TypeBool, value)
+		_node.McpXMLInject = value
 	}
 	if nodes := _c.mutation.APIKeysIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1200,6 +1225,18 @@ func (u *GroupUpsert) UpdateModelRoutingEnabled() *GroupUpsert {
 	return u
 }
 
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (u *GroupUpsert) SetMcpXMLInject(v bool) *GroupUpsert {
+	u.Set(group.FieldMcpXMLInject, v)
+	return u
+}
+
+// UpdateMcpXMLInject sets the "mcp_xml_inject" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateMcpXMLInject() *GroupUpsert {
+	u.SetExcluded(group.FieldMcpXMLInject)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -1683,6 +1720,20 @@ func (u *GroupUpsertOne) SetModelRoutingEnabled(v bool) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateModelRoutingEnabled() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelRoutingEnabled()
+	})
+}
+
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (u *GroupUpsertOne) SetMcpXMLInject(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMcpXMLInject(v)
+	})
+}
+
+// UpdateMcpXMLInject sets the "mcp_xml_inject" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateMcpXMLInject() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMcpXMLInject()
 	})
 }
 
@@ -2335,6 +2386,20 @@ func (u *GroupUpsertBulk) SetModelRoutingEnabled(v bool) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateModelRoutingEnabled() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelRoutingEnabled()
+	})
+}
+
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (u *GroupUpsertBulk) SetMcpXMLInject(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMcpXMLInject(v)
+	})
+}
+
+// UpdateMcpXMLInject sets the "mcp_xml_inject" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateMcpXMLInject() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMcpXMLInject()
 	})
 }
 

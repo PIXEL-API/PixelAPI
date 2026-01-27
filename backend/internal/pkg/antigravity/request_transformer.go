@@ -44,11 +44,13 @@ type TransformOptions struct {
 	// IdentityPatch 可选：自定义注入到 systemInstruction 开头的身份防护提示词；
 	// 为空时使用默认模板（包含 [IDENTITY_PATCH] 及 SYSTEM_PROMPT_BEGIN 标记）。
 	IdentityPatch string
+	EnableMCPXML  bool
 }
 
 func DefaultTransformOptions() TransformOptions {
 	return TransformOptions{
 		EnableIdentityPatch: true,
+		EnableMCPXML:        true,
 	}
 }
 
@@ -257,8 +259,8 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 	// 添加用户的 system prompt
 	parts = append(parts, userSystemParts...)
 
-	// 检测是否有 MCP 工具，如有则注入 XML 调用协议
-	if hasMCPTools(tools) {
+	// 检测是否有 MCP 工具，如有且启用了 MCP XML 注入则注入 XML 调用协议
+	if opts.EnableMCPXML && hasMCPTools(tools) {
 		parts = append(parts, GeminiPart{Text: mcpXMLProtocol})
 	}
 
@@ -491,7 +493,7 @@ func parseToolResultContent(content json.RawMessage, isError bool) string {
 
 // buildGenerationConfig 构建 generationConfig
 const (
-	defaultMaxOutputTokens   = 64000
+	defaultMaxOutputTokens    = 64000
 	maxOutputTokensUpperBound = 65000
 	maxOutputTokensClaude     = 64000
 )

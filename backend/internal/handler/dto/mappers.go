@@ -92,6 +92,7 @@ func GroupFromServiceShallow(g *service.Group) *Group {
 		FallbackGroupIDOnInvalidRequest: g.FallbackGroupIDOnInvalidRequest,
 		ModelRouting:                    g.ModelRouting,
 		ModelRoutingEnabled:             g.ModelRoutingEnabled,
+		MCPXMLInject:                    g.MCPXMLInject,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 		AccountCount:                    g.AccountCount,
