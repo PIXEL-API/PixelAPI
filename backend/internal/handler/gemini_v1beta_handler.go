@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/gemini"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
@@ -288,10 +289,14 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 
 		// 5) forward (根据平台分流)
 		var result *service.ForwardResult
+		requestCtx := c.Request.Context()
+		if switchCount > 0 {
+			requestCtx = context.WithValue(requestCtx, ctxkey.AccountSwitchCount, switchCount)
+		}
 		if account.Platform == service.PlatformAntigravity {
-			result, err = h.antigravityGatewayService.ForwardGemini(c.Request.Context(), c, account, modelName, action, stream, body)
+			result, err = h.antigravityGatewayService.ForwardGemini(requestCtx, c, account, modelName, action, stream, body)
 		} else {
-			result, err = h.geminiCompatService.ForwardNative(c.Request.Context(), c, account, modelName, action, stream, body)
+			result, err = h.geminiCompatService.ForwardNative(requestCtx, c, account, modelName, action, stream, body)
 		}
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
