@@ -795,17 +795,15 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 	if parsed.MetadataUserID != "" {
 		return ""
 	}
-	accountUUID := account.GetExtraString("account_uuid")
-	if accountUUID == "" {
-		return ""
-	}
 
 	userID := strings.TrimSpace(account.GetClaudeUserID())
 	if userID == "" && fp != nil {
 		userID = fp.ClientID
 	}
 	if userID == "" {
-		return ""
+		// Fall back to a random, well-formed client id so we can still satisfy
+		// Claude Code OAuth requirements when account metadata is incomplete.
+		userID = generateClientID()
 	}
 
 	sessionHash := s.GenerateSessionHash(parsed)
@@ -814,7 +812,14 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 		seed := fmt.Sprintf("%d::%s", account.ID, sessionHash)
 		sessionID = generateSessionUUID(seed)
 	}
-	return fmt.Sprintf("user_%s_account_%s_session_%s", userID, accountUUID, sessionID)
+
+	// Prefer the newer format that includes account_uuid (if present),
+	// otherwise fall back to the legacy Claude Code format.
+	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
+	if accountUUID != "" {
+		return fmt.Sprintf("user_%s_account_%s_session_%s", userID, accountUUID, sessionID)
+	}
+	return fmt.Sprintf("user_%s_account__session_%s", userID, sessionID)
 }
 
 func generateSessionUUID(seed string) string {
