@@ -2,9 +2,10 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"net/http"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
@@ -35,12 +36,12 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	// Generate PKCE values
 	state, err := openai.GenerateState()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate state: %w", err)
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_OAUTH_STATE_FAILED", "failed to generate state: %v", err)
 	}
 
 	codeVerifier, err := openai.GenerateCodeVerifier()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate code verifier: %w", err)
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_OAUTH_VERIFIER_FAILED", "failed to generate code verifier: %v", err)
 	}
 
 	codeChallenge := openai.GenerateCodeChallenge(codeVerifier)
@@ -48,14 +49,17 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	// Generate session ID
 	sessionID, err := openai.GenerateSessionID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate session ID: %w", err)
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_OAUTH_SESSION_FAILED", "failed to generate session ID: %v", err)
 	}
 
 	// Get proxy URL if specified
 	var proxyURL string
 	if proxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
-		if err == nil && proxy != nil {
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
+		}
+		if proxy != nil {
 			proxyURL = proxy.URL()
 		}
 	}
@@ -110,14 +114,17 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	// Get session
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
-		return nil, fmt.Errorf("session not found or expired")
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
 	}
 
-	// Get proxy URL
+	// Get proxy URL: prefer input.ProxyID, fallback to session.ProxyURL
 	proxyURL := session.ProxyURL
 	if input.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
-		if err == nil && proxy != nil {
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
+		}
+		if proxy != nil {
 			proxyURL = proxy.URL()
 		}
 	}
@@ -131,7 +138,7 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	// Exchange code for token
 	tokenResp, err := s.oauthClient.ExchangeCode(ctx, input.Code, session.CodeVerifier, redirectURI, proxyURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to exchange code: %w", err)
+		return nil, err
 	}
 
 	// Parse ID token to get user info
@@ -201,12 +208,12 @@ func (s *OpenAIOAuthService) RefreshToken(ctx context.Context, refreshToken stri
 // RefreshAccountToken refreshes token for an OpenAI account
 func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
 	if !account.IsOpenAI() {
-		return nil, fmt.Errorf("account is not an OpenAI account")
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT", "account is not an OpenAI account")
 	}
 
 	refreshToken := account.GetOpenAIRefreshToken()
 	if refreshToken == "" {
-		return nil, fmt.Errorf("no refresh token available")
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
 	}
 
 	var proxyURL string

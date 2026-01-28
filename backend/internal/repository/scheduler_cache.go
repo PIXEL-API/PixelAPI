@@ -58,7 +58,9 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		return nil, false, err
 	}
 	if len(ids) == 0 {
-		return []*service.Account{}, true, nil
+		// 空快照视为缓存未命中，触发数据库回退查询
+		// 这解决了新分组创建后立即绑定账号时的竞态条件问题
+		return nil, false, nil
 	}
 
 	keys := make([]string, 0, len(ids))
