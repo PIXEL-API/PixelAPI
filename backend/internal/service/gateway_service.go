@@ -3230,12 +3230,18 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 处理 anthropic-beta header（OAuth 账号需要包含 oauth beta）
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			// 非 Claude Code 客户端：按 Claude Code 规则生成 beta header
+			// 非 Claude Code 客户端：按 opencode 的策略处理：
+			// - 强制 Claude Code 指纹相关请求头（尤其是 user-agent/x-stainless/x-app）
+			// - 保留 incoming beta 的同时，确保 OAuth 所需 beta 存在
+			applyClaudeCodeMimicHeaders(req, reqStream)
+
+			incomingBeta := req.Header.Get("anthropic-beta")
+			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
+			// Tools 场景更严格，保留 claude-code beta 以提高 Claude Code 识别成功率。
 			if requestHasTools(body) {
-				req.Header.Set("anthropic-beta", claude.MessageBetaHeaderWithTools)
-			} else {
-				req.Header.Set("anthropic-beta", claude.MessageBetaHeaderNoTools)
+				requiredBetas = append([]string{claude.BetaClaudeCode}, requiredBetas...)
 			}
+			req.Header.Set("anthropic-beta", mergeAnthropicBeta(requiredBetas, incomingBeta))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
@@ -3349,6 +3355,52 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request, isStream bool) {
 		}
 	}
 	if isStream && req.Header.Get("x-stainless-helper-method") == "" {
+		req.Header.Set("x-stainless-helper-method", "stream")
+	}
+}
+
+func mergeAnthropicBeta(required []string, incoming string) string {
+	seen := make(map[string]struct{}, len(required)+8)
+	out := make([]string, 0, len(required)+8)
+
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+
+	for _, r := range required {
+		add(r)
+	}
+	for _, p := range strings.Split(incoming, ",") {
+		add(p)
+	}
+	return strings.Join(out, ",")
+}
+
+// applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
+// This mirrors opencode-anthropic-auth behavior: do not trust downstream
+// headers when using Claude Code-scoped OAuth credentials.
+func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
+	if req == nil {
+		return
+	}
+	// Start with the standard defaults (fill missing).
+	applyClaudeOAuthHeaderDefaults(req, isStream)
+	// Then force key headers to match Claude Code fingerprint regardless of what the client sent.
+	for key, value := range claude.DefaultHeaders {
+		if value == "" {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
+	if isStream {
 		req.Header.Set("x-stainless-helper-method", "stream")
 	}
 }
@@ -4600,7 +4652,11 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// OAuth 账号：处理 anthropic-beta header
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			req.Header.Set("anthropic-beta", claude.CountTokensBetaHeader)
+			applyClaudeCodeMimicHeaders(req, false)
+
+			incomingBeta := req.Header.Get("anthropic-beta")
+			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
+			req.Header.Set("anthropic-beta", mergeAnthropicBeta(requiredBetas, incomingBeta))
 		} else {
 			clientBetaHeader := req.Header.Get("anthropic-beta")
 			if clientBetaHeader == "" {
