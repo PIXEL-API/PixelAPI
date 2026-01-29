@@ -36,6 +36,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		EmailVerifyEnabled:          settings.EmailVerifyEnabled,
 		PromoCodeEnabled:            settings.PromoCodeEnabled,
 		PasswordResetEnabled:        settings.PasswordResetEnabled,
+		InvitationCodeEnabled:       settings.InvitationCodeEnabled,
 		TotpEnabled:                 settings.TotpEnabled,
 		TurnstileEnabled:            settings.TurnstileEnabled,
 		TurnstileSiteKey:            settings.TurnstileSiteKey,
