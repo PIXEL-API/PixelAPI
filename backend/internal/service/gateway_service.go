@@ -3385,12 +3385,12 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			applyClaudeCodeMimicHeaders(req, reqStream)
 
 			incomingBeta := req.Header.Get("anthropic-beta")
+			// Match real Claude CLI traffic (per mitmproxy reports):
+			// messages requests typically use only oauth + interleaved-thinking.
+			// Also drop claude-code beta if a downstream client added it.
 			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			// Tools 场景更严格，保留 claude-code beta 以提高 Claude Code 识别成功率。
-			if requestHasTools(body) {
-				requiredBetas = append([]string{claude.BetaClaudeCode}, requiredBetas...)
-			}
-			req.Header.Set("anthropic-beta", mergeAnthropicBeta(requiredBetas, incomingBeta))
+			drop := map[string]struct{}{claude.BetaClaudeCode: {}}
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
@@ -3542,6 +3542,25 @@ func mergeAnthropicBeta(required []string, incoming string) string {
 	return strings.Join(out, ",")
 }
 
+func mergeAnthropicBetaDropping(required []string, incoming string, drop map[string]struct{}) string {
+	merged := mergeAnthropicBeta(required, incoming)
+	if merged == "" || len(drop) == 0 {
+		return merged
+	}
+	out := make([]string, 0, 8)
+	for _, p := range strings.Split(merged, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := drop[p]; ok {
+			continue
+		}
+		out = append(out, p)
+	}
+	return strings.Join(out, ",")
+}
+
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
 // This mirrors opencode-anthropic-auth behavior: do not trust downstream
 // headers when using Claude Code-scoped OAuth credentials.
@@ -3558,6 +3577,8 @@ func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
 		}
 		req.Header.Set(key, value)
 	}
+	// Real Claude CLI uses Accept: application/json (even for streaming).
+	req.Header.Set("accept", "application/json")
 	if isStream {
 		req.Header.Set("x-stainless-helper-method", "stream")
 	}
