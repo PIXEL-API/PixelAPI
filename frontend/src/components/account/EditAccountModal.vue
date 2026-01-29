@@ -39,6 +39,8 @@
                 ? 'https://api.openai.com'
                 : account.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
+                  : account.platform === 'sora'
+                    ? 'https://sora.chatgpt.com/backend'
                   : 'https://api.anthropic.com'
             "
           />
@@ -55,6 +57,8 @@
                 ? 'sk-proj-...'
                 : account.platform === 'gemini'
                   ? 'AIza...'
+                  : account.platform === 'sora'
+                    ? 'access-token...'
                   : 'sk-ant-...'
             "
           />
@@ -919,6 +923,7 @@ const baseUrlHint = computed(() => {
   if (!props.account) return t('admin.accounts.baseUrlHint')
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
+  if (props.account.platform === 'sora') return t('admin.accounts.sora.baseUrlHint')
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -997,6 +1002,7 @@ const tempUnschedPresets = computed(() => [
 const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
+  if (props.account?.platform === 'sora') return 'https://sora.chatgpt.com/backend'
   return 'https://api.anthropic.com'
 })
 
@@ -1061,7 +1067,9 @@ watch(
             ? 'https://api.openai.com'
             : newAccount.platform === 'gemini'
               ? 'https://generativelanguage.googleapis.com'
-              : 'https://api.anthropic.com'
+              : newAccount.platform === 'sora'
+                ? 'https://sora.chatgpt.com/backend'
+                : 'https://api.anthropic.com'
         editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
 
         // Load model mappings and detect mode
@@ -1104,7 +1112,9 @@ watch(
             ? 'https://api.openai.com'
             : newAccount.platform === 'gemini'
               ? 'https://generativelanguage.googleapis.com'
-              : 'https://api.anthropic.com'
+              : newAccount.platform === 'sora'
+                ? 'https://sora.chatgpt.com/backend'
+                : 'https://api.anthropic.com'
         editBaseUrl.value = platformDefaultUrl
         modelRestrictionMode.value = 'whitelist'
         modelMappings.value = []
@@ -1381,17 +1391,32 @@ const handleSubmit = async () => {
     if (props.account.type === 'apikey') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newBaseUrl = editBaseUrl.value.trim() || defaultBaseUrl.value
+      const isSora = props.account.platform === 'sora'
       const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
 
       // Always update credentials for apikey type to handle model mapping changes
-      const newCredentials: Record<string, unknown> = {
-        base_url: newBaseUrl
+      const newCredentials: Record<string, unknown> = {}
+      if (!isSora) {
+        newCredentials.base_url = newBaseUrl
       }
 
       // Handle API key
       if (editApiKey.value.trim()) {
         // User provided a new API key
-        newCredentials.api_key = editApiKey.value.trim()
+        if (isSora) {
+          newCredentials.access_token = editApiKey.value.trim()
+        } else {
+          newCredentials.api_key = editApiKey.value.trim()
+        }
+      } else if (isSora) {
+        const existingToken = (currentCredentials.access_token || currentCredentials.token) as string | undefined
+        if (existingToken) {
+          newCredentials.access_token = existingToken
+        } else {
+          appStore.showError(t('admin.accounts.apiKeyIsRequired'))
+          submitting.value = false
+          return
+        }
       } else if (currentCredentials.api_key) {
         // Preserve existing api_key
         newCredentials.api_key = currentCredentials.api_key

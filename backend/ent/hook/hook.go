@@ -117,6 +117,54 @@ func (f SettingFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SettingMutation", m)
 }
 
+// The SoraAccountFunc type is an adapter to allow the use of ordinary
+// function as SoraAccount mutator.
+type SoraAccountFunc func(context.Context, *ent.SoraAccountMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SoraAccountFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SoraAccountMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SoraAccountMutation", m)
+}
+
+// The SoraCacheFileFunc type is an adapter to allow the use of ordinary
+// function as SoraCacheFile mutator.
+type SoraCacheFileFunc func(context.Context, *ent.SoraCacheFileMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SoraCacheFileFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SoraCacheFileMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SoraCacheFileMutation", m)
+}
+
+// The SoraTaskFunc type is an adapter to allow the use of ordinary
+// function as SoraTask mutator.
+type SoraTaskFunc func(context.Context, *ent.SoraTaskMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SoraTaskFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SoraTaskMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SoraTaskMutation", m)
+}
+
+// The SoraUsageStatFunc type is an adapter to allow the use of ordinary
+// function as SoraUsageStat mutator.
+type SoraUsageStatFunc func(context.Context, *ent.SoraUsageStatMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SoraUsageStatFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SoraUsageStatMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SoraUsageStatMutation", m)
+}
+
 // The UsageCleanupTaskFunc type is an adapter to allow the use of ordinary
 // function as UsageCleanupTask mutator.
 type UsageCleanupTaskFunc func(context.Context, *ent.UsageCleanupTaskMutation) (ent.Value, error)

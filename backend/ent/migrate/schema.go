@@ -434,6 +434,172 @@ var (
 		Columns:    SettingsColumns,
 		PrimaryKey: []*schema.Column{SettingsColumns[0]},
 	}
+	// SoraAccountsColumns holds the columns for the "sora_accounts" table.
+	SoraAccountsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "access_token", Type: field.TypeString, Nullable: true},
+		{Name: "session_token", Type: field.TypeString, Nullable: true},
+		{Name: "refresh_token", Type: field.TypeString, Nullable: true},
+		{Name: "client_id", Type: field.TypeString, Nullable: true},
+		{Name: "email", Type: field.TypeString, Nullable: true},
+		{Name: "username", Type: field.TypeString, Nullable: true},
+		{Name: "remark", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "use_count", Type: field.TypeInt, Default: 0},
+		{Name: "plan_type", Type: field.TypeString, Nullable: true},
+		{Name: "plan_title", Type: field.TypeString, Nullable: true},
+		{Name: "subscription_end", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "sora_supported", Type: field.TypeBool, Default: false},
+		{Name: "sora_invite_code", Type: field.TypeString, Nullable: true},
+		{Name: "sora_redeemed_count", Type: field.TypeInt, Default: 0},
+		{Name: "sora_remaining_count", Type: field.TypeInt, Default: 0},
+		{Name: "sora_total_count", Type: field.TypeInt, Default: 0},
+		{Name: "sora_cooldown_until", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "cooled_until", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "image_enabled", Type: field.TypeBool, Default: true},
+		{Name: "video_enabled", Type: field.TypeBool, Default: true},
+		{Name: "image_concurrency", Type: field.TypeInt, Default: -1},
+		{Name: "video_concurrency", Type: field.TypeInt, Default: -1},
+		{Name: "is_expired", Type: field.TypeBool, Default: false},
+	}
+	// SoraAccountsTable holds the schema information for the "sora_accounts" table.
+	SoraAccountsTable = &schema.Table{
+		Name:       "sora_accounts",
+		Columns:    SoraAccountsColumns,
+		PrimaryKey: []*schema.Column{SoraAccountsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "soraaccount_account_id",
+				Unique:  true,
+				Columns: []*schema.Column{SoraAccountsColumns[3]},
+			},
+			{
+				Name:    "soraaccount_plan_type",
+				Unique:  false,
+				Columns: []*schema.Column{SoraAccountsColumns[12]},
+			},
+			{
+				Name:    "soraaccount_sora_supported",
+				Unique:  false,
+				Columns: []*schema.Column{SoraAccountsColumns[15]},
+			},
+			{
+				Name:    "soraaccount_image_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{SoraAccountsColumns[22]},
+			},
+			{
+				Name:    "soraaccount_video_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{SoraAccountsColumns[23]},
+			},
+		},
+	}
+	// SoraCacheFilesColumns holds the columns for the "sora_cache_files" table.
+	SoraCacheFilesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "task_id", Type: field.TypeString, Nullable: true, Size: 120},
+		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "media_type", Type: field.TypeString, Size: 32},
+		{Name: "original_url", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "cache_path", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "cache_url", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "size_bytes", Type: field.TypeInt64, Default: 0},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// SoraCacheFilesTable holds the schema information for the "sora_cache_files" table.
+	SoraCacheFilesTable = &schema.Table{
+		Name:       "sora_cache_files",
+		Columns:    SoraCacheFilesColumns,
+		PrimaryKey: []*schema.Column{SoraCacheFilesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "soracachefile_account_id",
+				Unique:  false,
+				Columns: []*schema.Column{SoraCacheFilesColumns[2]},
+			},
+			{
+				Name:    "soracachefile_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{SoraCacheFilesColumns[3]},
+			},
+			{
+				Name:    "soracachefile_media_type",
+				Unique:  false,
+				Columns: []*schema.Column{SoraCacheFilesColumns[4]},
+			},
+		},
+	}
+	// SoraTasksColumns holds the columns for the "sora_tasks" table.
+	SoraTasksColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "task_id", Type: field.TypeString, Unique: true, Size: 120},
+		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "model", Type: field.TypeString, Size: 120},
+		{Name: "prompt", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "status", Type: field.TypeString, Size: 32, Default: "processing"},
+		{Name: "progress", Type: field.TypeFloat64, Default: 0},
+		{Name: "result_urls", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "error_message", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "retry_count", Type: field.TypeInt, Default: 0},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "completed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// SoraTasksTable holds the schema information for the "sora_tasks" table.
+	SoraTasksTable = &schema.Table{
+		Name:       "sora_tasks",
+		Columns:    SoraTasksColumns,
+		PrimaryKey: []*schema.Column{SoraTasksColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "soratask_account_id",
+				Unique:  false,
+				Columns: []*schema.Column{SoraTasksColumns[2]},
+			},
+			{
+				Name:    "soratask_status",
+				Unique:  false,
+				Columns: []*schema.Column{SoraTasksColumns[5]},
+			},
+		},
+	}
+	// SoraUsageStatsColumns holds the columns for the "sora_usage_stats" table.
+	SoraUsageStatsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "image_count", Type: field.TypeInt, Default: 0},
+		{Name: "video_count", Type: field.TypeInt, Default: 0},
+		{Name: "error_count", Type: field.TypeInt, Default: 0},
+		{Name: "last_error_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "today_image_count", Type: field.TypeInt, Default: 0},
+		{Name: "today_video_count", Type: field.TypeInt, Default: 0},
+		{Name: "today_error_count", Type: field.TypeInt, Default: 0},
+		{Name: "today_date", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "date"}},
+		{Name: "consecutive_error_count", Type: field.TypeInt, Default: 0},
+	}
+	// SoraUsageStatsTable holds the schema information for the "sora_usage_stats" table.
+	SoraUsageStatsTable = &schema.Table{
+		Name:       "sora_usage_stats",
+		Columns:    SoraUsageStatsColumns,
+		PrimaryKey: []*schema.Column{SoraUsageStatsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "sorausagestat_account_id",
+				Unique:  true,
+				Columns: []*schema.Column{SoraUsageStatsColumns[3]},
+			},
+			{
+				Name:    "sorausagestat_today_date",
+				Unique:  false,
+				Columns: []*schema.Column{SoraUsageStatsColumns[11]},
+			},
+		},
+	}
 	// UsageCleanupTasksColumns holds the columns for the "usage_cleanup_tasks" table.
 	UsageCleanupTasksColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -843,6 +1009,10 @@ var (
 		ProxiesTable,
 		RedeemCodesTable,
 		SettingsTable,
+		SoraAccountsTable,
+		SoraCacheFilesTable,
+		SoraTasksTable,
+		SoraUsageStatsTable,
 		UsageCleanupTasksTable,
 		UsageLogsTable,
 		UsersTable,
@@ -889,6 +1059,18 @@ func init() {
 	}
 	SettingsTable.Annotation = &entsql.Annotation{
 		Table: "settings",
+	}
+	SoraAccountsTable.Annotation = &entsql.Annotation{
+		Table: "sora_accounts",
+	}
+	SoraCacheFilesTable.Annotation = &entsql.Annotation{
+		Table: "sora_cache_files",
+	}
+	SoraTasksTable.Annotation = &entsql.Annotation{
+		Table: "sora_tasks",
+	}
+	SoraUsageStatsTable.Annotation = &entsql.Annotation{
+		Table: "sora_usage_stats",
 	}
 	UsageCleanupTasksTable.Annotation = &entsql.Annotation{
 		Table: "usage_cleanup_tasks",

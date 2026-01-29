@@ -27,7 +27,7 @@ func NewGroupHandler(adminService service.AdminService) *GroupHandler {
 type CreateGroupRequest struct {
 	Name             string   `json:"name" binding:"required"`
 	Description      string   `json:"description"`
-	Platform         string   `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity"`
+	Platform         string   `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity sora"`
 	RateMultiplier   float64  `json:"rate_multiplier"`
 	IsExclusive      bool     `json:"is_exclusive"`
 	SubscriptionType string   `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
@@ -49,7 +49,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
-	Platform         string   `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity"`
+	Platform         string   `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity sora"`
 	RateMultiplier   *float64 `json:"rate_multiplier"`
 	IsExclusive      *bool    `json:"is_exclusive"`
 	Status           string   `json:"status" binding:"omitempty,oneof=active inactive"`

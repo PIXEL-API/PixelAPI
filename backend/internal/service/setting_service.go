@@ -219,6 +219,29 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyEnableIdentityPatch] = strconv.FormatBool(settings.EnableIdentityPatch)
 	updates[SettingKeyIdentityPatchPrompt] = settings.IdentityPatchPrompt
 
+	// Sora settings
+	updates[SettingKeySoraBaseURL] = strings.TrimSpace(settings.SoraBaseURL)
+	updates[SettingKeySoraTimeout] = strconv.Itoa(settings.SoraTimeout)
+	updates[SettingKeySoraMaxRetries] = strconv.Itoa(settings.SoraMaxRetries)
+	updates[SettingKeySoraPollInterval] = strconv.FormatFloat(settings.SoraPollInterval, 'f', -1, 64)
+	updates[SettingKeySoraCallLogicMode] = settings.SoraCallLogicMode
+	updates[SettingKeySoraCacheEnabled] = strconv.FormatBool(settings.SoraCacheEnabled)
+	updates[SettingKeySoraCacheBaseDir] = settings.SoraCacheBaseDir
+	updates[SettingKeySoraCacheVideoDir] = settings.SoraCacheVideoDir
+	updates[SettingKeySoraCacheMaxBytes] = strconv.FormatInt(settings.SoraCacheMaxBytes, 10)
+	allowedHostsRaw, err := marshalStringSliceSetting(settings.SoraCacheAllowedHosts)
+	if err != nil {
+		return fmt.Errorf("marshal sora cache allowed hosts: %w", err)
+	}
+	updates[SettingKeySoraCacheAllowedHosts] = allowedHostsRaw
+	updates[SettingKeySoraCacheUserDirEnabled] = strconv.FormatBool(settings.SoraCacheUserDirEnabled)
+	updates[SettingKeySoraWatermarkFreeEnabled] = strconv.FormatBool(settings.SoraWatermarkFreeEnabled)
+	updates[SettingKeySoraWatermarkFreeParseMethod] = settings.SoraWatermarkFreeParseMethod
+	updates[SettingKeySoraWatermarkFreeCustomParseURL] = strings.TrimSpace(settings.SoraWatermarkFreeCustomParseURL)
+	updates[SettingKeySoraWatermarkFreeCustomParseToken] = settings.SoraWatermarkFreeCustomParseToken
+	updates[SettingKeySoraWatermarkFreeFallbackOnFailure] = strconv.FormatBool(settings.SoraWatermarkFreeFallbackOnFailure)
+	updates[SettingKeySoraTokenRefreshEnabled] = strconv.FormatBool(settings.SoraTokenRefreshEnabled)
+
 	// Ops monitoring (vNext)
 	updates[SettingKeyOpsMonitoringEnabled] = strconv.FormatBool(settings.OpsMonitoringEnabled)
 	updates[SettingKeyOpsRealtimeMonitoringEnabled] = strconv.FormatBool(settings.OpsRealtimeMonitoringEnabled)
@@ -227,7 +250,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 		updates[SettingKeyOpsMetricsIntervalSeconds] = strconv.Itoa(settings.OpsMetricsIntervalSeconds)
 	}
 
-	err := s.settingRepo.SetMultiple(ctx, updates)
+	err = s.settingRepo.SetMultiple(ctx, updates)
 	if err == nil && s.onUpdate != nil {
 		s.onUpdate() // Invalidate cache after settings update
 	}
@@ -295,6 +318,41 @@ func (s *SettingService) GetDefaultBalance(ctx context.Context) float64 {
 	return s.cfg.Default.UserBalance
 }
 
+// GetSoraConfig 获取 Sora 配置（优先读取 DB 设置，回退 config.yaml）
+func (s *SettingService) GetSoraConfig(ctx context.Context) config.SoraConfig {
+	base := config.SoraConfig{}
+	if s.cfg != nil {
+		base = s.cfg.Sora
+	}
+	if s.settingRepo == nil {
+		return base
+	}
+	keys := []string{
+		SettingKeySoraBaseURL,
+		SettingKeySoraTimeout,
+		SettingKeySoraMaxRetries,
+		SettingKeySoraPollInterval,
+		SettingKeySoraCallLogicMode,
+		SettingKeySoraCacheEnabled,
+		SettingKeySoraCacheBaseDir,
+		SettingKeySoraCacheVideoDir,
+		SettingKeySoraCacheMaxBytes,
+		SettingKeySoraCacheAllowedHosts,
+		SettingKeySoraCacheUserDirEnabled,
+		SettingKeySoraWatermarkFreeEnabled,
+		SettingKeySoraWatermarkFreeParseMethod,
+		SettingKeySoraWatermarkFreeCustomParseURL,
+		SettingKeySoraWatermarkFreeCustomParseToken,
+		SettingKeySoraWatermarkFreeFallbackOnFailure,
+		SettingKeySoraTokenRefreshEnabled,
+	}
+	values, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		return base
+	}
+	return mergeSoraConfig(base, values)
+}
+
 // InitializeDefaultSettings 初始化默认设置
 func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	// 检查是否已有设置
@@ -308,6 +366,12 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	}
 
 	// 初始化默认设置
+	soraCfg := config.SoraConfig{}
+	if s.cfg != nil {
+		soraCfg = s.cfg.Sora
+	}
+	allowedHostsRaw, _ := marshalStringSliceSetting(soraCfg.Cache.AllowedHosts)
+
 	defaults := map[string]string{
 		SettingKeyRegistrationEnabled: "true",
 		SettingKeyEmailVerifyEnabled:  "false",
@@ -327,6 +391,25 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Identity patch defaults
 		SettingKeyEnableIdentityPatch: "true",
 		SettingKeyIdentityPatchPrompt: "",
+
+		// Sora defaults
+		SettingKeySoraBaseURL:                        soraCfg.BaseURL,
+		SettingKeySoraTimeout:                        strconv.Itoa(soraCfg.Timeout),
+		SettingKeySoraMaxRetries:                     strconv.Itoa(soraCfg.MaxRetries),
+		SettingKeySoraPollInterval:                   strconv.FormatFloat(soraCfg.PollInterval, 'f', -1, 64),
+		SettingKeySoraCallLogicMode:                  soraCfg.CallLogicMode,
+		SettingKeySoraCacheEnabled:                   strconv.FormatBool(soraCfg.Cache.Enabled),
+		SettingKeySoraCacheBaseDir:                   soraCfg.Cache.BaseDir,
+		SettingKeySoraCacheVideoDir:                  soraCfg.Cache.VideoDir,
+		SettingKeySoraCacheMaxBytes:                  strconv.FormatInt(soraCfg.Cache.MaxBytes, 10),
+		SettingKeySoraCacheAllowedHosts:              allowedHostsRaw,
+		SettingKeySoraCacheUserDirEnabled:            strconv.FormatBool(soraCfg.Cache.UserDirEnabled),
+		SettingKeySoraWatermarkFreeEnabled:           strconv.FormatBool(soraCfg.WatermarkFree.Enabled),
+		SettingKeySoraWatermarkFreeParseMethod:       soraCfg.WatermarkFree.ParseMethod,
+		SettingKeySoraWatermarkFreeCustomParseURL:    soraCfg.WatermarkFree.CustomParseURL,
+		SettingKeySoraWatermarkFreeCustomParseToken:  soraCfg.WatermarkFree.CustomParseToken,
+		SettingKeySoraWatermarkFreeFallbackOnFailure: strconv.FormatBool(soraCfg.WatermarkFree.FallbackOnFailure),
+		SettingKeySoraTokenRefreshEnabled:            strconv.FormatBool(soraCfg.TokenRefresh.Enabled),
 
 		// Ops monitoring defaults (vNext)
 		SettingKeyOpsMonitoringEnabled:         "true",
@@ -434,6 +517,26 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.IdentityPatchPrompt = settings[SettingKeyIdentityPatchPrompt]
 
+	// Sora settings
+	soraCfg := s.parseSoraConfig(settings)
+	result.SoraBaseURL = soraCfg.BaseURL
+	result.SoraTimeout = soraCfg.Timeout
+	result.SoraMaxRetries = soraCfg.MaxRetries
+	result.SoraPollInterval = soraCfg.PollInterval
+	result.SoraCallLogicMode = soraCfg.CallLogicMode
+	result.SoraCacheEnabled = soraCfg.Cache.Enabled
+	result.SoraCacheBaseDir = soraCfg.Cache.BaseDir
+	result.SoraCacheVideoDir = soraCfg.Cache.VideoDir
+	result.SoraCacheMaxBytes = soraCfg.Cache.MaxBytes
+	result.SoraCacheAllowedHosts = soraCfg.Cache.AllowedHosts
+	result.SoraCacheUserDirEnabled = soraCfg.Cache.UserDirEnabled
+	result.SoraWatermarkFreeEnabled = soraCfg.WatermarkFree.Enabled
+	result.SoraWatermarkFreeParseMethod = soraCfg.WatermarkFree.ParseMethod
+	result.SoraWatermarkFreeCustomParseURL = soraCfg.WatermarkFree.CustomParseURL
+	result.SoraWatermarkFreeCustomParseToken = soraCfg.WatermarkFree.CustomParseToken
+	result.SoraWatermarkFreeFallbackOnFailure = soraCfg.WatermarkFree.FallbackOnFailure
+	result.SoraTokenRefreshEnabled = soraCfg.TokenRefresh.Enabled
+
 	// Ops monitoring settings (default: enabled, fail-open)
 	result.OpsMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsMonitoringEnabled])
 	result.OpsRealtimeMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsRealtimeMonitoringEnabled])
@@ -469,6 +572,131 @@ func (s *SettingService) getStringOrDefault(settings map[string]string, key, def
 		return value
 	}
 	return defaultValue
+}
+
+func (s *SettingService) parseSoraConfig(settings map[string]string) config.SoraConfig {
+	base := config.SoraConfig{}
+	if s.cfg != nil {
+		base = s.cfg.Sora
+	}
+	return mergeSoraConfig(base, settings)
+}
+
+func mergeSoraConfig(base config.SoraConfig, settings map[string]string) config.SoraConfig {
+	cfg := base
+	if settings == nil {
+		return cfg
+	}
+	if raw, ok := settings[SettingKeySoraBaseURL]; ok {
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			cfg.BaseURL = trimmed
+		}
+	}
+	if raw, ok := settings[SettingKeySoraTimeout]; ok {
+		if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && v > 0 {
+			cfg.Timeout = v
+		}
+	}
+	if raw, ok := settings[SettingKeySoraMaxRetries]; ok {
+		if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && v >= 0 {
+			cfg.MaxRetries = v
+		}
+	}
+	if raw, ok := settings[SettingKeySoraPollInterval]; ok {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && v > 0 {
+			cfg.PollInterval = v
+		}
+	}
+	if raw, ok := settings[SettingKeySoraCallLogicMode]; ok && strings.TrimSpace(raw) != "" {
+		cfg.CallLogicMode = strings.TrimSpace(raw)
+	}
+	if raw, ok := settings[SettingKeySoraCacheEnabled]; ok {
+		cfg.Cache.Enabled = parseBoolSetting(raw, cfg.Cache.Enabled)
+	}
+	if raw, ok := settings[SettingKeySoraCacheBaseDir]; ok && strings.TrimSpace(raw) != "" {
+		cfg.Cache.BaseDir = strings.TrimSpace(raw)
+	}
+	if raw, ok := settings[SettingKeySoraCacheVideoDir]; ok && strings.TrimSpace(raw) != "" {
+		cfg.Cache.VideoDir = strings.TrimSpace(raw)
+	}
+	if raw, ok := settings[SettingKeySoraCacheMaxBytes]; ok {
+		if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && v >= 0 {
+			cfg.Cache.MaxBytes = v
+		}
+	}
+	if raw, ok := settings[SettingKeySoraCacheAllowedHosts]; ok {
+		cfg.Cache.AllowedHosts = parseStringSliceSetting(raw)
+	}
+	if raw, ok := settings[SettingKeySoraCacheUserDirEnabled]; ok {
+		cfg.Cache.UserDirEnabled = parseBoolSetting(raw, cfg.Cache.UserDirEnabled)
+	}
+	if raw, ok := settings[SettingKeySoraWatermarkFreeEnabled]; ok {
+		cfg.WatermarkFree.Enabled = parseBoolSetting(raw, cfg.WatermarkFree.Enabled)
+	}
+	if raw, ok := settings[SettingKeySoraWatermarkFreeParseMethod]; ok && strings.TrimSpace(raw) != "" {
+		cfg.WatermarkFree.ParseMethod = strings.TrimSpace(raw)
+	}
+	if raw, ok := settings[SettingKeySoraWatermarkFreeCustomParseURL]; ok && strings.TrimSpace(raw) != "" {
+		cfg.WatermarkFree.CustomParseURL = strings.TrimSpace(raw)
+	}
+	if raw, ok := settings[SettingKeySoraWatermarkFreeCustomParseToken]; ok {
+		cfg.WatermarkFree.CustomParseToken = raw
+	}
+	if raw, ok := settings[SettingKeySoraWatermarkFreeFallbackOnFailure]; ok {
+		cfg.WatermarkFree.FallbackOnFailure = parseBoolSetting(raw, cfg.WatermarkFree.FallbackOnFailure)
+	}
+	if raw, ok := settings[SettingKeySoraTokenRefreshEnabled]; ok {
+		cfg.TokenRefresh.Enabled = parseBoolSetting(raw, cfg.TokenRefresh.Enabled)
+	}
+	return cfg
+}
+
+func parseBoolSetting(raw string, fallback bool) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fallback
+	}
+	if v, err := strconv.ParseBool(trimmed); err == nil {
+		return v
+	}
+	return fallback
+}
+
+func parseStringSliceSetting(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return []string{}
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(trimmed), &values); err == nil {
+		return normalizeStringSlice(values)
+	}
+	parts := strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == ',' || r == '\n' || r == ';'
+	})
+	return normalizeStringSlice(parts)
+}
+
+func marshalStringSliceSetting(values []string) (string, error) {
+	normalized := normalizeStringSlice(values)
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func normalizeStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			normalized = append(normalized, trimmed)
+		}
+	}
+	return normalized
 }
 
 // IsTurnstileEnabled 检查是否启用 Turnstile 验证

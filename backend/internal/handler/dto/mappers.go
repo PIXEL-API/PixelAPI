@@ -287,6 +287,72 @@ func ProxyWithAccountCountFromService(p *service.ProxyWithAccountCount) *ProxyWi
 	}
 }
 
+func SoraUsageStatFromService(stat *service.SoraUsageStat) *SoraUsageStat {
+	if stat == nil {
+		return nil
+	}
+	return &SoraUsageStat{
+		AccountID:             stat.AccountID,
+		ImageCount:            stat.ImageCount,
+		VideoCount:            stat.VideoCount,
+		ErrorCount:            stat.ErrorCount,
+		LastErrorAt:           timeToUnixSeconds(stat.LastErrorAt),
+		TodayImageCount:       stat.TodayImageCount,
+		TodayVideoCount:       stat.TodayVideoCount,
+		TodayErrorCount:       stat.TodayErrorCount,
+		TodayDate:             timeToUnixSeconds(stat.TodayDate),
+		ConsecutiveErrorCount: stat.ConsecutiveErrorCount,
+		CreatedAt:             stat.CreatedAt,
+		UpdatedAt:             stat.UpdatedAt,
+	}
+}
+
+func SoraAccountFromService(account *service.Account, soraAcc *service.SoraAccount, usage *service.SoraUsageStat) *SoraAccount {
+	if account == nil {
+		return nil
+	}
+	out := &SoraAccount{
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		AccountStatus:      account.Status,
+		AccountType:        account.Type,
+		AccountConcurrency: account.Concurrency,
+		ProxyID:            account.ProxyID,
+		Usage:              SoraUsageStatFromService(usage),
+		CreatedAt:          account.CreatedAt,
+		UpdatedAt:          account.UpdatedAt,
+	}
+	if soraAcc == nil {
+		return out
+	}
+	out.AccessToken = soraAcc.AccessToken
+	out.SessionToken = soraAcc.SessionToken
+	out.RefreshToken = soraAcc.RefreshToken
+	out.ClientID = soraAcc.ClientID
+	out.Email = soraAcc.Email
+	out.Username = soraAcc.Username
+	out.Remark = soraAcc.Remark
+	out.UseCount = soraAcc.UseCount
+	out.PlanType = soraAcc.PlanType
+	out.PlanTitle = soraAcc.PlanTitle
+	out.SubscriptionEnd = timeToUnixSeconds(soraAcc.SubscriptionEnd)
+	out.SoraSupported = soraAcc.SoraSupported
+	out.SoraInviteCode = soraAcc.SoraInviteCode
+	out.SoraRedeemedCount = soraAcc.SoraRedeemedCount
+	out.SoraRemainingCount = soraAcc.SoraRemainingCount
+	out.SoraTotalCount = soraAcc.SoraTotalCount
+	out.SoraCooldownUntil = timeToUnixSeconds(soraAcc.SoraCooldownUntil)
+	out.CooledUntil = timeToUnixSeconds(soraAcc.CooledUntil)
+	out.ImageEnabled = soraAcc.ImageEnabled
+	out.VideoEnabled = soraAcc.VideoEnabled
+	out.ImageConcurrency = soraAcc.ImageConcurrency
+	out.VideoConcurrency = soraAcc.VideoConcurrency
+	out.IsExpired = soraAcc.IsExpired
+	out.CreatedAt = soraAcc.CreatedAt
+	out.UpdatedAt = soraAcc.UpdatedAt
+	return out
+}
+
 func ProxyAccountSummaryFromService(a *service.ProxyAccountSummary) *ProxyAccountSummary {
 	if a == nil {
 		return nil
