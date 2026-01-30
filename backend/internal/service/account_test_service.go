@@ -31,6 +31,7 @@ var sseDataPrefix = regexp.MustCompile(`^data:\s*`)
 const (
 	testClaudeAPIURL   = "https://api.anthropic.com/v1/messages"
 	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
+	soraMeAPIURL       = "https://sora.chatgpt.com/backend/me" // Sora 用户信息接口，用于测试连接
 )
 
 // TestEvent represents a SSE event for account testing
@@ -161,6 +162,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 	if account.Platform == PlatformAntigravity {
 		return s.testAntigravityAccountConnection(c, account, modelID)
+	}
+
+	if account.Platform == PlatformSora {
+		return s.testSoraAccountConnection(c, account)
 	}
 
 	return s.testClaudeAccountConnection(c, account, modelID)
@@ -459,6 +464,74 @@ func (s *AccountTestService) testGeminiAccountConnection(c *gin.Context, account
 
 	// Process SSE stream
 	return s.processGeminiStream(c, resp.Body)
+}
+
+// testSoraAccountConnection 测试 Sora 账号的连接
+// 调用 /backend/me 接口验证 access_token 有效性（不需要 Sentinel Token）
+func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *Account) error {
+	ctx := c.Request.Context()
+
+	authToken := account.GetCredential("access_token")
+	if authToken == "" {
+		return s.sendErrorAndEnd(c, "No access token available")
+	}
+
+	// Set SSE headers
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	// Send test_start event
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: "sora"})
+
+	req, err := http.NewRequestWithContext(ctx, "GET", soraMeAPIURL, nil)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+
+	// 使用 Sora 客户端标准请求头（参考 sora2api）
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	req.Header.Set("User-Agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
+	req.Header.Set("Accept", "application/json")
+
+	// Get proxy URL
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Sora API returned %d: %s", resp.StatusCode, string(body)))
+	}
+
+	// 解析 /me 响应，提取用户信息
+	var meResp map[string]any
+	if err := json.Unmarshal(body, &meResp); err != nil {
+		// 能收到 200 就说明 token 有效
+		s.sendEvent(c, TestEvent{Type: "content", Text: "Sora connection OK (token valid)"})
+	} else {
+		// 尝试提取用户名或邮箱信息
+		info := "Sora connection OK"
+		if name, ok := meResp["name"].(string); ok && name != "" {
+			info = fmt.Sprintf("Sora connection OK - User: %s", name)
+		} else if email, ok := meResp["email"].(string); ok && email != "" {
+			info = fmt.Sprintf("Sora connection OK - Email: %s", email)
+		}
+		s.sendEvent(c, TestEvent{Type: "content", Text: info})
+	}
+
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
 }
 
 // testAntigravityAccountConnection tests an Antigravity account's connection
