@@ -72,4 +72,3 @@ func UserAnnouncementFromService(a *service.UserAnnouncement) *UserAnnouncement 
 		UpdatedAt: a.Announcement.UpdatedAt,
 	}
 }
-

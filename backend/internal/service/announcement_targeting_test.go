@@ -64,4 +64,3 @@ func TestAnnouncementTargeting_Matches_AndOrSemantics(t *testing.T) {
 	require.False(t, targeting.Matches(99.9, map[int64]struct{}{10: {}}))
 	require.True(t, targeting.Matches(100, map[int64]struct{}{10: {}}))
 }
-
