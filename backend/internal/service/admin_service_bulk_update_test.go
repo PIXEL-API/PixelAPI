@@ -15,6 +15,13 @@ type accountRepoStubForBulkUpdate struct {
 	bulkUpdateErr    error
 	bulkUpdateIDs    []int64
 	bindGroupErrByID map[int64]error
+	getByIDsAccounts []*Account
+	getByIDsErr      error
+	getByIDsCalled   bool
+	getByIDsIDs      []int64
+	getByIDAccounts  map[int64]*Account
+	getByIDErrByID   map[int64]error
+	getByIDCalled    []int64
 }
 
 func (s *accountRepoStubForBulkUpdate) BulkUpdate(_ context.Context, ids []int64, _ AccountBulkUpdate) (int64, error) {
@@ -30,6 +37,26 @@ func (s *accountRepoStubForBulkUpdate) BindGroups(_ context.Context, accountID i
 		return err
 	}
 	return nil
+}
+
+func (s *accountRepoStubForBulkUpdate) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
+	s.getByIDsCalled = true
+	s.getByIDsIDs = append([]int64{}, ids...)
+	if s.getByIDsErr != nil {
+		return nil, s.getByIDsErr
+	}
+	return s.getByIDsAccounts, nil
+}
+
+func (s *accountRepoStubForBulkUpdate) GetByID(_ context.Context, id int64) (*Account, error) {
+	s.getByIDCalled = append(s.getByIDCalled, id)
+	if err, ok := s.getByIDErrByID[id]; ok {
+		return nil, err
+	}
+	if account, ok := s.getByIDAccounts[id]; ok {
+		return account, nil
+	}
+	return nil, errors.New("account not found")
 }
 
 // TestAdminService_BulkUpdateAccounts_AllSuccessIDs 验证批量更新成功时返回 success_ids/failed_ids。
@@ -77,4 +104,32 @@ func TestAdminService_BulkUpdateAccounts_PartialFailureIDs(t *testing.T) {
 	require.ElementsMatch(t, []int64{1, 3}, result.SuccessIDs)
 	require.ElementsMatch(t, []int64{2}, result.FailedIDs)
 	require.Len(t, result.Results, 3)
+}
+
+// TestAdminService_BulkUpdateAccounts_SoraSyncWithoutGroupIDs 验证无分组更新时仍会触发 Sora 同步。
+func TestAdminService_BulkUpdateAccounts_SoraSyncWithoutGroupIDs(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{ID: 1, Platform: PlatformSora},
+		},
+		getByIDAccounts: map[int64]*Account{
+			1: {ID: 1, Platform: PlatformSora},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo:     repo,
+		soraSyncService: &Sora2APISyncService{},
+	}
+
+	schedulable := true
+	input := &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{1},
+		Schedulable: &schedulable,
+	}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), input)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.True(t, repo.getByIDsCalled)
+	require.ElementsMatch(t, []int64{1}, repo.getByIDCalled)
 }

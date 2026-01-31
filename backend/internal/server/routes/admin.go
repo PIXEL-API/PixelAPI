@@ -64,6 +64,9 @@ func RegisterAdminRoutes(
 
 		// 用户属性管理
 		registerUserAttributeRoutes(admin, h)
+
+		// 模型列表
+		registerModelRoutes(admin, h)
 	}
 }
 
@@ -370,4 +373,8 @@ func registerUserAttributeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		attrs.PUT("/:id", h.Admin.UserAttribute.UpdateDefinition)
 		attrs.DELETE("/:id", h.Admin.UserAttribute.DeleteDefinition)
 	}
+}
+
+func registerModelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	admin.GET("/models", h.Admin.Model.List)
 }

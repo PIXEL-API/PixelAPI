@@ -45,6 +45,19 @@
             :placeholder="t('admin.accounts.searchModels')"
             @click.stop
           />
+          <div v-if="props.platform === 'sora'" class="mt-2 flex items-center gap-2 text-xs">
+            <span v-if="loadingSoraModels" class="text-gray-500">
+              {{ t('admin.accounts.soraModelsLoading') }}
+            </span>
+            <button
+              v-else-if="soraLoadError"
+              type="button"
+              class="text-primary-600 hover:underline dark:text-primary-400"
+              @click.stop="loadSoraModels"
+            >
+              {{ t('admin.accounts.soraModelsRetry') }}
+            </button>
+          </div>
         </div>
         <div class="max-h-52 overflow-auto">
           <button
@@ -120,12 +133,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { allModels, getModelsByPlatform } from '@/composables/useModelWhitelist'
+import { adminAPI } from '@/api/admin'
 
 const { t } = useI18n()
 
@@ -144,11 +158,24 @@ const showDropdown = ref(false)
 const searchQuery = ref('')
 const customModel = ref('')
 const isComposing = ref(false)
+const soraModelOptions = ref<{ value: string; label: string }[]>([])
+const loadingSoraModels = ref(false)
+const soraLoadError = ref(false)
+
+const availableOptions = computed(() => {
+  if (props.platform === 'sora') {
+    if (soraModelOptions.value.length > 0) {
+      return soraModelOptions.value
+    }
+    return getModelsByPlatform('sora').map(m => ({ value: m, label: m }))
+  }
+  return allModels
+})
 
 const filteredModels = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  if (!query) return allModels
-  return allModels.filter(
+  if (!query) return availableOptions.value
+  return availableOptions.value.filter(
     m => m.value.toLowerCase().includes(query) || m.label.toLowerCase().includes(query)
   )
 })
@@ -186,7 +213,9 @@ const handleEnter = () => {
 }
 
 const fillRelated = () => {
-  const models = getModelsByPlatform(props.platform)
+  const models = props.platform === 'sora' && soraModelOptions.value.length > 0
+    ? soraModelOptions.value.map(m => m.value)
+    : getModelsByPlatform(props.platform)
   const newModels = [...props.modelValue]
   for (const model of models) {
     if (!newModels.includes(model)) newModels.push(model)
@@ -197,4 +226,32 @@ const fillRelated = () => {
 const clearAll = () => {
   emit('update:modelValue', [])
 }
+
+const loadSoraModels = async () => {
+  if (props.platform !== 'sora') {
+    soraModelOptions.value = []
+    return
+  }
+  if (loadingSoraModels.value) return
+  soraLoadError.value = false
+  loadingSoraModels.value = true
+  try {
+    const models = await adminAPI.models.getPlatformModels('sora')
+    soraModelOptions.value = (models || []).map((m) => ({ value: m, label: m }))
+  } catch (error) {
+    console.warn('加载 Sora 模型列表失败', error)
+    soraLoadError.value = true
+    appStore.showWarning(t('admin.accounts.soraModelsLoadFailed'))
+  } finally {
+    loadingSoraModels.value = false
+  }
+}
+
+watch(
+  () => props.platform,
+  () => {
+    loadSoraModels()
+  },
+  { immediate: true }
+)
 </script>
