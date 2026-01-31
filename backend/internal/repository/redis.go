@@ -40,8 +40,8 @@ func buildRedisOptions(cfg *config.Config) *redis.Options {
 
 	if cfg.Redis.EnableTLS {
 		opts.TLSConfig = &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			ServerName:         cfg.Redis.Host,
+			MinVersion: tls.VersionTLS12,
+			ServerName: cfg.Redis.Host,
 		}
 	}
 
