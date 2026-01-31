@@ -62,7 +62,6 @@ type Sora2APIService struct {
 	adminUsername   string
 	adminPassword   string
 	adminTokenTTL   time.Duration
-	adminTimeout    time.Duration
 	tokenImportMode string
 
 	client      *http.Client
@@ -72,9 +71,8 @@ type Sora2APIService struct {
 	adminTokenAt time.Time
 	adminMu      sync.Mutex
 
-	modelCache   []Sora2APIModel
-	modelCacheAt time.Time
-	modelMu      sync.RWMutex
+	modelCache []Sora2APIModel
+	modelMu    sync.RWMutex
 }
 
 func NewSora2APIService(cfg *config.Config) *Sora2APIService {
@@ -96,7 +94,6 @@ func NewSora2APIService(cfg *config.Config) *Sora2APIService {
 		adminUsername:   strings.TrimSpace(cfg.Sora2API.AdminUsername),
 		adminPassword:   strings.TrimSpace(cfg.Sora2API.AdminPassword),
 		adminTokenTTL:   adminTTL,
-		adminTimeout:    adminTimeout,
 		tokenImportMode: strings.ToLower(strings.TrimSpace(cfg.Sora2API.TokenImportMode)),
 		client:          &http.Client{},
 		adminClient:     &http.Client{Timeout: adminTimeout},
@@ -176,7 +173,6 @@ func (s *Sora2APIService) ListModels(ctx context.Context) ([]Sora2APIModel, erro
 
 	s.modelMu.Lock()
 	s.modelCache = models
-	s.modelCacheAt = time.Now()
 	s.modelMu.Unlock()
 
 	return models, nil

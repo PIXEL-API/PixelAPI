@@ -83,10 +83,10 @@ func (r *ClaudeTokenRefresher) Refresh(ctx context.Context, account *Account) (m
 
 // OpenAITokenRefresher 处理 OpenAI OAuth token刷新
 type OpenAITokenRefresher struct {
-	openaiOAuthService  *OpenAIOAuthService
-	accountRepo         AccountRepository
-	soraAccountRepo     SoraAccountRepository // Sora 扩展表仓储，用于双表同步
-	soraSyncService     *Sora2APISyncService  // Sora2API 同步服务
+	openaiOAuthService *OpenAIOAuthService
+	accountRepo        AccountRepository
+	soraAccountRepo    SoraAccountRepository // Sora 扩展表仓储，用于双表同步
+	soraSyncService    *Sora2APISyncService  // Sora2API 同步服务
 }
 
 // NewOpenAITokenRefresher 创建 OpenAI token刷新器

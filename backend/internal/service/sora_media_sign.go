@@ -15,9 +15,15 @@ func SignSoraMediaURL(path string, query string, expires int64, key string) stri
 		return ""
 	}
 	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(buildSoraMediaSignPayload(path, query)))
-	mac.Write([]byte("|"))
-	mac.Write([]byte(strconv.FormatInt(expires, 10)))
+	if _, err := mac.Write([]byte(buildSoraMediaSignPayload(path, query))); err != nil {
+		return ""
+	}
+	if _, err := mac.Write([]byte("|")); err != nil {
+		return ""
+	}
+	if _, err := mac.Write([]byte(strconv.FormatInt(expires, 10))); err != nil {
+		return ""
+	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
