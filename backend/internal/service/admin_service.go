@@ -283,7 +283,6 @@ type adminServiceImpl struct {
 	groupRepo            GroupRepository
 	accountRepo          AccountRepository
 	soraAccountRepo      SoraAccountRepository // Sora 账号扩展表仓储
-	soraSyncService      *Sora2APISyncService  // Sora2API 同步服务
 	proxyRepo            ProxyRepository
 	apiKeyRepo           APIKeyRepository
 	redeemCodeRepo       RedeemCodeRepository
@@ -299,7 +298,6 @@ func NewAdminService(
 	groupRepo GroupRepository,
 	accountRepo AccountRepository,
 	soraAccountRepo SoraAccountRepository,
-	soraSyncService *Sora2APISyncService,
 	proxyRepo ProxyRepository,
 	apiKeyRepo APIKeyRepository,
 	redeemCodeRepo RedeemCodeRepository,
@@ -313,7 +311,6 @@ func NewAdminService(
 		groupRepo:            groupRepo,
 		accountRepo:          accountRepo,
 		soraAccountRepo:      soraAccountRepo,
-		soraSyncService:      soraSyncService,
 		proxyRepo:            proxyRepo,
 		apiKeyRepo:           apiKeyRepo,
 		redeemCodeRepo:       redeemCodeRepo,
@@ -917,9 +914,6 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	// 同步到 sora2api（异步，不阻塞创建）
-	s.syncSoraAccountAsync(account)
-
 	return account, nil
 }
 
@@ -1014,7 +1008,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
-	s.syncSoraAccountAsync(updated)
 	return updated, nil
 }
 
@@ -1032,17 +1025,15 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
-	needSoraSync := s != nil && s.soraSyncService != nil
 
 	// 预加载账号平台信息（混合渠道检查或 Sora 同步需要）。
 	platformByID := map[int64]string{}
-	if needMixedChannelCheck || needSoraSync {
+	if needMixedChannelCheck {
 		accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			if needMixedChannelCheck {
 				return nil, err
 			}
-			log.Printf("[AdminService] 预加载账号平台信息失败，将逐个降级同步: err=%v", err)
 		} else {
 			for _, account := range accounts {
 				if account != nil {
@@ -1134,45 +1125,15 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		result.Success++
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)
-
-		// 批量更新后同步 sora2api
-		if needSoraSync {
-			platform := platformByID[accountID]
-			if platform == "" {
-				updated, err := s.accountRepo.GetByID(ctx, accountID)
-				if err != nil {
-					log.Printf("[AdminService] 批量更新后获取账号失败，无法同步 sora2api: account_id=%d err=%v", accountID, err)
-					continue
-				}
-				if updated.Platform == PlatformSora {
-					s.syncSoraAccountAsync(updated)
-				}
-				continue
-			}
-
-			if platform == PlatformSora {
-				updated, err := s.accountRepo.GetByID(ctx, accountID)
-				if err != nil {
-					log.Printf("[AdminService] 批量更新后获取账号失败，无法同步 sora2api: account_id=%d err=%v", accountID, err)
-					continue
-				}
-				s.syncSoraAccountAsync(updated)
-			}
-		}
 	}
 
 	return result, nil
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
-	account, err := s.accountRepo.GetByID(ctx, id)
-	if err != nil {
-		return err
-	}
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return err
 	}
-	s.deleteSoraAccountAsync(account)
 	return nil
 }
 
@@ -1210,42 +1171,7 @@ func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, 
 	if err != nil {
 		return nil, err
 	}
-	s.syncSoraAccountAsync(updated)
 	return updated, nil
-}
-
-func (s *adminServiceImpl) syncSoraAccountAsync(account *Account) {
-	if s == nil || s.soraSyncService == nil || account == nil {
-		return
-	}
-	if account.Platform != PlatformSora {
-		return
-	}
-	syncAccount := *account
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := s.soraSyncService.SyncAccount(ctx, &syncAccount); err != nil {
-			log.Printf("[AdminService] 同步 sora2api 失败: account_id=%d err=%v", syncAccount.ID, err)
-		}
-	}()
-}
-
-func (s *adminServiceImpl) deleteSoraAccountAsync(account *Account) {
-	if s == nil || s.soraSyncService == nil || account == nil {
-		return
-	}
-	if account.Platform != PlatformSora {
-		return
-	}
-	syncAccount := *account
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := s.soraSyncService.DeleteAccount(ctx, &syncAccount); err != nil {
-			log.Printf("[AdminService] 删除 sora2api token 失败: account_id=%d err=%v", syncAccount.ID, err)
-		}
-	}()
 }
 
 // Proxy management implementations

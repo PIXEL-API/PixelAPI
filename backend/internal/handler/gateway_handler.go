@@ -29,11 +29,11 @@ type GatewayHandler struct {
 	geminiCompatService       *service.GeminiMessagesCompatService
 	antigravityGatewayService *service.AntigravityGatewayService
 	userService               *service.UserService
-	sora2apiService           *service.Sora2APIService
 	billingCacheService       *service.BillingCacheService
 	concurrencyHelper         *ConcurrencyHelper
 	maxAccountSwitches        int
 	maxAccountSwitchesGemini  int
+	cfg                       *config.Config
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -42,7 +42,6 @@ func NewGatewayHandler(
 	geminiCompatService *service.GeminiMessagesCompatService,
 	antigravityGatewayService *service.AntigravityGatewayService,
 	userService *service.UserService,
-	sora2apiService *service.Sora2APIService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
 	cfg *config.Config,
@@ -64,11 +63,11 @@ func NewGatewayHandler(
 		geminiCompatService:       geminiCompatService,
 		antigravityGatewayService: antigravityGatewayService,
 		userService:               userService,
-		sora2apiService:           sora2apiService,
 		billingCacheService:       billingCacheService,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		maxAccountSwitches:        maxAccountSwitches,
 		maxAccountSwitchesGemini:  maxAccountSwitchesGemini,
+		cfg:                       cfg,
 	}
 }
 
@@ -486,18 +485,9 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	if platform == service.PlatformSora {
-		if h.sora2apiService == nil || !h.sora2apiService.Enabled() {
-			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "sora2api not configured")
-			return
-		}
-		models, err := h.sora2apiService.ListModels(c.Request.Context())
-		if err != nil {
-			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Failed to fetch Sora models")
-			return
-		}
 		c.JSON(http.StatusOK, gin.H{
 			"object": "list",
-			"data":   models,
+			"data":   service.DefaultSoraModels(h.cfg),
 		})
 		return
 	}

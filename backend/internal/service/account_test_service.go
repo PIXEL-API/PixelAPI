@@ -491,7 +491,7 @@ func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
 
-	// 使用 Sora 客户端标准请求头（参考 sora2api）
+	// 使用 Sora 客户端标准请求头
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	req.Header.Set("User-Agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
 	req.Header.Set("Accept", "application/json")

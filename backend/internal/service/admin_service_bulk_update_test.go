@@ -105,31 +105,3 @@ func TestAdminService_BulkUpdateAccounts_PartialFailureIDs(t *testing.T) {
 	require.ElementsMatch(t, []int64{2}, result.FailedIDs)
 	require.Len(t, result.Results, 3)
 }
-
-// TestAdminService_BulkUpdateAccounts_SoraSyncWithoutGroupIDs 验证无分组更新时仍会触发 Sora 同步。
-func TestAdminService_BulkUpdateAccounts_SoraSyncWithoutGroupIDs(t *testing.T) {
-	repo := &accountRepoStubForBulkUpdate{
-		getByIDsAccounts: []*Account{
-			{ID: 1, Platform: PlatformSora},
-		},
-		getByIDAccounts: map[int64]*Account{
-			1: {ID: 1, Platform: PlatformSora},
-		},
-	}
-	svc := &adminServiceImpl{
-		accountRepo:     repo,
-		soraSyncService: &Sora2APISyncService{},
-	}
-
-	schedulable := true
-	input := &BulkUpdateAccountsInput{
-		AccountIDs:  []int64{1},
-		Schedulable: &schedulable,
-	}
-
-	result, err := svc.BulkUpdateAccounts(context.Background(), input)
-	require.NoError(t, err)
-	require.Equal(t, 1, result.Success)
-	require.True(t, repo.getByIDsCalled)
-	require.ElementsMatch(t, []int64{1}, repo.getByIDCalled)
-}
