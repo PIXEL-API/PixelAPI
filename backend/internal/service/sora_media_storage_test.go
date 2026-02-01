@@ -67,3 +67,27 @@ func TestSoraMediaStorage_FallbackToUpstream(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{url}, urls)
 }
+
+func TestSoraMediaStorage_MaxDownloadBytes(t *testing.T) {
+	tmpDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("too-large"))
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		Sora: config.SoraConfig{
+			Storage: config.SoraStorageConfig{
+				Type:             "local",
+				LocalPath:        tmpDir,
+				MaxDownloadBytes: 1,
+			},
+		},
+	}
+
+	storage := NewSoraMediaStorage(cfg)
+	_, err := storage.StoreFromURLs(context.Background(), "image", []string{server.URL + "/img.png"})
+	require.Error(t, err)
+}

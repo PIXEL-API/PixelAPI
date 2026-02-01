@@ -30,6 +30,8 @@ type SoraMediaStorage struct {
 	imageRoot          string
 	videoRoot          string
 	maxConcurrent      int
+	downloadTimeout    time.Duration
+	maxDownloadBytes   int64
 	fallbackToUpstream bool
 	debug              bool
 	sem                chan struct{}
@@ -92,6 +94,17 @@ func (s *SoraMediaStorage) refreshConfig() {
 		maxConcurrent = 4
 	}
 	s.maxConcurrent = maxConcurrent
+	timeoutSeconds := s.cfg.Sora.Storage.DownloadTimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 120
+	}
+	s.downloadTimeout = time.Duration(timeoutSeconds) * time.Second
+
+	maxBytes := s.cfg.Sora.Storage.MaxDownloadBytes
+	if maxBytes <= 0 {
+		maxBytes = 200 << 20
+	}
+	s.maxDownloadBytes = maxBytes
 	s.fallbackToUpstream = s.cfg.Sora.Storage.FallbackToUpstream
 	s.debug = s.cfg.Sora.Storage.Debug
 	s.sem = make(chan struct{}, maxConcurrent)
@@ -180,7 +193,8 @@ func (s *SoraMediaStorage) downloadOnce(ctx context.Context, root, mediaType, ra
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: s.downloadTimeout}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -198,6 +212,9 @@ func (s *SoraMediaStorage) downloadOnce(ctx context.Context, root, mediaType, ra
 	if ext == "" {
 		ext = ".bin"
 	}
+	if s.maxDownloadBytes > 0 && resp.ContentLength > s.maxDownloadBytes {
+		return "", fmt.Errorf("download size exceeds limit: %d", resp.ContentLength)
+	}
 
 	datePath := time.Now().Format("2006/01/02")
 	destDir := filepath.Join(root, filepath.FromSlash(datePath))
@@ -212,9 +229,15 @@ func (s *SoraMediaStorage) downloadOnce(ctx context.Context, root, mediaType, ra
 	}
 	defer func() { _ = out.Close() }()
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	limited := io.LimitReader(resp.Body, s.maxDownloadBytes+1)
+	written, err := io.Copy(out, limited)
+	if err != nil {
 		_ = os.Remove(destPath)
 		return "", err
+	}
+	if s.maxDownloadBytes > 0 && written > s.maxDownloadBytes {
+		_ = os.Remove(destPath)
+		return "", fmt.Errorf("download size exceeds limit: %d", written)
 	}
 
 	relative := path.Join("/", mediaType, datePath, filename)

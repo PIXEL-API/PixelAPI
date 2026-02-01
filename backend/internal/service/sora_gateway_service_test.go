@@ -97,3 +97,16 @@ func TestSoraGatewayService_BuildSoraMediaURLSigned(t *testing.T) {
 	require.Contains(t, url, "expires=")
 	require.Contains(t, url, "sig=")
 }
+
+func TestDecodeSoraImageInput_BlockPrivateURL(t *testing.T) {
+	_, _, err := decodeSoraImageInput(context.Background(), "http://127.0.0.1/internal.png")
+	require.Error(t, err)
+}
+
+func TestDecodeSoraImageInput_DataURL(t *testing.T) {
+	encoded := "data:image/png;base64,aGVsbG8="
+	data, filename, err := decodeSoraImageInput(context.Background(), encoded)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	require.Contains(t, filename, ".png")
+}
