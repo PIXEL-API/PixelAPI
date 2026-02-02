@@ -218,6 +218,14 @@ func (m *mockGroupRepoForGemini) DeleteAccountGroupsByGroupID(ctx context.Contex
 	return 0, nil
 }
 
+func (m *mockGroupRepoForGemini) BindAccountsToGroup(ctx context.Context, groupID int64, accountIDs []int64) error {
+	return nil
+}
+
+func (m *mockGroupRepoForGemini) GetAccountIDsByGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error) {
+	return nil, nil
+}
+
 var _ GroupRepository = (*mockGroupRepoForGemini)(nil)
 
 // mockGatewayCacheForGemini Gemini 测试用的 cache mock
