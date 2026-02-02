@@ -92,6 +92,9 @@ var (
 // ErrClaudeCodeOnly 表示分组仅允许 Claude Code 客户端访问
 var ErrClaudeCodeOnly = errors.New("this group only allows Claude Code clients")
 
+// ErrModelScopeNotSupported 表示请求的模型系列不在分组支持的范围内
+var ErrModelScopeNotSupported = errors.New("model scope not supported by this group")
+
 // allowedHeaders 白名单headers（参考CRS项目）
 var allowedHeaders = map[string]bool{
 	"accept":                                    true,
@@ -580,6 +583,13 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	preferOAuth := platform == PlatformGemini
 	if s.debugModelRoutingEnabled() && platform == PlatformAnthropic && requestedModel != "" {
 		log.Printf("[ModelRoutingDebug] load-aware enabled: group_id=%v model=%s session=%s platform=%s", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), platform)
+	}
+
+	// Antigravity 模型系列检查（在账号选择前检查，确保所有代码路径都经过此检查）
+	if platform == PlatformAntigravity && groupID != nil && requestedModel != "" {
+		if err := s.checkAntigravityModelScope(ctx, *groupID, requestedModel); err != nil {
+			return nil, err
+		}
 	}
 
 	accounts, useMixed, err := s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
@@ -1477,6 +1487,13 @@ func shuffleWithinPriority(accounts []*Account) {
 
 // selectAccountForModelWithPlatform 选择单平台账户（完全隔离）
 func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, platform string) (*Account, error) {
+	// 对 Antigravity 平台，检查请求的模型系列是否在分组支持范围内
+	if platform == PlatformAntigravity && groupID != nil && requestedModel != "" {
+		if err := s.checkAntigravityModelScope(ctx, *groupID, requestedModel); err != nil {
+			return nil, err
+		}
+	}
+
 	preferOAuth := platform == PlatformGemini
 	routingAccountIDs := s.routingAccountIDsForRequest(ctx, groupID, requestedModel, platform)
 
@@ -3896,6 +3913,27 @@ func (s *GatewayService) validateUpstreamBaseURL(raw string) (string, error) {
 		return "", fmt.Errorf("invalid base_url: %w", err)
 	}
 	return normalized, nil
+}
+
+// checkAntigravityModelScope 检查 Antigravity 平台的模型系列是否在分组支持范围内
+func (s *GatewayService) checkAntigravityModelScope(ctx context.Context, groupID int64, requestedModel string) error {
+	scope, ok := ResolveAntigravityQuotaScope(requestedModel)
+	if !ok {
+		return nil // 无法解析 scope，跳过检查
+	}
+
+	group, err := s.resolveGroupByID(ctx, groupID)
+	if err != nil {
+		return nil // 查询失败时放行
+	}
+	if group == nil {
+		return nil // 分组不存在时放行
+	}
+
+	if !IsScopeSupported(group.SupportedModelScopes, scope) {
+		return ErrModelScopeNotSupported
+	}
+	return nil
 }
 
 // GetAvailableModels returns the list of models available for a group
