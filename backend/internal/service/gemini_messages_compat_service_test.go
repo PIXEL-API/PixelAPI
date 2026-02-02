@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +126,80 @@ func TestConvertClaudeToolsToGeminiTools_CustomType(t *testing.T) {
 					tt.description, expectedFuncCount, len(funcDecls))
 			}
 		})
+	}
+}
+
+func TestConvertClaudeMessagesToGeminiGenerateContent_AddsThoughtSignatureForToolUse(t *testing.T) {
+	claudeReq := map[string]any{
+		"model":      "claude-haiku-4-5-20251001",
+		"max_tokens": 10,
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "hi"},
+				},
+			},
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "text", "text": "ok"},
+					map[string]any{
+						"type":  "tool_use",
+						"id":    "toolu_123",
+						"name":  "default_api:write_file",
+						"input": map[string]any{"path": "a.txt", "content": "x"},
+						// no signature on purpose
+					},
+				},
+			},
+		},
+		"tools": []any{
+			map[string]any{
+				"name":        "default_api:write_file",
+				"description": "write file",
+				"input_schema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"path": map[string]any{"type": "string"}},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(claudeReq)
+
+	out, err := convertClaudeMessagesToGeminiGenerateContent(b)
+	if err != nil {
+		t.Fatalf("convert failed: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "\"functionCall\"") {
+		t.Fatalf("expected functionCall in output, got: %s", s)
+	}
+	if !strings.Contains(s, "\"thoughtSignature\":\""+geminiDummyThoughtSignature+"\"") {
+		t.Fatalf("expected injected thoughtSignature %q, got: %s", geminiDummyThoughtSignature, s)
+	}
+}
+
+func TestEnsureGeminiFunctionCallThoughtSignatures_InsertsWhenMissing(t *testing.T) {
+	geminiReq := map[string]any{
+		"contents": []any{
+			map[string]any{
+				"role": "user",
+				"parts": []any{
+					map[string]any{
+						"functionCall": map[string]any{
+							"name": "default_api:write_file",
+							"args": map[string]any{"path": "a.txt"},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(geminiReq)
+	out := ensureGeminiFunctionCallThoughtSignatures(b)
+	s := string(out)
+	if !strings.Contains(s, "\"thoughtSignature\":\""+geminiDummyThoughtSignature+"\"") {
+		t.Fatalf("expected injected thoughtSignature %q, got: %s", geminiDummyThoughtSignature, s)
 	}
 }
