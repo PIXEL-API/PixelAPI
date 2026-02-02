@@ -59,3 +59,6 @@ export {
 }
 
 export default adminAPI
+
+// Re-export types used by components
+export type { BalanceHistoryItem } from './users'
