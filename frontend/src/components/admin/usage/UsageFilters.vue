@@ -127,6 +127,12 @@
           <Select v-model="filters.stream" :options="streamTypeOptions" @change="emitChange" />
         </div>
 
+        <!-- Billing Type Filter -->
+        <div class="w-full sm:w-auto sm:min-w-[200px]">
+          <label class="input-label">{{ t('admin.usage.billingType') }}</label>
+          <Select v-model="filters.billing_type" :options="billingTypeOptions" @change="emitChange" />
+        </div>
+
         <!-- Group Filter -->
         <div class="w-full sm:w-auto sm:min-w-[200px]">
           <label class="input-label">{{ t('admin.usage.group') }}</label>
@@ -147,9 +153,12 @@
       </div>
 
       <!-- Right: actions -->
-      <div class="flex w-full flex-wrap items-center justify-end gap-3 sm:w-auto">
+      <div v-if="showActions" class="flex w-full flex-wrap items-center justify-end gap-3 sm:w-auto">
         <button type="button" @click="$emit('reset')" class="btn btn-secondary">
           {{ t('common.reset') }}
+        </button>
+        <button type="button" @click="$emit('cleanup')" class="btn btn-danger">
+          {{ t('admin.usage.cleanup.button') }}
         </button>
         <button type="button" @click="$emit('export')" :disabled="exporting" class="btn btn-primary">
           {{ t('usage.exportExcel') }}
@@ -174,16 +183,20 @@ interface Props {
   exporting: boolean
   startDate: string
   endDate: string
+  showActions?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  showActions: true
+})
 const emit = defineEmits([
   'update:modelValue',
   'update:startDate',
   'update:endDate',
   'change',
   'reset',
-  'export'
+  'export',
+  'cleanup'
 ])
 
 const { t } = useI18n()
@@ -219,6 +232,12 @@ const streamTypeOptions = ref<SelectOption[]>([
   { value: null, label: t('admin.usage.allTypes') },
   { value: true, label: t('usage.stream') },
   { value: false, label: t('usage.sync') }
+])
+
+const billingTypeOptions = ref<SelectOption[]>([
+  { value: null, label: t('admin.usage.allBillingTypes') },
+  { value: 0, label: t('admin.usage.billingTypeBalance') },
+  { value: 1, label: t('admin.usage.billingTypeSubscription') }
 ])
 
 const emitChange = () => emit('change')

@@ -84,9 +84,9 @@ func (h *UserHandler) List(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.User, 0, len(users))
+	out := make([]dto.AdminUser, 0, len(users))
 	for i := range users {
-		out = append(out, *dto.UserFromService(&users[i]))
+		out = append(out, *dto.UserFromServiceAdmin(&users[i]))
 	}
 	response.Paginated(c, out, total, page, pageSize)
 }
@@ -129,7 +129,7 @@ func (h *UserHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UserFromService(user))
+	response.Success(c, dto.UserFromServiceAdmin(user))
 }
 
 // Create handles creating a new user
@@ -155,7 +155,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UserFromService(user))
+	response.Success(c, dto.UserFromServiceAdmin(user))
 }
 
 // Update handles updating a user
@@ -189,7 +189,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UserFromService(user))
+	response.Success(c, dto.UserFromServiceAdmin(user))
 }
 
 // Delete handles deleting a user
@@ -231,7 +231,7 @@ func (h *UserHandler) UpdateBalance(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.UserFromService(user))
+	response.Success(c, dto.UserFromServiceAdmin(user))
 }
 
 // GetUserAPIKeys handles getting user's API keys

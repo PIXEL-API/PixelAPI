@@ -244,6 +244,13 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_NonSuccessStatus() {
 	require.ErrorContains(s.T(), err, "status 401")
 }
 
+func TestNewOpenAIOAuthClient_DefaultTokenURL(t *testing.T) {
+	client := NewOpenAIOAuthClient()
+	svc, ok := client.(*openaiOAuthService)
+	require.True(t, ok)
+	require.Equal(t, openai.TokenURL, svc.tokenURL)
+}
+
 func TestOpenAIOAuthServiceSuite(t *testing.T) {
 	suite.Run(t, new(OpenAIOAuthServiceSuite))
 }

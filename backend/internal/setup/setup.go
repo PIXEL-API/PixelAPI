@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -79,10 +80,11 @@ type DatabaseConfig struct {
 }
 
 type RedisConfig struct {
-	Host     string `json:"host" yaml:"host"`
-	Port     int    `json:"port" yaml:"port"`
-	Password string `json:"password" yaml:"password"`
-	DB       int    `json:"db" yaml:"db"`
+	Host      string `json:"host" yaml:"host"`
+	Port      int    `json:"port" yaml:"port"`
+	Password  string `json:"password" yaml:"password"`
+	DB        int    `json:"db" yaml:"db"`
+	EnableTLS bool   `json:"enable_tls" yaml:"enable_tls"`
 }
 
 type AdminConfig struct {
@@ -199,11 +201,20 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 
 // TestRedisConnection tests the Redis connection
 func TestRedisConnection(cfg *RedisConfig) error {
-	rdb := redis.NewClient(&redis.Options{
+	opts := &redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Password: cfg.Password,
 		DB:       cfg.DB,
-	})
+	}
+
+	if cfg.EnableTLS {
+		opts.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			ServerName: cfg.Host,
+		}
+	}
+
+	rdb := redis.NewClient(opts)
 	defer func() {
 		if err := rdb.Close(); err != nil {
 			log.Printf("failed to close redis client: %v", err)
@@ -485,10 +496,11 @@ func AutoSetupFromEnv() error {
 			SSLMode:  getEnvOrDefault("DATABASE_SSLMODE", "disable"),
 		},
 		Redis: RedisConfig{
-			Host:     getEnvOrDefault("REDIS_HOST", "localhost"),
-			Port:     getEnvIntOrDefault("REDIS_PORT", 6379),
-			Password: getEnvOrDefault("REDIS_PASSWORD", ""),
-			DB:       getEnvIntOrDefault("REDIS_DB", 0),
+			Host:      getEnvOrDefault("REDIS_HOST", "localhost"),
+			Port:      getEnvIntOrDefault("REDIS_PORT", 6379),
+			Password:  getEnvOrDefault("REDIS_PASSWORD", ""),
+			DB:        getEnvIntOrDefault("REDIS_DB", 0),
+			EnableTLS: getEnvOrDefault("REDIS_ENABLE_TLS", "false") == "true",
 		},
 		Admin: AdminConfig{
 			Email:    getEnvOrDefault("ADMIN_EMAIL", "admin@sub2api.local"),

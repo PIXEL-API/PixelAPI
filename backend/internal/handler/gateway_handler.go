@@ -31,6 +31,7 @@ type GatewayHandler struct {
 	antigravityGatewayService *service.AntigravityGatewayService
 	userService               *service.UserService
 	billingCacheService       *service.BillingCacheService
+	usageService              *service.UsageService
 	concurrencyHelper         *ConcurrencyHelper
 	maxAccountSwitches        int
 	maxAccountSwitchesGemini  int
@@ -44,6 +45,7 @@ func NewGatewayHandler(
 	userService *service.UserService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
+	usageService *service.UsageService,
 	cfg *config.Config,
 ) *GatewayHandler {
 	pingInterval := time.Duration(0)
@@ -64,6 +66,7 @@ func NewGatewayHandler(
 		antigravityGatewayService: antigravityGatewayService,
 		userService:               userService,
 		billingCacheService:       billingCacheService,
+		usageService:              usageService,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		maxAccountSwitches:        maxAccountSwitches,
 		maxAccountSwitchesGemini:  maxAccountSwitchesGemini,
@@ -210,17 +213,20 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			account := selection.Account
 			setOpsSelectedAccount(c, account.ID)
 
-			// 检查预热请求拦截（在账号选择后、转发前检查）
-			if account.IsInterceptWarmupEnabled() && isWarmupRequest(body) {
-				if selection.Acquired && selection.ReleaseFunc != nil {
-					selection.ReleaseFunc()
+			// 检查请求拦截（预热请求、SUGGESTION MODE等）
+			if account.IsInterceptWarmupEnabled() {
+				interceptType := detectInterceptType(body)
+				if interceptType != InterceptTypeNone {
+					if selection.Acquired && selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					if reqStream {
+						sendMockInterceptStream(c, reqModel, interceptType)
+					} else {
+						sendMockInterceptResponse(c, reqModel, interceptType)
+					}
+					return
 				}
-				if reqStream {
-					sendMockWarmupStream(c, reqModel)
-				} else {
-					sendMockWarmupResponse(c, reqModel)
-				}
-				return
 			}
 
 			// 3. 获取账号并发槽位
@@ -359,17 +365,20 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			account := selection.Account
 			setOpsSelectedAccount(c, account.ID)
 
-			// 检查预热请求拦截（在账号选择后、转发前检查）
-			if account.IsInterceptWarmupEnabled() && isWarmupRequest(body) {
-				if selection.Acquired && selection.ReleaseFunc != nil {
-					selection.ReleaseFunc()
+			// 检查请求拦截（预热请求、SUGGESTION MODE等）
+			if account.IsInterceptWarmupEnabled() {
+				interceptType := detectInterceptType(body)
+				if interceptType != InterceptTypeNone {
+					if selection.Acquired && selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					if reqStream {
+						sendMockInterceptStream(c, reqModel, interceptType)
+					} else {
+						sendMockInterceptResponse(c, reqModel, interceptType)
+					}
+					return
 				}
-				if reqStream {
-					sendMockWarmupStream(c, reqModel)
-				} else {
-					sendMockWarmupResponse(c, reqModel)
-				}
-				return
 			}
 
 			// 3. 获取账号并发槽位
@@ -588,7 +597,7 @@ func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service
 	return &cloned
 }
 
-// Usage handles getting account balance for CC Switch integration
+// Usage handles getting account balance and usage statistics for CC Switch integration
 // GET /v1/usage
 func (h *GatewayHandler) Usage(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
@@ -603,7 +612,40 @@ func (h *GatewayHandler) Usage(c *gin.Context) {
 		return
 	}
 
-	// 订阅模式：返回订阅限额信息
+	// Best-effort: 获取用量统计，失败不影响基础响应
+	var usageData gin.H
+	if h.usageService != nil {
+		dashStats, err := h.usageService.GetUserDashboardStats(c.Request.Context(), subject.UserID)
+		if err == nil && dashStats != nil {
+			usageData = gin.H{
+				"today": gin.H{
+					"requests":              dashStats.TodayRequests,
+					"input_tokens":          dashStats.TodayInputTokens,
+					"output_tokens":         dashStats.TodayOutputTokens,
+					"cache_creation_tokens": dashStats.TodayCacheCreationTokens,
+					"cache_read_tokens":     dashStats.TodayCacheReadTokens,
+					"total_tokens":          dashStats.TodayTokens,
+					"cost":                  dashStats.TodayCost,
+					"actual_cost":           dashStats.TodayActualCost,
+				},
+				"total": gin.H{
+					"requests":              dashStats.TotalRequests,
+					"input_tokens":          dashStats.TotalInputTokens,
+					"output_tokens":         dashStats.TotalOutputTokens,
+					"cache_creation_tokens": dashStats.TotalCacheCreationTokens,
+					"cache_read_tokens":     dashStats.TotalCacheReadTokens,
+					"total_tokens":          dashStats.TotalTokens,
+					"cost":                  dashStats.TotalCost,
+					"actual_cost":           dashStats.TotalActualCost,
+				},
+				"average_duration_ms": dashStats.AverageDurationMs,
+				"rpm":                 dashStats.Rpm,
+				"tpm":                 dashStats.Tpm,
+			}
+		}
+	}
+
+	// 订阅模式：返回订阅限额信息 + 用量统计
 	if apiKey.Group != nil && apiKey.Group.IsSubscriptionType() {
 		subscription, ok := middleware2.GetSubscriptionFromContext(c)
 		if !ok {
@@ -612,28 +654,46 @@ func (h *GatewayHandler) Usage(c *gin.Context) {
 		}
 
 		remaining := h.calculateSubscriptionRemaining(apiKey.Group, subscription)
-		c.JSON(http.StatusOK, gin.H{
+		resp := gin.H{
 			"isValid":   true,
 			"planName":  apiKey.Group.Name,
 			"remaining": remaining,
 			"unit":      "USD",
-		})
+			"subscription": gin.H{
+				"daily_usage_usd":   subscription.DailyUsageUSD,
+				"weekly_usage_usd":  subscription.WeeklyUsageUSD,
+				"monthly_usage_usd": subscription.MonthlyUsageUSD,
+				"daily_limit_usd":   apiKey.Group.DailyLimitUSD,
+				"weekly_limit_usd":  apiKey.Group.WeeklyLimitUSD,
+				"monthly_limit_usd": apiKey.Group.MonthlyLimitUSD,
+				"expires_at":        subscription.ExpiresAt,
+			},
+		}
+		if usageData != nil {
+			resp["usage"] = usageData
+		}
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 
-	// 余额模式：返回钱包余额
+	// 余额模式：返回钱包余额 + 用量统计
 	latestUser, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
 	if err != nil {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to get user info")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"isValid":   true,
 		"planName":  "钱包余额",
 		"remaining": latestUser.Balance,
 		"unit":      "USD",
-	})
+		"balance":   latestUser.Balance,
+	}
+	if usageData != nil {
+		resp["usage"] = usageData
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // calculateSubscriptionRemaining 计算订阅剩余可用额度
@@ -835,17 +895,30 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	}
 }
 
-// isWarmupRequest 检测是否为预热请求（标题生成、Warmup等）
-func isWarmupRequest(body []byte) bool {
-	// 快速检查：如果body不包含关键字，直接返回false
+// InterceptType 表示请求拦截类型
+type InterceptType int
+
+const (
+	InterceptTypeNone           InterceptType = iota
+	InterceptTypeWarmup                       // 预热请求（返回 "New Conversation"）
+	InterceptTypeSuggestionMode               // SUGGESTION MODE（返回空字符串）
+)
+
+// detectInterceptType 检测请求是否需要拦截，返回拦截类型
+func detectInterceptType(body []byte) InterceptType {
+	// 快速检查：如果不包含任何关键字，直接返回
 	bodyStr := string(body)
-	if !strings.Contains(bodyStr, "title") && !strings.Contains(bodyStr, "Warmup") {
-		return false
+	hasSuggestionMode := strings.Contains(bodyStr, "[SUGGESTION MODE:")
+	hasWarmupKeyword := strings.Contains(bodyStr, "title") || strings.Contains(bodyStr, "Warmup")
+
+	if !hasSuggestionMode && !hasWarmupKeyword {
+		return InterceptTypeNone
 	}
 
-	// 解析完整请求
+	// 解析请求（只解析一次）
 	var req struct {
 		Messages []struct {
+			Role    string `json:"role"`
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -856,43 +929,71 @@ func isWarmupRequest(body []byte) bool {
 		} `json:"system"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		return false
+		return InterceptTypeNone
 	}
 
-	// 检查 messages 中的标题提示模式
-	for _, msg := range req.Messages {
-		for _, content := range msg.Content {
-			if content.Type == "text" {
-				if strings.Contains(content.Text, "Please write a 5-10 word title for the following conversation:") ||
-					content.Text == "Warmup" {
-					return true
+	// 检查 SUGGESTION MODE（最后一条 user 消息）
+	if hasSuggestionMode && len(req.Messages) > 0 {
+		lastMsg := req.Messages[len(req.Messages)-1]
+		if lastMsg.Role == "user" && len(lastMsg.Content) > 0 &&
+			lastMsg.Content[0].Type == "text" &&
+			strings.HasPrefix(lastMsg.Content[0].Text, "[SUGGESTION MODE:") {
+			return InterceptTypeSuggestionMode
+		}
+	}
+
+	// 检查 Warmup 请求
+	if hasWarmupKeyword {
+		// 检查 messages 中的标题提示模式
+		for _, msg := range req.Messages {
+			for _, content := range msg.Content {
+				if content.Type == "text" {
+					if strings.Contains(content.Text, "Please write a 5-10 word title for the following conversation:") ||
+						content.Text == "Warmup" {
+						return InterceptTypeWarmup
+					}
 				}
+			}
+		}
+		// 检查 system 中的标题提取模式
+		for _, sys := range req.System {
+			if strings.Contains(sys.Text, "nalyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title") {
+				return InterceptTypeWarmup
 			}
 		}
 	}
 
-	// 检查 system 中的标题提取模式
-	for _, system := range req.System {
-		if strings.Contains(system.Text, "nalyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title") {
-			return true
-		}
-	}
-
-	return false
+	return InterceptTypeNone
 }
 
-// sendMockWarmupStream 发送流式 mock 响应（用于预热请求拦截）
-func sendMockWarmupStream(c *gin.Context, model string) {
+// sendMockInterceptStream 发送流式 mock 响应（用于请求拦截）
+func sendMockInterceptStream(c *gin.Context, model string, interceptType InterceptType) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
+	// 根据拦截类型决定响应内容
+	var msgID string
+	var outputTokens int
+	var textDeltas []string
+
+	switch interceptType {
+	case InterceptTypeSuggestionMode:
+		msgID = "msg_mock_suggestion"
+		outputTokens = 1
+		textDeltas = []string{""} // 空内容
+	default: // InterceptTypeWarmup
+		msgID = "msg_mock_warmup"
+		outputTokens = 2
+		textDeltas = []string{"New", " Conversation"}
+	}
+
 	// Build message_start event with proper JSON marshaling
 	messageStart := map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
-			"id":            "msg_mock_warmup",
+			"id":            msgID,
 			"type":          "message",
 			"role":          "assistant",
 			"model":         model,
@@ -907,15 +1008,45 @@ func sendMockWarmupStream(c *gin.Context, model string) {
 	}
 	messageStartJSON, _ := json.Marshal(messageStart)
 
+	// Build events
 	events := []string{
 		`event: message_start` + "\n" + `data: ` + string(messageStartJSON),
 		`event: content_block_start` + "\n" + `data: {"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"}`,
-		`event: content_block_delta` + "\n" + `data: {"delta":{"text":"New","type":"text_delta"},"index":0,"type":"content_block_delta"}`,
-		`event: content_block_delta` + "\n" + `data: {"delta":{"text":" Conversation","type":"text_delta"},"index":0,"type":"content_block_delta"}`,
-		`event: content_block_stop` + "\n" + `data: {"index":0,"type":"content_block_stop"}`,
-		`event: message_delta` + "\n" + `data: {"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"input_tokens":10,"output_tokens":2}}`,
-		`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
 	}
+
+	// Add text deltas
+	for _, text := range textDeltas {
+		delta := map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]string{
+				"type": "text_delta",
+				"text": text,
+			},
+		}
+		deltaJSON, _ := json.Marshal(delta)
+		events = append(events, `event: content_block_delta`+"\n"+`data: `+string(deltaJSON))
+	}
+
+	// Add final events
+	messageDelta := map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason":   "end_turn",
+			"stop_sequence": nil,
+		},
+		"usage": map[string]int{
+			"input_tokens":  10,
+			"output_tokens": outputTokens,
+		},
+	}
+	messageDeltaJSON, _ := json.Marshal(messageDelta)
+
+	events = append(events,
+		`event: content_block_stop`+"\n"+`data: {"index":0,"type":"content_block_stop"}`,
+		`event: message_delta`+"\n"+`data: `+string(messageDeltaJSON),
+		`event: message_stop`+"\n"+`data: {"type":"message_stop"}`,
+	)
 
 	for _, event := range events {
 		_, _ = c.Writer.WriteString(event + "\n\n")
@@ -924,18 +1055,32 @@ func sendMockWarmupStream(c *gin.Context, model string) {
 	}
 }
 
-// sendMockWarmupResponse 发送非流式 mock 响应（用于预热请求拦截）
-func sendMockWarmupResponse(c *gin.Context, model string) {
+// sendMockInterceptResponse 发送非流式 mock 响应（用于请求拦截）
+func sendMockInterceptResponse(c *gin.Context, model string, interceptType InterceptType) {
+	var msgID, text string
+	var outputTokens int
+
+	switch interceptType {
+	case InterceptTypeSuggestionMode:
+		msgID = "msg_mock_suggestion"
+		text = ""
+		outputTokens = 1
+	default: // InterceptTypeWarmup
+		msgID = "msg_mock_warmup"
+		text = "New Conversation"
+		outputTokens = 2
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"id":          "msg_mock_warmup",
+		"id":          msgID,
 		"type":        "message",
 		"role":        "assistant",
 		"model":       model,
-		"content":     []gin.H{{"type": "text", "text": "New Conversation"}},
+		"content":     []gin.H{{"type": "text", "text": text}},
 		"stop_reason": "end_turn",
 		"usage": gin.H{
 			"input_tokens":  10,
-			"output_tokens": 2,
+			"output_tokens": outputTokens,
 		},
 	})
 }

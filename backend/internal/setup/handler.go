@@ -176,10 +176,11 @@ func testDatabase(c *gin.Context) {
 
 // TestRedisRequest represents Redis test request
 type TestRedisRequest struct {
-	Host     string `json:"host" binding:"required"`
-	Port     int    `json:"port" binding:"required"`
-	Password string `json:"password"`
-	DB       int    `json:"db"`
+	Host      string `json:"host" binding:"required"`
+	Port      int    `json:"port" binding:"required"`
+	Password  string `json:"password"`
+	DB        int    `json:"db"`
+	EnableTLS bool   `json:"enable_tls"`
 }
 
 // testRedis tests Redis connection
@@ -205,10 +206,11 @@ func testRedis(c *gin.Context) {
 	}
 
 	cfg := &RedisConfig{
-		Host:     req.Host,
-		Port:     req.Port,
-		Password: req.Password,
-		DB:       req.DB,
+		Host:      req.Host,
+		Port:      req.Port,
+		Password:  req.Password,
+		DB:        req.DB,
+		EnableTLS: req.EnableTLS,
 	}
 
 	if err := TestRedisConnection(cfg); err != nil {

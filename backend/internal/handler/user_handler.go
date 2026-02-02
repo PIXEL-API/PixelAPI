@@ -47,9 +47,6 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 		return
 	}
 
-	// 清空notes字段，普通用户不应看到备注
-	userData.Notes = ""
-
 	response.Success(c, dto.UserFromService(userData))
 }
 
@@ -104,9 +101,6 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-
-	// 清空notes字段，普通用户不应看到备注
-	updatedUser.Notes = ""
 
 	response.Success(c, dto.UserFromService(updatedUser))
 }

@@ -35,7 +35,9 @@ func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey
 	client := s.clientFactory(proxyURL)
 
 	var orgs []struct {
-		UUID string `json:"uuid"`
+		UUID      string  `json:"uuid"`
+		Name      string  `json:"name"`
+		RavenType *string `json:"raven_type"` // nil for personal, "team" for team organization
 	}
 
 	targetURL := s.baseURL + "/api/organizations"
@@ -65,7 +67,23 @@ func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey
 		return "", fmt.Errorf("no organizations found")
 	}
 
-	log.Printf("[OAuth] Step 1 SUCCESS - Got org UUID: %s", orgs[0].UUID)
+	// 如果只有一个组织，直接使用
+	if len(orgs) == 1 {
+		log.Printf("[OAuth] Step 1 SUCCESS - Single org found, UUID: %s, Name: %s", orgs[0].UUID, orgs[0].Name)
+		return orgs[0].UUID, nil
+	}
+
+	// 如果有多个组织，优先选择 raven_type 为 "team" 的组织
+	for _, org := range orgs {
+		if org.RavenType != nil && *org.RavenType == "team" {
+			log.Printf("[OAuth] Step 1 SUCCESS - Selected team org, UUID: %s, Name: %s, RavenType: %s",
+				org.UUID, org.Name, *org.RavenType)
+			return org.UUID, nil
+		}
+	}
+
+	// 如果没有 team 类型的组织，使用第一个
+	log.Printf("[OAuth] Step 1 SUCCESS - No team org found, using first org, UUID: %s, Name: %s", orgs[0].UUID, orgs[0].Name)
 	return orgs[0].UUID, nil
 }
 
@@ -182,7 +200,9 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 
 	resp, err := client.R().
 		SetContext(ctx).
+		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
+		SetHeader("User-Agent", "axios/1.8.4").
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -205,8 +225,6 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
 	client := s.clientFactory(proxyURL)
 
-	// 使用 JSON 格式（与 ExchangeCodeForToken 保持一致）
-	// Anthropic OAuth API 期望 JSON 格式的请求体
 	reqBody := map[string]any{
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
@@ -217,7 +235,9 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 
 	resp, err := client.R().
 		SetContext(ctx).
+		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
+		SetHeader("User-Agent", "axios/1.8.4").
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
