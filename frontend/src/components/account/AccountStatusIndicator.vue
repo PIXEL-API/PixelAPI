@@ -122,7 +122,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Account } from '@/types'
-import { formatCountdownWithSuffix } from '@/utils/format'
+import { formatCountdownWithSuffix, formatTime } from '@/utils/format'
 
 const { t } = useI18n()
 
