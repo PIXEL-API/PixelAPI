@@ -410,6 +410,22 @@ func (a *Account) GetExtraString(key string) string {
 	return ""
 }
 
+func (a *Account) GetClaudeUserID() string {
+	if v := strings.TrimSpace(a.GetExtraString("claude_user_id")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(a.GetExtraString("anthropic_user_id")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(a.GetCredential("claude_user_id")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(a.GetCredential("anthropic_user_id")); v != "" {
+		return v
+	}
+	return ""
+}
+
 func (a *Account) IsCustomErrorCodesEnabled() bool {
 	if a.Type != AccountTypeAPIKey || a.Credentials == nil {
 		return false

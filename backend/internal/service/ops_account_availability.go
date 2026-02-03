@@ -67,6 +67,8 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 
 		isAvailable := acc.Status == StatusActive && acc.Schedulable && !isRateLimited && !isOverloaded && !isTempUnsched
 
+		scopeRateLimits := acc.GetAntigravityScopeRateLimits()
+
 		if acc.Platform != "" {
 			if _, ok := platform[acc.Platform]; !ok {
 				platform[acc.Platform] = &PlatformAvailability{
@@ -83,6 +85,14 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 			}
 			if hasError {
 				p.ErrorCount++
+			}
+			if len(scopeRateLimits) > 0 {
+				if p.ScopeRateLimitCount == nil {
+					p.ScopeRateLimitCount = make(map[string]int64)
+				}
+				for scope := range scopeRateLimits {
+					p.ScopeRateLimitCount[scope]++
+				}
 			}
 		}
 
@@ -107,6 +117,14 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 			}
 			if hasError {
 				g.ErrorCount++
+			}
+			if len(scopeRateLimits) > 0 {
+				if g.ScopeRateLimitCount == nil {
+					g.ScopeRateLimitCount = make(map[string]int64)
+				}
+				for scope := range scopeRateLimits {
+					g.ScopeRateLimitCount[scope]++
+				}
 			}
 		}
 
@@ -139,6 +157,9 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 			if remainingSec > 0 {
 				item.RateLimitRemainingSec = &remainingSec
 			}
+		}
+		if len(scopeRateLimits) > 0 {
+			item.ScopeRateLimits = scopeRateLimits
 		}
 		if isOverloaded && acc.OverloadUntil != nil {
 			item.OverloadUntil = acc.OverloadUntil
