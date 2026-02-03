@@ -23,7 +23,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody)
+	applyCodexOAuthTransform(reqBody, false)
 
 	// 未显式设置 store=true，默认为 false。
 	store, ok := reqBody["store"].(bool)
@@ -59,7 +59,7 @@ func TestApplyCodexOAuthTransform_ExplicitStoreFalsePreserved(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody)
+	applyCodexOAuthTransform(reqBody, false)
 
 	store, ok := reqBody["store"].(bool)
 	require.True(t, ok)
@@ -79,7 +79,7 @@ func TestApplyCodexOAuthTransform_ExplicitStoreTrueForcedFalse(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody)
+	applyCodexOAuthTransform(reqBody, false)
 
 	store, ok := reqBody["store"].(bool)
 	require.True(t, ok)
@@ -97,7 +97,7 @@ func TestApplyCodexOAuthTransform_NonContinuationDefaultsStoreFalseAndStripsIDs(
 		},
 	}
 
-	applyCodexOAuthTransform(reqBody)
+	applyCodexOAuthTransform(reqBody, false)
 
 	store, ok := reqBody["store"].(bool)
 	require.True(t, ok)
@@ -148,7 +148,7 @@ func TestApplyCodexOAuthTransform_NormalizeCodexTools_PreservesResponsesFunction
 		},
 	}
 
-	applyCodexOAuthTransform(reqBody)
+	applyCodexOAuthTransform(reqBody, false)
 
 	tools, ok := reqBody["tools"].([]any)
 	require.True(t, ok)
@@ -169,7 +169,7 @@ func TestApplyCodexOAuthTransform_EmptyInput(t *testing.T) {
 		"input": []any{},
 	}
 
-	applyCodexOAuthTransform(reqBody)
+	applyCodexOAuthTransform(reqBody, false)
 
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
@@ -195,4 +195,78 @@ func setupCodexCache(t *testing.T) {
 	data, err := json.Marshal(meta)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "opencode-codex-header-meta.json"), data, 0o644))
+}
+
+func TestApplyCodexOAuthTransform_CodexCLI_PreservesExistingInstructions(t *testing.T) {
+	// Codex CLI 场景：已有 instructions 时不修改
+	setupCodexCache(t)
+
+	reqBody := map[string]any{
+		"model":        "gpt-5.1",
+		"instructions": "existing instructions",
+	}
+
+	result := applyCodexOAuthTransform(reqBody, true) // isCodexCLI=true
+
+	instructions, ok := reqBody["instructions"].(string)
+	require.True(t, ok)
+	require.Equal(t, "existing instructions", instructions)
+	// Modified 仍可能为 true（因为其他字段被修改），但 instructions 应保持不变
+	_ = result
+}
+
+func TestApplyCodexOAuthTransform_CodexCLI_SuppliesDefaultWhenEmpty(t *testing.T) {
+	// Codex CLI 场景：无 instructions 时补充默认值
+	setupCodexCache(t)
+
+	reqBody := map[string]any{
+		"model": "gpt-5.1",
+		// 没有 instructions 字段
+	}
+
+	result := applyCodexOAuthTransform(reqBody, true) // isCodexCLI=true
+
+	instructions, ok := reqBody["instructions"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, instructions)
+	require.True(t, result.Modified)
+}
+
+func TestApplyCodexOAuthTransform_NonCodexCLI_OverridesInstructions(t *testing.T) {
+	// 非 Codex CLI 场景：使用 opencode 指令覆盖
+	setupCodexCache(t)
+
+	reqBody := map[string]any{
+		"model":        "gpt-5.1",
+		"instructions": "old instructions",
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false) // isCodexCLI=false
+
+	instructions, ok := reqBody["instructions"].(string)
+	require.True(t, ok)
+	require.NotEqual(t, "old instructions", instructions)
+	require.True(t, result.Modified)
+}
+
+func TestIsInstructionsEmpty(t *testing.T) {
+	tests := []struct {
+		name     string
+		reqBody  map[string]any
+		expected bool
+	}{
+		{"missing field", map[string]any{}, true},
+		{"nil value", map[string]any{"instructions": nil}, true},
+		{"empty string", map[string]any{"instructions": ""}, true},
+		{"whitespace only", map[string]any{"instructions": "   "}, true},
+		{"non-string", map[string]any{"instructions": 123}, true},
+		{"valid string", map[string]any{"instructions": "hello"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isInstructionsEmpty(tt.reqBody)
+			require.Equal(t, tt.expected, result)
+		})
+	}
 }
