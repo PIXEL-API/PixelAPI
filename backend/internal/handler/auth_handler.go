@@ -15,23 +15,25 @@ import (
 
 // AuthHandler handles authentication-related requests
 type AuthHandler struct {
-	cfg          *config.Config
-	authService  *service.AuthService
-	userService  *service.UserService
-	settingSvc   *service.SettingService
-	promoService *service.PromoService
-	totpService  *service.TotpService
+	cfg           *config.Config
+	authService   *service.AuthService
+	userService   *service.UserService
+	settingSvc    *service.SettingService
+	promoService  *service.PromoService
+	redeemService *service.RedeemService
+	totpService   *service.TotpService
 }
 
 // NewAuthHandler creates a new AuthHandler
-func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userService *service.UserService, settingService *service.SettingService, promoService *service.PromoService, totpService *service.TotpService) *AuthHandler {
+func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userService *service.UserService, settingService *service.SettingService, promoService *service.PromoService, redeemService *service.RedeemService, totpService *service.TotpService) *AuthHandler {
 	return &AuthHandler{
-		cfg:          cfg,
-		authService:  authService,
-		userService:  userService,
-		settingSvc:   settingService,
-		promoService: promoService,
-		totpService:  totpService,
+		cfg:           cfg,
+		authService:   authService,
+		userService:   userService,
+		settingSvc:    settingService,
+		promoService:  promoService,
+		redeemService: redeemService,
+		totpService:   totpService,
 	}
 }
 
@@ -41,7 +43,8 @@ type RegisterRequest struct {
 	Password       string `json:"password" binding:"required,min=6"`
 	VerifyCode     string `json:"verify_code"`
 	TurnstileToken string `json:"turnstile_token"`
-	PromoCode      string `json:"promo_code"` // 注册优惠码
+	PromoCode      string `json:"promo_code"`      // 注册优惠码
+	InvitationCode string `json:"invitation_code"` // 邀请码
 }
 
 // SendVerifyCodeRequest 发送验证码请求
@@ -87,7 +90,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 	}
 
-	token, user, err := h.authService.RegisterWithVerification(c.Request.Context(), req.Email, req.Password, req.VerifyCode, req.PromoCode)
+	token, user, err := h.authService.RegisterWithVerification(c.Request.Context(), req.Email, req.Password, req.VerifyCode, req.PromoCode, req.InvitationCode)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -343,6 +346,67 @@ func (h *AuthHandler) ValidatePromoCode(c *gin.Context) {
 	response.Success(c, ValidatePromoCodeResponse{
 		Valid:       true,
 		BonusAmount: promoCode.BonusAmount,
+	})
+}
+
+// ValidateInvitationCodeRequest 验证邀请码请求
+type ValidateInvitationCodeRequest struct {
+	Code string `json:"code" binding:"required"`
+}
+
+// ValidateInvitationCodeResponse 验证邀请码响应
+type ValidateInvitationCodeResponse struct {
+	Valid     bool   `json:"valid"`
+	ErrorCode string `json:"error_code,omitempty"`
+}
+
+// ValidateInvitationCode 验证邀请码（公开接口，注册前调用）
+// POST /api/v1/auth/validate-invitation-code
+func (h *AuthHandler) ValidateInvitationCode(c *gin.Context) {
+	// 检查邀请码功能是否启用
+	if h.settingSvc == nil || !h.settingSvc.IsInvitationCodeEnabled(c.Request.Context()) {
+		response.Success(c, ValidateInvitationCodeResponse{
+			Valid:     false,
+			ErrorCode: "INVITATION_CODE_DISABLED",
+		})
+		return
+	}
+
+	var req ValidateInvitationCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	// 验证邀请码
+	redeemCode, err := h.redeemService.GetByCode(c.Request.Context(), req.Code)
+	if err != nil {
+		response.Success(c, ValidateInvitationCodeResponse{
+			Valid:     false,
+			ErrorCode: "INVITATION_CODE_NOT_FOUND",
+		})
+		return
+	}
+
+	// 检查类型和状态
+	if redeemCode.Type != service.RedeemTypeInvitation {
+		response.Success(c, ValidateInvitationCodeResponse{
+			Valid:     false,
+			ErrorCode: "INVITATION_CODE_INVALID",
+		})
+		return
+	}
+
+	if redeemCode.Status != service.StatusUnused {
+		response.Success(c, ValidateInvitationCodeResponse{
+			Valid:     false,
+			ErrorCode: "INVITATION_CODE_USED",
+		})
+		return
+	}
+
+	response.Success(c, ValidateInvitationCodeResponse{
+		Valid: true,
 	})
 }
 

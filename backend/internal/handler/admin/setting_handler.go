@@ -49,6 +49,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EmailVerifyEnabled:                   settings.EmailVerifyEnabled,
 		PromoCodeEnabled:                     settings.PromoCodeEnabled,
 		PasswordResetEnabled:                 settings.PasswordResetEnabled,
+		InvitationCodeEnabled:                settings.InvitationCodeEnabled,
 		TotpEnabled:                          settings.TotpEnabled,
 		TotpEncryptionKeyConfigured:          h.settingService.IsTotpEncryptionKeyConfigured(),
 		SMTPHost:                             settings.SMTPHost,
@@ -94,11 +95,12 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 // UpdateSettingsRequest 更新设置请求
 type UpdateSettingsRequest struct {
 	// 注册设置
-	RegistrationEnabled  bool `json:"registration_enabled"`
-	EmailVerifyEnabled   bool `json:"email_verify_enabled"`
-	PromoCodeEnabled     bool `json:"promo_code_enabled"`
-	PasswordResetEnabled bool `json:"password_reset_enabled"`
-	TotpEnabled          bool `json:"totp_enabled"` // TOTP 双因素认证
+	RegistrationEnabled   bool `json:"registration_enabled"`
+	EmailVerifyEnabled    bool `json:"email_verify_enabled"`
+	PromoCodeEnabled      bool `json:"promo_code_enabled"`
+	PasswordResetEnabled  bool `json:"password_reset_enabled"`
+	InvitationCodeEnabled bool `json:"invitation_code_enabled"`
+	TotpEnabled           bool `json:"totp_enabled"` // TOTP 双因素认证
 
 	// 邮件服务设置
 	SMTPHost     string `json:"smtp_host"`
@@ -291,6 +293,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EmailVerifyEnabled:          req.EmailVerifyEnabled,
 		PromoCodeEnabled:            req.PromoCodeEnabled,
 		PasswordResetEnabled:        req.PasswordResetEnabled,
+		InvitationCodeEnabled:       req.InvitationCodeEnabled,
 		TotpEnabled:                 req.TotpEnabled,
 		SMTPHost:                    req.SMTPHost,
 		SMTPPort:                    req.SMTPPort,
@@ -370,6 +373,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EmailVerifyEnabled:                   updatedSettings.EmailVerifyEnabled,
 		PromoCodeEnabled:                     updatedSettings.PromoCodeEnabled,
 		PasswordResetEnabled:                 updatedSettings.PasswordResetEnabled,
+		InvitationCodeEnabled:                updatedSettings.InvitationCodeEnabled,
 		TotpEnabled:                          updatedSettings.TotpEnabled,
 		TotpEncryptionKeyConfigured:          h.settingService.IsTotpEncryptionKeyConfigured(),
 		SMTPHost:                             updatedSettings.SMTPHost,
