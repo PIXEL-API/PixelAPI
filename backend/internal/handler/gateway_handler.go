@@ -596,6 +596,7 @@ func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service
 	cloned.Group = group
 	return &cloned
 }
+
 // Usage handles getting account balance and usage statistics for CC Switch integration
 // GET /v1/usage
 func (h *GatewayHandler) Usage(c *gin.Context) {
