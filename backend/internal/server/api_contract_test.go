@@ -1150,6 +1150,14 @@ func (r *stubRedeemCodeRepo) ListByUser(ctx context.Context, userID int64, limit
 	return append([]service.RedeemCode(nil), codes...), nil
 }
 
+func (stubRedeemCodeRepo) ListByUserPaginated(ctx context.Context, userID int64, params pagination.PaginationParams, codeType string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
+	return nil, nil, errors.New("not implemented")
+}
+
+func (stubRedeemCodeRepo) SumPositiveBalanceByUser(ctx context.Context, userID int64) (float64, error) {
+	return 0, errors.New("not implemented")
+}
+
 type stubUserSubscriptionRepo struct {
 	byUser       map[int64][]service.UserSubscription
 	activeByUser map[int64][]service.UserSubscription

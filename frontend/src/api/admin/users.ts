@@ -174,6 +174,53 @@ export async function getUserUsageStats(
   return data
 }
 
+/**
+ * Balance history item returned from the API
+ */
+export interface BalanceHistoryItem {
+  id: number
+  code: string
+  type: string
+  value: number
+  status: string
+  used_by: number | null
+  used_at: string | null
+  created_at: string
+  group_id: number | null
+  validity_days: number
+  notes: string
+  user?: { id: number; email: string } | null
+  group?: { id: number; name: string } | null
+}
+
+// Balance history response extends pagination with total_recharged summary
+export interface BalanceHistoryResponse extends PaginatedResponse<BalanceHistoryItem> {
+  total_recharged: number
+}
+
+/**
+ * Get user's balance/concurrency change history
+ * @param id - User ID
+ * @param page - Page number
+ * @param pageSize - Items per page
+ * @param type - Optional type filter (balance, admin_balance, concurrency, admin_concurrency, subscription)
+ * @returns Paginated balance history with total_recharged
+ */
+export async function getUserBalanceHistory(
+  id: number,
+  page: number = 1,
+  pageSize: number = 20,
+  type?: string
+): Promise<BalanceHistoryResponse> {
+  const params: Record<string, any> = { page, page_size: pageSize }
+  if (type) params.type = type
+  const { data } = await apiClient.get<BalanceHistoryResponse>(
+    `/admin/users/${id}/balance-history`,
+    { params }
+  )
+  return data
+}
+
 export const usersAPI = {
   list,
   getById,
@@ -184,7 +231,8 @@ export const usersAPI = {
   updateConcurrency,
   toggleStatus,
   getUserApiKeys,
-  getUserUsageStats
+  getUserUsageStats,
+  getUserBalanceHistory
 }
 
 export default usersAPI
