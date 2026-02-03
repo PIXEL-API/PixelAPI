@@ -21,6 +21,12 @@
           <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
         </template>
 
+        <template #cell-reasoning_effort="{ row }">
+          <span class="text-sm text-gray-900 dark:text-white">
+            {{ formatReasoningEffort(row.reasoning_effort) }}
+          </span>
+        </template>
+
         <template #cell-group="{ row }">
           <span v-if="row.group" class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
             {{ row.group.name }}
@@ -232,14 +238,14 @@
   </Teleport>
 </template>
 
-<script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { formatDateTime } from '@/utils/format'
-import DataTable from '@/components/common/DataTable.vue'
-import EmptyState from '@/components/common/EmptyState.vue'
-import Icon from '@/components/icons/Icon.vue'
-import type { AdminUsageLog } from '@/types'
+  <script setup lang="ts">
+  import { ref, computed } from 'vue'
+  import { useI18n } from 'vue-i18n'
+  import { formatDateTime, formatReasoningEffort } from '@/utils/format'
+  import DataTable from '@/components/common/DataTable.vue'
+  import EmptyState from '@/components/common/EmptyState.vue'
+  import Icon from '@/components/icons/Icon.vue'
+  import type { AdminUsageLog } from '@/types'
 
 defineProps(['data', 'loading'])
 const { t } = useI18n()
@@ -259,6 +265,7 @@ const cols = computed(() => [
   { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
   { key: 'account', label: t('admin.usage.account'), sortable: false },
   { key: 'model', label: t('usage.model'), sortable: true },
+  { key: 'reasoning_effort', label: t('usage.reasoningEffort'), sortable: false },
   { key: 'group', label: t('admin.usage.group'), sortable: false },
   { key: 'stream', label: t('usage.type'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
