@@ -409,6 +409,7 @@ func (h *AuthHandler) ValidateInvitationCode(c *gin.Context) {
 		Valid: true,
 	})
 }
+
 // ForgotPasswordRequest 忘记密码请求
 type ForgotPasswordRequest struct {
 	Email          string `json:"email" binding:"required,email"`
