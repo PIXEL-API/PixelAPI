@@ -2829,6 +2829,7 @@ export default {
         empty: 'No data',
         queued: 'Queue {count}',
         rateLimited: 'Rate-limited {count}',
+        scopeRateLimitedTooltip: '{scope} rate-limited ({count} accounts)',
         errorAccounts: 'Errors {count}',
         loadFailed: 'Failed to load concurrency data'
       },

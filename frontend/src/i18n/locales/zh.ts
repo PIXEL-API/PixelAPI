@@ -2982,6 +2982,7 @@ export default {
         empty: '暂无数据',
         queued: '队列 {count}',
         rateLimited: '限流 {count}',
+        scopeRateLimitedTooltip: '{scope} 限流中 ({count} 个账号)',
         errorAccounts: '异常 {count}',
         loadFailed: '加载并发数据失败'
       },
