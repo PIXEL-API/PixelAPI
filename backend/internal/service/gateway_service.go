@@ -585,12 +585,18 @@ func (s *GatewayService) hashContent(content string) string {
 }
 
 // replaceModelInBody 替换请求体中的model字段
+// 使用 json.RawMessage 保留其他字段的原始字节，避免 thinking 块等内容被修改
 func (s *GatewayService) replaceModelInBody(body []byte, newModel string) []byte {
-	var req map[string]any
+	var req map[string]json.RawMessage
 	if err := json.Unmarshal(body, &req); err != nil {
 		return body
 	}
-	req["model"] = newModel
+	// 只序列化 model 字段
+	modelBytes, err := json.Marshal(newModel)
+	if err != nil {
+		return body
+	}
+	req["model"] = modelBytes
 	newBody, err := json.Marshal(req)
 	if err != nil {
 		return body
@@ -787,12 +793,21 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	if len(body) == 0 {
 		return body, modelID, nil
 	}
+
+	// 使用 json.RawMessage 保留 messages 的原始字节，避免 thinking 块被修改
+	var reqRaw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &reqRaw); err != nil {
+		return body, modelID, nil
+	}
+
+	// 同时解析为 map[string]any 用于修改非 messages 字段
 	var req map[string]any
 	if err := json.Unmarshal(body, &req); err != nil {
 		return body, modelID, nil
 	}
 
 	toolNameMap := make(map[string]string)
+	modified := false
 
 	if system, ok := req["system"]; ok {
 		switch v := system.(type) {
@@ -800,6 +815,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 			sanitized := sanitizeSystemText(v)
 			if sanitized != v {
 				req["system"] = sanitized
+				modified = true
 			}
 		case []any:
 			for _, item := range v {
@@ -817,6 +833,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 				sanitized := sanitizeSystemText(text)
 				if sanitized != text {
 					block["text"] = sanitized
+					modified = true
 				}
 			}
 		}
@@ -827,6 +844,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		if normalized != rawModel {
 			req["model"] = normalized
 			modelID = normalized
+			modified = true
 		}
 	}
 
@@ -842,16 +860,19 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 					normalized := normalizeToolNameForClaude(name, toolNameMap)
 					if normalized != "" && normalized != name {
 						toolMap["name"] = normalized
+						modified = true
 					}
 				}
 				if desc, ok := toolMap["description"].(string); ok {
 					sanitized := sanitizeToolDescription(desc)
 					if sanitized != desc {
 						toolMap["description"] = sanitized
+						modified = true
 					}
 				}
 				if schema, ok := toolMap["input_schema"]; ok {
 					normalizeToolInputSchema(schema, toolNameMap)
+					modified = true
 				}
 				tools[idx] = toolMap
 			}
@@ -880,11 +901,15 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 				normalizedTools[normalized] = value
 			}
 			req["tools"] = normalizedTools
+			modified = true
 		}
 	} else {
 		req["tools"] = []any{}
+		modified = true
 	}
 
+	// 处理 messages 中的 tool_use 块，但保留包含 thinking 块的消息的原始字节
+	messagesModified := false
 	if messages, ok := req["messages"].([]any); ok {
 		for _, msg := range messages {
 			msgMap, ok := msg.(map[string]any)
@@ -895,6 +920,24 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 			if !ok {
 				continue
 			}
+			// 检查此消息是否包含 thinking 块
+			hasThinking := false
+			for _, block := range content {
+				blockMap, ok := block.(map[string]any)
+				if !ok {
+					continue
+				}
+				blockType, _ := blockMap["type"].(string)
+				if blockType == "thinking" || blockType == "redacted_thinking" {
+					hasThinking = true
+					break
+				}
+			}
+			// 如果包含 thinking 块，跳过此消息的修改
+			if hasThinking {
+				continue
+			}
+			// 只修改不包含 thinking 块的消息中的 tool_use
 			for _, block := range content {
 				blockMap, ok := block.(map[string]any)
 				if !ok {
@@ -907,6 +950,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 					normalized := normalizeToolNameForClaude(name, toolNameMap)
 					if normalized != "" && normalized != name {
 						blockMap["name"] = normalized
+						messagesModified = true
 					}
 				}
 			}
@@ -916,6 +960,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	if opts.stripSystemCacheControl {
 		if system, ok := req["system"]; ok {
 			_ = stripCacheControlFromSystemBlocks(system)
+			modified = true
 		}
 	}
 
@@ -927,12 +972,46 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		}
 		if existing, ok := metadata["user_id"].(string); !ok || existing == "" {
 			metadata["user_id"] = opts.metadataUserID
+			modified = true
 		}
 	}
 
-	delete(req, "temperature")
-	delete(req, "tool_choice")
+	if _, hasTemp := req["temperature"]; hasTemp {
+		delete(req, "temperature")
+		modified = true
+	}
+	if _, hasChoice := req["tool_choice"]; hasChoice {
+		delete(req, "tool_choice")
+		modified = true
+	}
 
+	if !modified && !messagesModified {
+		return body, modelID, toolNameMap
+	}
+
+	// 如果 messages 没有被修改，保留原始 messages 字节
+	if !messagesModified {
+		// 序列化非 messages 字段
+		newBody, err := json.Marshal(req)
+		if err != nil {
+			return body, modelID, toolNameMap
+		}
+		// 替换回原始的 messages
+		var newReq map[string]json.RawMessage
+		if err := json.Unmarshal(newBody, &newReq); err != nil {
+			return newBody, modelID, toolNameMap
+		}
+		if origMessages, ok := reqRaw["messages"]; ok {
+			newReq["messages"] = origMessages
+		}
+		finalBody, err := json.Marshal(newReq)
+		if err != nil {
+			return newBody, modelID, toolNameMap
+		}
+		return finalBody, modelID, toolNameMap
+	}
+
+	// messages 被修改了，需要完整序列化
 	newBody, err := json.Marshal(req)
 	if err != nil {
 		return body, modelID, toolNameMap
@@ -3618,6 +3697,13 @@ func (s *GatewayService) isThinkingBlockSignatureError(respBody []byte) bool {
 	// 例如: "Expected `thinking` or `redacted_thinking`, but found `text`"
 	if strings.Contains(msg, "expected") && (strings.Contains(msg, "thinking") || strings.Contains(msg, "redacted_thinking")) {
 		log.Printf("[SignatureCheck] Detected thinking block type error")
+		return true
+	}
+
+	// 检测 thinking block 被修改的错误
+	// 例如: "thinking or redacted_thinking blocks in the latest assistant message cannot be modified"
+	if strings.Contains(msg, "cannot be modified") && (strings.Contains(msg, "thinking") || strings.Contains(msg, "redacted_thinking")) {
+		log.Printf("[SignatureCheck] Detected thinking block modification error")
 		return true
 	}
 
