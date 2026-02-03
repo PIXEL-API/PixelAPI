@@ -60,6 +60,92 @@ type OpenAICodexUsageSnapshot struct {
 	UpdatedAt                   string   `json:"updated_at,omitempty"`
 }
 
+// NormalizedCodexLimits contains normalized 5h/7d rate limit data
+type NormalizedCodexLimits struct {
+	Used5hPercent   *float64
+	Reset5hSeconds  *int
+	Window5hMinutes *int
+	Used7dPercent   *float64
+	Reset7dSeconds  *int
+	Window7dMinutes *int
+}
+
+// Normalize converts primary/secondary fields to canonical 5h/7d fields.
+// Strategy: Compare window_minutes to determine which is 5h vs 7d.
+// Returns nil if snapshot is nil or has no useful data.
+func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
+	if s == nil {
+		return nil
+	}
+
+	result := &NormalizedCodexLimits{}
+
+	primaryMins := 0
+	secondaryMins := 0
+	hasPrimaryWindow := false
+	hasSecondaryWindow := false
+
+	if s.PrimaryWindowMinutes != nil {
+		primaryMins = *s.PrimaryWindowMinutes
+		hasPrimaryWindow = true
+	}
+	if s.SecondaryWindowMinutes != nil {
+		secondaryMins = *s.SecondaryWindowMinutes
+		hasSecondaryWindow = true
+	}
+
+	// Determine mapping based on window_minutes
+	use5hFromPrimary := false
+	use7dFromPrimary := false
+
+	if hasPrimaryWindow && hasSecondaryWindow {
+		// Both known: smaller window is 5h, larger is 7d
+		if primaryMins < secondaryMins {
+			use5hFromPrimary = true
+		} else {
+			use7dFromPrimary = true
+		}
+	} else if hasPrimaryWindow {
+		// Only primary known: classify by threshold (<=360 min = 6h -> 5h window)
+		if primaryMins <= 360 {
+			use5hFromPrimary = true
+		} else {
+			use7dFromPrimary = true
+		}
+	} else if hasSecondaryWindow {
+		// Only secondary known: classify by threshold
+		if secondaryMins <= 360 {
+			// 5h from secondary, so primary (if any data) is 7d
+			use7dFromPrimary = true
+		} else {
+			// 7d from secondary, so primary (if any data) is 5h
+			use5hFromPrimary = true
+		}
+	} else {
+		// No window_minutes: fall back to legacy assumption (primary=7d, secondary=5h)
+		use7dFromPrimary = true
+	}
+
+	// Assign values
+	if use5hFromPrimary {
+		result.Used5hPercent = s.PrimaryUsedPercent
+		result.Reset5hSeconds = s.PrimaryResetAfterSeconds
+		result.Window5hMinutes = s.PrimaryWindowMinutes
+		result.Used7dPercent = s.SecondaryUsedPercent
+		result.Reset7dSeconds = s.SecondaryResetAfterSeconds
+		result.Window7dMinutes = s.SecondaryWindowMinutes
+	} else if use7dFromPrimary {
+		result.Used7dPercent = s.PrimaryUsedPercent
+		result.Reset7dSeconds = s.PrimaryResetAfterSeconds
+		result.Window7dMinutes = s.PrimaryWindowMinutes
+		result.Used5hPercent = s.SecondaryUsedPercent
+		result.Reset5hSeconds = s.SecondaryResetAfterSeconds
+		result.Window5hMinutes = s.SecondaryWindowMinutes
+	}
+
+	return result
+}
+
 // OpenAIUsage represents OpenAI API response usage
 type OpenAIUsage struct {
 	InputTokens              int `json:"input_tokens"`
@@ -70,12 +156,15 @@ type OpenAIUsage struct {
 
 // OpenAIForwardResult represents the result of forwarding
 type OpenAIForwardResult struct {
-	RequestID    string
-	Usage        OpenAIUsage
-	Model        string
-	Stream       bool
-	Duration     time.Duration
-	FirstTokenMs *int
+	RequestID string
+	Usage     OpenAIUsage
+	Model     string
+	// ReasoningEffort is extracted from request body (reasoning.effort) or derived from model suffix.
+	// Stored for usage records display; nil means not provided / not applicable.
+	ReasoningEffort *string
+	Stream          bool
+	Duration        time.Duration
+	FirstTokenMs    *int
 }
 
 // OpenAIGatewayService handles OpenAI API gateway operations
@@ -756,6 +845,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				bodyModified = true
 			}
 		}
+
+		// Remove prompt_cache_retention (not supported by upstream OpenAI API)
+		if _, has := reqBody["prompt_cache_retention"]; has {
+			delete(reqBody, "prompt_cache_retention")
+			bodyModified = true
+		}
 	}
 
 	// Re-serialize body only if modified
@@ -867,18 +962,21 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts)
 	if account.Type == AccountTypeOAuth {
-		if snapshot := extractCodexUsageHeaders(resp.Header); snapshot != nil {
+		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 		}
 	}
 
+	reasoningEffort := extractOpenAIReasoningEffort(reqBody, originalModel)
+
 	return &OpenAIForwardResult{
-		RequestID:    resp.Header.Get("x-request-id"),
-		Usage:        *usage,
-		Model:        originalModel,
-		Stream:       reqStream,
-		Duration:     time.Since(startTime),
-		FirstTokenMs: firstTokenMs,
+		RequestID:       resp.Header.Get("x-request-id"),
+		Usage:           *usage,
+		Model:           originalModel,
+		ReasoningEffort: reasoningEffort,
+		Stream:          reqStream,
+		Duration:        time.Since(startTime),
+		FirstTokenMs:    firstTokenMs,
 	}, nil
 }
 
@@ -1174,15 +1272,29 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	// 记录上次收到上游数据的时间，用于控制 keepalive 发送频率
 	lastDataAt := time.Now()
 
-	// 仅发送一次错误事件，避免多次写入导致协议混乱（写失败时尽力通知客户端）
+	// 仅发送一次错误事件，避免多次写入导致协议混乱。
+	// 注意：OpenAI `/v1/responses` streaming 事件必须符合 OpenAI Responses schema；
+	// 否则下游 SDK（例如 OpenCode）会因为类型校验失败而报错。
 	errorEventSent := false
+	clientDisconnected := false // 客户端断开后继续 drain 上游以收集 usage
 	sendErrorEvent := func(reason string) {
-		if errorEventSent {
+		if errorEventSent || clientDisconnected {
 			return
 		}
 		errorEventSent = true
-		_, _ = fmt.Fprintf(w, "event: error\ndata: {\"error\":\"%s\"}\n\n", reason)
-		flusher.Flush()
+		payload := map[string]any{
+			"type":            "error",
+			"sequence_number": 0,
+			"error": map[string]any{
+				"type":    "upstream_error",
+				"message": reason,
+				"code":    reason,
+			},
+		}
+		if b, err := json.Marshal(payload); err == nil {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
 	}
 
 	needModelReplace := originalModel != mappedModel
@@ -1194,6 +1306,17 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 			}
 			if ev.err != nil {
+				// 客户端断开/取消请求时，上游读取往往会返回 context canceled。
+				// /v1/responses 的 SSE 事件必须符合 OpenAI 协议；这里不注入自定义 error event，避免下游 SDK 解析失败。
+				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
+					log.Printf("Context canceled during streaming, returning collected usage")
+					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+				}
+				// 客户端已断开时，上游出错仅影响体验，不影响计费；返回已收集 usage
+				if clientDisconnected {
+					log.Printf("Upstream read error after client disconnect: %v, returning collected usage", ev.err)
+					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+				}
 				if errors.Is(ev.err, bufio.ErrTooLong) {
 					log.Printf("SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, ev.err)
 					sendErrorEvent("response_too_large")
@@ -1217,15 +1340,19 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 				// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
 				if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEData(data); corrected {
+					data = correctedData
 					line = "data: " + correctedData
 				}
 
-				// Forward line
-				if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-					sendErrorEvent("write_failed")
-					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, err
+				// 写入客户端（客户端断开后继续 drain 上游）
+				if !clientDisconnected {
+					if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
+						clientDisconnected = true
+						log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+					} else {
+						flusher.Flush()
+					}
 				}
-				flusher.Flush()
 
 				// Record first token time
 				if firstTokenMs == nil && data != "" && data != "[DONE]" {
@@ -1235,17 +1362,24 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				s.parseSSEUsage(data, usage)
 			} else {
 				// Forward non-data lines as-is
-				if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-					sendErrorEvent("write_failed")
-					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, err
+				if !clientDisconnected {
+					if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
+						clientDisconnected = true
+						log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+					} else {
+						flusher.Flush()
+					}
 				}
-				flusher.Flush()
 			}
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
 			if time.Since(lastRead) < streamInterval {
 				continue
+			}
+			if clientDisconnected {
+				log.Printf("Upstream timeout after client disconnect, returning collected usage")
+				return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 			}
 			log.Printf("Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
 			// 处理流超时，可能标记账户为临时不可调度或错误状态
@@ -1256,11 +1390,16 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
+			if clientDisconnected {
+				continue
+			}
 			if time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
 			if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
-				return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, err
+				clientDisconnected = true
+				log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+				continue
 			}
 			flusher.Flush()
 		}
@@ -1601,6 +1740,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		AccountID:             account.ID,
 		RequestID:             result.RequestID,
 		Model:                 result.Model,
+		ReasoningEffort:       result.ReasoningEffort,
 		InputTokens:           actualInputTokens,
 		OutputTokens:          result.Usage.OutputTokens,
 		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
@@ -1665,8 +1805,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	return nil
 }
 
-// extractCodexUsageHeaders extracts Codex usage limits from response headers
-func extractCodexUsageHeaders(headers http.Header) *OpenAICodexUsageSnapshot {
+// ParseCodexRateLimitHeaders extracts Codex usage limits from response headers.
+// Exported for use in ratelimit_service when handling OpenAI 429 responses.
+func ParseCodexRateLimitHeaders(headers http.Header) *OpenAICodexUsageSnapshot {
 	snapshot := &OpenAICodexUsageSnapshot{}
 	hasData := false
 
@@ -1740,6 +1881,8 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 
 	// Convert snapshot to map for merging into Extra
 	updates := make(map[string]any)
+
+	// Save raw primary/secondary fields for debugging/tracing
 	if snapshot.PrimaryUsedPercent != nil {
 		updates["codex_primary_used_percent"] = *snapshot.PrimaryUsedPercent
 	}
@@ -1763,109 +1906,25 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 	}
 	updates["codex_usage_updated_at"] = snapshot.UpdatedAt
 
-	// Normalize to canonical 5h/7d fields based on window_minutes
-	// This fixes the issue where OpenAI's primary/secondary naming is reversed
-	// Strategy: Compare the two windows and assign the smaller one to 5h, larger one to 7d
-
-	// IMPORTANT: We can only reliably determine window type from window_minutes field
-	// The reset_after_seconds is remaining time, not window size, so it cannot be used for comparison
-
-	var primaryWindowMins, secondaryWindowMins int
-	var hasPrimaryWindow, hasSecondaryWindow bool
-
-	// Only use window_minutes for reliable window size comparison
-	if snapshot.PrimaryWindowMinutes != nil {
-		primaryWindowMins = *snapshot.PrimaryWindowMinutes
-		hasPrimaryWindow = true
-	}
-
-	if snapshot.SecondaryWindowMinutes != nil {
-		secondaryWindowMins = *snapshot.SecondaryWindowMinutes
-		hasSecondaryWindow = true
-	}
-
-	// Determine which is 5h and which is 7d
-	var use5hFromPrimary, use7dFromPrimary bool
-	var use5hFromSecondary, use7dFromSecondary bool
-
-	if hasPrimaryWindow && hasSecondaryWindow {
-		// Both window sizes known: compare and assign smaller to 5h, larger to 7d
-		if primaryWindowMins < secondaryWindowMins {
-			use5hFromPrimary = true
-			use7dFromSecondary = true
-		} else {
-			use5hFromSecondary = true
-			use7dFromPrimary = true
+	// Normalize to canonical 5h/7d fields
+	if normalized := snapshot.Normalize(); normalized != nil {
+		if normalized.Used5hPercent != nil {
+			updates["codex_5h_used_percent"] = *normalized.Used5hPercent
 		}
-	} else if hasPrimaryWindow {
-		// Only primary window size known: classify by absolute threshold
-		if primaryWindowMins <= 360 {
-			use5hFromPrimary = true
-		} else {
-			use7dFromPrimary = true
+		if normalized.Reset5hSeconds != nil {
+			updates["codex_5h_reset_after_seconds"] = *normalized.Reset5hSeconds
 		}
-	} else if hasSecondaryWindow {
-		// Only secondary window size known: classify by absolute threshold
-		if secondaryWindowMins <= 360 {
-			use5hFromSecondary = true
-		} else {
-			use7dFromSecondary = true
+		if normalized.Window5hMinutes != nil {
+			updates["codex_5h_window_minutes"] = *normalized.Window5hMinutes
 		}
-	} else {
-		// No window_minutes available: cannot reliably determine window types
-		// Fall back to legacy assumption (may be incorrect)
-		// Assume primary=7d, secondary=5h based on historical observation
-		if snapshot.SecondaryUsedPercent != nil || snapshot.SecondaryResetAfterSeconds != nil || snapshot.SecondaryWindowMinutes != nil {
-			use5hFromSecondary = true
+		if normalized.Used7dPercent != nil {
+			updates["codex_7d_used_percent"] = *normalized.Used7dPercent
 		}
-		if snapshot.PrimaryUsedPercent != nil || snapshot.PrimaryResetAfterSeconds != nil || snapshot.PrimaryWindowMinutes != nil {
-			use7dFromPrimary = true
+		if normalized.Reset7dSeconds != nil {
+			updates["codex_7d_reset_after_seconds"] = *normalized.Reset7dSeconds
 		}
-	}
-
-	// Write canonical 5h fields
-	if use5hFromPrimary {
-		if snapshot.PrimaryUsedPercent != nil {
-			updates["codex_5h_used_percent"] = *snapshot.PrimaryUsedPercent
-		}
-		if snapshot.PrimaryResetAfterSeconds != nil {
-			updates["codex_5h_reset_after_seconds"] = *snapshot.PrimaryResetAfterSeconds
-		}
-		if snapshot.PrimaryWindowMinutes != nil {
-			updates["codex_5h_window_minutes"] = *snapshot.PrimaryWindowMinutes
-		}
-	} else if use5hFromSecondary {
-		if snapshot.SecondaryUsedPercent != nil {
-			updates["codex_5h_used_percent"] = *snapshot.SecondaryUsedPercent
-		}
-		if snapshot.SecondaryResetAfterSeconds != nil {
-			updates["codex_5h_reset_after_seconds"] = *snapshot.SecondaryResetAfterSeconds
-		}
-		if snapshot.SecondaryWindowMinutes != nil {
-			updates["codex_5h_window_minutes"] = *snapshot.SecondaryWindowMinutes
-		}
-	}
-
-	// Write canonical 7d fields
-	if use7dFromPrimary {
-		if snapshot.PrimaryUsedPercent != nil {
-			updates["codex_7d_used_percent"] = *snapshot.PrimaryUsedPercent
-		}
-		if snapshot.PrimaryResetAfterSeconds != nil {
-			updates["codex_7d_reset_after_seconds"] = *snapshot.PrimaryResetAfterSeconds
-		}
-		if snapshot.PrimaryWindowMinutes != nil {
-			updates["codex_7d_window_minutes"] = *snapshot.PrimaryWindowMinutes
-		}
-	} else if use7dFromSecondary {
-		if snapshot.SecondaryUsedPercent != nil {
-			updates["codex_7d_used_percent"] = *snapshot.SecondaryUsedPercent
-		}
-		if snapshot.SecondaryResetAfterSeconds != nil {
-			updates["codex_7d_reset_after_seconds"] = *snapshot.SecondaryResetAfterSeconds
-		}
-		if snapshot.SecondaryWindowMinutes != nil {
-			updates["codex_7d_window_minutes"] = *snapshot.SecondaryWindowMinutes
+		if normalized.Window7dMinutes != nil {
+			updates["codex_7d_window_minutes"] = *normalized.Window7dMinutes
 		}
 	}
 
@@ -1875,4 +1934,87 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 		defer cancel()
 		_ = s.accountRepo.UpdateExtra(updateCtx, accountID, updates)
 	}()
+}
+
+func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any) (value string, present bool) {
+	if reqBody == nil {
+		return "", false
+	}
+
+	// Primary: reasoning.effort
+	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
+		if effort, ok := reasoning["effort"].(string); ok {
+			return normalizeOpenAIReasoningEffort(effort), true
+		}
+	}
+
+	// Fallback: some clients may use a flat field.
+	if effort, ok := reqBody["reasoning_effort"].(string); ok {
+		return normalizeOpenAIReasoningEffort(effort), true
+	}
+
+	return "", false
+}
+
+func deriveOpenAIReasoningEffortFromModel(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return ""
+	}
+
+	modelID := strings.TrimSpace(model)
+	if strings.Contains(modelID, "/") {
+		parts := strings.Split(modelID, "/")
+		modelID = parts[len(parts)-1]
+	}
+
+	parts := strings.FieldsFunc(strings.ToLower(modelID), func(r rune) bool {
+		switch r {
+		case '-', '_', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return normalizeOpenAIReasoningEffort(parts[len(parts)-1])
+}
+
+func extractOpenAIReasoningEffort(reqBody map[string]any, requestedModel string) *string {
+	if value, present := getOpenAIReasoningEffortFromReqBody(reqBody); present {
+		if value == "" {
+			return nil
+		}
+		return &value
+	}
+
+	value := deriveOpenAIReasoningEffortFromModel(requestedModel)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func normalizeOpenAIReasoningEffort(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		return ""
+	}
+
+	// Normalize separators for "x-high"/"x_high" variants.
+	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+
+	switch value {
+	case "none", "minimal":
+		return ""
+	case "low", "medium", "high":
+		return value
+	case "xhigh", "extrahigh":
+		return "xhigh"
+	default:
+		// Only store known effort levels for now to keep UI consistent.
+		return ""
+	}
 }

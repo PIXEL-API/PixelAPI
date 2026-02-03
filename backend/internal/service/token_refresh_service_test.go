@@ -70,7 +70,7 @@ func TestTokenRefreshService_RefreshWithRetry_InvalidatesCache(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       5,
 		Platform: PlatformGemini,
@@ -98,7 +98,7 @@ func TestTokenRefreshService_RefreshWithRetry_InvalidatorErrorIgnored(t *testing
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       6,
 		Platform: PlatformGemini,
@@ -124,7 +124,7 @@ func TestTokenRefreshService_RefreshWithRetry_NilInvalidator(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg)
 	account := &Account{
 		ID:       7,
 		Platform: PlatformGemini,
@@ -151,7 +151,7 @@ func TestTokenRefreshService_RefreshWithRetry_Antigravity(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       8,
 		Platform: PlatformAntigravity,
@@ -179,7 +179,7 @@ func TestTokenRefreshService_RefreshWithRetry_NonOAuthAccount(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       9,
 		Platform: PlatformGemini,
@@ -207,7 +207,7 @@ func TestTokenRefreshService_RefreshWithRetry_OtherPlatformOAuth(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       10,
 		Platform: PlatformOpenAI, // OpenAI OAuth 账户
@@ -235,7 +235,7 @@ func TestTokenRefreshService_RefreshWithRetry_UpdateFailed(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       11,
 		Platform: PlatformGemini,
@@ -264,7 +264,7 @@ func TestTokenRefreshService_RefreshWithRetry_RefreshFailed(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       12,
 		Platform: PlatformGemini,
@@ -291,7 +291,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityRefreshFailed(t *testin
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       13,
 		Platform: PlatformAntigravity,
@@ -318,7 +318,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityNonRetryableError(t *te
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, cfg)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg)
 	account := &Account{
 		ID:       14,
 		Platform: PlatformAntigravity,
