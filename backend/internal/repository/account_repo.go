@@ -813,7 +813,7 @@ func (r *accountRepository) SetAntigravityQuotaScopeLimit(ctx context.Context, i
 	client := clientFromContext(ctx, r.client)
 	result, err := client.ExecContext(
 		ctx,
-		`UPDATE accounts SET 
+		`UPDATE accounts SET
 			extra = jsonb_set(
 				jsonb_set(COALESCE(extra, '{}'::jsonb), '{antigravity_quota_scopes}'::text[], COALESCE(extra->'antigravity_quota_scopes', '{}'::jsonb), true),
 				ARRAY['antigravity_quota_scopes', $1]::text[],
