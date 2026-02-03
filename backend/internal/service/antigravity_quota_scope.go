@@ -89,3 +89,30 @@ func (a *Account) antigravityQuotaScopeResetAt(scope AntigravityQuotaScope) *tim
 	}
 	return &resetAt
 }
+
+var antigravityAllScopes = []AntigravityQuotaScope{
+	AntigravityQuotaScopeClaude,
+	AntigravityQuotaScopeGeminiText,
+	AntigravityQuotaScopeGeminiImage,
+}
+
+func (a *Account) GetAntigravityScopeRateLimits() map[string]int64 {
+	if a == nil || a.Platform != PlatformAntigravity {
+		return nil
+	}
+	now := time.Now()
+	result := make(map[string]int64)
+	for _, scope := range antigravityAllScopes {
+		resetAt := a.antigravityQuotaScopeResetAt(scope)
+		if resetAt != nil && now.Before(*resetAt) {
+			remainingSec := int64(time.Until(*resetAt).Seconds())
+			if remainingSec > 0 {
+				result[string(scope)] = remainingSec
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
