@@ -46,7 +46,7 @@ func ValidateURLFormat(raw string, allowInsecureHTTP bool) (string, error) {
 		}
 	}
 
-	return trimmed, nil
+	return strings.TrimRight(trimmed, "/"), nil
 }
 
 func ValidateHTTPSURL(raw string, opts ValidationOptions) (string, error) {
