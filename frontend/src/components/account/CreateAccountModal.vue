@@ -614,21 +614,87 @@
         </div>
       </div>
 
-      <!-- Account Type Selection (Antigravity - OAuth only) -->
+      <!-- Account Type Selection (Antigravity - OAuth or Upstream) -->
       <div v-if="form.platform === 'antigravity'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
-        <div class="mt-2">
-          <div
-            class="flex items-center gap-3 rounded-lg border-2 border-purple-500 bg-purple-50 p-3 dark:bg-purple-900/20"
+        <div class="mt-2 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            @click="antigravityAccountType = 'oauth'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              antigravityAccountType === 'oauth'
+                ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                : 'border-gray-200 hover:border-purple-300 dark:border-dark-600 dark:hover:border-purple-700'
+            ]"
           >
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-purple-500 text-white">
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                antigravityAccountType === 'oauth'
+                  ? 'bg-purple-500 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
               <Icon name="key" size="sm" />
             </div>
             <div>
               <span class="block text-sm font-medium text-gray-900 dark:text-white">OAuth</span>
               <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.antigravityOauth') }}</span>
             </div>
-          </div>
+          </button>
+
+          <button
+            type="button"
+            @click="antigravityAccountType = 'upstream'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              antigravityAccountType === 'upstream'
+                ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                : 'border-gray-200 hover:border-purple-300 dark:border-dark-600 dark:hover:border-purple-700'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                antigravityAccountType === 'upstream'
+                  ? 'bg-purple-500 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="cloud" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.types.upstream') }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.upstreamDesc') }}</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Upstream config (only for Antigravity upstream type) -->
+      <div v-if="form.platform === 'antigravity' && antigravityAccountType === 'upstream'" class="space-y-4">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.upstream.baseUrl') }}</label>
+          <input
+            v-model="upstreamBaseUrl"
+            type="text"
+            required
+            class="input"
+            placeholder="https://s.konstants.xyz"
+          />
+          <p class="input-hint">{{ t('admin.accounts.upstream.baseUrlHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.upstream.apiKey') }}</label>
+          <input
+            v-model="upstreamApiKey"
+            type="password"
+            required
+            class="input font-mono"
+            placeholder="sk-..."
+          />
+          <p class="input-hint">{{ t('admin.accounts.upstream.apiKeyHint') }}</p>
         </div>
       </div>
 
@@ -1953,6 +2019,9 @@ const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
+const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
+const upstreamBaseUrl = ref('') // For upstream type: base URL
+const upstreamApiKey = ref('') // For upstream type: API key
 const tempUnschedEnabled = ref(false)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const geminiOAuthType = ref<'code_assist' | 'google_one' | 'ai_studio'>('google_one')
@@ -2055,7 +2124,13 @@ const form = reactive({
 })
 
 // Helper to check if current type needs OAuth flow
-const isOAuthFlow = computed(() => accountCategory.value === 'oauth-based')
+const isOAuthFlow = computed(() => {
+  // Antigravity upstream 类型不需要 OAuth 流程
+  if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
+    return false
+  }
+  return accountCategory.value === 'oauth-based'
+})
 
 const isManualInputMethod = computed(() => {
   return oauthFlowRef.value?.inputMethod === 'manual'
@@ -2095,10 +2170,15 @@ watch(
   }
 )
 
-// Sync form.type based on accountCategory and addMethod
+// Sync form.type based on accountCategory, addMethod, and antigravityAccountType
 watch(
-  [accountCategory, addMethod],
-  ([category, method]) => {
+  [accountCategory, addMethod, antigravityAccountType],
+  ([category, method, agType]) => {
+    // Antigravity upstream 类型
+    if (form.platform === 'antigravity' && agType === 'upstream') {
+      form.type = 'upstream'
+      return
+    }
     if (category === 'oauth-based') {
       form.type = method as AccountType // 'oauth' or 'setup-token'
     } else {
@@ -2126,9 +2206,10 @@ watch(
     if (newPlatform !== 'anthropic') {
       interceptWarmupRequests.value = false
     }
-    // Antigravity only supports OAuth
+    // Antigravity: reset to OAuth by default, but allow upstream selection
     if (newPlatform === 'antigravity') {
       accountCategory.value = 'oauth-based'
+      antigravityAccountType.value = 'oauth'
     }
     // Reset OAuth states
     oauth.resetState()
@@ -2361,6 +2442,9 @@ const resetForm = () => {
   sessionIdleTimeout.value = null
   tlsFingerprintEnabled.value = false
   sessionIdMaskingEnabled.value = false
+  antigravityAccountType.value = 'oauth'
+  upstreamBaseUrl.value = ''
+  upstreamApiKey.value = ''
   tempUnschedEnabled.value = false
   tempUnschedRules.value = []
   geminiOAuthType.value = 'code_assist'
@@ -2439,6 +2523,36 @@ const handleSubmit = async () => {
       return
     }
     step.value = 2
+    return
+  }
+
+  // For Antigravity upstream type, create directly
+  if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
+    if (!form.name.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    if (!upstreamBaseUrl.value.trim()) {
+      appStore.showError(t('admin.accounts.upstream.pleaseEnterBaseUrl'))
+      return
+    }
+    if (!upstreamApiKey.value.trim()) {
+      appStore.showError(t('admin.accounts.upstream.pleaseEnterApiKey'))
+      return
+    }
+
+    submitting.value = true
+    try {
+      const credentials: Record<string, unknown> = {
+        base_url: upstreamBaseUrl.value.trim(),
+        api_key: upstreamApiKey.value.trim()
+      }
+      await createAccountAndFinish(form.platform, 'upstream', credentials)
+    } catch (error: any) {
+      appStore.showError(error.response?.data?.detail || t('admin.accounts.failedToCreate'))
+    } finally {
+      submitting.value = false
+    }
     return
   }
 

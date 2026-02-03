@@ -136,6 +136,7 @@ export interface OpsThroughputTrendPoint {
   bucket_start: string
   request_count: number
   token_consumed: number
+  switch_count?: number
   qps: number
   tps: number
 }
@@ -284,6 +285,7 @@ export interface OpsSystemMetricsSnapshot {
 
   goroutine_count?: number | null
   concurrency_queue_depth?: number | null
+  account_switch_count?: number | null
 }
 
 export interface OpsJobHeartbeat {

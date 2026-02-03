@@ -286,6 +286,20 @@ func (_c *GroupCreate) SetNillableFallbackGroupID(v *int64) *GroupCreate {
 	return _c
 }
 
+// SetFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field.
+func (_c *GroupCreate) SetFallbackGroupIDOnInvalidRequest(v int64) *GroupCreate {
+	_c.mutation.SetFallbackGroupIDOnInvalidRequest(v)
+	return _c
+}
+
+// SetNillableFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableFallbackGroupIDOnInvalidRequest(v *int64) *GroupCreate {
+	if v != nil {
+		_c.SetFallbackGroupIDOnInvalidRequest(*v)
+	}
+	return _c
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (_c *GroupCreate) SetModelRouting(v map[string][]int64) *GroupCreate {
 	_c.mutation.SetModelRouting(v)
@@ -303,6 +317,26 @@ func (_c *GroupCreate) SetNillableModelRoutingEnabled(v *bool) *GroupCreate {
 	if v != nil {
 		_c.SetModelRoutingEnabled(*v)
 	}
+	return _c
+}
+
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (_c *GroupCreate) SetMcpXMLInject(v bool) *GroupCreate {
+	_c.mutation.SetMcpXMLInject(v)
+	return _c
+}
+
+// SetNillableMcpXMLInject sets the "mcp_xml_inject" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableMcpXMLInject(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetMcpXMLInject(*v)
+	}
+	return _c
+}
+
+// SetSupportedModelScopes sets the "supported_model_scopes" field.
+func (_c *GroupCreate) SetSupportedModelScopes(v []string) *GroupCreate {
+	_c.mutation.SetSupportedModelScopes(v)
 	return _c
 }
 
@@ -479,6 +513,14 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultModelRoutingEnabled
 		_c.mutation.SetModelRoutingEnabled(v)
 	}
+	if _, ok := _c.mutation.McpXMLInject(); !ok {
+		v := group.DefaultMcpXMLInject
+		_c.mutation.SetMcpXMLInject(v)
+	}
+	if _, ok := _c.mutation.SupportedModelScopes(); !ok {
+		v := group.DefaultSupportedModelScopes
+		_c.mutation.SetSupportedModelScopes(v)
+	}
 	return nil
 }
 
@@ -536,6 +578,12 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.ModelRoutingEnabled(); !ok {
 		return &ValidationError{Name: "model_routing_enabled", err: errors.New(`ent: missing required field "Group.model_routing_enabled"`)}
+	}
+	if _, ok := _c.mutation.McpXMLInject(); !ok {
+		return &ValidationError{Name: "mcp_xml_inject", err: errors.New(`ent: missing required field "Group.mcp_xml_inject"`)}
+	}
+	if _, ok := _c.mutation.SupportedModelScopes(); !ok {
+		return &ValidationError{Name: "supported_model_scopes", err: errors.New(`ent: missing required field "Group.supported_model_scopes"`)}
 	}
 	return nil
 }
@@ -640,6 +688,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldFallbackGroupID, field.TypeInt64, value)
 		_node.FallbackGroupID = &value
 	}
+	if value, ok := _c.mutation.FallbackGroupIDOnInvalidRequest(); ok {
+		_spec.SetField(group.FieldFallbackGroupIDOnInvalidRequest, field.TypeInt64, value)
+		_node.FallbackGroupIDOnInvalidRequest = &value
+	}
 	if value, ok := _c.mutation.ModelRouting(); ok {
 		_spec.SetField(group.FieldModelRouting, field.TypeJSON, value)
 		_node.ModelRouting = value
@@ -647,6 +699,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ModelRoutingEnabled(); ok {
 		_spec.SetField(group.FieldModelRoutingEnabled, field.TypeBool, value)
 		_node.ModelRoutingEnabled = value
+	}
+	if value, ok := _c.mutation.McpXMLInject(); ok {
+		_spec.SetField(group.FieldMcpXMLInject, field.TypeBool, value)
+		_node.McpXMLInject = value
+	}
+	if value, ok := _c.mutation.SupportedModelScopes(); ok {
+		_spec.SetField(group.FieldSupportedModelScopes, field.TypeJSON, value)
+		_node.SupportedModelScopes = value
 	}
 	if nodes := _c.mutation.APIKeysIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1128,6 +1188,30 @@ func (u *GroupUpsert) ClearFallbackGroupID() *GroupUpsert {
 	return u
 }
 
+// SetFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsert) SetFallbackGroupIDOnInvalidRequest(v int64) *GroupUpsert {
+	u.Set(group.FieldFallbackGroupIDOnInvalidRequest, v)
+	return u
+}
+
+// UpdateFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateFallbackGroupIDOnInvalidRequest() *GroupUpsert {
+	u.SetExcluded(group.FieldFallbackGroupIDOnInvalidRequest)
+	return u
+}
+
+// AddFallbackGroupIDOnInvalidRequest adds v to the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsert) AddFallbackGroupIDOnInvalidRequest(v int64) *GroupUpsert {
+	u.Add(group.FieldFallbackGroupIDOnInvalidRequest, v)
+	return u
+}
+
+// ClearFallbackGroupIDOnInvalidRequest clears the value of the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsert) ClearFallbackGroupIDOnInvalidRequest() *GroupUpsert {
+	u.SetNull(group.FieldFallbackGroupIDOnInvalidRequest)
+	return u
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (u *GroupUpsert) SetModelRouting(v map[string][]int64) *GroupUpsert {
 	u.Set(group.FieldModelRouting, v)
@@ -1155,6 +1239,30 @@ func (u *GroupUpsert) SetModelRoutingEnabled(v bool) *GroupUpsert {
 // UpdateModelRoutingEnabled sets the "model_routing_enabled" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateModelRoutingEnabled() *GroupUpsert {
 	u.SetExcluded(group.FieldModelRoutingEnabled)
+	return u
+}
+
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (u *GroupUpsert) SetMcpXMLInject(v bool) *GroupUpsert {
+	u.Set(group.FieldMcpXMLInject, v)
+	return u
+}
+
+// UpdateMcpXMLInject sets the "mcp_xml_inject" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateMcpXMLInject() *GroupUpsert {
+	u.SetExcluded(group.FieldMcpXMLInject)
+	return u
+}
+
+// SetSupportedModelScopes sets the "supported_model_scopes" field.
+func (u *GroupUpsert) SetSupportedModelScopes(v []string) *GroupUpsert {
+	u.Set(group.FieldSupportedModelScopes, v)
+	return u
+}
+
+// UpdateSupportedModelScopes sets the "supported_model_scopes" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateSupportedModelScopes() *GroupUpsert {
+	u.SetExcluded(group.FieldSupportedModelScopes)
 	return u
 }
 
@@ -1581,6 +1689,34 @@ func (u *GroupUpsertOne) ClearFallbackGroupID() *GroupUpsertOne {
 	})
 }
 
+// SetFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsertOne) SetFallbackGroupIDOnInvalidRequest(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetFallbackGroupIDOnInvalidRequest(v)
+	})
+}
+
+// AddFallbackGroupIDOnInvalidRequest adds v to the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsertOne) AddFallbackGroupIDOnInvalidRequest(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddFallbackGroupIDOnInvalidRequest(v)
+	})
+}
+
+// UpdateFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateFallbackGroupIDOnInvalidRequest() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateFallbackGroupIDOnInvalidRequest()
+	})
+}
+
+// ClearFallbackGroupIDOnInvalidRequest clears the value of the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsertOne) ClearFallbackGroupIDOnInvalidRequest() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearFallbackGroupIDOnInvalidRequest()
+	})
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (u *GroupUpsertOne) SetModelRouting(v map[string][]int64) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -1613,6 +1749,34 @@ func (u *GroupUpsertOne) SetModelRoutingEnabled(v bool) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateModelRoutingEnabled() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelRoutingEnabled()
+	})
+}
+
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (u *GroupUpsertOne) SetMcpXMLInject(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMcpXMLInject(v)
+	})
+}
+
+// UpdateMcpXMLInject sets the "mcp_xml_inject" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateMcpXMLInject() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMcpXMLInject()
+	})
+}
+
+// SetSupportedModelScopes sets the "supported_model_scopes" field.
+func (u *GroupUpsertOne) SetSupportedModelScopes(v []string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetSupportedModelScopes(v)
+	})
+}
+
+// UpdateSupportedModelScopes sets the "supported_model_scopes" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateSupportedModelScopes() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateSupportedModelScopes()
 	})
 }
 
@@ -2205,6 +2369,34 @@ func (u *GroupUpsertBulk) ClearFallbackGroupID() *GroupUpsertBulk {
 	})
 }
 
+// SetFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsertBulk) SetFallbackGroupIDOnInvalidRequest(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetFallbackGroupIDOnInvalidRequest(v)
+	})
+}
+
+// AddFallbackGroupIDOnInvalidRequest adds v to the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsertBulk) AddFallbackGroupIDOnInvalidRequest(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddFallbackGroupIDOnInvalidRequest(v)
+	})
+}
+
+// UpdateFallbackGroupIDOnInvalidRequest sets the "fallback_group_id_on_invalid_request" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateFallbackGroupIDOnInvalidRequest() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateFallbackGroupIDOnInvalidRequest()
+	})
+}
+
+// ClearFallbackGroupIDOnInvalidRequest clears the value of the "fallback_group_id_on_invalid_request" field.
+func (u *GroupUpsertBulk) ClearFallbackGroupIDOnInvalidRequest() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearFallbackGroupIDOnInvalidRequest()
+	})
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (u *GroupUpsertBulk) SetModelRouting(v map[string][]int64) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
@@ -2237,6 +2429,34 @@ func (u *GroupUpsertBulk) SetModelRoutingEnabled(v bool) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateModelRoutingEnabled() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelRoutingEnabled()
+	})
+}
+
+// SetMcpXMLInject sets the "mcp_xml_inject" field.
+func (u *GroupUpsertBulk) SetMcpXMLInject(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMcpXMLInject(v)
+	})
+}
+
+// UpdateMcpXMLInject sets the "mcp_xml_inject" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateMcpXMLInject() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMcpXMLInject()
+	})
+}
+
+// SetSupportedModelScopes sets the "supported_model_scopes" field.
+func (u *GroupUpsertBulk) SetSupportedModelScopes(v []string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetSupportedModelScopes(v)
+	})
+}
+
+// UpdateSupportedModelScopes sets the "supported_model_scopes" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateSupportedModelScopes() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateSupportedModelScopes()
 	})
 }
 
