@@ -845,6 +845,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				bodyModified = true
 			}
 		}
+
+		// Remove prompt_cache_retention (not supported by upstream OpenAI API)
+		if _, has := reqBody["prompt_cache_retention"]; has {
+			delete(reqBody, "prompt_cache_retention")
+			bodyModified = true
+		}
 	}
 
 	// Re-serialize body only if modified
