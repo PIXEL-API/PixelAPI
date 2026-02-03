@@ -1681,13 +1681,14 @@ func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel
 
 // OpenAIRecordUsageInput input for recording usage
 type OpenAIRecordUsageInput struct {
-	Result       *OpenAIForwardResult
-	APIKey       *APIKey
-	User         *User
-	Account      *Account
-	Subscription *UserSubscription
-	UserAgent    string // 请求的 User-Agent
-	IPAddress    string // 请求的客户端 IP 地址
+	Result        *OpenAIForwardResult
+	APIKey        *APIKey
+	User          *User
+	Account       *Account
+	Subscription  *UserSubscription
+	UserAgent     string // 请求的 User-Agent
+	IPAddress     string // 请求的客户端 IP 地址
+	APIKeyService APIKeyQuotaUpdater
 }
 
 // RecordUsage records usage and deducts balance
@@ -1796,6 +1797,13 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		if shouldBill && cost.ActualCost > 0 {
 			_ = s.userRepo.DeductBalance(ctx, user.ID, cost.ActualCost)
 			s.billingCacheService.QueueDeductBalance(user.ID, cost.ActualCost)
+		}
+	}
+
+	// Update API key quota if applicable (only for balance mode with quota set)
+	if shouldBill && cost.ActualCost > 0 && apiKey.Quota > 0 && input.APIKeyService != nil {
+		if err := input.APIKeyService.UpdateQuotaUsed(ctx, apiKey.ID, cost.ActualCost); err != nil {
+			log.Printf("Update API key quota failed: %v", err)
 		}
 	}
 
