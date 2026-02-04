@@ -70,15 +70,6 @@ func shortSessionHash(sessionHash string) string {
 	return sessionHash[:8]
 }
 
-func normalizeClaudeModelForAnthropic(requestedModel string) string {
-	for _, prefix := range anthropicPrefixMappings {
-		if strings.HasPrefix(requestedModel, prefix) {
-			return prefix
-		}
-	}
-	return requestedModel
-}
-
 func redactAuthHeaderValue(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -260,12 +251,6 @@ var (
 		"You are a Claude agent, built on Anthropic's Claude Agent SDK",        // Agent SDK 变体
 		"You are a file search specialist for Claude Code",                     // Explore Agent 版
 		"You are a helpful AI assistant tasked with summarizing conversations", // Compact 版
-	}
-
-	anthropicPrefixMappings = []string{
-		"claude-opus-4-5",
-		"claude-haiku-4-5",
-		"claude-sonnet-4-5",
 	}
 )
 
@@ -2576,8 +2561,9 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 		// Antigravity 平台使用专门的模型支持检查
 		return IsAntigravityModelSupported(requestedModel)
 	}
-	if account.Platform == PlatformAnthropic {
-		requestedModel = normalizeClaudeModelForAnthropic(requestedModel)
+	// OAuth/SetupToken 账号使用 Anthropic 标准映射（短ID → 长ID）
+	if account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
+		requestedModel = claude.NormalizeModelID(requestedModel)
 	}
 	// Gemini API Key 账户直接透传，由上游判断模型是否支持
 	if account.Platform == PlatformGemini && account.Type == AccountTypeAPIKey {
@@ -3028,7 +3014,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// 强制执行 cache_control 块数量限制（最多 4 个）
 	body = enforceCacheControlLimit(body)
 
-	// 应用模型映射（APIKey 明确映射优先，其次使用 Anthropic 前缀映射）
+	// 应用模型映射：
+	// - APIKey 账号：使用账号级别的显式映射（如果配置），否则透传原始模型名
+	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
 	mappedModel := reqModel
 	mappingSource := ""
 	if account.Type == AccountTypeAPIKey {
@@ -3037,8 +3025,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			mappingSource = "account"
 		}
 	}
-	if mappingSource == "" && account.Platform == PlatformAnthropic {
-		normalized := normalizeClaudeModelForAnthropic(reqModel)
+	if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
+		normalized := claude.NormalizeModelID(reqModel)
 		if normalized != reqModel {
 			mappedModel = normalized
 			mappingSource = "prefix"
@@ -4979,7 +4967,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return nil
 	}
 
-	// 应用模型映射（APIKey 明确映射优先，其次使用 Anthropic 前缀映射）
+	// 应用模型映射：
+	// - APIKey 账号：使用账号级别的显式映射（如果配置），否则透传原始模型名
+	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
 	if reqModel != "" {
 		mappedModel := reqModel
 		mappingSource := ""
@@ -4989,8 +4979,8 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 				mappingSource = "account"
 			}
 		}
-		if mappingSource == "" && account.Platform == PlatformAnthropic {
-			normalized := normalizeClaudeModelForAnthropic(reqModel)
+		if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
+			normalized := claude.NormalizeModelID(reqModel)
 			if normalized != reqModel {
 				mappedModel = normalized
 				mappingSource = "prefix"
