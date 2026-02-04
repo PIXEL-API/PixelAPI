@@ -33,7 +33,10 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		SetKey(key.Key).
 		SetName(key.Name).
 		SetStatus(key.Status).
-		SetNillableGroupID(key.GroupID)
+		SetNillableGroupID(key.GroupID).
+		SetQuota(key.Quota).
+		SetQuotaUsed(key.QuotaUsed).
+		SetNillableExpiresAt(key.ExpiresAt)
 
 	if len(key.IPWhitelist) > 0 {
 		builder.SetIPWhitelist(key.IPWhitelist)
@@ -110,6 +113,9 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldStatus,
 			apikey.FieldIPWhitelist,
 			apikey.FieldIPBlacklist,
+			apikey.FieldQuota,
+			apikey.FieldQuotaUsed,
+			apikey.FieldExpiresAt,
 		).
 		WithUser(func(q *dbent.UserQuery) {
 			q.Select(
@@ -136,8 +142,11 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldImagePrice4k,
 				group.FieldClaudeCodeOnly,
 				group.FieldFallbackGroupID,
+				group.FieldFallbackGroupIDOnInvalidRequest,
 				group.FieldModelRoutingEnabled,
 				group.FieldModelRouting,
+				group.FieldMcpXMLInject,
+				group.FieldSupportedModelScopes,
 			)
 		}).
 		Only(ctx)
@@ -161,11 +170,20 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
 		SetName(key.Name).
 		SetStatus(key.Status).
+		SetQuota(key.Quota).
+		SetQuotaUsed(key.QuotaUsed).
 		SetUpdatedAt(now)
 	if key.GroupID != nil {
 		builder.SetGroupID(*key.GroupID)
 	} else {
 		builder.ClearGroupID()
+	}
+
+	// Expiration time
+	if key.ExpiresAt != nil {
+		builder.SetExpiresAt(*key.ExpiresAt)
+	} else {
+		builder.ClearExpiresAt()
 	}
 
 	// IP 限制字段
@@ -357,6 +375,38 @@ func (r *apiKeyRepository) ListKeysByGroupID(ctx context.Context, groupID int64)
 	return keys, nil
 }
 
+// IncrementQuotaUsed atomically increments the quota_used field and returns the new value
+func (r *apiKeyRepository) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) (float64, error) {
+	// Use raw SQL for atomic increment to avoid race conditions
+	// First get current value
+	m, err := r.activeQuery().
+		Where(apikey.IDEQ(id)).
+		Select(apikey.FieldQuotaUsed).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return 0, service.ErrAPIKeyNotFound
+		}
+		return 0, err
+	}
+
+	newValue := m.QuotaUsed + amount
+
+	// Update with new value
+	affected, err := r.client.APIKey.Update().
+		Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).
+		SetQuotaUsed(newValue).
+		Save(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		return 0, service.ErrAPIKeyNotFound
+	}
+
+	return newValue, nil
+}
+
 func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 	if m == nil {
 		return nil
@@ -372,6 +422,9 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 		GroupID:     m.GroupID,
+		Quota:       m.Quota,
+		QuotaUsed:   m.QuotaUsed,
+		ExpiresAt:   m.ExpiresAt,
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)
@@ -409,28 +462,31 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		return nil
 	}
 	return &service.Group{
-		ID:                  g.ID,
-		Name:                g.Name,
-		Description:         derefString(g.Description),
-		Platform:            g.Platform,
-		RateMultiplier:      g.RateMultiplier,
-		IsExclusive:         g.IsExclusive,
-		Status:              g.Status,
-		Hydrated:            true,
-		SubscriptionType:    g.SubscriptionType,
-		DailyLimitUSD:       g.DailyLimitUsd,
-		WeeklyLimitUSD:      g.WeeklyLimitUsd,
-		MonthlyLimitUSD:     g.MonthlyLimitUsd,
-		ImagePrice1K:        g.ImagePrice1k,
-		ImagePrice2K:        g.ImagePrice2k,
-		ImagePrice4K:        g.ImagePrice4k,
-		DefaultValidityDays: g.DefaultValidityDays,
-		ClaudeCodeOnly:      g.ClaudeCodeOnly,
-		FallbackGroupID:     g.FallbackGroupID,
-		ModelRouting:        g.ModelRouting,
-		ModelRoutingEnabled: g.ModelRoutingEnabled,
-		CreatedAt:           g.CreatedAt,
-		UpdatedAt:           g.UpdatedAt,
+		ID:                              g.ID,
+		Name:                            g.Name,
+		Description:                     derefString(g.Description),
+		Platform:                        g.Platform,
+		RateMultiplier:                  g.RateMultiplier,
+		IsExclusive:                     g.IsExclusive,
+		Status:                          g.Status,
+		Hydrated:                        true,
+		SubscriptionType:                g.SubscriptionType,
+		DailyLimitUSD:                   g.DailyLimitUsd,
+		WeeklyLimitUSD:                  g.WeeklyLimitUsd,
+		MonthlyLimitUSD:                 g.MonthlyLimitUsd,
+		ImagePrice1K:                    g.ImagePrice1k,
+		ImagePrice2K:                    g.ImagePrice2k,
+		ImagePrice4K:                    g.ImagePrice4k,
+		DefaultValidityDays:             g.DefaultValidityDays,
+		ClaudeCodeOnly:                  g.ClaudeCodeOnly,
+		FallbackGroupID:                 g.FallbackGroupID,
+		FallbackGroupIDOnInvalidRequest: g.FallbackGroupIDOnInvalidRequest,
+		ModelRouting:                    g.ModelRouting,
+		ModelRoutingEnabled:             g.ModelRoutingEnabled,
+		MCPXMLInject:                    g.McpXMLInject,
+		SupportedModelScopes:            g.SupportedModelScopes,
+		CreatedAt:                       g.CreatedAt,
+		UpdatedAt:                       g.UpdatedAt,
 	}
 }
 

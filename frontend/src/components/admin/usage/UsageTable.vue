@@ -238,14 +238,14 @@
   </Teleport>
 </template>
 
-  <script setup lang="ts">
-  import { ref, computed } from 'vue'
-  import { useI18n } from 'vue-i18n'
-  import { formatDateTime, formatReasoningEffort } from '@/utils/format'
-  import DataTable from '@/components/common/DataTable.vue'
-  import EmptyState from '@/components/common/EmptyState.vue'
-  import Icon from '@/components/icons/Icon.vue'
-  import type { AdminUsageLog } from '@/types'
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { formatDateTime, formatReasoningEffort } from '@/utils/format'
+import DataTable from '@/components/common/DataTable.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import Icon from '@/components/icons/Icon.vue'
+import type { AdminUsageLog } from '@/types'
 
 defineProps(['data', 'loading'])
 const { t } = useI18n()

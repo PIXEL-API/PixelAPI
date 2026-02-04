@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
@@ -476,9 +477,13 @@ func (s *OpsService) executeClientRetry(ctx context.Context, reqType opsRetryReq
 			continue
 		}
 
+		attemptCtx := ctx
+		if switches > 0 {
+			attemptCtx = context.WithValue(attemptCtx, ctxkey.AccountSwitchCount, switches)
+		}
 		exec := func() *opsRetryExecution {
 			defer selection.ReleaseFunc()
-			return s.executeWithAccount(ctx, reqType, errorLog, body, account)
+			return s.executeWithAccount(attemptCtx, reqType, errorLog, body, account)
 		}()
 
 		if exec != nil {
