@@ -44,11 +44,13 @@ type TransformOptions struct {
 	// IdentityPatch 可选：自定义注入到 systemInstruction 开头的身份防护提示词；
 	// 为空时使用默认模板（包含 [IDENTITY_PATCH] 及 SYSTEM_PROMPT_BEGIN 标记）。
 	IdentityPatch string
+	EnableMCPXML  bool
 }
 
 func DefaultTransformOptions() TransformOptions {
 	return TransformOptions{
 		EnableIdentityPatch: true,
+		EnableMCPXML:        true,
 	}
 }
 
@@ -257,8 +259,8 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 	// 添加用户的 system prompt
 	parts = append(parts, userSystemParts...)
 
-	// 检测是否有 MCP 工具，如有则注入 XML 调用协议
-	if hasMCPTools(tools) {
+	// 检测是否有 MCP 工具，如有且启用了 MCP XML 注入则注入 XML 调用协议
+	if opts.EnableMCPXML && hasMCPTools(tools) {
 		parts = append(parts, GeminiPart{Text: mcpXMLProtocol})
 	}
 
@@ -312,7 +314,7 @@ func buildContents(messages []ClaudeMessage, toolIDToName map[string]string, isT
 				parts = append([]GeminiPart{{
 					Text:             "Thinking...",
 					Thought:          true,
-					ThoughtSignature: dummyThoughtSignature,
+					ThoughtSignature: DummyThoughtSignature,
 				}}, parts...)
 			}
 		}
@@ -330,9 +332,10 @@ func buildContents(messages []ClaudeMessage, toolIDToName map[string]string, isT
 	return contents, strippedThinking, nil
 }
 
-// dummyThoughtSignature 用于跳过 Gemini 3 thought_signature 验证
+// DummyThoughtSignature 用于跳过 Gemini 3 thought_signature 验证
 // 参考: https://ai.google.dev/gemini-api/docs/thought-signatures
-const dummyThoughtSignature = "skip_thought_signature_validator"
+// 导出供跨包使用（如 gemini_native_signature_cleaner 跨账号修复）
+const DummyThoughtSignature = "skip_thought_signature_validator"
 
 // buildParts 构建消息的 parts
 // allowDummyThought: 只有 Gemini 模型支持 dummy thought signature
@@ -370,7 +373,7 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 			// signature 处理：
 			// - Claude 模型（allowDummyThought=false）：必须是上游返回的真实 signature（dummy 视为缺失）
 			// - Gemini 模型（allowDummyThought=true）：优先透传真实 signature，缺失时使用 dummy signature
-			if block.Signature != "" && (allowDummyThought || block.Signature != dummyThoughtSignature) {
+			if block.Signature != "" && (allowDummyThought || block.Signature != DummyThoughtSignature) {
 				part.ThoughtSignature = block.Signature
 			} else if !allowDummyThought {
 				// Claude 模型需要有效 signature；在缺失时降级为普通文本，并在上层禁用 thinking mode。
@@ -381,7 +384,7 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 				continue
 			} else {
 				// Gemini 模型使用 dummy signature
-				part.ThoughtSignature = dummyThoughtSignature
+				part.ThoughtSignature = DummyThoughtSignature
 			}
 			parts = append(parts, part)
 
@@ -411,10 +414,10 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 			// tool_use 的 signature 处理：
 			// - Claude 模型（allowDummyThought=false）：必须是上游返回的真实 signature（dummy 视为缺失）
 			// - Gemini 模型（allowDummyThought=true）：优先透传真实 signature，缺失时使用 dummy signature
-			if block.Signature != "" && (allowDummyThought || block.Signature != dummyThoughtSignature) {
+			if block.Signature != "" && (allowDummyThought || block.Signature != DummyThoughtSignature) {
 				part.ThoughtSignature = block.Signature
 			} else if allowDummyThought {
-				part.ThoughtSignature = dummyThoughtSignature
+				part.ThoughtSignature = DummyThoughtSignature
 			}
 			parts = append(parts, part)
 
@@ -492,9 +495,23 @@ func parseToolResultContent(content json.RawMessage, isError bool) string {
 }
 
 // buildGenerationConfig 构建 generationConfig
+const (
+	defaultMaxOutputTokens    = 64000
+	maxOutputTokensUpperBound = 65000
+	maxOutputTokensClaude     = 64000
+)
+
+func maxOutputTokensLimit(model string) int {
+	if strings.HasPrefix(model, "claude-") {
+		return maxOutputTokensClaude
+	}
+	return maxOutputTokensUpperBound
+}
+
 func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
+	maxLimit := maxOutputTokensLimit(req.Model)
 	config := &GeminiGenerationConfig{
-		MaxOutputTokens: 64000, // 默认最大输出
+		MaxOutputTokens: defaultMaxOutputTokens, // 默认最大输出
 		StopSequences:   DefaultStopSequences,
 	}
 
@@ -516,6 +533,10 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 			}
 			config.ThinkingConfig.ThinkingBudget = budget
 		}
+	}
+
+	if config.MaxOutputTokens > maxLimit {
+		config.MaxOutputTokens = maxLimit
 	}
 
 	// 其他参数
