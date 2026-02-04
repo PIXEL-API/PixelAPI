@@ -29,7 +29,6 @@ type SoraMediaStorage struct {
 	root               string
 	imageRoot          string
 	videoRoot          string
-	maxConcurrent      int
 	downloadTimeout    time.Duration
 	maxDownloadBytes   int64
 	fallbackToUpstream bool
@@ -93,7 +92,6 @@ func (s *SoraMediaStorage) refreshConfig() {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 4
 	}
-	s.maxConcurrent = maxConcurrent
 	timeoutSeconds := s.cfg.Sora.Storage.DownloadTimeoutSeconds
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 120
