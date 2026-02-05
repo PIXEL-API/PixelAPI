@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -620,35 +619,6 @@ func stripToolPrefix(value string) string {
 	return toolPrefixRe.ReplaceAllString(value, "")
 }
 
-func toPascalCase(value string) string {
-	if value == "" {
-		return value
-	}
-	normalized := toolNameBoundaryRe.ReplaceAllString(value, " ")
-	tokens := make([]string, 0)
-	for _, token := range strings.Fields(normalized) {
-		expanded := toolNameCamelRe.ReplaceAllString(token, "$1 $2")
-		parts := strings.Fields(expanded)
-		if len(parts) > 0 {
-			tokens = append(tokens, parts...)
-		}
-	}
-	if len(tokens) == 0 {
-		return value
-	}
-	var builder strings.Builder
-	for _, token := range tokens {
-		lower := strings.ToLower(token)
-		if lower == "" {
-			continue
-		}
-		runes := []rune(lower)
-		runes[0] = unicode.ToUpper(runes[0])
-		_, _ = builder.WriteString(string(runes))
-	}
-	return builder.String()
-}
-
 func toSnakeCase(value string) string {
 	if value == "" {
 		return value
@@ -664,15 +634,14 @@ func normalizeToolNameForClaude(name string, cache map[string]string) string {
 		return name
 	}
 	stripped := stripToolPrefix(name)
+	// 只对已知的工具名进行映射，未知工具名保持原样
+	// 避免破坏 Anthropic 特殊工具（如 text_editor_20250728）
 	mapped, ok := claudeToolNameOverrides[strings.ToLower(stripped)]
 	if !ok {
-		mapped = toPascalCase(stripped)
-	}
-	if mapped != "" && cache != nil && mapped != stripped {
-		cache[mapped] = stripped
-	}
-	if mapped == "" {
 		return stripped
+	}
+	if cache != nil && mapped != stripped {
+		cache[mapped] = stripped
 	}
 	return mapped
 }
@@ -682,15 +651,18 @@ func normalizeToolNameForOpenCode(name string, cache map[string]string) string {
 		return name
 	}
 	stripped := stripToolPrefix(name)
+	// 优先从请求时建立的映射中查找
 	if cache != nil {
 		if mapped, ok := cache[stripped]; ok {
 			return mapped
 		}
 	}
+	// 已知工具名的硬编码映射
 	if mapped, ok := openCodeToolOverrides[stripped]; ok {
 		return mapped
 	}
-	return toSnakeCase(stripped)
+	// 未知工具名保持原样，避免破坏 Anthropic 特殊工具
+	return stripped
 }
 
 func normalizeParamNameForOpenCode(name string, cache map[string]string) string {
