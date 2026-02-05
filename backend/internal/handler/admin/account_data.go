@@ -469,6 +469,13 @@ func validateDataProxy(item DataProxy) error {
 	default:
 		return fmt.Errorf("proxy protocol is invalid: %s", item.Protocol)
 	}
+	if item.Status != "" {
+		switch item.Status {
+		case service.StatusActive, service.StatusDisabled, "inactive":
+		default:
+			return fmt.Errorf("proxy status is invalid: %s", item.Status)
+		}
+	}
 	return nil
 }
 
