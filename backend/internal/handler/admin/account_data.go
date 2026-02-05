@@ -318,24 +318,6 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 	response.Success(c, result)
 }
 
-func (h *AccountHandler) listAllAccounts(ctx context.Context) ([]service.Account, error) {
-	page := 1
-	pageSize := dataPageCap
-	var out []service.Account
-	for {
-		items, total, err := h.adminService.ListAccounts(ctx, page, pageSize, "", "", "", "")
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, items...)
-		if len(out) >= int(total) || len(items) == 0 {
-			break
-		}
-		page++
-	}
-	return out, nil
-}
-
 func (h *AccountHandler) listAllProxies(ctx context.Context) ([]service.Proxy, error) {
 	page := 1
 	pageSize := dataPageCap
