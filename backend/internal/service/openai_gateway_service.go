@@ -846,10 +846,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 
-		// Remove prompt_cache_retention (not supported by upstream OpenAI API)
-		if _, has := reqBody["prompt_cache_retention"]; has {
-			delete(reqBody, "prompt_cache_retention")
-			bodyModified = true
+		// Remove unsupported fields (not supported by upstream OpenAI API)
+		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "previous_response_id"} {
+			if _, has := reqBody[unsupportedField]; has {
+				delete(reqBody, unsupportedField)
+				bodyModified = true
+			}
 		}
 	}
 
@@ -938,7 +940,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			})
 
 			s.handleFailoverSideEffects(ctx, resp, account)
-			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode}
+			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account)
 	}
@@ -1129,7 +1131,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *ht
 		Detail:             upstreamDetail,
 	})
 	if shouldDisable {
-		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode}
+		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: body}
 	}
 
 	// Return appropriate error response

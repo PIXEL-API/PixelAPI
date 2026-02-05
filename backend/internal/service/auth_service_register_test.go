@@ -116,6 +116,7 @@ func newAuthService(repo *userRepoStub, settings map[string]string, emailCache E
 	return NewAuthService(
 		repo,
 		nil, // redeemRepo
+		nil, // refreshTokenCache
 		cfg,
 		settingService,
 		emailService,
