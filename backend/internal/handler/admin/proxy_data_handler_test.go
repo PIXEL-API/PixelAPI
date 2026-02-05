@@ -69,7 +69,8 @@ func TestProxyExportDataRespectsFilters(t *testing.T) {
 	var resp proxyDataResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, dataType, resp.Data.Type)
+	require.Empty(t, resp.Data.Type)
+	require.Equal(t, 0, resp.Data.Version)
 	require.Len(t, resp.Data.Proxies, 1)
 	require.Len(t, resp.Data.Accounts, 0)
 	require.Equal(t, "https", resp.Data.Proxies[0].Protocol)
@@ -156,6 +157,7 @@ func TestProxyImportDataReusesAndTriggersLatencyProbe(t *testing.T) {
 					"status":    "active",
 				},
 			},
+			"accounts": []map[string]any{},
 		},
 	}
 
@@ -181,6 +183,6 @@ func TestProxyImportDataReusesAndTriggersLatencyProbe(t *testing.T) {
 	require.Eventually(t, func() bool {
 		adminSvc.mu.Lock()
 		defer adminSvc.mu.Unlock()
-		return len(adminSvc.testedProxyIDs) == 2
+		return len(adminSvc.testedProxyIDs) == 1
 	}, time.Second, 10*time.Millisecond)
 }

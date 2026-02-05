@@ -61,8 +61,6 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 	}
 
 	payload := DataPayload{
-		Type:       dataType,
-		Version:    dataVersion,
 		ExportedAt: time.Now().UTC().Format(time.RFC3339),
 		Proxies:    dataProxies,
 		Accounts:   []DataAccount{},
@@ -123,10 +121,11 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			continue
 		}
 
+		normalizedStatus := normalizeProxyStatus(item.Status)
 		if existing, ok := proxyByKey[key]; ok {
 			result.ProxyReused++
-			if item.Status != "" && item.Status != existing.Status {
-				if _, err := h.adminService.UpdateProxy(ctx, existing.ID, &service.UpdateProxyInput{Status: item.Status}); err != nil {
+			if normalizedStatus != "" && normalizedStatus != existing.Status {
+				if _, err := h.adminService.UpdateProxy(ctx, existing.ID, &service.UpdateProxyInput{Status: normalizedStatus}); err != nil {
 					result.Errors = append(result.Errors, DataImportError{
 						Kind:     "proxy",
 						Name:     item.Name,
@@ -160,8 +159,8 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 		result.ProxyCreated++
 		proxyByKey[key] = *created
 
-		if item.Status != "" && item.Status != created.Status {
-			if _, err := h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{Status: item.Status}); err != nil {
+		if normalizedStatus != "" && normalizedStatus != created.Status {
+			if _, err := h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{Status: normalizedStatus}); err != nil {
 				result.Errors = append(result.Errors, DataImportError{
 					Kind:     "proxy",
 					Name:     item.Name,
@@ -170,7 +169,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 				})
 			}
 		}
-		latencyProbeIDs = append(latencyProbeIDs, created.ID)
+		// CreateProxy already triggers a latency probe, avoid double probing here.
 	}
 
 	if len(latencyProbeIDs) > 0 {
@@ -186,18 +185,10 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 }
 
 func (h *ProxyHandler) getProxiesByIDs(ctx context.Context, ids []int64) ([]service.Proxy, error) {
-	out := make([]service.Proxy, 0, len(ids))
-	for _, id := range ids {
-		proxy, err := h.adminService.GetProxy(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if proxy == nil {
-			continue
-		}
-		out = append(out, *proxy)
+	if len(ids) == 0 {
+		return []service.Proxy{}, nil
 	}
-	return out, nil
+	return h.adminService.GetProxiesByIDs(ctx, ids)
 }
 
 func parseProxyIDs(c *gin.Context) ([]int64, error) {
