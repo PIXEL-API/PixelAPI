@@ -579,6 +579,7 @@ func (s *PricingService) extractBaseName(model string) string {
 func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	// Claude模型系列匹配规则
 	familyPatterns := map[string][]string{
+		"opus-4.6":   {"claude-opus-4.6", "claude-opus-4-6"},
 		"opus-4.5":   {"claude-opus-4.5", "claude-opus-4-5"},
 		"opus-4":     {"claude-opus-4", "claude-3-opus"},
 		"sonnet-4.5": {"claude-sonnet-4.5", "claude-sonnet-4-5"},
