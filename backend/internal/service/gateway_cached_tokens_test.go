@@ -163,11 +163,9 @@ func TestStreamingReconcile_MessageDelta(t *testing.T) {
 	require.Equal(t, "message_delta", eventType)
 
 	// 模拟 processSSEEvent 中的 reconcile 逻辑
-	if u, ok := event["usage"].(map[string]any); ok {
-		reconcileCachedTokens(u)
-	}
-
-	usage := event["usage"].(map[string]any)
+	usage, ok := event["usage"].(map[string]any)
+	require.True(t, ok)
+	reconcileCachedTokens(usage)
 	assert.Equal(t, float64(15), usage["cache_read_input_tokens"])
 }
 
@@ -183,11 +181,9 @@ func TestStreamingReconcile_MessageDelta_NativeClaude(t *testing.T) {
 	var event map[string]any
 	require.NoError(t, json.Unmarshal([]byte(eventJSON), &event))
 
-	if u, ok := event["usage"].(map[string]any); ok {
-		reconcileCachedTokens(u)
-	}
-
-	usage := event["usage"].(map[string]any)
+	usage, ok := event["usage"].(map[string]any)
+	require.True(t, ok)
+	reconcileCachedTokens(usage)
 	_, hasCacheRead := usage["cache_read_input_tokens"]
 	assert.False(t, hasCacheRead, "不应为原生 Claude 响应注入 cache_read_input_tokens")
 }
