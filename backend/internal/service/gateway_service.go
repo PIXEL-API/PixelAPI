@@ -4180,6 +4180,20 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			eventName = eventType
 		}
 
+		// 兼容 Kimi cached_tokens → cache_read_input_tokens
+		if eventType == "message_start" {
+			if msg, ok := event["message"].(map[string]any); ok {
+				if u, ok := msg["usage"].(map[string]any); ok {
+					reconcileCachedTokens(u)
+				}
+			}
+		}
+		if eventType == "message_delta" {
+			if u, ok := event["usage"].(map[string]any); ok {
+				reconcileCachedTokens(u)
+			}
+		}
+
 		if needModelReplace {
 			if msg, ok := event["message"].(map[string]any); ok {
 				if model, ok := msg["model"].(string); ok && model == mappedModel {
@@ -4528,6 +4542,17 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
+	}
+
+	// 兼容 Kimi cached_tokens → cache_read_input_tokens
+	if response.Usage.CacheReadInputTokens == 0 {
+		cachedTokens := gjson.GetBytes(body, "usage.cached_tokens").Int()
+		if cachedTokens > 0 {
+			response.Usage.CacheReadInputTokens = int(cachedTokens)
+			if newBody, err := sjson.SetBytes(body, "usage.cache_read_input_tokens", cachedTokens); err == nil {
+				body = newBody
+			}
+		}
 	}
 
 	// 如果有模型映射，替换响应中的model字段
@@ -5336,4 +5361,22 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	}
 
 	return models
+}
+
+// reconcileCachedTokens 兼容 Kimi 等上游：
+// 将 OpenAI 风格的 cached_tokens 映射到 Claude 标准的 cache_read_input_tokens
+func reconcileCachedTokens(usage map[string]any) bool {
+	if usage == nil {
+		return false
+	}
+	cacheRead, _ := usage["cache_read_input_tokens"].(float64)
+	if cacheRead > 0 {
+		return false // 已有标准字段，无需处理
+	}
+	cached, _ := usage["cached_tokens"].(float64)
+	if cached <= 0 {
+		return false
+	}
+	usage["cache_read_input_tokens"] = cached
+	return true
 }
