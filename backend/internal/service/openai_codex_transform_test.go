@@ -176,6 +176,19 @@ func TestApplyCodexOAuthTransform_EmptyInput(t *testing.T) {
 	require.Len(t, input, 0)
 }
 
+func TestNormalizeCodexModel_Gpt53(t *testing.T) {
+	cases := map[string]string{
+		"gpt-5.3":             "gpt-5.3",
+		"gpt-5.3-codex":       "gpt-5.3-codex",
+		"gpt-5.3-codex-xhigh": "gpt-5.3-codex",
+		"gpt 5.3 codex":       "gpt-5.3-codex",
+	}
+
+	for input, expected := range cases {
+		require.Equal(t, expected, normalizeCodexModel(input))
+	}
+}
+
 func setupCodexCache(t *testing.T) {
 	t.Helper()
 
