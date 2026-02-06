@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 type stubOpenAIAccountRepo struct {
@@ -1064,6 +1065,43 @@ func TestOpenAIStreamingHeadersOverride(t *testing.T) {
 	if rec.Header().Get("X-Request-Id") != "req-123" {
 		t.Fatalf("expected X-Request-Id passthrough, got %q", rec.Header().Get("X-Request-Id"))
 	}
+}
+
+func TestOpenAIStreamingReuseScannerBufferAndStillWorks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0,
+			StreamKeepaliveInterval:   0,
+			MaxLineSize:               defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       pr,
+		Header:     http.Header{},
+	}
+
+	go func() {
+		defer func() { _ = pw.Close() }()
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":3}}}}\n\n"))
+	}()
+
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+	_ = pr.Close()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.usage)
+	require.Equal(t, 1, result.usage.InputTokens)
+	require.Equal(t, 2, result.usage.OutputTokens)
+	require.Equal(t, 3, result.usage.CacheReadInputTokens)
 }
 
 func TestOpenAIInvalidBaseURLWhenAllowlistDisabled(t *testing.T) {
