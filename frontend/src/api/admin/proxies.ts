@@ -9,7 +9,9 @@ import type {
   ProxyAccountSummary,
   CreateProxyRequest,
   UpdateProxyRequest,
-  PaginatedResponse
+  PaginatedResponse,
+  AdminDataPayload,
+  AdminDataImportResult
 } from '@/types'
 
 /**
@@ -208,6 +210,34 @@ export async function batchDelete(ids: number[]): Promise<{
   return data
 }
 
+export async function exportData(options?: {
+  ids?: number[]
+  filters?: {
+    protocol?: string
+    status?: 'active' | 'inactive'
+    search?: string
+  }
+}): Promise<AdminDataPayload> {
+  const params: Record<string, string> = {}
+  if (options?.ids && options.ids.length > 0) {
+    params.ids = options.ids.join(',')
+  } else if (options?.filters) {
+    const { protocol, status, search } = options.filters
+    if (protocol) params.protocol = protocol
+    if (status) params.status = status
+    if (search) params.search = search
+  }
+  const { data } = await apiClient.get<AdminDataPayload>('/admin/proxies/data', { params })
+  return data
+}
+
+export async function importData(payload: {
+  data: AdminDataPayload
+}): Promise<AdminDataImportResult> {
+  const { data } = await apiClient.post<AdminDataImportResult>('/admin/proxies/data', payload)
+  return data
+}
+
 export const proxiesAPI = {
   list,
   getAll,
@@ -221,7 +251,9 @@ export const proxiesAPI = {
   getStats,
   getProxyAccounts,
   batchCreate,
-  batchDelete
+  batchDelete,
+  exportData,
+  importData
 }
 
 export default proxiesAPI
