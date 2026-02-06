@@ -1089,8 +1089,9 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	result, err := client.ExecContext(
 		ctx,
 		"UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
-		payload, id,
+		string(payload), id,
 	)
+
 	if err != nil {
 		return err
 	}
