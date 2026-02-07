@@ -23,8 +23,7 @@ import (
 //   - 临时不可调度且未过期：清理
 //   - 临时不可调度已过期：不清理
 //   - 正常可调度状态：不清理
-//   - 模型限流超过阈值：清理
-//   - 模型限流未超过阈值：不清理
+//   - 模型限流（任意时长）：清理
 //
 // TestShouldClearStickySession tests the sticky session clearing logic.
 // Verifies correct behavior for various account states including:
@@ -35,9 +34,9 @@ func TestShouldClearStickySession(t *testing.T) {
 	future := now.Add(1 * time.Hour)
 	past := now.Add(-1 * time.Hour)
 
-	// 短限流时间（低于阈值，不应清除粘性会话）
+	// 短限流时间（有限流即清除粘性会话）
 	shortRateLimitReset := now.Add(5 * time.Second).Format(time.RFC3339)
-	// 长限流时间（超过阈值，应清除粘性会话）
+	// 长限流时间（有限流即清除粘性会话）
 	longRateLimitReset := now.Add(30 * time.Second).Format(time.RFC3339)
 
 	tests := []struct {
@@ -53,7 +52,7 @@ func TestShouldClearStickySession(t *testing.T) {
 		{name: "temp unschedulable", account: &Account{Status: StatusActive, Schedulable: true, TempUnschedulableUntil: &future}, requestedModel: "", want: true},
 		{name: "temp unschedulable expired", account: &Account{Status: StatusActive, Schedulable: true, TempUnschedulableUntil: &past}, requestedModel: "", want: false},
 		{name: "active schedulable", account: &Account{Status: StatusActive, Schedulable: true}, requestedModel: "", want: false},
-		// 模型限流测试
+		// 模型限流测试：有限流即清除
 		{
 			name: "model rate limited short duration",
 			account: &Account{
@@ -68,7 +67,7 @@ func TestShouldClearStickySession(t *testing.T) {
 				},
 			},
 			requestedModel: "claude-sonnet-4",
-			want:           false, // 低于阈值，不清除
+			want:           true, // 有限流即清除
 		},
 		{
 			name: "model rate limited long duration",
@@ -84,7 +83,7 @@ func TestShouldClearStickySession(t *testing.T) {
 				},
 			},
 			requestedModel: "claude-sonnet-4",
-			want:           true, // 超过阈值，清除
+			want:           true, // 有限流即清除
 		},
 		{
 			name: "model rate limited different model",
