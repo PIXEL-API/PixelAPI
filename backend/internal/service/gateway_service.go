@@ -2616,7 +2616,6 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 	return account.IsModelSupported(requestedModel)
 }
 
-
 // GetAccessToken 获取账号凭证
 func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
 	switch account.Type {
