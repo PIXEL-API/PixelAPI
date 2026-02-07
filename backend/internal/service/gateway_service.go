@@ -313,6 +313,14 @@ type GatewayCache interface {
 	// SaveGeminiSession 保存 Gemini 会话
 	// Save Gemini session binding
 	SaveGeminiSession(ctx context.Context, groupID int64, prefixHash, digestChain, uuid string, accountID int64) error
+
+	// FindAnthropicSession 查找 Anthropic 会话（Trie 匹配）
+	// Find Anthropic session using Trie matching
+	FindAnthropicSession(ctx context.Context, groupID int64, prefixHash, digestChain string) (uuid string, accountID int64, found bool)
+
+	// SaveAnthropicSession 保存 Anthropic 会话
+	// Save Anthropic session binding
+	SaveAnthropicSession(ctx context.Context, groupID int64, prefixHash, digestChain, uuid string, accountID int64) error
 }
 
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
@@ -482,22 +490,24 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 		return s.hashContent(cacheableContent)
 	}
 
-	// 3. Fallback: 使用 system 内容
+	// 3. 最后 fallback: 使用 system + 所有消息的完整摘要串
+	var combined strings.Builder
 	if parsed.System != nil {
 		systemText := s.extractTextFromSystem(parsed.System)
 		if systemText != "" {
-			return s.hashContent(systemText)
+			combined.WriteString(systemText)
 		}
 	}
-
-	// 4. 最后 fallback: 使用第一条消息
-	if len(parsed.Messages) > 0 {
-		if firstMsg, ok := parsed.Messages[0].(map[string]any); ok {
-			msgText := s.extractTextFromContent(firstMsg["content"])
+	for _, msg := range parsed.Messages {
+		if m, ok := msg.(map[string]any); ok {
+			msgText := s.extractTextFromContent(m["content"])
 			if msgText != "" {
-				return s.hashContent(msgText)
+				combined.WriteString(msgText)
 			}
 		}
+	}
+	if combined.Len() > 0 {
+		return s.hashContent(combined.String())
 	}
 
 	return ""
@@ -539,6 +549,22 @@ func (s *GatewayService) SaveGeminiSession(ctx context.Context, groupID int64, p
 		return nil
 	}
 	return s.cache.SaveGeminiSession(ctx, groupID, prefixHash, digestChain, uuid, accountID)
+}
+
+// FindAnthropicSession 查找 Anthropic 会话（基于内容摘要链的 Fallback 匹配）
+func (s *GatewayService) FindAnthropicSession(ctx context.Context, groupID int64, prefixHash, digestChain string) (uuid string, accountID int64, found bool) {
+	if digestChain == "" || s.cache == nil {
+		return "", 0, false
+	}
+	return s.cache.FindAnthropicSession(ctx, groupID, prefixHash, digestChain)
+}
+
+// SaveAnthropicSession 保存 Anthropic 会话
+func (s *GatewayService) SaveAnthropicSession(ctx context.Context, groupID int64, prefixHash, digestChain, uuid string, accountID int64) error {
+	if digestChain == "" || s.cache == nil {
+		return nil
+	}
+	return s.cache.SaveAnthropicSession(ctx, groupID, prefixHash, digestChain, uuid, accountID)
 }
 
 func (s *GatewayService) extractCacheableContent(parsed *ParsedRequest) string {
@@ -1104,7 +1130,6 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 									result.ReleaseFunc() // 释放槽位
 									// 继续到负载感知选择
 								} else {
-									_ = s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, stickySessionTTL)
 									if s.debugModelRoutingEnabled() {
 										log.Printf("[ModelRoutingDebug] routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), stickyAccountID)
 									}
@@ -1258,7 +1283,6 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						if !s.checkAndRegisterSession(ctx, account, sessionHash) {
 							result.ReleaseFunc() // 释放槽位，继续到 Layer 2
 						} else {
-							_ = s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, stickySessionTTL)
 							return &AccountSelectionResult{
 								Account:     account,
 								Acquired:    true,
@@ -2163,9 +2187,6 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && account.IsSchedulableForModelWithContext(ctx, requestedModel) {
-							if err := s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, stickySessionTTL); err != nil {
-								log.Printf("refresh session ttl failed: session=%s err=%v", sessionHash, err)
-							}
 							if s.debugModelRoutingEnabled() {
 								log.Printf("[ModelRoutingDebug] legacy routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 							}
@@ -2266,9 +2287,6 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
 					if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && account.IsSchedulableForModelWithContext(ctx, requestedModel) {
-						if err := s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, stickySessionTTL); err != nil {
-							log.Printf("refresh session ttl failed: session=%s err=%v", sessionHash, err)
-						}
 						return account, nil
 					}
 				}
@@ -2377,9 +2395,6 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 						}
 						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
-								if err := s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, stickySessionTTL); err != nil {
-									log.Printf("refresh session ttl failed: session=%s err=%v", sessionHash, err)
-								}
 								if s.debugModelRoutingEnabled() {
 									log.Printf("[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -2482,9 +2497,6 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 					}
 					if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 						if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
-							if err := s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, stickySessionTTL); err != nil {
-								log.Printf("refresh session ttl failed: session=%s err=%v", sessionHash, err)
-							}
 							return account, nil
 						}
 					}
