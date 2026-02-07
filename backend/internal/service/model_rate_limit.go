@@ -1,35 +1,82 @@
 package service
 
 import (
+	"context"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
 
 const modelRateLimitsKey = "model_rate_limits"
-const modelRateLimitScopeClaudeSonnet = "claude_sonnet"
 
-func resolveModelRateLimitScope(requestedModel string) (string, bool) {
-	model := strings.ToLower(strings.TrimSpace(requestedModel))
-	if model == "" {
-		return "", false
-	}
-	model = strings.TrimPrefix(model, "models/")
-	if strings.Contains(model, "sonnet") {
-		return modelRateLimitScopeClaudeSonnet, true
-	}
-	return "", false
+// isRateLimitActiveForKey 检查指定 key 的限流是否生效
+func (a *Account) isRateLimitActiveForKey(key string) bool {
+	resetAt := a.modelRateLimitResetAt(key)
+	return resetAt != nil && time.Now().Before(*resetAt)
 }
 
-func (a *Account) isModelRateLimited(requestedModel string) bool {
-	scope, ok := resolveModelRateLimitScope(requestedModel)
-	if !ok {
-		return false
-	}
-	resetAt := a.modelRateLimitResetAt(scope)
+// getRateLimitRemainingForKey 获取指定 key 的限流剩余时间，0 表示未限流或已过期
+func (a *Account) getRateLimitRemainingForKey(key string) time.Duration {
+	resetAt := a.modelRateLimitResetAt(key)
 	if resetAt == nil {
+		return 0
+	}
+	remaining := time.Until(*resetAt)
+	if remaining > 0 {
+		return remaining
+	}
+	return 0
+}
+
+func (a *Account) isModelRateLimitedWithContext(ctx context.Context, requestedModel string) bool {
+	if a == nil {
 		return false
 	}
-	return time.Now().Before(*resetAt)
+
+	modelKey := a.GetMappedModel(requestedModel)
+	if a.Platform == PlatformAntigravity {
+		modelKey = resolveFinalAntigravityModelKey(ctx, a, requestedModel)
+	}
+	modelKey = strings.TrimSpace(modelKey)
+	if modelKey == "" {
+		return false
+	}
+	return a.isRateLimitActiveForKey(modelKey)
+}
+
+// GetModelRateLimitRemainingTime 获取模型限流剩余时间
+// 返回 0 表示未限流或已过期
+func (a *Account) GetModelRateLimitRemainingTime(requestedModel string) time.Duration {
+	return a.GetModelRateLimitRemainingTimeWithContext(context.Background(), requestedModel)
+}
+
+func (a *Account) GetModelRateLimitRemainingTimeWithContext(ctx context.Context, requestedModel string) time.Duration {
+	if a == nil {
+		return 0
+	}
+
+	modelKey := a.GetMappedModel(requestedModel)
+	if a.Platform == PlatformAntigravity {
+		modelKey = resolveFinalAntigravityModelKey(ctx, a, requestedModel)
+	}
+	modelKey = strings.TrimSpace(modelKey)
+	if modelKey == "" {
+		return 0
+	}
+	return a.getRateLimitRemainingForKey(modelKey)
+}
+
+func resolveFinalAntigravityModelKey(ctx context.Context, account *Account, requestedModel string) string {
+	modelKey := mapAntigravityModel(account, requestedModel)
+	if modelKey == "" {
+		return ""
+	}
+	// thinking 会影响 Antigravity 最终模型名（例如 claude-sonnet-4-5 -> claude-sonnet-4-5-thinking）
+	if enabled, ok := ctx.Value(ctxkey.ThinkingEnabled).(bool); ok {
+		modelKey = applyThinkingModelSuffix(modelKey, enabled)
+	}
+	return modelKey
 }
 
 func (a *Account) modelRateLimitResetAt(scope string) *time.Time {

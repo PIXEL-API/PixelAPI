@@ -4,10 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand/v2"
+	"strconv"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/dgraph-io/ristretto"
+	"golang.org/x/sync/singleflight"
 )
 
 // MaxExpiresAt is the maximum allowed expiration date (year 2099)
@@ -35,15 +40,76 @@ type SubscriptionService struct {
 	groupRepo           GroupRepository
 	userSubRepo         UserSubscriptionRepository
 	billingCacheService *BillingCacheService
+
+	// L1 缓存：加速中间件热路径的订阅查询
+	subCacheL1     *ristretto.Cache
+	subCacheGroup  singleflight.Group
+	subCacheTTL    time.Duration
+	subCacheJitter int // 抖动百分比
 }
 
 // NewSubscriptionService 创建订阅服务
-func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscriptionRepository, billingCacheService *BillingCacheService) *SubscriptionService {
-	return &SubscriptionService{
+func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscriptionRepository, billingCacheService *BillingCacheService, cfg *config.Config) *SubscriptionService {
+	svc := &SubscriptionService{
 		groupRepo:           groupRepo,
 		userSubRepo:         userSubRepo,
 		billingCacheService: billingCacheService,
 	}
+	svc.initSubCache(cfg)
+	return svc
+}
+
+// initSubCache 初始化订阅 L1 缓存
+func (s *SubscriptionService) initSubCache(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	sc := cfg.SubscriptionCache
+	if sc.L1Size <= 0 || sc.L1TTLSeconds <= 0 {
+		return
+	}
+	cache, err := ristretto.NewCache(&ristretto.Config{
+		NumCounters: int64(sc.L1Size) * 10,
+		MaxCost:     int64(sc.L1Size),
+		BufferItems: 64,
+	})
+	if err != nil {
+		log.Printf("Warning: failed to init subscription L1 cache: %v", err)
+		return
+	}
+	s.subCacheL1 = cache
+	s.subCacheTTL = time.Duration(sc.L1TTLSeconds) * time.Second
+	s.subCacheJitter = sc.JitterPercent
+}
+
+// subCacheKey 生成订阅缓存 key（热路径，避免 fmt.Sprintf 开销）
+func subCacheKey(userID, groupID int64) string {
+	return "sub:" + strconv.FormatInt(userID, 10) + ":" + strconv.FormatInt(groupID, 10)
+}
+
+// jitteredTTL 为 TTL 添加抖动，避免集中过期
+func (s *SubscriptionService) jitteredTTL(ttl time.Duration) time.Duration {
+	if ttl <= 0 || s.subCacheJitter <= 0 {
+		return ttl
+	}
+	pct := s.subCacheJitter
+	if pct > 100 {
+		pct = 100
+	}
+	delta := float64(pct) / 100
+	factor := 1 - delta + rand.Float64()*(2*delta)
+	if factor <= 0 {
+		return ttl
+	}
+	return time.Duration(float64(ttl) * factor)
+}
+
+// InvalidateSubCache 失效指定用户+分组的订阅 L1 缓存
+func (s *SubscriptionService) InvalidateSubCache(userID, groupID int64) {
+	if s.subCacheL1 == nil {
+		return
+	}
+	s.subCacheL1.Del(subCacheKey(userID, groupID))
 }
 
 // AssignSubscriptionInput 分配订阅输入
@@ -81,6 +147,7 @@ func (s *SubscriptionService) AssignSubscription(ctx context.Context, input *Ass
 	}
 
 	// 失效订阅缓存
+	s.InvalidateSubCache(input.UserID, input.GroupID)
 	if s.billingCacheService != nil {
 		userID, groupID := input.UserID, input.GroupID
 		go func() {
@@ -167,6 +234,7 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 		}
 
 		// 失效订阅缓存
+		s.InvalidateSubCache(input.UserID, input.GroupID)
 		if s.billingCacheService != nil {
 			userID, groupID := input.UserID, input.GroupID
 			go func() {
@@ -188,6 +256,7 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 	}
 
 	// 失效订阅缓存
+	s.InvalidateSubCache(input.UserID, input.GroupID)
 	if s.billingCacheService != nil {
 		userID, groupID := input.UserID, input.GroupID
 		go func() {
@@ -297,6 +366,7 @@ func (s *SubscriptionService) RevokeSubscription(ctx context.Context, subscripti
 	}
 
 	// 失效订阅缓存
+	s.InvalidateSubCache(sub.UserID, sub.GroupID)
 	if s.billingCacheService != nil {
 		userID, groupID := sub.UserID, sub.GroupID
 		go func() {
@@ -363,6 +433,7 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 	}
 
 	// 失效订阅缓存
+	s.InvalidateSubCache(sub.UserID, sub.GroupID)
 	if s.billingCacheService != nil {
 		userID, groupID := sub.UserID, sub.GroupID
 		go func() {
@@ -381,12 +452,39 @@ func (s *SubscriptionService) GetByID(ctx context.Context, id int64) (*UserSubsc
 }
 
 // GetActiveSubscription 获取用户对特定分组的有效订阅
+// 使用 L1 缓存 + singleflight 加速中间件热路径。
+// 返回缓存对象的浅拷贝，调用方可安全修改字段而不会污染缓存或触发 data race。
 func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
-	sub, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
-	if err != nil {
-		return nil, ErrSubscriptionNotFound
+	key := subCacheKey(userID, groupID)
+
+	// L1 缓存命中：返回浅拷贝
+	if s.subCacheL1 != nil {
+		if v, ok := s.subCacheL1.Get(key); ok {
+			if sub, ok := v.(*UserSubscription); ok {
+				cp := *sub
+				return &cp, nil
+			}
+		}
 	}
-	return sub, nil
+
+	// singleflight 防止并发击穿
+	value, err, _ := s.subCacheGroup.Do(key, func() (any, error) {
+		sub, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+		if err != nil {
+			return nil, ErrSubscriptionNotFound
+		}
+		// 写入 L1 缓存
+		if s.subCacheL1 != nil {
+			_ = s.subCacheL1.SetWithTTL(key, sub, 1, s.jitteredTTL(s.subCacheTTL))
+		}
+		return sub, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// singleflight 返回的也是缓存指针，需要浅拷贝
+	cp := *value.(*UserSubscription)
+	return &cp, nil
 }
 
 // ListUserSubscriptions 获取用户的所有订阅
@@ -521,9 +619,12 @@ func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *Use
 		needsInvalidateCache = true
 	}
 
-	// 如果有窗口被重置，失效 Redis 缓存以保持一致性
-	if needsInvalidateCache && s.billingCacheService != nil {
-		_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, sub.GroupID)
+	// 如果有窗口被重置，失效缓存以保持一致性
+	if needsInvalidateCache {
+		s.InvalidateSubCache(sub.UserID, sub.GroupID)
+		if s.billingCacheService != nil {
+			_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, sub.GroupID)
+		}
 	}
 
 	return nil
@@ -542,6 +643,78 @@ func (s *SubscriptionService) CheckUsageLimits(ctx context.Context, sub *UserSub
 		return ErrMonthlyLimitExceeded
 	}
 	return nil
+}
+
+// ValidateAndCheckLimits 合并验证+限额检查（中间件热路径专用）
+// 仅做内存检查，不触发 DB 写入。窗口重置的 DB 写入由 DoWindowMaintenance 异步完成。
+// 返回 needsMaintenance 表示是否需要异步执行窗口维护。
+func (s *SubscriptionService) ValidateAndCheckLimits(sub *UserSubscription, group *Group) (needsMaintenance bool, err error) {
+	// 1. 验证订阅状态
+	if sub.Status == SubscriptionStatusExpired {
+		return false, ErrSubscriptionExpired
+	}
+	if sub.Status == SubscriptionStatusSuspended {
+		return false, ErrSubscriptionSuspended
+	}
+	if sub.IsExpired() {
+		return false, ErrSubscriptionExpired
+	}
+
+	// 2. 内存中修正过期窗口的用量，确保 CheckUsageLimits 不会误拒绝用户
+	//    实际的 DB 窗口重置由 DoWindowMaintenance 异步完成
+	if sub.NeedsDailyReset() {
+		sub.DailyUsageUSD = 0
+		needsMaintenance = true
+	}
+	if sub.NeedsWeeklyReset() {
+		sub.WeeklyUsageUSD = 0
+		needsMaintenance = true
+	}
+	if sub.NeedsMonthlyReset() {
+		sub.MonthlyUsageUSD = 0
+		needsMaintenance = true
+	}
+	if !sub.IsWindowActivated() {
+		needsMaintenance = true
+	}
+
+	// 3. 检查用量限额
+	if !sub.CheckDailyLimit(group, 0) {
+		return needsMaintenance, ErrDailyLimitExceeded
+	}
+	if !sub.CheckWeeklyLimit(group, 0) {
+		return needsMaintenance, ErrWeeklyLimitExceeded
+	}
+	if !sub.CheckMonthlyLimit(group, 0) {
+		return needsMaintenance, ErrMonthlyLimitExceeded
+	}
+
+	return needsMaintenance, nil
+}
+
+// DoWindowMaintenance 异步执行窗口维护（激活+重置）
+// 使用独立 context，不受请求取消影响。
+// 注意：此方法仅在 ValidateAndCheckLimits 返回 needsMaintenance=true 时调用，
+// 而 IsExpired()=true 的订阅在 ValidateAndCheckLimits 中已被拦截返回错误，
+// 因此进入此方法的订阅一定未过期，无需处理过期状态同步。
+func (s *SubscriptionService) DoWindowMaintenance(sub *UserSubscription) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 激活窗口（首次使用时）
+	if !sub.IsWindowActivated() {
+		if err := s.CheckAndActivateWindow(ctx, sub); err != nil {
+			log.Printf("Failed to activate subscription windows: %v", err)
+		}
+	}
+
+	// 重置过期窗口
+	if err := s.CheckAndResetWindows(ctx, sub); err != nil {
+		log.Printf("Failed to reset subscription windows: %v", err)
+	}
+
+	// 失效 L1 缓存，确保后续请求拿到更新后的数据
+	s.InvalidateSubCache(sub.UserID, sub.GroupID)
 }
 
 // RecordUsage 记录使用量到订阅

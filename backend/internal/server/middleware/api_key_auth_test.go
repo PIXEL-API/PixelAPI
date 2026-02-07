@@ -60,7 +60,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 	t.Run("simple_mode_bypasses_quota_check", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeSimple}
 		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-		subscriptionService := service.NewSubscriptionService(nil, &stubUserSubscriptionRepo{}, nil)
+		subscriptionService := service.NewSubscriptionService(nil, &stubUserSubscriptionRepo{}, nil, cfg)
 		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
 
 		w := httptest.NewRecorder()
@@ -99,7 +99,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 			resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
 			resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
 		}
-		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil)
+		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, cfg)
 		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
 
 		w := httptest.NewRecorder()

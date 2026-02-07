@@ -17,6 +17,29 @@ func TestParseGatewayRequest(t *testing.T) {
 	require.True(t, parsed.HasSystem)
 	require.NotNil(t, parsed.System)
 	require.Len(t, parsed.Messages, 1)
+	require.False(t, parsed.ThinkingEnabled)
+}
+
+func TestParseGatewayRequest_ThinkingEnabled(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-5","thinking":{"type":"enabled"},"messages":[{"content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(body)
+	require.NoError(t, err)
+	require.Equal(t, "claude-sonnet-4-5", parsed.Model)
+	require.True(t, parsed.ThinkingEnabled)
+}
+
+func TestParseGatewayRequest_MaxTokens(t *testing.T) {
+	body := []byte(`{"model":"claude-haiku-4-5","max_tokens":1}`)
+	parsed, err := ParseGatewayRequest(body)
+	require.NoError(t, err)
+	require.Equal(t, 1, parsed.MaxTokens)
+}
+
+func TestParseGatewayRequest_MaxTokensNonIntegralIgnored(t *testing.T) {
+	body := []byte(`{"model":"claude-haiku-4-5","max_tokens":1.5}`)
+	parsed, err := ParseGatewayRequest(body)
+	require.NoError(t, err)
+	require.Equal(t, 0, parsed.MaxTokens)
 }
 
 func TestParseGatewayRequest_SystemNull(t *testing.T) {
