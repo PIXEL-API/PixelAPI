@@ -50,6 +50,7 @@ type OAuthSession struct {
 type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*OAuthSession
+	stopOnce sync.Once
 	stopCh   chan struct{}
 }
 
@@ -65,7 +66,9 @@ func NewSessionStore() *SessionStore {
 
 // Stop stops the cleanup goroutine
 func (s *SessionStore) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
 }
 
 // Set stores a session
