@@ -3,6 +3,8 @@ package middleware
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
+	"log"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -18,11 +20,14 @@ const (
 	CloudflareInsightsDomain = "https://static.cloudflareinsights.com"
 )
 
-// GenerateNonce generates a cryptographically secure random nonce
-func GenerateNonce() string {
+// GenerateNonce generates a cryptographically secure random nonce.
+// 返回 error 以确保调用方在 crypto/rand 失败时能正确降级。
+func GenerateNonce() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return base64.StdEncoding.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate CSP nonce: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
 }
 
 // GetNonceFromContext retrieves the CSP nonce from gin context
@@ -52,12 +57,17 @@ func SecurityHeaders(cfg config.CSPConfig) gin.HandlerFunc {
 
 		if cfg.Enabled {
 			// Generate nonce for this request
-			nonce := GenerateNonce()
-			c.Set(CSPNonceKey, nonce)
-
-			// Replace nonce placeholder in policy
-			finalPolicy := strings.ReplaceAll(policy, NonceTemplate, "'nonce-"+nonce+"'")
-			c.Header("Content-Security-Policy", finalPolicy)
+			nonce, err := GenerateNonce()
+			if err != nil {
+				// crypto/rand 失败时降级为无 nonce 的 CSP 策略
+				log.Printf("[SecurityHeaders] %v — 降级为无 nonce 的 CSP", err)
+				finalPolicy := strings.ReplaceAll(policy, NonceTemplate, "'unsafe-inline'")
+				c.Header("Content-Security-Policy", finalPolicy)
+			} else {
+				c.Set(CSPNonceKey, nonce)
+				finalPolicy := strings.ReplaceAll(policy, NonceTemplate, "'nonce-"+nonce+"'")
+				c.Header("Content-Security-Policy", finalPolicy)
+			}
 		}
 		c.Next()
 	}
