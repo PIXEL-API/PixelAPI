@@ -236,7 +236,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, failedAccountIDs, "") // Gemini 不使用会话限制
 			if err != nil {
 				if len(failedAccountIDs) == 0 {
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error(), streamStarted)
+					log.Printf("[Gateway] SelectAccount failed: %v", err)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
 					return
 				}
 				if lastFailoverErr != nil {
@@ -284,12 +285,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if err == nil && canWait {
 					accountWaitCounted = true
 				}
-				// Ensure the wait counter is decremented if we exit before acquiring the slot.
-				defer func() {
+				releaseWait := func() {
 					if accountWaitCounted {
 						h.concurrencyHelper.DecrementAccountWaitCount(c.Request.Context(), account.ID)
+						accountWaitCounted = false
 					}
-				}()
+				}
 
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 					c,
@@ -301,14 +302,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				)
 				if err != nil {
 					log.Printf("Account concurrency acquire failed: %v", err)
+					releaseWait()
 					h.handleConcurrencyError(c, err, "account", streamStarted)
 					return
 				}
 				// Slot acquired: no longer waiting in queue.
-				if accountWaitCounted {
-					h.concurrencyHelper.DecrementAccountWaitCount(c.Request.Context(), account.ID)
-					accountWaitCounted = false
-				}
+				releaseWait()
 				if err := h.gatewayService.BindStickySession(c.Request.Context(), apiKey.GroupID, sessionKey, account.ID); err != nil {
 					log.Printf("Bind sticky session failed: %v", err)
 				}
@@ -398,7 +397,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionKey, reqModel, failedAccountIDs, parsedReq.MetadataUserID)
 			if err != nil {
 				if len(failedAccountIDs) == 0 {
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error(), streamStarted)
+					log.Printf("[Gateway] SelectAccount failed: %v", err)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
 					return
 				}
 				if lastFailoverErr != nil {
@@ -446,11 +446,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if err == nil && canWait {
 					accountWaitCounted = true
 				}
-				defer func() {
+				releaseWait := func() {
 					if accountWaitCounted {
 						h.concurrencyHelper.DecrementAccountWaitCount(c.Request.Context(), account.ID)
+						accountWaitCounted = false
 					}
-				}()
+				}
 
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 					c,
@@ -462,13 +463,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				)
 				if err != nil {
 					log.Printf("Account concurrency acquire failed: %v", err)
+					releaseWait()
 					h.handleConcurrencyError(c, err, "account", streamStarted)
 					return
 				}
-				if accountWaitCounted {
-					h.concurrencyHelper.DecrementAccountWaitCount(c.Request.Context(), account.ID)
-					accountWaitCounted = false
-				}
+				// Slot acquired: no longer waiting in queue.
+				releaseWait()
 				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 					log.Printf("Bind sticky session failed: %v", err)
 				}
@@ -967,7 +967,8 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	// 选择支持该模型的账号
 	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
 	if err != nil {
-		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error())
+		log.Printf("[Gateway] SelectAccountForModel failed: %v", err)
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable")
 		return
 	}
 	setOpsSelectedAccount(c, account.ID)
@@ -1238,7 +1239,8 @@ func billingErrorDetails(err error) (status int, code, message string) {
 	}
 	msg := pkgerrors.Message(err)
 	if msg == "" {
-		msg = err.Error()
+		log.Printf("[Gateway] billing error details: %v", err)
+		msg = "Billing error"
 	}
 	return http.StatusForbidden, "billing_error", msg
 }
