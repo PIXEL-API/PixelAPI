@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
@@ -1489,4 +1490,10 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 	}
 
 	response.Success(c, results)
+}
+
+// GetAntigravityDefaultModelMapping 获取 Antigravity 平台的默认模型映射
+// GET /api/v1/admin/accounts/antigravity/default-model-mapping
+func (h *AccountHandler) GetAntigravityDefaultModelMapping(c *gin.Context) {
+	response.Success(c, domain.DefaultAntigravityModelMapping)
 }

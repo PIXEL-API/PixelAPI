@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/gin-gonic/gin"
@@ -113,7 +114,7 @@ func TestAntigravityGatewayService_Forward_PromptTooLong(t *testing.T) {
 	c, _ := gin.CreateTestContext(writer)
 
 	body, err := json.Marshal(map[string]any{
-		"model": "claude-opus-4-5",
+		"model": "claude-opus-4-6",
 		"messages": []map[string]any{
 			{"role": "user", "content": "hi"},
 		},
@@ -149,7 +150,7 @@ func TestAntigravityGatewayService_Forward_PromptTooLong(t *testing.T) {
 		},
 	}
 
-	result, err := svc.Forward(context.Background(), c, account, body)
+	result, err := svc.Forward(context.Background(), c, account, body, false)
 	require.Nil(t, result)
 
 	var promptErr *PromptTooLongError
@@ -166,27 +167,227 @@ func TestAntigravityGatewayService_Forward_PromptTooLong(t *testing.T) {
 	require.Equal(t, "prompt_too_long", events[0].Kind)
 }
 
-func TestAntigravityMaxRetriesForModel_AfterSwitch(t *testing.T) {
-	t.Setenv(antigravityMaxRetriesEnv, "4")
-	t.Setenv(antigravityMaxRetriesAfterSwitchEnv, "7")
-	t.Setenv(antigravityMaxRetriesClaudeEnv, "")
-	t.Setenv(antigravityMaxRetriesGeminiTextEnv, "")
-	t.Setenv(antigravityMaxRetriesGeminiImageEnv, "")
+// TestAntigravityGatewayService_Forward_ModelRateLimitTriggersFailover
+// 验证：当账号存在模型限流且剩余时间 >= antigravityRateLimitThreshold 时，
+// Forward 方法应返回 UpstreamFailoverError，触发 Handler 切换账号
+func TestAntigravityGatewayService_Forward_ModelRateLimitTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
 
-	got := antigravityMaxRetriesForModel("claude-sonnet-4-5", false)
-	require.Equal(t, 4, got)
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-opus-4-6",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+		"max_tokens": 1,
+		"stream":     false,
+	})
+	require.NoError(t, err)
 
-	got = antigravityMaxRetriesForModel("claude-sonnet-4-5", true)
-	require.Equal(t, 7, got)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request = req
+
+	// 不需要真正调用上游，因为预检查会直接返回切换信号
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  &httpUpstreamStub{resp: nil, err: nil},
+	}
+
+	// 设置模型限流：剩余时间 30 秒（> antigravityRateLimitThreshold 7s）
+	futureResetAt := time.Now().Add(30 * time.Second).Format(time.RFC3339)
+	account := &Account{
+		ID:          1,
+		Name:        "acc-rate-limited",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+		},
+		Extra: map[string]any{
+			modelRateLimitsKey: map[string]any{
+				"claude-opus-4-6-thinking": map[string]any{
+					"rate_limit_reset_at": futureResetAt,
+				},
+			},
+		},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.Nil(t, result, "Forward should not return result when model rate limited")
+	require.NotNil(t, err, "Forward should return error")
+
+	// 核心验证：错误应该是 UpstreamFailoverError，而不是普通 502 错误
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	// 非粘性会话请求，ForceCacheBilling 应为 false
+	require.False(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be false for non-sticky session")
 }
 
-func TestAntigravityMaxRetriesForModel_AfterSwitchFallback(t *testing.T) {
-	t.Setenv(antigravityMaxRetriesEnv, "5")
-	t.Setenv(antigravityMaxRetriesAfterSwitchEnv, "")
-	t.Setenv(antigravityMaxRetriesClaudeEnv, "")
-	t.Setenv(antigravityMaxRetriesGeminiTextEnv, "")
-	t.Setenv(antigravityMaxRetriesGeminiImageEnv, "")
+// TestAntigravityGatewayService_ForwardGemini_ModelRateLimitTriggersFailover
+// 验证：ForwardGemini 方法同样能正确将 AntigravityAccountSwitchError 转换为 UpstreamFailoverError
+func TestAntigravityGatewayService_ForwardGemini_ModelRateLimitTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
 
-	got := antigravityMaxRetriesForModel("gemini-2.5-flash", true)
-	require.Equal(t, 5, got)
+	body, err := json.Marshal(map[string]any{
+		"contents": []map[string]any{
+			{"role": "user", "parts": []map[string]any{{"text": "hi"}}},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:generateContent", bytes.NewReader(body))
+	c.Request = req
+
+	// 不需要真正调用上游，因为预检查会直接返回切换信号
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  &httpUpstreamStub{resp: nil, err: nil},
+	}
+
+	// 设置模型限流：剩余时间 30 秒（> antigravityRateLimitThreshold 7s）
+	futureResetAt := time.Now().Add(30 * time.Second).Format(time.RFC3339)
+	account := &Account{
+		ID:          2,
+		Name:        "acc-gemini-rate-limited",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+		},
+		Extra: map[string]any{
+			modelRateLimitsKey: map[string]any{
+				"gemini-2.5-flash": map[string]any{
+					"rate_limit_reset_at": futureResetAt,
+				},
+			},
+		},
+	}
+
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-2.5-flash", "generateContent", false, body, false)
+	require.Nil(t, result, "ForwardGemini should not return result when model rate limited")
+	require.NotNil(t, err, "ForwardGemini should return error")
+
+	// 核心验证：错误应该是 UpstreamFailoverError，而不是普通 502 错误
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	// 非粘性会话请求，ForceCacheBilling 应为 false
+	require.False(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be false for non-sticky session")
+}
+
+// TestAntigravityGatewayService_Forward_StickySessionForceCacheBilling
+// 验证：粘性会话切换时，UpstreamFailoverError.ForceCacheBilling 应为 true
+func TestAntigravityGatewayService_Forward_StickySessionForceCacheBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"model":    "claude-opus-4-6",
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request = req
+
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  &httpUpstreamStub{resp: nil, err: nil},
+	}
+
+	// 设置模型限流：剩余时间 30 秒（> antigravityRateLimitThreshold 7s）
+	futureResetAt := time.Now().Add(30 * time.Second).Format(time.RFC3339)
+	account := &Account{
+		ID:          3,
+		Name:        "acc-sticky-rate-limited",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+		},
+		Extra: map[string]any{
+			modelRateLimitsKey: map[string]any{
+				"claude-opus-4-6-thinking": map[string]any{
+					"rate_limit_reset_at": futureResetAt,
+				},
+			},
+		},
+	}
+
+	// 传入 isStickySession = true
+	result, err := svc.Forward(context.Background(), c, account, body, true)
+	require.Nil(t, result, "Forward should not return result when model rate limited")
+	require.NotNil(t, err, "Forward should return error")
+
+	// 核心验证：粘性会话切换时，ForceCacheBilling 应为 true
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.True(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be true for sticky session switch")
+}
+
+// TestAntigravityGatewayService_ForwardGemini_StickySessionForceCacheBilling
+// 验证：ForwardGemini 粘性会话切换时，UpstreamFailoverError.ForceCacheBilling 应为 true
+func TestAntigravityGatewayService_ForwardGemini_StickySessionForceCacheBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"contents": []map[string]any{
+			{"role": "user", "parts": []map[string]any{{"text": "hi"}}},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:generateContent", bytes.NewReader(body))
+	c.Request = req
+
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  &httpUpstreamStub{resp: nil, err: nil},
+	}
+
+	// 设置模型限流：剩余时间 30 秒（> antigravityRateLimitThreshold 7s）
+	futureResetAt := time.Now().Add(30 * time.Second).Format(time.RFC3339)
+	account := &Account{
+		ID:          4,
+		Name:        "acc-gemini-sticky-rate-limited",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+		},
+		Extra: map[string]any{
+			modelRateLimitsKey: map[string]any{
+				"gemini-2.5-flash": map[string]any{
+					"rate_limit_reset_at": futureResetAt,
+				},
+			},
+		},
+	}
+
+	// 传入 isStickySession = true
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-2.5-flash", "generateContent", false, body, true)
+	require.Nil(t, result, "ForwardGemini should not return result when model rate limited")
+	require.NotNil(t, err, "ForwardGemini should return error")
+
+	// 核心验证：粘性会话切换时，ForceCacheBilling 应为 true
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.True(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be true for sticky session switch")
 }
