@@ -120,3 +120,24 @@ func TestGeminiCLITmpDirRegex(t *testing.T) {
 		})
 	}
 }
+
+func TestSafeShortPrefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		n     int
+		want  string
+	}{
+		{name: "空字符串", input: "", n: 8, want: ""},
+		{name: "长度小于截断值", input: "abc", n: 8, want: "abc"},
+		{name: "长度等于截断值", input: "12345678", n: 8, want: "12345678"},
+		{name: "长度大于截断值", input: "1234567890", n: 8, want: "12345678"},
+		{name: "截断值为0", input: "123456", n: 0, want: "123456"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, safeShortPrefix(tt.input, tt.n))
+		})
+	}
+}
