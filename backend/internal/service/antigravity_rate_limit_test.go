@@ -524,8 +524,8 @@ func TestParseAntigravitySmartRetryInfo(t *testing.T) {
 }
 
 func TestShouldTriggerAntigravitySmartRetry(t *testing.T) {
-	oauthAccount := &Account{Type: AccountTypeOAuth}
-	setupTokenAccount := &Account{Type: AccountTypeSetupToken}
+	oauthAccount := &Account{Type: AccountTypeOAuth, Platform: PlatformAntigravity}
+	setupTokenAccount := &Account{Type: AccountTypeSetupToken, Platform: PlatformAntigravity}
 	apiKeyAccount := &Account{Type: AccountTypeAPIKey}
 
 	tests := []struct {
