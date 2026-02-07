@@ -337,6 +337,22 @@ export interface OpsConcurrencyStatsResponse {
   timestamp?: string
 }
 
+export interface UserConcurrencyInfo {
+  user_id: number
+  user_email: string
+  username: string
+  current_in_use: number
+  max_capacity: number
+  load_percentage: number
+  waiting_in_queue: number
+}
+
+export interface OpsUserConcurrencyStatsResponse {
+  enabled: boolean
+  user: Record<string, UserConcurrencyInfo>
+  timestamp?: string
+}
+
 export async function getConcurrencyStats(platform?: string, groupId?: number | null): Promise<OpsConcurrencyStatsResponse> {
   const params: Record<string, any> = {}
   if (platform) {
@@ -347,6 +363,11 @@ export async function getConcurrencyStats(platform?: string, groupId?: number | 
   }
 
   const { data } = await apiClient.get<OpsConcurrencyStatsResponse>('/admin/ops/concurrency', { params })
+  return data
+}
+
+export async function getUserConcurrencyStats(): Promise<OpsUserConcurrencyStatsResponse> {
+  const { data } = await apiClient.get<OpsUserConcurrencyStatsResponse>('/admin/ops/user-concurrency')
   return data
 }
 
@@ -1171,6 +1192,7 @@ export const opsAPI = {
   getErrorTrend,
   getErrorDistribution,
   getConcurrencyStats,
+  getUserConcurrencyStats,
   getAccountAvailabilityStats,
   getRealtimeTrafficSummary,
   subscribeQPS,

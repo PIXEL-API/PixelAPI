@@ -212,17 +212,6 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		}
 	}
 
-	if scopeLimits := a.GetAntigravityScopeRateLimits(); len(scopeLimits) > 0 {
-		out.ScopeRateLimits = make(map[string]ScopeRateLimitInfo, len(scopeLimits))
-		now := time.Now()
-		for scope, remainingSec := range scopeLimits {
-			out.ScopeRateLimits[scope] = ScopeRateLimitInfo{
-				ResetAt:      now.Add(time.Duration(remainingSec) * time.Second),
-				RemainingSec: remainingSec,
-			}
-		}
-	}
-
 	return out
 }
 
