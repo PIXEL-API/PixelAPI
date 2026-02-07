@@ -495,14 +495,14 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 	if parsed.System != nil {
 		systemText := s.extractTextFromSystem(parsed.System)
 		if systemText != "" {
-			combined.WriteString(systemText)
+			_, _ = combined.WriteString(systemText)
 		}
 	}
 	for _, msg := range parsed.Messages {
 		if m, ok := msg.(map[string]any); ok {
 			msgText := s.extractTextFromContent(m["content"])
 			if msgText != "" {
-				combined.WriteString(msgText)
+				_, _ = combined.WriteString(msgText)
 			}
 		}
 	}
