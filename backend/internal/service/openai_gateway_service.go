@@ -765,7 +765,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	bodyModified := false
 	originalModel := reqModel
 
-	isCodexCLI := openai.IsCodexCLIRequest(c.GetHeader("User-Agent"))
+	isCodexCLI := openai.IsCodexCLIRequest(c.GetHeader("User-Agent")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 
 	// 对所有请求执行模型映射（包含 Codex CLI）。
 	mappedModel := account.GetMappedModel(reqModel)
@@ -1051,6 +1051,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	customUA := account.GetOpenAIUserAgent()
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
+	}
+
+	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为 Codex CLI。
+	// 用于网关未透传/改写 User-Agent 时，仍能命中 Codex 侧识别逻辑。
+	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+		req.Header.Set("user-agent", "codex_cli_rs/0.98.0")
 	}
 
 	// Ensure required headers exist
