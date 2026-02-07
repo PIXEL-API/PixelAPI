@@ -906,6 +906,39 @@ func TestGeminiMessagesCompatService_isModelSupportedByAccount(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "Antigravity平台-空模型允许",
+			account:  &Account{Platform: PlatformAntigravity},
+			model:    "",
+			expected: true,
+		},
+		{
+			name: "Antigravity平台-自定义映射-支持自定义模型",
+			account: &Account{
+				Platform: PlatformAntigravity,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{
+						"my-custom-model": "upstream-model",
+						"gpt-4o":          "some-model",
+					},
+				},
+			},
+			model:    "my-custom-model",
+			expected: true,
+		},
+		{
+			name: "Antigravity平台-自定义映射-不在映射中的模型不支持",
+			account: &Account{
+				Platform: PlatformAntigravity,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{
+						"my-custom-model": "upstream-model",
+					},
+				},
+			},
+			model:    "claude-sonnet-4-5",
+			expected: false,
+		},
+		{
 			name:     "Gemini平台-无映射配置-支持所有模型",
 			account:  &Account{Platform: PlatformGemini},
 			model:    "gemini-2.5-flash",
