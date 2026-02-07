@@ -1687,7 +1687,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			Usage:        ClaudeUsage{},
 			Model:        originalModel,
 			Stream:       false,
-			Duration:     time.Since(time.Now()),
+			Duration:     time.Since(startTime),
 			FirstTokenMs: nil,
 		}, nil
 	default:

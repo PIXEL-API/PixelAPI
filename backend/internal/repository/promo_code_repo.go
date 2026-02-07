@@ -132,7 +132,7 @@ func (r *promoCodeRepository) ListWithFilters(ctx context.Context, params pagina
 		q = q.Where(promocode.CodeContainsFold(search))
 	}
 
-	total, err := q.Count(ctx)
+	total, err := q.Clone().Count(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -187,7 +187,7 @@ func (r *promoCodeRepository) ListUsagesByPromoCode(ctx context.Context, promoCo
 	q := r.client.PromoCodeUsage.Query().
 		Where(promocodeusage.PromoCodeIDEQ(promoCodeID))
 
-	total, err := q.Count(ctx)
+	total, err := q.Clone().Count(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

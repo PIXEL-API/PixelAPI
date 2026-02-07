@@ -216,7 +216,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err != nil {
 			log.Printf("[OpenAI Handler] SelectAccount failed: %v", err)
 			if len(failedAccountIDs) == 0 {
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error(), streamStarted)
+				log.Printf("[OpenAI Gateway] SelectAccount failed: %v", err)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
 				return
 			}
 			if lastFailoverErr != nil {
@@ -249,11 +250,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			if err == nil && canWait {
 				accountWaitCounted = true
 			}
-			defer func() {
+			releaseWait := func() {
 				if accountWaitCounted {
 					h.concurrencyHelper.DecrementAccountWaitCount(c.Request.Context(), account.ID)
+					accountWaitCounted = false
 				}
-			}()
+			}
 
 			accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 				c,
@@ -265,13 +267,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			)
 			if err != nil {
 				log.Printf("Account concurrency acquire failed: %v", err)
+				releaseWait()
 				h.handleConcurrencyError(c, err, "account", streamStarted)
 				return
 			}
-			if accountWaitCounted {
-				h.concurrencyHelper.DecrementAccountWaitCount(c.Request.Context(), account.ID)
-				accountWaitCounted = false
-			}
+			// Slot acquired: no longer waiting in queue.
+			releaseWait()
 			if err := h.gatewayService.BindStickySession(c.Request.Context(), apiKey.GroupID, sessionHash, account.ID); err != nil {
 				log.Printf("Bind sticky session failed: %v", err)
 			}

@@ -3,6 +3,7 @@ package admin
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -738,57 +739,40 @@ func (h *AccountHandler) BatchUpdateCredentials(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	success := 0
-	failed := 0
-	results := []gin.H{}
 
+	// 阶段一：预验证所有账号存在，收集 credentials
+	type accountUpdate struct {
+		ID          int64
+		Credentials map[string]any
+	}
+	updates := make([]accountUpdate, 0, len(req.AccountIDs))
 	for _, accountID := range req.AccountIDs {
-		// Get account
 		account, err := h.adminService.GetAccount(ctx, accountID)
 		if err != nil {
-			failed++
-			results = append(results, gin.H{
-				"account_id": accountID,
-				"success":    false,
-				"error":      "Account not found",
-			})
-			continue
+			response.Error(c, 404, fmt.Sprintf("Account %d not found", accountID))
+			return
 		}
-
-		// Update credentials field
 		if account.Credentials == nil {
 			account.Credentials = make(map[string]any)
 		}
-
 		account.Credentials[req.Field] = req.Value
+		updates = append(updates, accountUpdate{ID: accountID, Credentials: account.Credentials})
+	}
 
-		// Update account
+	// 阶段二：依次更新，任何失败立即返回（避免部分成功部分失败）
+	for _, u := range updates {
 		updateInput := &service.UpdateAccountInput{
-			Credentials: account.Credentials,
+			Credentials: u.Credentials,
 		}
-
-		_, err = h.adminService.UpdateAccount(ctx, accountID, updateInput)
-		if err != nil {
-			failed++
-			results = append(results, gin.H{
-				"account_id": accountID,
-				"success":    false,
-				"error":      err.Error(),
-			})
-			continue
+		if _, err := h.adminService.UpdateAccount(ctx, u.ID, updateInput); err != nil {
+			response.Error(c, 500, fmt.Sprintf("Failed to update account %d: %v", u.ID, err))
+			return
 		}
-
-		success++
-		results = append(results, gin.H{
-			"account_id": accountID,
-			"success":    true,
-		})
 	}
 
 	response.Success(c, gin.H{
-		"success": success,
-		"failed":  failed,
-		"results": results,
+		"success": len(updates),
+		"failed":  0,
 	})
 }
 

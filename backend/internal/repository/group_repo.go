@@ -183,7 +183,7 @@ func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination
 		q = q.Where(group.IsExclusiveEQ(*isExclusive))
 	}
 
-	total, err := q.Count(ctx)
+	total, err := q.Clone().Count(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

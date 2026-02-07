@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -62,13 +64,15 @@ type ChangePasswordRequest struct {
 type UserService struct {
 	userRepo             UserRepository
 	authCacheInvalidator APIKeyAuthCacheInvalidator
+	billingCache         BillingCache
 }
 
 // NewUserService 创建用户服务实例
-func NewUserService(userRepo UserRepository, authCacheInvalidator APIKeyAuthCacheInvalidator) *UserService {
+func NewUserService(userRepo UserRepository, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCache BillingCache) *UserService {
 	return &UserService{
 		userRepo:             userRepo,
 		authCacheInvalidator: authCacheInvalidator,
+		billingCache:         billingCache,
 	}
 }
 
@@ -182,6 +186,15 @@ func (s *UserService) UpdateBalance(ctx context.Context, userID int64, amount fl
 	}
 	if s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+	if s.billingCache != nil {
+		go func() {
+			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.billingCache.InvalidateUserBalance(cacheCtx, userID); err != nil {
+				log.Printf("invalidate user balance cache failed: user_id=%d err=%v", userID, err)
+			}
+		}()
 	}
 	return nil
 }

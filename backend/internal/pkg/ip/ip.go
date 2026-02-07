@@ -54,29 +54,34 @@ func normalizeIP(ip string) string {
 	return ip
 }
 
-// isPrivateIP 检查 IP 是否为私有地址。
-func isPrivateIP(ipStr string) bool {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return false
-	}
+// privateNets 预编译私有 IP CIDR 块，避免每次调用 isPrivateIP 时重复解析
+var privateNets []*net.IPNet
 
-	// 私有 IP 范围
-	privateBlocks := []string{
+func init() {
+	for _, cidr := range []string{
 		"10.0.0.0/8",
 		"172.16.0.0/12",
 		"192.168.0.0/16",
 		"127.0.0.0/8",
 		"::1/128",
 		"fc00::/7",
-	}
-
-	for _, block := range privateBlocks {
-		_, cidr, err := net.ParseCIDR(block)
+	} {
+		_, block, err := net.ParseCIDR(cidr)
 		if err != nil {
-			continue
+			panic("invalid CIDR: " + cidr)
 		}
-		if cidr.Contains(ip) {
+		privateNets = append(privateNets, block)
+	}
+}
+
+// isPrivateIP 检查 IP 是否为私有地址。
+func isPrivateIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for _, block := range privateNets {
+		if block.Contains(ip) {
 			return true
 		}
 	}
