@@ -483,7 +483,11 @@ func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID,
 		return nil, err
 	}
 	// singleflight 返回的也是缓存指针，需要浅拷贝
-	cp := *value.(*UserSubscription)
+	sub, ok := value.(*UserSubscription)
+	if !ok || sub == nil {
+		return nil, ErrSubscriptionNotFound
+	}
+	cp := *sub
 	return &cp, nil
 }
 
