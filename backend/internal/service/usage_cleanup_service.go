@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -174,7 +175,7 @@ func (s *UsageCleanupService) runOnce() {
 		return
 	}
 	if task == nil {
-		log.Printf("[UsageCleanup] run_once done: no_task=true")
+		slog.Debug("[UsageCleanup] run_once done: no_task=true")
 		return
 	}
 
