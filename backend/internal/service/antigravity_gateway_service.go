@@ -3492,12 +3492,14 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		return nil, s.writeClaudeError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
 	}
 	// 透传客户端所有请求头（排除 hop-by-hop 和认证头）
-	for key, values := range c.Request.Header {
-		if upstreamHopByHopHeaders[strings.ToLower(key)] {
-			continue
-		}
-		for _, v := range values {
-			req.Header.Add(key, v)
+	if c != nil && c.Request != nil {
+		for key, values := range c.Request.Header {
+			if upstreamHopByHopHeaders[strings.ToLower(key)] {
+				continue
+			}
+			for _, v := range values {
+				req.Header.Add(key, v)
+			}
 		}
 	}
 	// 覆盖认证头
@@ -3638,12 +3640,14 @@ func (s *AntigravityGatewayService) ForwardUpstreamGemini(ctx context.Context, c
 		return nil, s.writeGoogleError(c, http.StatusInternalServerError, "Failed to build request")
 	}
 	// 透传客户端所有请求头（排除 hop-by-hop 和认证头）
-	for key, values := range c.Request.Header {
-		if upstreamHopByHopHeaders[strings.ToLower(key)] {
-			continue
-		}
-		for _, v := range values {
-			req.Header.Add(key, v)
+	if c != nil && c.Request != nil {
+		for key, values := range c.Request.Header {
+			if upstreamHopByHopHeaders[strings.ToLower(key)] {
+				continue
+			}
+			for _, v := range values {
+				req.Header.Add(key, v)
+			}
 		}
 	}
 	// 覆盖认证头
