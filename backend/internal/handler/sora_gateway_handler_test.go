@@ -16,9 +16,16 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/testutil"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// 编译期接口断言
+var _ service.SoraClient = (*stubSoraClient)(nil)
+var _ service.AccountRepository = (*stubAccountRepo)(nil)
+var _ service.GroupRepository = (*stubGroupRepo)(nil)
+var _ service.UsageLogRepository = (*stubUsageLogRepo)(nil)
 
 type stubSoraClient struct {
 	imageURLs []string
@@ -39,52 +46,6 @@ func (s *stubSoraClient) GetImageTask(ctx context.Context, account *service.Acco
 }
 func (s *stubSoraClient) GetVideoTask(ctx context.Context, account *service.Account, taskID string) (*service.SoraVideoTaskStatus, error) {
 	return &service.SoraVideoTaskStatus{ID: taskID, Status: "completed", URLs: s.imageURLs}, nil
-}
-
-type stubConcurrencyCache struct{}
-
-func (c stubConcurrencyCache) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
-	return true, nil
-}
-func (c stubConcurrencyCache) ReleaseAccountSlot(ctx context.Context, accountID int64, requestID string) error {
-	return nil
-}
-func (c stubConcurrencyCache) GetAccountConcurrency(ctx context.Context, accountID int64) (int, error) {
-	return 0, nil
-}
-func (c stubConcurrencyCache) IncrementAccountWaitCount(ctx context.Context, accountID int64, maxWait int) (bool, error) {
-	return true, nil
-}
-func (c stubConcurrencyCache) DecrementAccountWaitCount(ctx context.Context, accountID int64) error {
-	return nil
-}
-func (c stubConcurrencyCache) GetAccountWaitingCount(ctx context.Context, accountID int64) (int, error) {
-	return 0, nil
-}
-func (c stubConcurrencyCache) AcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
-	return true, nil
-}
-func (c stubConcurrencyCache) ReleaseUserSlot(ctx context.Context, userID int64, requestID string) error {
-	return nil
-}
-func (c stubConcurrencyCache) GetUserConcurrency(ctx context.Context, userID int64) (int, error) {
-	return 0, nil
-}
-func (c stubConcurrencyCache) IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error) {
-	return true, nil
-}
-func (c stubConcurrencyCache) DecrementWaitCount(ctx context.Context, userID int64) error {
-	return nil
-}
-func (c stubConcurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []service.AccountWithConcurrency) (map[int64]*service.AccountLoadInfo, error) {
-	result := make(map[int64]*service.AccountLoadInfo, len(accounts))
-	for _, acc := range accounts {
-		result[acc.ID] = &service.AccountLoadInfo{AccountID: acc.ID, LoadRate: 0}
-	}
-	return result, nil
-}
-func (c stubConcurrencyCache) CleanupExpiredAccountSlots(ctx context.Context, accountID int64) error {
-	return nil
 }
 
 type stubAccountRepo struct {
@@ -260,6 +221,12 @@ func (r *stubGroupRepo) GetAccountCount(ctx context.Context, groupID int64) (int
 func (r *stubGroupRepo) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	return 0, nil
 }
+func (r *stubGroupRepo) GetAccountIDsByGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error) {
+	return nil, nil
+}
+func (r *stubGroupRepo) BindAccountsToGroup(ctx context.Context, groupID int64, accountIDs []int64) error {
+	return nil
+}
 
 type stubUsageLogRepo struct{}
 
@@ -312,13 +279,16 @@ func (s *stubUsageLogRepo) GetAPIKeyUsageTrend(ctx context.Context, startTime, e
 func (s *stubUsageLogRepo) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) ([]usagestats.UserUsageTrendPoint, error) {
 	return nil, nil
 }
-func (s *stubUsageLogRepo) GetBatchUserUsageStats(ctx context.Context, userIDs []int64) (map[int64]*usagestats.BatchUserUsageStats, error) {
+func (s *stubUsageLogRepo) GetBatchUserUsageStats(ctx context.Context, userIDs []int64, startTime, endTime time.Time) (map[int64]*usagestats.BatchUserUsageStats, error) {
 	return nil, nil
 }
-func (s *stubUsageLogRepo) GetBatchAPIKeyUsageStats(ctx context.Context, apiKeyIDs []int64) (map[int64]*usagestats.BatchAPIKeyUsageStats, error) {
+func (s *stubUsageLogRepo) GetBatchAPIKeyUsageStats(ctx context.Context, apiKeyIDs []int64, startTime, endTime time.Time) (map[int64]*usagestats.BatchAPIKeyUsageStats, error) {
 	return nil, nil
 }
 func (s *stubUsageLogRepo) GetUserDashboardStats(ctx context.Context, userID int64) (*usagestats.UserDashboardStats, error) {
+	return nil, nil
+}
+func (s *stubUsageLogRepo) GetAPIKeyDashboardStats(ctx context.Context, apiKeyID int64) (*usagestats.UserDashboardStats, error) {
 	return nil, nil
 }
 func (s *stubUsageLogRepo) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) ([]usagestats.TrendDataPoint, error) {
@@ -384,7 +354,7 @@ func TestSoraGatewayHandler_ChatCompletions(t *testing.T) {
 	usageLogRepo := &stubUsageLogRepo{}
 	deferredService := service.NewDeferredService(accountRepo, nil, 0)
 	billingService := service.NewBillingService(cfg, nil)
-	concurrencyService := service.NewConcurrencyService(stubConcurrencyCache{})
+	concurrencyService := service.NewConcurrencyService(testutil.StubConcurrencyCache{})
 	billingCacheService := service.NewBillingCacheService(nil, nil, nil, cfg)
 	t.Cleanup(func() {
 		billingCacheService.Stop()
@@ -394,6 +364,7 @@ func TestSoraGatewayHandler_ChatCompletions(t *testing.T) {
 		accountRepo,
 		groupRepo,
 		usageLogRepo,
+		nil,
 		nil,
 		nil,
 		nil,
