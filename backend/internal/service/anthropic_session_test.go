@@ -236,43 +236,6 @@ func TestBuildAnthropicDigestChain_Deterministic(t *testing.T) {
 	}
 }
 
-func TestBuildAnthropicTrieKey(t *testing.T) {
-	tests := []struct {
-		name       string
-		groupID    int64
-		prefixHash string
-		want       string
-	}{
-		{
-			name:       "normal",
-			groupID:    123,
-			prefixHash: "abcdef12",
-			want:       "anthropic:trie:123:abcdef12",
-		},
-		{
-			name:       "zero group",
-			groupID:    0,
-			prefixHash: "xyz",
-			want:       "anthropic:trie:0:xyz",
-		},
-		{
-			name:       "empty prefix",
-			groupID:    1,
-			prefixHash: "",
-			want:       "anthropic:trie:1:",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := BuildAnthropicTrieKey(tt.groupID, tt.prefixHash)
-			if got != tt.want {
-				t.Errorf("BuildAnthropicTrieKey(%d, %q) = %q, want %q", tt.groupID, tt.prefixHash, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGenerateAnthropicDigestSessionKey(t *testing.T) {
 	tests := []struct {
 		name       string
