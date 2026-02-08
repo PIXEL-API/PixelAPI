@@ -482,7 +482,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if switchCount > 0 {
 				requestCtx = context.WithValue(requestCtx, ctxkey.AccountSwitchCount, switchCount)
 			}
-			if account.Platform == service.PlatformAntigravity {
+			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, body, hasBoundSession)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)

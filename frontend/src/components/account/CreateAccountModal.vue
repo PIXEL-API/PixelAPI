@@ -2289,9 +2289,9 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType],
   ([category, method, agType]) => {
-    // Antigravity upstream 类型
+    // Antigravity upstream 类型（实际创建为 apikey）
     if (form.platform === 'antigravity' && agType === 'upstream') {
-      form.type = 'upstream'
+      form.type = 'apikey'
       return
     }
     if (category === 'oauth-based') {
@@ -2714,7 +2714,8 @@ const handleSubmit = async () => {
 
     submitting.value = true
     try {
-      await createAccountAndFinish(form.platform, 'upstream', credentials)
+      const extra = mixedScheduling.value ? { mixed_scheduling: true } : undefined
+      await createAccountAndFinish(form.platform, 'apikey', credentials, extra)
     } catch (error: any) {
       appStore.showError(error.response?.data?.detail || t('admin.accounts.failedToCreate'))
     } finally {
