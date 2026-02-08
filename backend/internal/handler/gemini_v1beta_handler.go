@@ -422,7 +422,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				failedAccountIDs[account.ID] = struct{}{}
-				if failoverErr.ForceCacheBilling {
+				if needForceCacheBilling(hasBoundSession, failoverErr) {
 					forceCacheBilling = true
 				}
 				if switchCount >= maxAccountSwitches {
