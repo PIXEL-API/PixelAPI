@@ -47,6 +47,21 @@ const (
 	googleRPCReasonRateLimitExceeded      = "RATE_LIMIT_EXCEEDED"
 )
 
+// upstreamHopByHopHeaders 透传请求头时需要排除的 hop-by-hop 头
+var upstreamHopByHopHeaders = map[string]bool{
+	"connection":          true,
+	"keep-alive":          true,
+	"proxy-authenticate":  true,
+	"proxy-authorization": true,
+	"proxy-connection":    true,
+	"te":                  true,
+	"trailer":             true,
+	"transfer-encoding":   true,
+	"upgrade":             true,
+	"host":                true,
+	"content-length":      true,
+}
+
 // antigravityPassthroughErrorMessages 透传给客户端的错误消息白名单（小写）
 // 匹配时使用 strings.Contains，无需完全匹配
 var antigravityPassthroughErrorMessages = []string{
@@ -3456,10 +3471,6 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	if mappedModel == "" {
 		return nil, s.writeClaudeError(c, http.StatusForbidden, "permission_error", fmt.Sprintf("model %s not in whitelist", claudeReq.Model))
 	}
-	loadModel := mappedModel
-	thinkingEnabled := claudeReq.Thinking != nil && claudeReq.Thinking.Type == "enabled"
-	mappedModel = applyThinkingModelSuffix(mappedModel, thinkingEnabled)
-	quotaScope, _ := resolveAntigravityQuotaScope(originalModel)
 
 	// 代理 URL
 	proxyURL := ""
@@ -3469,98 +3480,38 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 
 	// 统计模型调用次数
 	if s.cache != nil {
-		_, _ = s.cache.IncrModelCallCount(ctx, account.ID, loadModel)
+		_, _ = s.cache.IncrModelCallCount(ctx, account.ID, mappedModel)
 	}
 
 	apiURL := baseURL + "/antigravity/v1/messages"
 	log.Printf("%s upstream_forward url=%s model=%s", prefix, apiURL, mappedModel)
 
-	// 预检查：模型级限流
-	if remaining := account.GetRateLimitRemainingTimeWithContext(ctx, originalModel); remaining > 0 {
-		if remaining < antigravityRateLimitThreshold {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(remaining):
-			}
-		} else {
-			return nil, &UpstreamFailoverError{
-				StatusCode:        http.StatusServiceUnavailable,
-				ForceCacheBilling: isStickySession,
-			}
+	// 构建请求：body 原样透传
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, s.writeClaudeError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
+	}
+	// 透传客户端所有请求头（排除 hop-by-hop 和认证头）
+	for key, values := range c.Request.Header {
+		if upstreamHopByHopHeaders[strings.ToLower(key)] {
+			continue
+		}
+		for _, v := range values {
+			req.Header.Add(key, v)
 		}
 	}
+	// 覆盖认证头
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("x-api-key", apiKey)
 
-	// 重试循环
-	var resp *http.Response
-	var lastErr error
-	for attempt := 1; attempt <= antigravityMaxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
-		if err != nil {
-			return nil, s.writeClaudeError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("x-api-key", apiKey)
-
-		// 透传 anthropic headers
-		if v := c.GetHeader("anthropic-version"); v != "" {
-			req.Header.Set("anthropic-version", v)
-		} else {
-			req.Header.Set("anthropic-version", "2023-06-01")
-		}
-		if v := c.GetHeader("anthropic-beta"); v != "" {
-			req.Header.Set("anthropic-beta", v)
-		}
-
-		if c != nil && len(body) > 0 {
-			c.Set(OpsUpstreamRequestBodyKey, string(body))
-		}
-
-		resp, err = s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
-		if err != nil {
-			lastErr = err
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=request_failed retry=%d/%d error=%v", prefix, attempt, antigravityMaxRetries, err)
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					return nil, ctx.Err()
-				}
-				continue
-			}
-			return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries")
-		}
-
-		// 429/503 重试
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			_ = resp.Body.Close()
-
-			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope, 0, "", isStickySession)
-
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=%d retry=%d/%d body=%s", prefix, resp.StatusCode, attempt, antigravityMaxRetries, truncateForLog(respBody, 200))
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					return nil, ctx.Err()
-				}
-				continue
-			}
-
-			return nil, &UpstreamFailoverError{
-				StatusCode:        resp.StatusCode,
-				ForceCacheBilling: isStickySession,
-			}
-		}
-
-		break // 成功或非限流错误，跳出重试
+	if c != nil && len(body) > 0 {
+		c.Set(OpsUpstreamRequestBodyKey, string(body))
 	}
-	if resp == nil {
-		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", fmt.Sprintf("upstream request failed: %v", lastErr))
+
+	// 单次发送，不重试
+	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if err != nil {
+		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", fmt.Sprintf("Upstream request failed: %v", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -3568,44 +3519,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 
-		// signature 重试
-		if resp.StatusCode == http.StatusBadRequest && isSignatureRelatedError(respBody) {
-			log.Printf("%s upstream signature error, retrying with thinking stripped", prefix)
-			retryClaudeReq := claudeReq
-			retryClaudeReq.Messages = append([]antigravity.ClaudeMessage(nil), claudeReq.Messages...)
-			if stripped, stripErr := stripThinkingFromClaudeRequest(&retryClaudeReq); stripErr == nil && stripped {
-				retryBody, _ := json.Marshal(&retryClaudeReq)
-				retryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(retryBody))
-				if err == nil {
-					retryReq.Header.Set("Content-Type", "application/json")
-					retryReq.Header.Set("Authorization", "Bearer "+apiKey)
-					retryReq.Header.Set("x-api-key", apiKey)
-					retryReq.Header.Set("anthropic-version", "2023-06-01")
-					if v := c.GetHeader("anthropic-beta"); v != "" {
-						retryReq.Header.Set("anthropic-beta", v)
-					}
-					retryResp, retryErr := s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
-					if retryErr == nil && retryResp != nil && retryResp.StatusCode < 400 {
-						resp = retryResp
-						goto upstreamClaudeSuccess
-					}
-					if retryResp != nil {
-						_ = retryResp.Body.Close()
-					}
-				}
-			}
-		}
-
-		// prompt too long
-		if resp.StatusCode == http.StatusBadRequest && isPromptTooLongError(respBody) {
-			return nil, &PromptTooLongError{
-				StatusCode: resp.StatusCode,
-				RequestID:  resp.Header.Get("x-request-id"),
-				Body:       respBody,
-			}
-		}
-
-		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope, 0, "", isStickySession)
+		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, "", 0, "", isStickySession)
 
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
@@ -3614,7 +3528,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		return nil, s.writeMappedClaudeError(c, account, resp.StatusCode, resp.Header.Get("x-request-id"), respBody)
 	}
 
-upstreamClaudeSuccess:
+	// 成功响应
 	requestID := resp.Header.Get("x-request-id")
 	if requestID != "" {
 		c.Header("x-request-id", requestID)
@@ -3674,7 +3588,6 @@ func (s *AntigravityGatewayService) ForwardUpstreamGemini(ctx context.Context, c
 	if len(body) == 0 {
 		return nil, s.writeGoogleError(c, http.StatusBadRequest, "Request body is empty")
 	}
-	quotaScope, _ := resolveAntigravityQuotaScope(originalModel)
 
 	imageSize := s.extractImageSize(body)
 
@@ -3712,143 +3625,52 @@ func (s *AntigravityGatewayService) ForwardUpstreamGemini(ctx context.Context, c
 	}
 
 	// 构建 upstream URL: base_url + /antigravity/v1beta/models/MODEL:ACTION
-	upstreamAction := action
-	if action == "generateContent" && !stream {
-		// 非流式也用 streamGenerateContent，与 OAuth 路径行为一致
-		upstreamAction = action
-	}
-	apiURL := fmt.Sprintf("%s/antigravity/v1beta/models/%s:%s", baseURL, mappedModel, upstreamAction)
-	if stream || upstreamAction == "streamGenerateContent" {
+	apiURL := fmt.Sprintf("%s/antigravity/v1beta/models/%s:%s", baseURL, mappedModel, action)
+	if stream || action == "streamGenerateContent" {
 		apiURL += "?alt=sse"
 	}
 
-	log.Printf("%s upstream_forward_gemini url=%s model=%s action=%s", prefix, apiURL, mappedModel, upstreamAction)
+	log.Printf("%s upstream_forward_gemini url=%s model=%s action=%s", prefix, apiURL, mappedModel, action)
 
-	// 预检查：模型级限流
-	if remaining := account.GetRateLimitRemainingTimeWithContext(ctx, originalModel); remaining > 0 {
-		if remaining < antigravityRateLimitThreshold {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(remaining):
-			}
-		} else {
-			return nil, &UpstreamFailoverError{
-				StatusCode:        http.StatusServiceUnavailable,
-				ForceCacheBilling: isStickySession,
-			}
+	// 构建请求：body 原样透传
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, s.writeGoogleError(c, http.StatusInternalServerError, "Failed to build request")
+	}
+	// 透传客户端所有请求头（排除 hop-by-hop 和认证头）
+	for key, values := range c.Request.Header {
+		if upstreamHopByHopHeaders[strings.ToLower(key)] {
+			continue
+		}
+		for _, v := range values {
+			req.Header.Add(key, v)
 		}
 	}
+	// 覆盖认证头
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	// 重试循环
-	var resp *http.Response
-	var lastErr error
-	for attempt := 1; attempt <= antigravityMaxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
-		if err != nil {
-			return nil, s.writeGoogleError(c, http.StatusInternalServerError, "Failed to build request")
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-
-		if c != nil && len(body) > 0 {
-			c.Set(OpsUpstreamRequestBodyKey, string(body))
-		}
-
-		resp, err = s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
-		if err != nil {
-			lastErr = err
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=request_failed retry=%d/%d error=%v", prefix, attempt, antigravityMaxRetries, err)
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					return nil, ctx.Err()
-				}
-				continue
-			}
-			return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream request failed after retries")
-		}
-
-		// 429/503 重试
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			_ = resp.Body.Close()
-
-			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope, 0, "", isStickySession)
-
-			if attempt < antigravityMaxRetries {
-				log.Printf("%s status=%d retry=%d/%d body=%s", prefix, resp.StatusCode, attempt, antigravityMaxRetries, truncateForLog(respBody, 200))
-				if !sleepAntigravityBackoffWithContext(ctx, attempt) {
-					return nil, ctx.Err()
-				}
-				continue
-			}
-
-			return nil, &UpstreamFailoverError{
-				StatusCode:        resp.StatusCode,
-				ForceCacheBilling: isStickySession,
-			}
-		}
-
-		break
+	if c != nil && len(body) > 0 {
+		c.Set(OpsUpstreamRequestBodyKey, string(body))
 	}
-	if resp == nil {
-		return nil, s.writeGoogleError(c, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", lastErr))
+
+	// 单次发送，不重试
+	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if err != nil {
+		return nil, s.writeGoogleError(c, http.StatusBadGateway, fmt.Sprintf("Upstream request failed: %v", err))
 	}
-	defer func() {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	// 错误响应处理
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		contentType := resp.Header.Get("Content-Type")
-		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
-
-		// 模型兜底
-		if s.settingService != nil && s.settingService.IsModelFallbackEnabled(ctx) &&
-			isModelNotFoundError(resp.StatusCode, respBody) {
-			fallbackModel := s.settingService.GetFallbackModel(ctx, PlatformAntigravity)
-			if fallbackModel != "" && fallbackModel != mappedModel {
-				log.Printf("[Antigravity-Upstream] Model not found (%s), retrying with fallback model %s (account: %s)", mappedModel, fallbackModel, account.Name)
-				fallbackURL := fmt.Sprintf("%s/antigravity/v1beta/models/%s:%s", baseURL, fallbackModel, upstreamAction)
-				if stream || upstreamAction == "streamGenerateContent" {
-					fallbackURL += "?alt=sse"
-				}
-				fallbackReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fallbackURL, bytes.NewReader(body))
-				if err == nil {
-					fallbackReq.Header.Set("Content-Type", "application/json")
-					fallbackReq.Header.Set("Authorization", "Bearer "+apiKey)
-					fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
-					if err == nil && fallbackResp.StatusCode < 400 {
-						_ = resp.Body.Close()
-						resp = fallbackResp
-					} else if fallbackResp != nil {
-						_ = fallbackResp.Body.Close()
-					}
-				}
-			}
-		}
-
-		// fallback 成功
-		if resp.StatusCode < 400 {
-			goto upstreamGeminiSuccess
-		}
 
 		requestID := resp.Header.Get("x-request-id")
 		if requestID != "" {
 			c.Header("x-request-id", requestID)
 		}
 
-		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, quotaScope, 0, "", isStickySession)
+		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, "", 0, "", isStickySession)
 		upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		upstreamDetail := s.getUpstreamErrorDetail(respBody)
@@ -3886,7 +3708,7 @@ func (s *AntigravityGatewayService) ForwardUpstreamGemini(ctx context.Context, c
 		return nil, fmt.Errorf("antigravity upstream error: %d", resp.StatusCode)
 	}
 
-upstreamGeminiSuccess:
+	// 成功响应
 	requestID := resp.Header.Get("x-request-id")
 	if requestID != "" {
 		c.Header("x-request-id", requestID)
