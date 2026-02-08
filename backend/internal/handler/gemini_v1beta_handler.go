@@ -410,7 +410,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		if switchCount > 0 {
 			requestCtx = context.WithValue(requestCtx, ctxkey.AccountSwitchCount, switchCount)
 		}
-		if account.Platform == service.PlatformAntigravity {
+		if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 			result, err = h.antigravityGatewayService.ForwardGemini(requestCtx, c, account, modelName, action, stream, body, hasBoundSession)
 		} else {
 			result, err = h.geminiCompatService.ForwardNative(requestCtx, c, account, modelName, action, stream, body)
