@@ -298,6 +298,10 @@ func (m *mockGroupRepoForGateway) GetAccountIDsByGroupIDs(ctx context.Context, g
 	return nil, nil
 }
 
+func (m *mockGroupRepoForGateway) UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error {
+	return nil
+}
+
 func ptr[T any](v T) *T {
 	return &v
 }
