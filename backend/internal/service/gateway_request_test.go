@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
 func TestParseGatewayRequest(t *testing.T) {
 	body := []byte(`{"model":"claude-3-7-sonnet","stream":true,"metadata":{"user_id":"session_123e4567-e89b-12d3-a456-426614174000"},"system":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}],"messages":[{"content":"hi"}]}`)
-	parsed, err := ParseGatewayRequest(body)
+	parsed, err := ParseGatewayRequest(body, "")
 	require.NoError(t, err)
 	require.Equal(t, "claude-3-7-sonnet", parsed.Model)
 	require.True(t, parsed.Stream)
@@ -22,7 +23,7 @@ func TestParseGatewayRequest(t *testing.T) {
 
 func TestParseGatewayRequest_ThinkingEnabled(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-5","thinking":{"type":"enabled"},"messages":[{"content":"hi"}]}`)
-	parsed, err := ParseGatewayRequest(body)
+	parsed, err := ParseGatewayRequest(body, "")
 	require.NoError(t, err)
 	require.Equal(t, "claude-sonnet-4-5", parsed.Model)
 	require.True(t, parsed.ThinkingEnabled)
@@ -30,21 +31,21 @@ func TestParseGatewayRequest_ThinkingEnabled(t *testing.T) {
 
 func TestParseGatewayRequest_MaxTokens(t *testing.T) {
 	body := []byte(`{"model":"claude-haiku-4-5","max_tokens":1}`)
-	parsed, err := ParseGatewayRequest(body)
+	parsed, err := ParseGatewayRequest(body, "")
 	require.NoError(t, err)
 	require.Equal(t, 1, parsed.MaxTokens)
 }
 
 func TestParseGatewayRequest_MaxTokensNonIntegralIgnored(t *testing.T) {
 	body := []byte(`{"model":"claude-haiku-4-5","max_tokens":1.5}`)
-	parsed, err := ParseGatewayRequest(body)
+	parsed, err := ParseGatewayRequest(body, "")
 	require.NoError(t, err)
 	require.Equal(t, 0, parsed.MaxTokens)
 }
 
 func TestParseGatewayRequest_SystemNull(t *testing.T) {
 	body := []byte(`{"model":"claude-3","system":null}`)
-	parsed, err := ParseGatewayRequest(body)
+	parsed, err := ParseGatewayRequest(body, "")
 	require.NoError(t, err)
 	// 显式传入 system:null 也应视为“字段已存在”，避免默认 system 被注入。
 	require.True(t, parsed.HasSystem)
@@ -53,14 +54,110 @@ func TestParseGatewayRequest_SystemNull(t *testing.T) {
 
 func TestParseGatewayRequest_InvalidModelType(t *testing.T) {
 	body := []byte(`{"model":123}`)
-	_, err := ParseGatewayRequest(body)
+	_, err := ParseGatewayRequest(body, "")
 	require.Error(t, err)
 }
 
 func TestParseGatewayRequest_InvalidStreamType(t *testing.T) {
 	body := []byte(`{"stream":"true"}`)
-	_, err := ParseGatewayRequest(body)
+	_, err := ParseGatewayRequest(body, "")
 	require.Error(t, err)
+}
+
+// ============ Gemini 原生格式解析测试 ============
+
+func TestParseGatewayRequest_GeminiContents(t *testing.T) {
+	body := []byte(`{
+		"contents": [
+			{"role": "user", "parts": [{"text": "Hello"}]},
+			{"role": "model", "parts": [{"text": "Hi there"}]},
+			{"role": "user", "parts": [{"text": "How are you?"}]}
+		]
+	}`)
+	parsed, err := ParseGatewayRequest(body, domain.PlatformGemini)
+	require.NoError(t, err)
+	require.Len(t, parsed.Messages, 3, "should parse contents as Messages")
+	require.False(t, parsed.HasSystem, "Gemini format should not set HasSystem")
+	require.Nil(t, parsed.System, "no systemInstruction means nil System")
+}
+
+func TestParseGatewayRequest_GeminiSystemInstruction(t *testing.T) {
+	body := []byte(`{
+		"systemInstruction": {
+			"parts": [{"text": "You are a helpful assistant."}]
+		},
+		"contents": [
+			{"role": "user", "parts": [{"text": "Hello"}]}
+		]
+	}`)
+	parsed, err := ParseGatewayRequest(body, domain.PlatformGemini)
+	require.NoError(t, err)
+	require.NotNil(t, parsed.System, "should parse systemInstruction.parts as System")
+	parts, ok := parsed.System.([]any)
+	require.True(t, ok)
+	require.Len(t, parts, 1)
+	partMap, ok := parts[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "You are a helpful assistant.", partMap["text"])
+	require.Len(t, parsed.Messages, 1)
+}
+
+func TestParseGatewayRequest_GeminiWithModel(t *testing.T) {
+	body := []byte(`{
+		"model": "gemini-2.5-pro",
+		"contents": [{"role": "user", "parts": [{"text": "test"}]}]
+	}`)
+	parsed, err := ParseGatewayRequest(body, domain.PlatformGemini)
+	require.NoError(t, err)
+	require.Equal(t, "gemini-2.5-pro", parsed.Model)
+	require.Len(t, parsed.Messages, 1)
+}
+
+func TestParseGatewayRequest_GeminiIgnoresAnthropicFields(t *testing.T) {
+	// Gemini 格式下 system/messages 字段应被忽略
+	body := []byte(`{
+		"system": "should be ignored",
+		"messages": [{"role": "user", "content": "ignored"}],
+		"contents": [{"role": "user", "parts": [{"text": "real content"}]}]
+	}`)
+	parsed, err := ParseGatewayRequest(body, domain.PlatformGemini)
+	require.NoError(t, err)
+	require.False(t, parsed.HasSystem, "Gemini protocol should not parse Anthropic system field")
+	require.Nil(t, parsed.System, "no systemInstruction = nil System")
+	require.Len(t, parsed.Messages, 1, "should use contents, not messages")
+}
+
+func TestParseGatewayRequest_GeminiEmptyContents(t *testing.T) {
+	body := []byte(`{"contents": []}`)
+	parsed, err := ParseGatewayRequest(body, domain.PlatformGemini)
+	require.NoError(t, err)
+	require.Empty(t, parsed.Messages)
+}
+
+func TestParseGatewayRequest_GeminiNoContents(t *testing.T) {
+	body := []byte(`{"model": "gemini-2.5-flash"}`)
+	parsed, err := ParseGatewayRequest(body, domain.PlatformGemini)
+	require.NoError(t, err)
+	require.Nil(t, parsed.Messages)
+	require.Equal(t, "gemini-2.5-flash", parsed.Model)
+}
+
+func TestParseGatewayRequest_AnthropicIgnoresGeminiFields(t *testing.T) {
+	// Anthropic 格式下 contents/systemInstruction 字段应被忽略
+	body := []byte(`{
+		"system": "real system",
+		"messages": [{"role": "user", "content": "real content"}],
+		"contents": [{"role": "user", "parts": [{"text": "ignored"}]}],
+		"systemInstruction": {"parts": [{"text": "ignored"}]}
+	}`)
+	parsed, err := ParseGatewayRequest(body, domain.PlatformAnthropic)
+	require.NoError(t, err)
+	require.True(t, parsed.HasSystem)
+	require.Equal(t, "real system", parsed.System)
+	require.Len(t, parsed.Messages, 1)
+	msg, ok := parsed.Messages[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "real content", msg["content"])
 }
 
 func TestFilterThinkingBlocks(t *testing.T) {

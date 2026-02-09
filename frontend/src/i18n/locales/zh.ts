@@ -1496,7 +1496,6 @@ export default {
         overloaded: '过载中',
         tempUnschedulable: '临时不可调度',
         rateLimitedUntil: '限流中，重置时间：{time}',
-        scopeRateLimitedUntil: '{scope} 限流中，重置时间：{time}',
         modelRateLimitedUntil: '{model} 限流至 {time}',
         overloadedUntil: '负载过重，重置时间：{time}',
         viewTempUnschedDetails: '查看临时不可调度详情'
@@ -3236,7 +3235,6 @@ export default {
         empty: '暂无数据',
         queued: '队列 {count}',
         rateLimited: '限流 {count}',
-        scopeRateLimitedTooltip: '{scope} 限流中 ({count} 个账号)',
         errorAccounts: '异常 {count}',
         loadFailed: '加载并发数据失败'
       },
