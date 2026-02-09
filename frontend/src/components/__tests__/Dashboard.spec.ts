@@ -9,7 +9,6 @@ import { defineComponent, ref, onMounted, nextTick } from 'vue'
 
 // Mock API
 const mockGetDashboardStats = vi.fn()
-const mockRefreshUser = vi.fn()
 
 vi.mock('@/api', () => ({
   authAPI: {

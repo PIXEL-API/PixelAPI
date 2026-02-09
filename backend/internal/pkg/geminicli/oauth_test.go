@@ -377,7 +377,7 @@ func TestBuildAuthorizationURL_EmptyRedirectURI(t *testing.T) {
 		OAuthConfig{},
 		"test-state",
 		"test-challenge",
-		"",       // 空 redirectURI
+		"", // 空 redirectURI
 		"",
 		"code_assist",
 	)

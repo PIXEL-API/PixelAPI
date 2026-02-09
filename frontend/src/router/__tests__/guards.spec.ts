@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createRouter, createMemoryHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import { defineComponent, h } from 'vue'
 
 // Mock 导航加载状态
 vi.mock('@/composables/useNavigationLoading', () => {
@@ -47,61 +45,6 @@ vi.mock('@/api/auth', () => ({
   getPublicSettings: vi.fn(),
 }))
 
-const DummyComponent = defineComponent({
-  render() {
-    return h('div', 'dummy')
-  },
-})
-
-/**
- * 创建带守卫逻辑的测试路由
- * 模拟 router/index.ts 中的 beforeEach 守卫逻辑
- */
-function createTestRouter() {
-  const router = createRouter({
-    history: createMemoryHistory(),
-    routes: [
-      { path: '/login', component: DummyComponent, meta: { requiresAuth: false, title: 'Login' } },
-      {
-        path: '/register',
-        component: DummyComponent,
-        meta: { requiresAuth: false, title: 'Register' },
-      },
-      { path: '/home', component: DummyComponent, meta: { requiresAuth: false, title: 'Home' } },
-      { path: '/dashboard', component: DummyComponent, meta: { title: 'Dashboard' } },
-      { path: '/keys', component: DummyComponent, meta: { title: 'API Keys' } },
-      { path: '/subscriptions', component: DummyComponent, meta: { title: 'Subscriptions' } },
-      { path: '/redeem', component: DummyComponent, meta: { title: 'Redeem' } },
-      {
-        path: '/admin/dashboard',
-        component: DummyComponent,
-        meta: { requiresAdmin: true, title: 'Admin Dashboard' },
-      },
-      {
-        path: '/admin/users',
-        component: DummyComponent,
-        meta: { requiresAdmin: true, title: 'Admin Users' },
-      },
-      {
-        path: '/admin/groups',
-        component: DummyComponent,
-        meta: { requiresAdmin: true, title: 'Admin Groups' },
-      },
-      {
-        path: '/admin/subscriptions',
-        component: DummyComponent,
-        meta: { requiresAdmin: true, title: 'Admin Subscriptions' },
-      },
-      {
-        path: '/admin/redeem',
-        component: DummyComponent,
-        meta: { requiresAdmin: true, title: 'Admin Redeem' },
-      },
-    ],
-  })
-
-  return router
-}
 
 // 用于测试的 auth 状态
 interface MockAuthState {
