@@ -8,6 +8,12 @@ import (
 	"github.com/spf13/viper"
 )
 
+func resetViperWithJWTSecret(t *testing.T) {
+	t.Helper()
+	viper.Reset()
+	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
+}
+
 func TestNormalizeRunMode(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -29,7 +35,7 @@ func TestNormalizeRunMode(t *testing.T) {
 }
 
 func TestLoadDefaultSchedulingConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -57,7 +63,7 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 }
 
 func TestLoadSchedulingConfigFromEnv(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING", "5")
 
 	cfg, err := Load()
@@ -71,7 +77,7 @@ func TestLoadSchedulingConfigFromEnv(t *testing.T) {
 }
 
 func TestLoadDefaultSecurityToggles(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -93,7 +99,7 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 }
 
 func TestLoadDefaultServerMode(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -106,7 +112,7 @@ func TestLoadDefaultServerMode(t *testing.T) {
 }
 
 func TestLoadDefaultDatabaseSSLMode(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -119,7 +125,7 @@ func TestLoadDefaultDatabaseSSLMode(t *testing.T) {
 }
 
 func TestValidateLinuxDoFrontendRedirectURL(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -144,7 +150,7 @@ func TestValidateLinuxDoFrontendRedirectURL(t *testing.T) {
 }
 
 func TestValidateLinuxDoPKCERequiredForPublicClient(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -169,7 +175,7 @@ func TestValidateLinuxDoPKCERequiredForPublicClient(t *testing.T) {
 }
 
 func TestLoadDefaultDashboardCacheConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -194,7 +200,7 @@ func TestLoadDefaultDashboardCacheConfig(t *testing.T) {
 }
 
 func TestValidateDashboardCacheConfigEnabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -214,7 +220,7 @@ func TestValidateDashboardCacheConfigEnabled(t *testing.T) {
 }
 
 func TestValidateDashboardCacheConfigDisabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -233,7 +239,7 @@ func TestValidateDashboardCacheConfigDisabled(t *testing.T) {
 }
 
 func TestLoadDefaultDashboardAggregationConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -270,7 +276,7 @@ func TestLoadDefaultDashboardAggregationConfig(t *testing.T) {
 }
 
 func TestValidateDashboardAggregationConfigDisabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -289,7 +295,7 @@ func TestValidateDashboardAggregationConfigDisabled(t *testing.T) {
 }
 
 func TestValidateDashboardAggregationBackfillMaxDays(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -308,7 +314,7 @@ func TestValidateDashboardAggregationBackfillMaxDays(t *testing.T) {
 }
 
 func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -333,7 +339,7 @@ func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
 }
 
 func TestValidateUsageCleanupConfigEnabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -352,7 +358,7 @@ func TestValidateUsageCleanupConfigEnabled(t *testing.T) {
 }
 
 func TestValidateUsageCleanupConfigDisabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -451,7 +457,7 @@ func TestValidateAbsoluteHTTPURL(t *testing.T) {
 }
 
 func TestValidateServerFrontendURL(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -505,6 +511,7 @@ func TestValidateFrontendRedirectURL(t *testing.T) {
 func TestWarnIfInsecureURL(t *testing.T) {
 	warnIfInsecureURL("test", "http://example.com")
 	warnIfInsecureURL("test", "bad://url")
+	warnIfInsecureURL("test", "://invalid")
 }
 
 func TestGenerateJWTSecretDefaultLength(t *testing.T) {
@@ -518,7 +525,7 @@ func TestGenerateJWTSecretDefaultLength(t *testing.T) {
 }
 
 func TestValidateOpsCleanupScheduleRequired(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -536,7 +543,7 @@ func TestValidateOpsCleanupScheduleRequired(t *testing.T) {
 }
 
 func TestValidateConcurrencyPingInterval(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -553,14 +560,14 @@ func TestValidateConcurrencyPingInterval(t *testing.T) {
 }
 
 func TestProvideConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 	if _, err := ProvideConfig(); err != nil {
 		t.Fatalf("ProvideConfig() error: %v", err)
 	}
 }
 
 func TestValidateConfigWithLinuxDoEnabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -604,6 +611,24 @@ func TestGenerateJWTSecretWithLength(t *testing.T) {
 	}
 }
 
+func TestDatabaseDSNWithTimezone_WithPassword(t *testing.T) {
+	d := &DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		User:     "u",
+		Password: "p",
+		DBName:   "db",
+		SSLMode:  "prefer",
+	}
+	got := d.DSNWithTimezone("UTC")
+	if !strings.Contains(got, "password=p") {
+		t.Fatalf("DSNWithTimezone should include password: %q", got)
+	}
+	if !strings.Contains(got, "TimeZone=UTC") {
+		t.Fatalf("DSNWithTimezone should include TimeZone=UTC: %q", got)
+	}
+}
+
 func TestValidateAbsoluteHTTPURLMissingHost(t *testing.T) {
 	if err := ValidateAbsoluteHTTPURL("https://"); err == nil {
 		t.Fatalf("ValidateAbsoluteHTTPURL should reject missing host")
@@ -626,10 +651,35 @@ func TestWarnIfInsecureURLHTTPS(t *testing.T) {
 	warnIfInsecureURL("secure", "https://example.com")
 }
 
+func TestValidateJWTSecret_UTF8Bytes(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	// 31 bytes (< 32) even though it's 31 characters.
+	cfg.JWT.Secret = strings.Repeat("a", 31)
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("Validate() should reject 31-byte secret")
+	}
+	if !strings.Contains(err.Error(), "at least 32 bytes") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	// 32 bytes OK.
+	cfg.JWT.Secret = strings.Repeat("a", 32)
+	err = cfg.Validate()
+	if err != nil {
+		t.Fatalf("Validate() should accept 32-byte secret: %v", err)
+	}
+}
+
 func TestValidateConfigErrors(t *testing.T) {
 	buildValid := func(t *testing.T) *Config {
 		t.Helper()
-		viper.Reset()
+		resetViperWithJWTSecret(t)
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load() error: %v", err)
@@ -642,6 +692,26 @@ func TestValidateConfigErrors(t *testing.T) {
 		mutate  func(*Config)
 		wantErr string
 	}{
+		{
+			name:    "jwt secret required",
+			mutate:  func(c *Config) { c.JWT.Secret = "" },
+			wantErr: "jwt.secret is required",
+		},
+		{
+			name:    "jwt secret min bytes",
+			mutate:  func(c *Config) { c.JWT.Secret = strings.Repeat("a", 31) },
+			wantErr: "jwt.secret must be at least 32 bytes",
+		},
+		{
+			name:    "subscription maintenance worker_count non-negative",
+			mutate:  func(c *Config) { c.SubscriptionMaintenance.WorkerCount = -1 },
+			wantErr: "subscription_maintenance.worker_count",
+		},
+		{
+			name:    "subscription maintenance queue_size non-negative",
+			mutate:  func(c *Config) { c.SubscriptionMaintenance.QueueSize = -1 },
+			wantErr: "subscription_maintenance.queue_size",
+		},
 		{
 			name:    "jwt expire hour positive",
 			mutate:  func(c *Config) { c.JWT.ExpireHour = 0 },

@@ -48,6 +48,8 @@ type SubscriptionService struct {
 	subCacheGroup  singleflight.Group
 	subCacheTTL    time.Duration
 	subCacheJitter int // 抖动百分比
+
+	maintenanceQueue *SubscriptionMaintenanceQueue
 }
 
 // NewSubscriptionService 创建订阅服务
@@ -59,7 +61,29 @@ func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscript
 		entClient:           entClient,
 	}
 	svc.initSubCache(cfg)
+	svc.initMaintenanceQueue(cfg)
 	return svc
+}
+
+func (s *SubscriptionService) initMaintenanceQueue(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	mc := cfg.SubscriptionMaintenance
+	if mc.WorkerCount <= 0 || mc.QueueSize <= 0 {
+		return
+	}
+	s.maintenanceQueue = NewSubscriptionMaintenanceQueue(mc.WorkerCount, mc.QueueSize)
+}
+
+// Stop stops the maintenance worker pool.
+func (s *SubscriptionService) Stop() {
+	if s == nil {
+		return
+	}
+	if s.maintenanceQueue != nil {
+		s.maintenanceQueue.Stop()
+	}
 }
 
 // initSubCache 初始化订阅 L1 缓存
@@ -720,6 +744,23 @@ func (s *SubscriptionService) ValidateAndCheckLimits(sub *UserSubscription, grou
 // 而 IsExpired()=true 的订阅在 ValidateAndCheckLimits 中已被拦截返回错误，
 // 因此进入此方法的订阅一定未过期，无需处理过期状态同步。
 func (s *SubscriptionService) DoWindowMaintenance(sub *UserSubscription) {
+	if s == nil {
+		return
+	}
+	if s.maintenanceQueue != nil {
+		err := s.maintenanceQueue.TryEnqueue(func() {
+			s.doWindowMaintenance(sub)
+		})
+		if err != nil {
+			log.Printf("Subscription maintenance enqueue failed: %v", err)
+		}
+		return
+	}
+
+	s.doWindowMaintenance(sub)
+}
+
+func (s *SubscriptionService) doWindowMaintenance(sub *UserSubscription) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
