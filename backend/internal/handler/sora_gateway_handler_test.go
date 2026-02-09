@@ -78,6 +78,9 @@ func (r *stubAccountRepo) GetByCRSAccountID(ctx context.Context, crsAccountID st
 func (r *stubAccountRepo) FindByExtraField(ctx context.Context, key string, value any) ([]service.Account, error) {
 	return nil, nil
 }
+func (r *stubAccountRepo) ListCRSAccountIDs(ctx context.Context) (map[string]int64, error) {
+	return map[string]int64{}, nil
+}
 func (r *stubAccountRepo) Update(ctx context.Context, account *service.Account) error { return nil }
 func (r *stubAccountRepo) Delete(ctx context.Context, id int64) error                 { return nil }
 func (r *stubAccountRepo) List(ctx context.Context, params pagination.PaginationParams) ([]service.Account, *pagination.PaginationResult, error) {
@@ -136,9 +139,6 @@ func (r *stubAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx context.Conte
 	return r.ListSchedulableByPlatforms(ctx, platforms)
 }
 func (r *stubAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
-	return nil
-}
-func (r *stubAccountRepo) SetAntigravityQuotaScopeLimit(ctx context.Context, id int64, scope service.AntigravityQuotaScope, resetAt time.Time) error {
 	return nil
 }
 func (r *stubAccountRepo) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time) error {
@@ -225,6 +225,9 @@ func (r *stubGroupRepo) GetAccountIDsByGroupIDs(ctx context.Context, groupIDs []
 	return nil, nil
 }
 func (r *stubGroupRepo) BindAccountsToGroup(ctx context.Context, groupID int64, accountIDs []int64) error {
+	return nil
+}
+func (r *stubGroupRepo) UpdateSortOrders(ctx context.Context, updates []service.GroupSortOrderUpdate) error {
 	return nil
 }
 
@@ -367,7 +370,7 @@ func TestSoraGatewayHandler_ChatCompletions(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		nil,
+		testutil.StubGatewayCache{},
 		cfg,
 		nil,
 		concurrencyService,
@@ -378,6 +381,7 @@ func TestSoraGatewayHandler_ChatCompletions(t *testing.T) {
 		nil,
 		deferredService,
 		nil,
+		testutil.StubSessionLimitCache{},
 		nil,
 	)
 
