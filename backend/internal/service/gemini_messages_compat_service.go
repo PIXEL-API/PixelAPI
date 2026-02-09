@@ -908,8 +908,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				tempUnscheduleGoogleConfigError(ctx, s.accountRepo, account.ID, "[Gemini]")
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, RetryableOnSameAccount: true}
 			}
 		}
 		if s.shouldFailoverGeminiUpstreamError(resp.StatusCode) {
@@ -1387,8 +1386,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
-				tempUnscheduleGoogleConfigError(ctx, s.accountRepo, account.ID, "[Gemini]")
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: evBody}
+				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: evBody, RetryableOnSameAccount: true}
 			}
 		}
 		if s.shouldFailoverGeminiUpstreamError(resp.StatusCode) {
