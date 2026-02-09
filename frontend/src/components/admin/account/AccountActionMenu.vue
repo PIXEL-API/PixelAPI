@@ -53,7 +53,19 @@ import type { Account } from '@/types'
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
 const emit = defineEmits(['close', 'test', 'stats', 'reauth', 'refresh-token', 'reset-status', 'clear-rate-limit'])
 const { t } = useI18n()
-const isRateLimited = computed(() => props.account?.rate_limit_reset_at && new Date(props.account.rate_limit_reset_at) > new Date())
+const isRateLimited = computed(() => {
+  if (props.account?.rate_limit_reset_at && new Date(props.account.rate_limit_reset_at) > new Date()) {
+    return true
+  }
+  const modelLimits = (props.account?.extra as Record<string, unknown> | undefined)?.model_rate_limits as
+    | Record<string, { rate_limit_reset_at: string }>
+    | undefined
+  if (modelLimits) {
+    const now = new Date()
+    return Object.values(modelLimits).some(info => new Date(info.rate_limit_reset_at) > now)
+  }
+  return false
+})
 const isOverloaded = computed(() => props.account?.overload_until && new Date(props.account.overload_until) > new Date())
 
 const handleKeydown = (event: KeyboardEvent) => {
