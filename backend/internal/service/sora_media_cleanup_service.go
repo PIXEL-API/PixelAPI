@@ -85,6 +85,9 @@ func (s *SoraMediaCleanupService) Stop() {
 }
 
 func (s *SoraMediaCleanupService) runCleanup() {
+	if s.cfg == nil || s.storage == nil {
+		return
+	}
 	retention := s.cfg.Sora.Storage.Cleanup.RetentionDays
 	if retention <= 0 {
 		log.Printf("[SoraCleanup] skipped (retention_days=%d)", retention)
