@@ -129,17 +129,19 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 
 	svc := &OpenAIGatewayService{}
 
+	bodyWithKey := []byte(`{"prompt_cache_key":"ses_aaa"}`)
+
 	// 1) session_id header wins
 	c.Request.Header.Set("session_id", "sess-123")
 	c.Request.Header.Set("conversation_id", "conv-456")
-	h1 := svc.GenerateSessionHash(c, map[string]any{"prompt_cache_key": "ses_aaa"})
+	h1 := svc.GenerateSessionHash(c, bodyWithKey)
 	if h1 == "" {
 		t.Fatalf("expected non-empty hash")
 	}
 
 	// 2) conversation_id used when session_id absent
 	c.Request.Header.Del("session_id")
-	h2 := svc.GenerateSessionHash(c, map[string]any{"prompt_cache_key": "ses_aaa"})
+	h2 := svc.GenerateSessionHash(c, bodyWithKey)
 	if h2 == "" {
 		t.Fatalf("expected non-empty hash")
 	}
@@ -149,7 +151,7 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 
 	// 3) prompt_cache_key used when both headers absent
 	c.Request.Header.Del("conversation_id")
-	h3 := svc.GenerateSessionHash(c, map[string]any{"prompt_cache_key": "ses_aaa"})
+	h3 := svc.GenerateSessionHash(c, bodyWithKey)
 	if h3 == "" {
 		t.Fatalf("expected non-empty hash")
 	}
@@ -158,7 +160,7 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 	}
 
 	// 4) empty when no signals
-	h4 := svc.GenerateSessionHash(c, map[string]any{})
+	h4 := svc.GenerateSessionHash(c, []byte(`{}`))
 	if h4 != "" {
 		t.Fatalf("expected empty hash when no signals")
 	}

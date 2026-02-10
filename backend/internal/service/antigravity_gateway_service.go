@@ -22,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -981,16 +982,12 @@ func (s *AntigravityGatewayService) wrapV1InternalRequest(projectID, model strin
 }
 
 // unwrapV1InternalResponse 解包 v1internal 响应
+// 使用 gjson 零拷贝提取 response 字段，避免 Unmarshal+Marshal 双重开销
 func (s *AntigravityGatewayService) unwrapV1InternalResponse(body []byte) ([]byte, error) {
-	var outer map[string]any
-	if err := json.Unmarshal(body, &outer); err != nil {
-		return nil, err
+	result := gjson.GetBytes(body, "response")
+	if result.Exists() {
+		return []byte(result.Raw), nil
 	}
-
-	if resp, ok := outer["response"]; ok {
-		return json.Marshal(resp)
-	}
-
 	return body, nil
 }
 
@@ -2516,11 +2513,11 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				}
 
 				// 解析 usage
+				if u := extractGeminiUsage(inner); u != nil {
+					usage = u
+				}
 				var parsed map[string]any
 				if json.Unmarshal(inner, &parsed) == nil {
-					if u := extractGeminiUsage(parsed); u != nil {
-						usage = u
-					}
 					// Check for MALFORMED_FUNCTION_CALL
 					if candidates, ok := parsed["candidates"].([]any); ok && len(candidates) > 0 {
 						if cand, ok := candidates[0].(map[string]any); ok {
@@ -2676,7 +2673,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 			last = parsed
 
 			// 提取 usage
-			if u := extractGeminiUsage(parsed); u != nil {
+			if u := extractGeminiUsage(inner); u != nil {
 				usage = u
 			}
 
