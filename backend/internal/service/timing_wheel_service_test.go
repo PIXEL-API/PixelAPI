@@ -119,6 +119,41 @@ func TestTimingWheelService_Cancel_PreventsExecution(t *testing.T) {
 	}
 }
 
+func TestTimingWheelService_Schedule_AfterStop_LogsError(t *testing.T) {
+	svc, err := NewTimingWheelService()
+	if err != nil {
+		t.Fatalf("期望 err 为 nil，但得到: %v", err)
+	}
+	svc.Stop()
+
+	// Stop 后调用 Schedule 应走 error 日志路径，不应 panic
+	svc.Schedule("after-stop", 100*time.Millisecond, func() {
+		t.Fatal("不应被执行")
+	})
+}
+
+func TestTimingWheelService_ScheduleRecurring_AfterStop_LogsError(t *testing.T) {
+	svc, err := NewTimingWheelService()
+	if err != nil {
+		t.Fatalf("期望 err 为 nil，但得到: %v", err)
+	}
+	svc.Stop()
+
+	// Stop 后调用 ScheduleRecurring 应走 error 日志路径，不应 panic
+	svc.ScheduleRecurring("after-stop-rec", 100*time.Millisecond, func() {
+		t.Fatal("不应被执行")
+	})
+}
+
+func TestTimingWheelService_Stop_Idempotent(t *testing.T) {
+	svc, err := NewTimingWheelService()
+	if err != nil {
+		t.Fatalf("期望 err 为 nil，但得到: %v", err)
+	}
+	svc.Stop()
+	svc.Stop() // 第二次调用不应 panic
+}
+
 func TestTimingWheelService_ScheduleRecurring_ExecutesMultipleTimes(t *testing.T) {
 	original := newTimingWheel
 	t.Cleanup(func() { newTimingWheel = original })

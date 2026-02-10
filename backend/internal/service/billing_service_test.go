@@ -292,6 +292,133 @@ func TestCalculateCost_ZeroTokens(t *testing.T) {
 	require.Equal(t, 0.0, cost.ActualCost)
 }
 
+func TestCalculateCostWithConfig(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Default.RateMultiplier = 1.5
+	svc := NewBillingService(cfg, nil)
+
+	tokens := UsageTokens{InputTokens: 1000, OutputTokens: 500}
+	cost, err := svc.CalculateCostWithConfig("claude-sonnet-4", tokens)
+	require.NoError(t, err)
+
+	expected, _ := svc.CalculateCost("claude-sonnet-4", tokens, 1.5)
+	require.InDelta(t, expected.ActualCost, cost.ActualCost, 1e-10)
+}
+
+func TestCalculateCostWithConfig_ZeroMultiplier(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Default.RateMultiplier = 0
+	svc := NewBillingService(cfg, nil)
+
+	tokens := UsageTokens{InputTokens: 1000}
+	cost, err := svc.CalculateCostWithConfig("claude-sonnet-4", tokens)
+	require.NoError(t, err)
+
+	// 倍率 <=0 时默认 1.0
+	expected, _ := svc.CalculateCost("claude-sonnet-4", tokens, 1.0)
+	require.InDelta(t, expected.ActualCost, cost.ActualCost, 1e-10)
+}
+
+func TestGetEstimatedCost(t *testing.T) {
+	svc := newTestBillingService()
+
+	est, err := svc.GetEstimatedCost("claude-sonnet-4", 1000, 500)
+	require.NoError(t, err)
+	require.True(t, est > 0)
+}
+
+func TestListSupportedModels(t *testing.T) {
+	svc := newTestBillingService()
+
+	models := svc.ListSupportedModels()
+	require.NotEmpty(t, models)
+	require.GreaterOrEqual(t, len(models), 6)
+}
+
+func TestGetPricingServiceStatus_NilService(t *testing.T) {
+	svc := newTestBillingService()
+
+	status := svc.GetPricingServiceStatus()
+	require.NotNil(t, status)
+	require.Equal(t, "using fallback", status["last_updated"])
+}
+
+func TestForceUpdatePricing_NilService(t *testing.T) {
+	svc := newTestBillingService()
+
+	err := svc.ForceUpdatePricing()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not initialized")
+}
+
+func TestCalculateSoraImageCost(t *testing.T) {
+	svc := newTestBillingService()
+
+	price360 := 0.05
+	price540 := 0.08
+	cfg := &SoraPriceConfig{ImagePrice360: &price360, ImagePrice540: &price540}
+
+	cost := svc.CalculateSoraImageCost("360", 2, cfg, 1.0)
+	require.InDelta(t, 0.10, cost.TotalCost, 1e-10)
+
+	cost540 := svc.CalculateSoraImageCost("540", 1, cfg, 2.0)
+	require.InDelta(t, 0.08, cost540.TotalCost, 1e-10)
+	require.InDelta(t, 0.16, cost540.ActualCost, 1e-10)
+}
+
+func TestCalculateSoraImageCost_ZeroCount(t *testing.T) {
+	svc := newTestBillingService()
+	cost := svc.CalculateSoraImageCost("360", 0, nil, 1.0)
+	require.Equal(t, 0.0, cost.TotalCost)
+}
+
+func TestCalculateSoraVideoCost_NilConfig(t *testing.T) {
+	svc := newTestBillingService()
+	cost := svc.CalculateSoraVideoCost("sora-video", nil, 1.0)
+	require.Equal(t, 0.0, cost.TotalCost)
+}
+
+func TestCalculateCostWithLongContext_PropagatesError(t *testing.T) {
+	// 使用空的 fallback prices 让 GetModelPricing 失败
+	svc := &BillingService{
+		cfg:            &config.Config{},
+		fallbackPrices: make(map[string]*ModelPricing),
+	}
+
+	tokens := UsageTokens{InputTokens: 300000, CacheReadTokens: 0}
+	_, err := svc.CalculateCostWithLongContext("unknown-model", tokens, 1.0, 200000, 2.0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pricing not found")
+}
+
+func TestCalculateCost_SupportsCacheBreakdown(t *testing.T) {
+	svc := &BillingService{
+		cfg: &config.Config{},
+		fallbackPrices: map[string]*ModelPricing{
+			"claude-sonnet-4": {
+				InputPricePerToken:     3e-6,
+				OutputPricePerToken:    15e-6,
+				SupportsCacheBreakdown: true,
+				CacheCreation5mPrice:   4.0, // per million tokens
+				CacheCreation1hPrice:   5.0, // per million tokens
+			},
+		},
+	}
+
+	tokens := UsageTokens{
+		InputTokens:           1000,
+		OutputTokens:          500,
+		CacheCreation5mTokens: 100000,
+		CacheCreation1hTokens: 50000,
+	}
+	cost, err := svc.CalculateCost("claude-sonnet-4", tokens, 1.0)
+	require.NoError(t, err)
+
+	expected5m := float64(100000) / 1_000_000 * 4.0
+	expected1h := float64(50000) / 1_000_000 * 5.0
+	require.InDelta(t, expected5m+expected1h, cost.CacheCreationCost, 1e-10)
+}
+
 func TestCalculateCost_LargeTokenCount(t *testing.T) {
 	svc := newTestBillingService()
 
