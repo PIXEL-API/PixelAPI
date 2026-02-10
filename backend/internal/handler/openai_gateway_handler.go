@@ -95,15 +95,26 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	setOpsRequestContext(c, "", false, body)
 
-	// 使用 gjson 只读提取字段做校验，避免完整 Unmarshal
-	reqModel := gjson.GetBytes(body, "model").String()
-	reqStream := gjson.GetBytes(body, "stream").Bool()
+	// 校验请求体 JSON 合法性
+	if !gjson.ValidBytes(body) {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		return
+	}
 
-	// 验证 model 必填
-	if reqModel == "" {
+	// 使用 gjson 只读提取字段做校验，避免完整 Unmarshal
+	modelResult := gjson.GetBytes(body, "model")
+	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
 	}
+	reqModel := modelResult.String()
+
+	streamResult := gjson.GetBytes(body, "stream")
+	if streamResult.Exists() && streamResult.Type != gjson.True && streamResult.Type != gjson.False {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "invalid stream field type")
+		return
+	}
+	reqStream := streamResult.Bool()
 
 	userAgent := c.GetHeader("User-Agent")
 	isCodexCLI := openai.IsCodexCLIRequest(userAgent) || (h.cfg != nil && h.cfg.Gateway.ForceCodexCLI)
@@ -111,7 +122,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		existingInstructions := gjson.GetBytes(body, "instructions").String()
 		if strings.TrimSpace(existingInstructions) == "" {
 			if instructions := strings.TrimSpace(service.GetOpenCodeInstructions()); instructions != "" {
-				body, _ = sjson.SetBytes(body, "instructions", instructions)
+				newBody, err := sjson.SetBytes(body, "instructions", instructions)
+				if err != nil {
+					h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to process request")
+					return
+				}
+				body = newBody
 			}
 		}
 	}
