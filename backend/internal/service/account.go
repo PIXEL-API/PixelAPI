@@ -696,6 +696,25 @@ func (a *Account) IsMixedSchedulingEnabled() bool {
 	return false
 }
 
+// IsOpenAIOAuthPassthroughEnabled 返回 OpenAI OAuth 账号是否启用“原样透传（仅替换认证）”。
+//
+// 存储位置：accounts.extra.openai_oauth_passthrough。
+// 字段缺失或类型不正确时，按 false（关闭）处理。
+func (a *Account) IsOpenAIOAuthPassthroughEnabled() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	v, ok := a.Extra["openai_oauth_passthrough"]
+	if !ok || v == nil {
+		return false
+	}
+	enabled, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return enabled
+}
+
 // WindowCostSchedulability 窗口费用调度状态
 type WindowCostSchedulability int
 
