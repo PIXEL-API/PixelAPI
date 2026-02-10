@@ -243,6 +243,12 @@ var (
 	}
 )
 
+// systemBlockFilterPrefixes 需要从 system 中过滤的文本前缀列表
+// OAuth/SetupToken 账号转发时，匹配这些前缀的 system 元素会被移除
+var systemBlockFilterPrefixes = []string{
+	"x-anthropic-billing-header",
+}
+
 // ErrClaudeCodeOnly 表示分组仅允许 Claude Code 客户端访问
 var ErrClaudeCodeOnly = errors.New("this group only allows Claude Code clients")
 
@@ -1683,6 +1689,17 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	return accounts, useMixed, nil
 }
 
+// IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。
+// 用于 Handler 层在首次请求时提前设置 SingleAccountRetry context，
+// 避免单账号分组收到 503 时错误地设置模型限流标记导致后续请求连续快速失败。
+func (s *GatewayService) IsSingleAntigravityAccountGroup(ctx context.Context, groupID *int64) bool {
+	accounts, _, err := s.listSchedulableAccounts(ctx, groupID, PlatformAntigravity, true)
+	if err != nil {
+		return false
+	}
+	return len(accounts) == 1
+}
+
 func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string, useMixed bool) bool {
 	if account == nil {
 		return false
@@ -2673,6 +2690,60 @@ func hasClaudeCodePrefix(text string) bool {
 	return false
 }
 
+// matchesFilterPrefix 检查文本是否匹配任一过滤前缀
+func matchesFilterPrefix(text string) bool {
+	for _, prefix := range systemBlockFilterPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterSystemBlocksByPrefix 从 body 的 system 中移除文本匹配 systemBlockFilterPrefixes 前缀的元素
+// 直接从 body 解析 system，不依赖外部传入的 parsed.System（因为前置步骤可能已修改 body 中的 system）
+func filterSystemBlocksByPrefix(body []byte) []byte {
+	sys := gjson.GetBytes(body, "system")
+	if !sys.Exists() {
+		return body
+	}
+
+	switch {
+	case sys.Type == gjson.String:
+		if matchesFilterPrefix(sys.Str) {
+			result, err := sjson.DeleteBytes(body, "system")
+			if err != nil {
+				return body
+			}
+			return result
+		}
+	case sys.IsArray():
+		var parsed []any
+		if err := json.Unmarshal([]byte(sys.Raw), &parsed); err != nil {
+			return body
+		}
+		filtered := make([]any, 0, len(parsed))
+		changed := false
+		for _, item := range parsed {
+			if m, ok := item.(map[string]any); ok {
+				if text, ok := m["text"].(string); ok && matchesFilterPrefix(text) {
+					changed = true
+					continue
+				}
+			}
+			filtered = append(filtered, item)
+		}
+		if changed {
+			result, err := sjson.SetBytes(body, "system", filtered)
+			if err != nil {
+				return body
+			}
+			return result
+		}
+	}
+	return body
+}
+
 // injectClaudeCodePrompt 在 system 开头注入 Claude Code 提示词
 // 处理 null、字符串、数组三种格式
 func injectClaudeCodePrompt(body []byte, system any) []byte {
@@ -2950,6 +3021,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 
 		body, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
+	}
+
+	// OAuth/SetupToken 账号：移除黑名单前缀匹配的 system 元素（如客户端注入的计费元数据）
+	// 放在 inject/normalize 之后，确保不会被覆盖
+	if account.IsOAuth() {
+		body = filterSystemBlocksByPrefix(body)
 	}
 
 	// 强制执行 cache_control 块数量限制（最多 4 个）
