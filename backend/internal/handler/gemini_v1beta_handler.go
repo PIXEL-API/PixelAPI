@@ -554,6 +554,10 @@ func (h *GatewayHandler) handleGeminiFailoverExhausted(c *gin.Context, failoverE
 				msg = *rule.CustomMessage
 			}
 
+			if rule.SkipMonitoring {
+				c.Set(service.OpsSkipPassthroughKey, true)
+			}
+
 			googleError(c, respCode, msg)
 			return
 		}
