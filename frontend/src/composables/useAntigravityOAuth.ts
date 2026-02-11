@@ -83,6 +83,35 @@ export function useAntigravityOAuth() {
     }
   }
 
+  const validateRefreshToken = async (
+    refreshToken: string,
+    proxyId?: number | null
+  ): Promise<AntigravityTokenInfo | null> => {
+    if (!refreshToken.trim()) {
+      error.value = t('admin.accounts.oauth.antigravity.pleaseEnterRefreshToken')
+      return null
+    }
+
+    loading.value = true
+    error.value = ''
+
+    try {
+      const tokenInfo = await adminAPI.antigravity.refreshAntigravityToken(
+        refreshToken.trim(),
+        proxyId
+      )
+      return tokenInfo as AntigravityTokenInfo
+    } catch (err: any) {
+      error.value =
+        err.response?.data?.detail || t('admin.accounts.oauth.antigravity.failedToValidateRT')
+      // Don't show global error toast for batch validation to avoid spamming
+      // appStore.showError(error.value)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
   const buildCredentials = (tokenInfo: AntigravityTokenInfo): Record<string, unknown> => {
     let expiresAt: string | undefined
     if (typeof tokenInfo.expires_at === 'number' && Number.isFinite(tokenInfo.expires_at)) {
@@ -110,6 +139,7 @@ export function useAntigravityOAuth() {
     resetState,
     generateAuthUrl,
     exchangeAuthCode,
+    validateRefreshToken,
     buildCredentials
   }
 }

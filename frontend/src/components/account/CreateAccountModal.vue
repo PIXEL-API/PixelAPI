@@ -1647,12 +1647,12 @@
         :show-proxy-warning="form.platform !== 'openai' && !!form.proxy_id"
         :allow-multiple="form.platform === 'anthropic'"
         :show-cookie-option="form.platform === 'anthropic'"
-        :show-refresh-token-option="form.platform === 'openai'"
+        :show-refresh-token-option="form.platform === 'openai' || form.platform === 'antigravity'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
-        @validate-refresh-token="handleOpenAIValidateRT"
+        @validate-refresh-token="handleValidateRefreshToken"
       />
 
     </div>
@@ -2802,6 +2802,14 @@ const handleGenerateUrl = async () => {
   }
 }
 
+const handleValidateRefreshToken = (rt: string) => {
+  if (form.platform === 'openai') {
+    handleOpenAIValidateRT(rt)
+  } else if (form.platform === 'antigravity') {
+    handleAntigravityValidateRT(rt)
+  }
+}
+
 const formatDateTimeLocal = formatDateTimeLocalInput
 const parseDateTimeLocal = parseDateTimeLocalInput
 
@@ -2947,6 +2955,95 @@ const handleOpenAIValidateRT = async (refreshTokenInput: string) => {
     }
   } finally {
     openaiOAuth.loading.value = false
+  }
+}
+
+// Antigravity 手动 RT 批量验证和创建
+const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
+  if (!refreshTokenInput.trim()) return
+
+  // Parse multiple refresh tokens (one per line)
+  const refreshTokens = refreshTokenInput
+    .split('\n')
+    .map((rt) => rt.trim())
+    .filter((rt) => rt)
+
+  if (refreshTokens.length === 0) {
+    antigravityOAuth.error.value = t('admin.accounts.oauth.antigravity.pleaseEnterRefreshToken')
+    return
+  }
+
+  antigravityOAuth.loading.value = true
+  antigravityOAuth.error.value = ''
+
+  let successCount = 0
+  let failedCount = 0
+  const errors: string[] = []
+
+  try {
+    for (let i = 0; i < refreshTokens.length; i++) {
+      try {
+        const tokenInfo = await antigravityOAuth.validateRefreshToken(
+          refreshTokens[i],
+          form.proxy_id
+        )
+        if (!tokenInfo) {
+          failedCount++
+          errors.push(`#${i + 1}: ${antigravityOAuth.error.value || 'Validation failed'}`)
+          antigravityOAuth.error.value = ''
+          continue
+        }
+
+        const credentials = antigravityOAuth.buildCredentials(tokenInfo)
+        
+        // Generate account name with index for batch
+        const accountName = refreshTokens.length > 1 ? `${form.name} #${i + 1}` : form.name
+
+        // Note: Antigravity doesn't have buildExtraInfo, so we pass empty extra or rely on credentials
+        await adminAPI.accounts.create({
+          name: accountName,
+          notes: form.notes,
+          platform: 'antigravity',
+          type: 'oauth',
+          credentials,
+          extra: {},
+          proxy_id: form.proxy_id,
+          concurrency: form.concurrency,
+          priority: form.priority,
+          rate_multiplier: form.rate_multiplier,
+          group_ids: form.group_ids,
+          expires_at: form.expires_at,
+          auto_pause_on_expired: autoPauseOnExpired.value
+        })
+        successCount++
+      } catch (error: any) {
+        failedCount++
+        const errMsg = error.response?.data?.detail || error.message || 'Unknown error'
+        errors.push(`#${i + 1}: ${errMsg}`)
+      }
+    }
+
+    // Show results
+    if (successCount > 0 && failedCount === 0) {
+      appStore.showSuccess(
+        refreshTokens.length > 1
+          ? t('admin.accounts.oauth.batchSuccess', { count: successCount })
+          : t('admin.accounts.accountCreated')
+      )
+      emit('created')
+      handleClose()
+    } else if (successCount > 0 && failedCount > 0) {
+      appStore.showWarning(
+        t('admin.accounts.oauth.batchPartialSuccess', { success: successCount, failed: failedCount })
+      )
+      antigravityOAuth.error.value = errors.join('\n')
+      emit('created')
+    } else {
+      antigravityOAuth.error.value = errors.join('\n')
+      appStore.showError(t('admin.accounts.oauth.batchFailed'))
+    }
+  } finally {
+    antigravityOAuth.loading.value = false
   }
 }
 

@@ -192,6 +192,43 @@ func (s *AntigravityOAuthService) RefreshToken(ctx context.Context, refreshToken
 	return nil, fmt.Errorf("token 刷新失败 (重试后): %w", lastErr)
 }
 
+// ValidateRefreshToken 用 refresh token 验证并获取完整的 token 信息（含 email 和 project_id）
+func (s *AntigravityOAuthService) ValidateRefreshToken(ctx context.Context, refreshToken string, proxyID *int64) (*AntigravityTokenInfo, error) {
+	var proxyURL string
+	if proxyID != nil {
+		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
+		if err == nil && proxy != nil {
+			proxyURL = proxy.URL()
+		}
+	}
+
+	// 刷新 token
+	tokenInfo, err := s.RefreshToken(ctx, refreshToken, proxyURL)
+	if err != nil {
+		return nil, err
+	}
+
+	// 获取用户信息（email）
+	client := antigravity.NewClient(proxyURL)
+	userInfo, err := client.GetUserInfo(ctx, tokenInfo.AccessToken)
+	if err != nil {
+		fmt.Printf("[AntigravityOAuth] 警告: 获取用户信息失败: %v\n", err)
+	} else {
+		tokenInfo.Email = userInfo.Email
+	}
+
+	// 获取 project_id（容错，失败不阻塞）
+	projectID, loadErr := s.loadProjectIDWithRetry(ctx, tokenInfo.AccessToken, proxyURL, 3)
+	if loadErr != nil {
+		fmt.Printf("[AntigravityOAuth] 警告: 获取 project_id 失败（重试后）: %v\n", loadErr)
+		tokenInfo.ProjectIDMissing = true
+	} else {
+		tokenInfo.ProjectID = projectID
+	}
+
+	return tokenInfo, nil
+}
+
 func isNonRetryableAntigravityOAuthError(err error) bool {
 	msg := err.Error()
 	nonRetryable := []string{
