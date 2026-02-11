@@ -6,6 +6,7 @@
  */
 type SanitizeOptions = {
   allowRelative?: boolean
+  allowDataUrl?: boolean
 }
 
 export function sanitizeUrl(value: string, options: SanitizeOptions = {}): string {
@@ -15,6 +16,11 @@ export function sanitizeUrl(value: string, options: SanitizeOptions = {}): strin
   }
 
   if (options.allowRelative && trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return trimmed
+  }
+
+  // 允许 data:image/ 开头的 data URL（仅限图片类型）
+  if (options.allowDataUrl && trimmed.startsWith('data:image/')) {
     return trimmed
   }
 
