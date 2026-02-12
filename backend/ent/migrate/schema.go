@@ -575,6 +575,20 @@ var (
 			},
 		},
 	}
+	// SecuritySecretsColumns holds the columns for the "security_secrets" table.
+	SecuritySecretsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "key", Type: field.TypeString, Unique: true, Size: 100},
+		{Name: "value", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+	}
+	// SecuritySecretsTable holds the schema information for the "security_secrets" table.
+	SecuritySecretsTable = &schema.Table{
+		Name:       "security_secrets",
+		Columns:    SecuritySecretsColumns,
+		PrimaryKey: []*schema.Column{SecuritySecretsColumns[0]},
+	}
 	// SettingsColumns holds the columns for the "settings" table.
 	SettingsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1003,6 +1017,7 @@ var (
 		PromoCodeUsagesTable,
 		ProxiesTable,
 		RedeemCodesTable,
+		SecuritySecretsTable,
 		SettingsTable,
 		UsageCleanupTasksTable,
 		UsageLogsTable,
@@ -1058,6 +1073,9 @@ func init() {
 	RedeemCodesTable.ForeignKeys[1].RefTable = UsersTable
 	RedeemCodesTable.Annotation = &entsql.Annotation{
 		Table: "redeem_codes",
+	}
+	SecuritySecretsTable.Annotation = &entsql.Annotation{
+		Table: "security_secrets",
 	}
 	SettingsTable.Annotation = &entsql.Annotation{
 		Table: "settings",
