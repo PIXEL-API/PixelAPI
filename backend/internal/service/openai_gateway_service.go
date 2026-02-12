@@ -190,6 +190,7 @@ type OpenAIGatewayService struct {
 	userSubRepo         UserSubscriptionRepository
 	cache               GatewayCache
 	cfg                 *config.Config
+	codexDetector       CodexClientRestrictionDetector
 	schedulerSnapshot   *SchedulerSnapshotService
 	concurrencyService  *ConcurrencyService
 	billingService      *BillingService
@@ -225,6 +226,7 @@ func NewOpenAIGatewayService(
 		userSubRepo:         userSubRepo,
 		cache:               cache,
 		cfg:                 cfg,
+		codexDetector:       NewOpenAICodexClientRestrictionDetector(cfg),
 		schedulerSnapshot:   schedulerSnapshot,
 		concurrencyService:  concurrencyService,
 		billingService:      billingService,
@@ -235,6 +237,65 @@ func NewOpenAIGatewayService(
 		openAITokenProvider: openAITokenProvider,
 		toolCorrector:       NewCodexToolCorrector(),
 	}
+}
+
+func (s *OpenAIGatewayService) getCodexClientRestrictionDetector() CodexClientRestrictionDetector {
+	if s != nil && s.codexDetector != nil {
+		return s.codexDetector
+	}
+	var cfg *config.Config
+	if s != nil {
+		cfg = s.cfg
+	}
+	return NewOpenAICodexClientRestrictionDetector(cfg)
+}
+
+func (s *OpenAIGatewayService) detectCodexClientRestriction(c *gin.Context, account *Account) CodexClientRestrictionDetectionResult {
+	return s.getCodexClientRestrictionDetector().Detect(c, account)
+}
+
+func getAPIKeyIDFromContext(c *gin.Context) int64 {
+	if c == nil {
+		return 0
+	}
+	v, exists := c.Get("api_key")
+	if !exists {
+		return 0
+	}
+	apiKey, ok := v.(*APIKey)
+	if !ok || apiKey == nil {
+		return 0
+	}
+	return apiKey.ID
+}
+
+func logCodexCLIOnlyDetection(ctx context.Context, account *Account, apiKeyID int64, result CodexClientRestrictionDetectionResult) {
+	if !result.Enabled {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	fields := []zap.Field{
+		zap.String("component", "service.openai_gateway"),
+		zap.Int64("account_id", accountID),
+		zap.Bool("codex_cli_only_enabled", result.Enabled),
+		zap.Bool("codex_official_client_match", result.Matched),
+		zap.String("reject_reason", result.Reason),
+	}
+	if apiKeyID > 0 {
+		fields = append(fields, zap.Int64("api_key_id", apiKeyID))
+	}
+	log := logger.FromContext(ctx).With(fields...)
+	if result.Matched {
+		log.Info("OpenAI codex_cli_only 检测通过")
+		return
+	}
+	log.Warn("OpenAI codex_cli_only 拒绝非官方客户端请求")
 }
 
 // GenerateSessionHash generates a sticky-session hash for OpenAI requests.
@@ -756,6 +817,19 @@ func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, re
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
+
+	restrictionResult := s.detectCodexClientRestriction(c, account)
+	apiKeyID := getAPIKeyIDFromContext(c)
+	logCodexCLIOnlyDetection(ctx, account, apiKeyID, restrictionResult)
+	if restrictionResult.Enabled && !restrictionResult.Matched {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"type":    "forbidden_error",
+				"message": "This account only allows Codex official clients",
+			},
+		})
+		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
+	}
 
 	originalBody := body
 	reqModel, reqStream, promptCacheKey := extractOpenAIRequestMetaFromBody(body)
