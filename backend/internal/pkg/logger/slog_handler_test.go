@@ -15,7 +15,6 @@ type captureState struct {
 }
 
 type capturedWrite struct {
-	entry  zapcore.Entry
 	fields []zapcore.Field
 }
 
@@ -51,7 +50,6 @@ func (c *captureCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
 	allFields = append(allFields, c.withFields...)
 	allFields = append(allFields, fields...)
 	c.state.writes = append(c.state.writes, capturedWrite{
-		entry:  entry,
 		fields: allFields,
 	})
 	return nil

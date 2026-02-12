@@ -117,9 +117,9 @@
             </span>
           </template>
 
-          <template #cell-used_by="{ value }">
+          <template #cell-used_by="{ value, row }">
             <span class="text-sm text-gray-500 dark:text-dark-400">
-              {{ value ? t('admin.redeem.userPrefix', { id: value }) : '-' }}
+              {{ row.user?.email || (value ? t('admin.redeem.userPrefix', { id: value }) : '-') }}
             </span>
           </template>
 

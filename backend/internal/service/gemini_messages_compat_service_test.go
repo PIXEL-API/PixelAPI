@@ -299,6 +299,26 @@ func TestExtractGeminiUsage(t *testing.T) {
 			},
 		},
 		{
+			name:    "包含 thoughtsTokenCount",
+			input:   `{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":50}}`,
+			wantNil: false,
+			wantUsage: &ClaudeUsage{
+				InputTokens:          100,
+				OutputTokens:         70,
+				CacheReadInputTokens: 0,
+			},
+		},
+		{
+			name:    "包含 thoughtsTokenCount 与缓存",
+			input:   `{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"cachedContentTokenCount":30,"thoughtsTokenCount":50}}`,
+			wantNil: false,
+			wantUsage: &ClaudeUsage{
+				InputTokens:          70,
+				OutputTokens:         70,
+				CacheReadInputTokens: 30,
+			},
+		},
+		{
 			name:    "缺失 cachedContentTokenCount",
 			input:   `{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":50}}`,
 			wantNil: false,

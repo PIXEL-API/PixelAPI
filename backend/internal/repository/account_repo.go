@@ -448,7 +448,12 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 		q = q.Where(dbaccount.TypeEQ(accountType))
 	}
 	if status != "" {
-		q = q.Where(dbaccount.StatusEQ(status))
+		switch status {
+		case "rate_limited":
+			q = q.Where(dbaccount.RateLimitResetAtGT(time.Now()))
+		default:
+			q = q.Where(dbaccount.StatusEQ(status))
+		}
 	}
 	if search != "" {
 		q = q.Where(dbaccount.NameContainsFold(search))

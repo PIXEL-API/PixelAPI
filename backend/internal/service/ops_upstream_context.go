@@ -27,6 +27,10 @@ const (
 	OpsUpstreamLatencyMsKey  = "ops_upstream_latency_ms"
 	OpsResponseLatencyMsKey  = "ops_response_latency_ms"
 	OpsTimeToFirstTokenMsKey = "ops_time_to_first_token_ms"
+
+	// OpsSkipPassthroughKey 由 applyErrorPassthroughRule 在命中 skip_monitoring=true 的规则时设置。
+	// ops_error_logger 中间件检查此 key，为 true 时跳过错误记录。
+	OpsSkipPassthroughKey = "ops_skip_passthrough"
 )
 
 func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
@@ -132,6 +136,37 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	evCopy := ev
 	existing = append(existing, &evCopy)
 	c.Set(OpsUpstreamErrorsKey, existing)
+
+	checkSkipMonitoringForUpstreamEvent(c, &evCopy)
+}
+
+// checkSkipMonitoringForUpstreamEvent checks whether the upstream error event
+// matches a passthrough rule with skip_monitoring=true and, if so, sets the
+// OpsSkipPassthroughKey on the context.  This ensures intermediate retry /
+// failover errors (which never go through the final applyErrorPassthroughRule
+// path) can still suppress ops_error_logs recording.
+func checkSkipMonitoringForUpstreamEvent(c *gin.Context, ev *OpsUpstreamErrorEvent) {
+	if ev.UpstreamStatusCode == 0 {
+		return
+	}
+
+	svc := getBoundErrorPassthroughService(c)
+	if svc == nil {
+		return
+	}
+
+	// Use the best available body representation for keyword matching.
+	// Even when body is empty, MatchRule can still match rules that only
+	// specify ErrorCodes (no Keywords), so we always call it.
+	body := ev.Detail
+	if body == "" {
+		body = ev.Message
+	}
+
+	rule := svc.MatchRule(ev.Platform, ev.UpstreamStatusCode, []byte(body))
+	if rule != nil && rule.SkipMonitoring {
+		c.Set(OpsSkipPassthroughKey, true)
+	}
 }
 
 func marshalOpsUpstreamErrors(events []*OpsUpstreamErrorEvent) *string {
