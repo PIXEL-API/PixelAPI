@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"log"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +18,7 @@ import (
 	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
@@ -49,22 +49,9 @@ func init() {
 
 // initLogger configures the default slog handler based on gin.Mode().
 // In non-release mode, Debug level logs are enabled.
-func initLogger() {
-	var level slog.Level
-	if gin.Mode() == gin.ReleaseMode {
-		level = slog.LevelInfo
-	} else {
-		level = slog.LevelDebug
-	}
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
-	})
-	slog.SetDefault(slog.New(handler))
-}
-
 func main() {
-	// Initialize slog logger based on gin mode
-	initLogger()
+	logger.InitBootstrap()
+	defer logger.Sync()
 
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
@@ -140,6 +127,9 @@ func runMainServer() {
 	cfg, err := config.LoadForBootstrap()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+	if err := logger.Init(logger.OptionsFromConfig(cfg.Log)); err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 	if cfg.RunMode == config.RunModeSimple {
 		log.Println("⚠️  WARNING: Running in SIMPLE mode - billing and quota checks are DISABLED")
