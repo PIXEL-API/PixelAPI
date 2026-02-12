@@ -966,6 +966,37 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.scheduling.outbox_lag_rebuild_seconds",
 		},
 		{
+			name:    "log level invalid",
+			mutate:  func(c *Config) { c.Log.Level = "trace" },
+			wantErr: "log.level",
+		},
+		{
+			name:    "log format invalid",
+			mutate:  func(c *Config) { c.Log.Format = "plain" },
+			wantErr: "log.format",
+		},
+		{
+			name: "log output disabled",
+			mutate: func(c *Config) {
+				c.Log.Output.ToStdout = false
+				c.Log.Output.ToFile = false
+			},
+			wantErr: "log.output.to_stdout and log.output.to_file cannot both be false",
+		},
+		{
+			name:    "log rotation size",
+			mutate:  func(c *Config) { c.Log.Rotation.MaxSizeMB = 0 },
+			wantErr: "log.rotation.max_size_mb",
+		},
+		{
+			name: "log sampling enabled invalid",
+			mutate: func(c *Config) {
+				c.Log.Sampling.Enabled = true
+				c.Log.Sampling.Initial = 0
+			},
+			wantErr: "log.sampling.initial",
+		},
+		{
 			name:    "ops metrics collector ttl",
 			mutate:  func(c *Config) { c.Ops.MetricsCollectorCache.TTL = -1 },
 			wantErr: "ops.metrics_collector_cache.ttl",

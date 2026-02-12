@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 )
@@ -84,12 +84,12 @@ func NewPricingService(cfg *config.Config, remoteClient PricingRemoteClient) *Pr
 func (s *PricingService) Initialize() error {
 	// 确保数据目录存在
 	if err := os.MkdirAll(s.cfg.Pricing.DataDir, 0755); err != nil {
-		log.Printf("[Pricing] Failed to create data directory: %v", err)
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to create data directory: %v", err)
 	}
 
 	// 首次加载价格数据
 	if err := s.checkAndUpdatePricing(); err != nil {
-		log.Printf("[Pricing] Initial load failed, using fallback: %v", err)
+		logger.LegacyPrintf("service.pricing", "[Pricing] Initial load failed, using fallback: %v", err)
 		if err := s.useFallbackPricing(); err != nil {
 			return fmt.Errorf("failed to load pricing data: %w", err)
 		}
@@ -98,7 +98,7 @@ func (s *PricingService) Initialize() error {
 	// 启动定时更新
 	s.startUpdateScheduler()
 
-	log.Printf("[Pricing] Service initialized with %d models", len(s.pricingData))
+	logger.LegacyPrintf("service.pricing", "[Pricing] Service initialized with %d models", len(s.pricingData))
 	return nil
 }
 
@@ -106,7 +106,7 @@ func (s *PricingService) Initialize() error {
 func (s *PricingService) Stop() {
 	close(s.stopCh)
 	s.wg.Wait()
-	log.Println("[Pricing] Service stopped")
+	logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Service stopped")
 }
 
 // startUpdateScheduler 启动定时更新调度器
@@ -127,7 +127,7 @@ func (s *PricingService) startUpdateScheduler() {
 			select {
 			case <-ticker.C:
 				if err := s.syncWithRemote(); err != nil {
-					log.Printf("[Pricing] Sync failed: %v", err)
+					logger.LegacyPrintf("service.pricing", "[Pricing] Sync failed: %v", err)
 				}
 			case <-s.stopCh:
 				return
@@ -135,7 +135,7 @@ func (s *PricingService) startUpdateScheduler() {
 		}
 	}()
 
-	log.Printf("[Pricing] Update scheduler started (check every %v)", hashInterval)
+	logger.LegacyPrintf("service.pricing", "[Pricing] Update scheduler started (check every %v)", hashInterval)
 }
 
 // checkAndUpdatePricing 检查并更新价格数据
@@ -144,7 +144,7 @@ func (s *PricingService) checkAndUpdatePricing() error {
 
 	// 检查本地文件是否存在
 	if _, err := os.Stat(pricingFile); os.IsNotExist(err) {
-		log.Println("[Pricing] Local pricing file not found, downloading...")
+		logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Local pricing file not found, downloading...")
 		return s.downloadPricingData()
 	}
 
@@ -158,9 +158,9 @@ func (s *PricingService) checkAndUpdatePricing() error {
 	maxAge := time.Duration(s.cfg.Pricing.UpdateIntervalHours) * time.Hour
 
 	if fileAge > maxAge {
-		log.Printf("[Pricing] Local file is %v old, updating...", fileAge.Round(time.Hour))
+		logger.LegacyPrintf("service.pricing", "[Pricing] Local file is %v old, updating...", fileAge.Round(time.Hour))
 		if err := s.downloadPricingData(); err != nil {
-			log.Printf("[Pricing] Download failed, using existing file: %v", err)
+			logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
 		}
 	}
 
@@ -175,7 +175,7 @@ func (s *PricingService) syncWithRemote() error {
 	// 计算本地文件哈希
 	localHash, err := s.computeFileHash(pricingFile)
 	if err != nil {
-		log.Printf("[Pricing] Failed to compute local hash: %v", err)
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to compute local hash: %v", err)
 		return s.downloadPricingData()
 	}
 
@@ -183,15 +183,15 @@ func (s *PricingService) syncWithRemote() error {
 	if s.cfg.Pricing.HashURL != "" {
 		remoteHash, err := s.fetchRemoteHash()
 		if err != nil {
-			log.Printf("[Pricing] Failed to fetch remote hash: %v", err)
+			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash: %v", err)
 			return nil // 哈希获取失败不影响正常使用
 		}
 
 		if remoteHash != localHash {
-			log.Println("[Pricing] Remote hash differs, downloading new version...")
+			logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Remote hash differs, downloading new version...")
 			return s.downloadPricingData()
 		}
-		log.Println("[Pricing] Hash check passed, no update needed")
+		logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Hash check passed, no update needed")
 		return nil
 	}
 
@@ -205,7 +205,7 @@ func (s *PricingService) syncWithRemote() error {
 	maxAge := time.Duration(s.cfg.Pricing.UpdateIntervalHours) * time.Hour
 
 	if fileAge > maxAge {
-		log.Printf("[Pricing] File is %v old, downloading...", fileAge.Round(time.Hour))
+		logger.LegacyPrintf("service.pricing", "[Pricing] File is %v old, downloading...", fileAge.Round(time.Hour))
 		return s.downloadPricingData()
 	}
 
@@ -218,7 +218,7 @@ func (s *PricingService) downloadPricingData() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("[Pricing] Downloading from %s", remoteURL)
+	logger.LegacyPrintf("service.pricing", "[Pricing] Downloading from %s", remoteURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -252,7 +252,7 @@ func (s *PricingService) downloadPricingData() error {
 	// 保存到本地文件
 	pricingFile := s.getPricingFilePath()
 	if err := os.WriteFile(pricingFile, body, 0644); err != nil {
-		log.Printf("[Pricing] Failed to save file: %v", err)
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save file: %v", err)
 	}
 
 	// 保存哈希
@@ -260,7 +260,7 @@ func (s *PricingService) downloadPricingData() error {
 	hashStr := hex.EncodeToString(hash[:])
 	hashFile := s.getHashFilePath()
 	if err := os.WriteFile(hashFile, []byte(hashStr+"\n"), 0644); err != nil {
-		log.Printf("[Pricing] Failed to save hash: %v", err)
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save hash: %v", err)
 	}
 
 	// 更新内存数据
@@ -270,7 +270,7 @@ func (s *PricingService) downloadPricingData() error {
 	s.localHash = hashStr
 	s.mu.Unlock()
 
-	log.Printf("[Pricing] Downloaded %d models successfully", len(data))
+	logger.LegacyPrintf("service.pricing", "[Pricing] Downloaded %d models successfully", len(data))
 	return nil
 }
 
@@ -329,7 +329,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 	}
 
 	if skipped > 0 {
-		log.Printf("[Pricing] Skipped %d invalid entries", skipped)
+		logger.LegacyPrintf("service.pricing", "[Pricing] Skipped %d invalid entries", skipped)
 	}
 
 	if len(result) == 0 {
@@ -368,7 +368,7 @@ func (s *PricingService) loadPricingData(filePath string) error {
 	}
 	s.mu.Unlock()
 
-	log.Printf("[Pricing] Loaded %d models from %s", len(pricingData), filePath)
+	logger.LegacyPrintf("service.pricing", "[Pricing] Loaded %d models from %s", len(pricingData), filePath)
 	return nil
 }
 
@@ -380,7 +380,7 @@ func (s *PricingService) useFallbackPricing() error {
 		return fmt.Errorf("fallback file not found: %s", fallbackFile)
 	}
 
-	log.Printf("[Pricing] Using fallback file: %s", fallbackFile)
+	logger.LegacyPrintf("service.pricing", "[Pricing] Using fallback file: %s", fallbackFile)
 
 	// 复制到数据目录
 	data, err := os.ReadFile(fallbackFile)
@@ -390,7 +390,7 @@ func (s *PricingService) useFallbackPricing() error {
 
 	pricingFile := s.getPricingFilePath()
 	if err := os.WriteFile(pricingFile, data, 0644); err != nil {
-		log.Printf("[Pricing] Failed to copy fallback: %v", err)
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to copy fallback: %v", err)
 	}
 
 	return s.loadPricingData(fallbackFile)
@@ -639,7 +639,7 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 		for key, pricing := range s.pricingData {
 			keyLower := strings.ToLower(key)
 			if strings.Contains(keyLower, pattern) {
-				log.Printf("[Pricing] Fuzzy matched %s -> %s", model, key)
+				logger.LegacyPrintf("service.pricing", "[Pricing] Fuzzy matched %s -> %s", model, key)
 				return pricing
 			}
 		}
@@ -660,14 +660,14 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 
 	for _, variant := range variants {
 		if pricing, ok := s.pricingData[variant]; ok {
-			log.Printf("[Pricing] OpenAI fallback matched %s -> %s", model, variant)
+			logger.LegacyPrintf("service.pricing", "[Pricing] OpenAI fallback matched %s -> %s", model, variant)
 			return pricing
 		}
 	}
 
 	if strings.HasPrefix(model, "gpt-5.3-codex") {
 		if pricing, ok := s.pricingData["gpt-5.2-codex"]; ok {
-			log.Printf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-5.2-codex")
+			logger.LegacyPrintf("service.pricing", "[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-5.2-codex")
 			return pricing
 		}
 	}
@@ -675,7 +675,7 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 	// 最终回退到 DefaultTestModel
 	defaultModel := strings.ToLower(openai.DefaultTestModel)
 	if pricing, ok := s.pricingData[defaultModel]; ok {
-		log.Printf("[Pricing] OpenAI fallback to default model %s -> %s", model, defaultModel)
+		logger.LegacyPrintf("service.pricing", "[Pricing] OpenAI fallback to default model %s -> %s", model, defaultModel)
 		return pricing
 	}
 

@@ -255,18 +255,33 @@ func setOpsRequestContext(c *gin.Context, model string, stream bool, requestBody
 	if c == nil {
 		return
 	}
+	model = strings.TrimSpace(model)
 	c.Set(opsModelKey, model)
 	c.Set(opsStreamKey, stream)
 	if len(requestBody) > 0 {
 		c.Set(opsRequestBodyKey, requestBody)
 	}
+	if c.Request != nil && model != "" {
+		ctx := context.WithValue(c.Request.Context(), ctxkey.Model, model)
+		c.Request = c.Request.WithContext(ctx)
+	}
 }
 
-func setOpsSelectedAccount(c *gin.Context, accountID int64) {
+func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) {
 	if c == nil || accountID <= 0 {
 		return
 	}
 	c.Set(opsAccountIDKey, accountID)
+	if c.Request != nil {
+		ctx := context.WithValue(c.Request.Context(), ctxkey.AccountID, accountID)
+		if len(platform) > 0 {
+			p := strings.TrimSpace(platform[0])
+			if p != "" {
+				ctx = context.WithValue(ctx, ctxkey.Platform, p)
+			}
+		}
+		c.Request = c.Request.WithContext(ctx)
+	}
 }
 
 type opsCaptureWriter struct {
