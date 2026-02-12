@@ -53,7 +53,7 @@ func (o InitOptions) normalized() InitOptions {
 	}
 	out.Format = strings.ToLower(strings.TrimSpace(out.Format))
 	if out.Format == "" {
-		out.Format = "json"
+		out.Format = "console"
 	}
 	out.ServiceName = strings.TrimSpace(out.ServiceName)
 	if out.ServiceName == "" {
