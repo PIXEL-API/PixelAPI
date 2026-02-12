@@ -259,6 +259,40 @@ export interface OpsErrorDistributionResponse {
   items: OpsErrorDistributionItem[]
 }
 
+export type OpsOpenAITokenStatsTimeRange = '30m' | '1h' | '1d' | '15d' | '30d'
+
+export interface OpsOpenAITokenStatsItem {
+  model: string
+  request_count: number
+  avg_tokens_per_sec?: number | null
+  avg_first_token_ms?: number | null
+  total_output_tokens: number
+  avg_duration_ms: number
+  requests_with_first_token: number
+}
+
+export interface OpsOpenAITokenStatsResponse {
+  time_range: OpsOpenAITokenStatsTimeRange
+  start_time: string
+  end_time: string
+  platform?: string
+  group_id?: number | null
+  items: OpsOpenAITokenStatsItem[]
+  total: number
+  page?: number
+  page_size?: number
+  top_n?: number | null
+}
+
+export interface OpsOpenAITokenStatsParams {
+  time_range?: OpsOpenAITokenStatsTimeRange
+  platform?: string
+  group_id?: number | null
+  page?: number
+  page_size?: number
+  top_n?: number
+}
+
 export interface OpsSystemMetricsSnapshot {
   id: number
   created_at: string
@@ -971,6 +1005,17 @@ export async function getErrorDistribution(
   return data
 }
 
+export async function getOpenAITokenStats(
+  params: OpsOpenAITokenStatsParams,
+  options: OpsRequestOptions = {}
+): Promise<OpsOpenAITokenStatsResponse> {
+  const { data } = await apiClient.get<OpsOpenAITokenStatsResponse>('/admin/ops/dashboard/openai-token-stats', {
+    params,
+    signal: options.signal
+  })
+  return data
+}
+
 export type OpsErrorListView = 'errors' | 'excluded' | 'all'
 
 export type OpsErrorListQueryParams = {
@@ -1188,6 +1233,7 @@ export const opsAPI = {
   getLatencyHistogram,
   getErrorTrend,
   getErrorDistribution,
+  getOpenAITokenStats,
   getConcurrencyStats,
   getUserConcurrencyStats,
   getAccountAvailabilityStats,
