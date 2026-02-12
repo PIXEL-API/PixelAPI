@@ -29,17 +29,19 @@
       <!-- Logo/Brand -->
       <div class="mb-8 text-center">
         <!-- Custom Logo or Default Logo -->
-        <div
-          class="mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl shadow-lg shadow-primary-500/30"
-        >
-          <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
-        </div>
-        <h1 class="text-gradient mb-2 text-3xl font-bold">
-          {{ siteName }}
-        </h1>
-        <p class="text-sm text-gray-500 dark:text-dark-400">
-          {{ siteSubtitle }}
-        </p>
+        <template v-if="settingsLoaded">
+          <div
+            class="mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl shadow-lg shadow-primary-500/30"
+          >
+            <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+          </div>
+          <h1 class="text-gradient mb-2 text-3xl font-bold">
+            {{ siteName }}
+          </h1>
+          <p class="text-sm text-gray-500 dark:text-dark-400">
+            {{ siteSubtitle }}
+          </p>
+        </template>
       </div>
 
       <!-- Card Container -->
@@ -61,25 +63,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { getPublicSettings } from '@/api/auth'
+import { computed, onMounted } from 'vue'
+import { useAppStore } from '@/stores'
 import { sanitizeUrl } from '@/utils/url'
 
-const siteName = ref('Sub2API')
-const siteLogo = ref('')
-const siteSubtitle = ref('Subscription to API Conversion Platform')
+const appStore = useAppStore()
+
+const siteName = computed(() => appStore.siteName || 'Sub2API')
+const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
+const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'Subscription to API Conversion Platform')
+const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
 const currentYear = computed(() => new Date().getFullYear())
 
-onMounted(async () => {
-  try {
-    const settings = await getPublicSettings()
-    siteName.value = settings.site_name || 'Sub2API'
-    siteLogo.value = sanitizeUrl(settings.site_logo || '', { allowRelative: true })
-    siteSubtitle.value = settings.site_subtitle || 'Subscription to API Conversion Platform'
-  } catch (error) {
-    console.error('Failed to load public settings:', error)
-  }
+onMounted(() => {
+  appStore.fetchPublicSettings()
 })
 </script>
 

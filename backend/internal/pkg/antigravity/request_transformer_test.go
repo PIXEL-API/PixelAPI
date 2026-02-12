@@ -259,3 +259,93 @@ func TestBuildTools_CustomTypeTools(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       string
+		thinking    *ThinkingConfig
+		wantBudget  int
+		wantPresent bool
+	}{
+		{
+			name:        "enabled without budget defaults to dynamic (-1)",
+			model:       "claude-opus-4-6-thinking",
+			thinking:    &ThinkingConfig{Type: "enabled"},
+			wantBudget:  -1,
+			wantPresent: true,
+		},
+		{
+			name:        "enabled with budget uses the provided value",
+			model:       "claude-opus-4-6-thinking",
+			thinking:    &ThinkingConfig{Type: "enabled", BudgetTokens: 1024},
+			wantBudget:  1024,
+			wantPresent: true,
+		},
+		{
+			name:        "enabled with -1 budget uses dynamic (-1)",
+			model:       "claude-opus-4-6-thinking",
+			thinking:    &ThinkingConfig{Type: "enabled", BudgetTokens: -1},
+			wantBudget:  -1,
+			wantPresent: true,
+		},
+		{
+			name:        "adaptive on opus4.6 maps to high budget (24576)",
+			model:       "claude-opus-4-6-thinking",
+			thinking:    &ThinkingConfig{Type: "adaptive", BudgetTokens: 20000},
+			wantBudget:  ClaudeAdaptiveHighThinkingBudgetTokens,
+			wantPresent: true,
+		},
+		{
+			name:        "adaptive on non-opus model keeps default dynamic (-1)",
+			model:       "claude-sonnet-4-5-thinking",
+			thinking:    &ThinkingConfig{Type: "adaptive"},
+			wantBudget:  -1,
+			wantPresent: true,
+		},
+		{
+			name:        "disabled does not emit thinkingConfig",
+			model:       "claude-opus-4-6-thinking",
+			thinking:    &ThinkingConfig{Type: "disabled", BudgetTokens: 1024},
+			wantBudget:  0,
+			wantPresent: false,
+		},
+		{
+			name:        "nil thinking does not emit thinkingConfig",
+			model:       "claude-opus-4-6-thinking",
+			thinking:    nil,
+			wantBudget:  0,
+			wantPresent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &ClaudeRequest{
+				Model:    tt.model,
+				Thinking: tt.thinking,
+			}
+			cfg := buildGenerationConfig(req)
+			if cfg == nil {
+				t.Fatalf("expected non-nil generationConfig")
+			}
+
+			if tt.wantPresent {
+				if cfg.ThinkingConfig == nil {
+					t.Fatalf("expected thinkingConfig to be present")
+				}
+				if !cfg.ThinkingConfig.IncludeThoughts {
+					t.Fatalf("expected includeThoughts=true")
+				}
+				if cfg.ThinkingConfig.ThinkingBudget != tt.wantBudget {
+					t.Fatalf("expected thinkingBudget=%d, got %d", tt.wantBudget, cfg.ThinkingConfig.ThinkingBudget)
+				}
+				return
+			}
+
+			if cfg.ThinkingConfig != nil {
+				t.Fatalf("expected thinkingConfig to be nil, got %+v", cfg.ThinkingConfig)
+			}
+		})
+	}
+}

@@ -3631,7 +3631,8 @@ func requestNeedsBetaFeatures(body []byte) bool {
 	if tools.Exists() && tools.IsArray() && len(tools.Array()) > 0 {
 		return true
 	}
-	if strings.EqualFold(gjson.GetBytes(body, "thinking.type").String(), "enabled") {
+	thinkingType := gjson.GetBytes(body, "thinking.type").String()
+	if strings.EqualFold(thinkingType, "enabled") || strings.EqualFold(thinkingType, "adaptive") {
 		return true
 	}
 	return false

@@ -6,6 +6,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -106,7 +107,12 @@ func (r *redeemCodeRepository) ListWithFilters(ctx context.Context, params pagin
 		q = q.Where(redeemcode.StatusEQ(status))
 	}
 	if search != "" {
-		q = q.Where(redeemcode.CodeContainsFold(search))
+		q = q.Where(
+			redeemcode.Or(
+				redeemcode.CodeContainsFold(search),
+				redeemcode.HasUserWith(user.EmailContainsFold(search)),
+			),
+		)
 	}
 
 	total, err := q.Count(ctx)
