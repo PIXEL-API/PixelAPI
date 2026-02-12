@@ -680,7 +680,19 @@ func NormalizeRunMode(value string) string {
 	}
 }
 
+// Load 读取并校验完整配置（要求 jwt.secret 已显式提供）。
 func Load() (*Config, error) {
+	return load(false)
+}
+
+// LoadForBootstrap 读取启动阶段配置。
+//
+// 启动阶段允许 jwt.secret 先留空，后续由数据库初始化流程补齐并再次完整校验。
+func LoadForBootstrap() (*Config, error) {
+	return load(true)
+}
+
+func load(allowMissingJWTSecret bool) (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 
@@ -756,8 +768,18 @@ func Load() (*Config, error) {
 		cfg.Totp.EncryptionKeyConfigured = true
 	}
 
+	originalJWTSecret := cfg.JWT.Secret
+	if allowMissingJWTSecret && originalJWTSecret == "" {
+		// 启动阶段允许先无 JWT 密钥，后续在数据库初始化后补齐。
+		cfg.JWT.Secret = strings.Repeat("0", 32)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config error: %w", err)
+	}
+
+	if allowMissingJWTSecret && originalJWTSecret == "" {
+		cfg.JWT.Secret = ""
 	}
 
 	if !cfg.Security.URLAllowlist.Enabled {
