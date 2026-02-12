@@ -88,7 +88,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamKeepsToolNameAndBodyUnchang
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_oauth_passthrough": true},
+		Extra:          map[string]any{"openai_passthrough": true},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
@@ -107,6 +107,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamKeepsToolNameAndBodyUnchang
 
 	// 2) only auth is replaced; inbound auth/cookie are not forwarded
 	require.Equal(t, "Bearer oauth-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "codex_cli_rs/0.1.0", upstream.lastReq.Header.Get("User-Agent"))
 	require.Empty(t, upstream.lastReq.Header.Get("Cookie"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Api-Key"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Goog-Api-Key"))
@@ -154,7 +155,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *te
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_oauth_passthrough": false},
+		Extra:          map[string]any{"openai_passthrough": false},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
@@ -207,7 +208,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_ResponseHeadersAllowXCodex(t *tes
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_oauth_passthrough": true},
+		Extra:          map[string]any{"openai_passthrough": true},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
@@ -249,7 +250,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamErrorIncludesPassthroughF
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_oauth_passthrough": true},
+		Extra:          map[string]any{"openai_passthrough": true},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
@@ -267,7 +268,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamErrorIncludesPassthroughF
 	require.True(t, arr[len(arr)-1].Passthrough)
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_RequiresCodexUAOrForceFlag(t *testing.T) {
+func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAStillPassthroughWhenEnabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -297,7 +298,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_RequiresCodexUAOrForceFlag(t *tes
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_oauth_passthrough": true},
+		Extra:          map[string]any{"openai_passthrough": true},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
@@ -305,16 +306,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_RequiresCodexUAOrForceFlag(t *tes
 
 	_, err := svc.Forward(context.Background(), c, account, inputBody)
 	require.NoError(t, err)
-	// not codex, not forced => legacy transform should run
-	require.Contains(t, string(upstream.lastBody), `"store":false`)
-	require.Contains(t, string(upstream.lastBody), `"stream":true`)
-
-	// now enable force flag => should passthrough and keep bytes
-	upstream2 := &httpUpstreamRecorder{resp: resp}
-	svc2 := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: true}}, httpUpstream: upstream2}
-	_, err = svc2.Forward(context.Background(), c, account, inputBody)
-	require.NoError(t, err)
-	require.Equal(t, inputBody, upstream2.lastBody)
+	require.Equal(t, inputBody, upstream.lastBody)
+	require.Equal(t, "curl/8.0", upstream.lastReq.Header.Get("User-Agent"))
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_StreamingSetsFirstTokenMs(t *testing.T) {
@@ -352,7 +345,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamingSetsFirstTokenMs(t *test
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_oauth_passthrough": true},
+		Extra:          map[string]any{"openai_passthrough": true},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
@@ -406,7 +399,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamClientDisconnectStillCollec
 		Type:           AccountTypeOAuth,
 		Concurrency:    1,
 		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_oauth_passthrough": true},
+		Extra:          map[string]any{"openai_passthrough": true},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),
@@ -420,4 +413,49 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamClientDisconnectStillCollec
 	require.Equal(t, 11, result.Usage.InputTokens)
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
+}
+
+func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	c.Request.Header.Set("User-Agent", "curl/8.0")
+	c.Request.Header.Set("X-Test", "keep")
+
+	originalBody := []byte(`{"model":"gpt-5.2","stream":false,"max_output_tokens":128,"input":[{"type":"text","text":"hi"}]}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid"}},
+		Body:       io.NopCloser(strings.NewReader(`{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`)),
+	}
+	upstream := &httpUpstreamRecorder{resp: resp}
+
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream: upstream,
+	}
+
+	account := &Account{
+		ID:             456,
+		Name:           "apikey-acc",
+		Platform:       PlatformOpenAI,
+		Type:           AccountTypeAPIKey,
+		Concurrency:    1,
+		Credentials:    map[string]any{"api_key": "sk-api-key", "base_url": "https://api.openai.com"},
+		Extra:          map[string]any{"openai_passthrough": true},
+		Status:         StatusActive,
+		Schedulable:    true,
+		RateMultiplier: f64p(1),
+	}
+
+	_, err := svc.Forward(context.Background(), c, account, originalBody)
+	require.NoError(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, originalBody, upstream.lastBody)
+	require.Equal(t, "https://api.openai.com/v1/responses", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer sk-api-key", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "curl/8.0", upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "keep", upstream.lastReq.Header.Get("X-Test"))
 }
