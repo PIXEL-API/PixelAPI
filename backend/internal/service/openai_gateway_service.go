@@ -35,6 +35,8 @@ const (
 	openaiPlatformAPIURL   = "https://api.openai.com/v1/responses"
 	openaiStickySessionTTL = time.Hour // 粘性会话TTL
 	codexCLIUserAgent      = "codex_cli_rs/0.98.0"
+	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
+	codexCLIOnlyHeaderValueMaxBytes = 256
 
 	// OpenAIParsedRequestBodyKey 缓存 handler 侧已解析的请求体，避免重复解析。
 	OpenAIParsedRequestBodyKey = "openai_parsed_request_body"
@@ -61,6 +63,22 @@ var openaiPassthroughAllowedHeaders = map[string]bool{
 	"user-agent":      true,
 	"originator":      true,
 	"session_id":      true,
+}
+
+// codex_cli_only 拒绝时记录的请求头白名单（仅用于诊断日志，不参与上游透传）
+var codexCLIOnlyDebugHeaderWhitelist = []string{
+	"User-Agent",
+	"Content-Type",
+	"Accept",
+	"Accept-Language",
+	"OpenAI-Beta",
+	"Originator",
+	"Session_ID",
+	"Conversation_ID",
+	"X-Request-ID",
+	"X-Client-Request-ID",
+	"X-Forwarded-For",
+	"X-Real-IP",
 }
 
 // OpenAICodexUsageSnapshot represents Codex API usage limits from response headers
@@ -269,7 +287,7 @@ func getAPIKeyIDFromContext(c *gin.Context) int64 {
 	return apiKey.ID
 }
 
-func logCodexCLIOnlyDetection(ctx context.Context, account *Account, apiKeyID int64, result CodexClientRestrictionDetectionResult) {
+func logCodexCLIOnlyDetection(ctx context.Context, c *gin.Context, account *Account, apiKeyID int64, result CodexClientRestrictionDetectionResult, body []byte) {
 	if !result.Enabled {
 		return
 	}
@@ -290,12 +308,169 @@ func logCodexCLIOnlyDetection(ctx context.Context, account *Account, apiKeyID in
 	if apiKeyID > 0 {
 		fields = append(fields, zap.Int64("api_key_id", apiKeyID))
 	}
+	if !result.Matched {
+		fields = appendCodexCLIOnlyRejectedRequestFields(fields, c, body)
+	}
 	log := logger.FromContext(ctx).With(fields...)
 	if result.Matched {
 		log.Warn("OpenAI codex_cli_only 允许官方客户端请求")
 		return
 	}
 	log.Warn("OpenAI codex_cli_only 拒绝非官方客户端请求")
+}
+
+func appendCodexCLIOnlyRejectedRequestFields(fields []zap.Field, c *gin.Context, body []byte) []zap.Field {
+	if c == nil || c.Request == nil {
+		return fields
+	}
+
+	req := c.Request
+	requestModel, requestStream, promptCacheKey := extractOpenAIRequestMetaFromBody(body)
+	fields = append(fields,
+		zap.String("request_method", strings.TrimSpace(req.Method)),
+		zap.String("request_path", strings.TrimSpace(req.URL.Path)),
+		zap.String("request_query", strings.TrimSpace(req.URL.RawQuery)),
+		zap.String("request_host", strings.TrimSpace(req.Host)),
+		zap.String("request_client_ip", strings.TrimSpace(c.ClientIP())),
+		zap.String("request_remote_addr", strings.TrimSpace(req.RemoteAddr)),
+		zap.String("request_user_agent", strings.TrimSpace(req.Header.Get("User-Agent"))),
+		zap.String("request_content_type", strings.TrimSpace(req.Header.Get("Content-Type"))),
+		zap.Int64("request_content_length", req.ContentLength),
+		zap.Bool("request_stream", requestStream),
+	)
+	if requestModel != "" {
+		fields = append(fields, zap.String("request_model", requestModel))
+	}
+	if promptCacheKey != "" {
+		fields = append(fields, zap.String("request_prompt_cache_key_sha256", hashSensitiveValueForLog(promptCacheKey)))
+	}
+
+	if headers := snapshotCodexCLIOnlyHeaders(req.Header); len(headers) > 0 {
+		fields = append(fields, zap.Any("request_headers", headers))
+	}
+	fields = append(fields, zap.Int("request_body_size", len(body)))
+	return fields
+}
+
+func snapshotCodexCLIOnlyHeaders(header http.Header) map[string]string {
+	if len(header) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(codexCLIOnlyDebugHeaderWhitelist))
+	for _, key := range codexCLIOnlyDebugHeaderWhitelist {
+		value := strings.TrimSpace(header.Get(key))
+		if value == "" {
+			continue
+		}
+		result[strings.ToLower(key)] = truncateString(value, codexCLIOnlyHeaderValueMaxBytes)
+	}
+	return result
+}
+
+func hashSensitiveValueForLog(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:8])
+}
+
+func logOpenAIInstructionsRequiredDebug(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	upstreamStatusCode int,
+	upstreamMsg string,
+	requestBody []byte,
+	upstreamBody []byte,
+) {
+	msg := strings.TrimSpace(upstreamMsg)
+	if !isOpenAIInstructionsRequiredError(upstreamStatusCode, msg, upstreamBody) {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	accountID := int64(0)
+	accountName := ""
+	if account != nil {
+		accountID = account.ID
+		accountName = strings.TrimSpace(account.Name)
+	}
+
+	userAgent := ""
+	if c != nil {
+		userAgent = strings.TrimSpace(c.GetHeader("User-Agent"))
+	}
+
+	fields := []zap.Field{
+		zap.String("component", "service.openai_gateway"),
+		zap.Int64("account_id", accountID),
+		zap.String("account_name", accountName),
+		zap.Int("upstream_status_code", upstreamStatusCode),
+		zap.String("upstream_error_message", msg),
+		zap.String("request_user_agent", userAgent),
+		zap.Bool("codex_official_client_match", openai.IsCodexCLIRequest(userAgent)),
+	}
+	fields = appendCodexCLIOnlyRejectedRequestFields(fields, c, requestBody)
+
+	logger.FromContext(ctx).With(fields...).Warn("OpenAI 上游返回 Instructions are required，已记录请求详情用于排查")
+}
+
+func isOpenAIInstructionsRequiredError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if upstreamStatusCode != http.StatusBadRequest {
+		return false
+	}
+
+	hasInstructionRequired := func(text string) bool {
+		lower := strings.ToLower(strings.TrimSpace(text))
+		if lower == "" {
+			return false
+		}
+		if strings.Contains(lower, "instructions are required") {
+			return true
+		}
+		if strings.Contains(lower, "required parameter: 'instructions'") {
+			return true
+		}
+		if strings.Contains(lower, "required parameter: instructions") {
+			return true
+		}
+		if strings.Contains(lower, "missing required parameter") && strings.Contains(lower, "instructions") {
+			return true
+		}
+		return strings.Contains(lower, "instruction") && strings.Contains(lower, "required")
+	}
+
+	if hasInstructionRequired(upstreamMsg) {
+		return true
+	}
+	if len(upstreamBody) == 0 {
+		return false
+	}
+
+	errMsg := gjson.GetBytes(upstreamBody, "error.message").String()
+	errMsgLower := strings.ToLower(strings.TrimSpace(errMsg))
+	errCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.code").String()))
+	errParam := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.param").String()))
+	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.type").String()))
+
+	if errParam == "instructions" {
+		return true
+	}
+	if hasInstructionRequired(errMsg) {
+		return true
+	}
+	if strings.Contains(errCode, "missing_required_parameter") && strings.Contains(errMsgLower, "instructions") {
+		return true
+	}
+	if strings.Contains(errType, "invalid_request") && strings.Contains(errMsgLower, "instructions") && strings.Contains(errMsgLower, "required") {
+		return true
+	}
+
+	return false
 }
 
 // GenerateSessionHash generates a sticky-session hash for OpenAI requests.
@@ -820,7 +995,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	restrictionResult := s.detectCodexClientRestriction(c, account)
 	apiKeyID := getAPIKeyIDFromContext(c)
-	logCodexCLIOnlyDetection(ctx, account, apiKeyID, restrictionResult)
+	logCodexCLIOnlyDetection(ctx, c, account, apiKeyID, restrictionResult, body)
 	if restrictionResult.Enabled && !restrictionResult.Matched {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
@@ -1047,7 +1222,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			s.handleFailoverSideEffects(ctx, resp, account)
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
 		}
-		return s.handleErrorResponse(ctx, resp, c, account)
+		return s.handleErrorResponse(ctx, resp, c, account, body)
 	}
 
 	// Handle normal response
@@ -1183,7 +1358,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	if resp.StatusCode >= 400 {
 		// 透传模式不做 failover（避免改变原始上游语义），按上游原样返回错误响应。
-		return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account)
+		return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)
 	}
 
 	var usage *OpenAIUsage
@@ -1314,7 +1489,13 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	return req, nil
 }
 
-func (s *OpenAIGatewayService) handleErrorResponsePassthrough(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) error {
+func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	requestBody []byte,
+) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
@@ -1328,6 +1509,7 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(ctx context.Contex
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:             account.Platform,
 		AccountID:            account.ID,
@@ -1470,7 +1652,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			logger.LegacyPrintf("service.openai_gateway",
-				"[WARN] [OpenAI passthrough] 流读取被取消，可能发生断流: account=%d request_id=%s err=%v ctx_err=%v",
+				"[OpenAI passthrough] 流读取被取消，可能发生断流: account=%d request_id=%s err=%v ctx_err=%v",
 				account.ID,
 				upstreamRequestID,
 				err,
@@ -1483,7 +1665,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, err
 		}
 		logger.LegacyPrintf("service.openai_gateway",
-			"[WARN] [OpenAI passthrough] 流读取异常中断: account=%d request_id=%s err=%v",
+			"[OpenAI passthrough] 流读取异常中断: account=%d request_id=%s err=%v",
 			account.ID,
 			upstreamRequestID,
 			err,
@@ -1495,7 +1677,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			zap.String("component", "service.openai_gateway"),
 			zap.Int64("account_id", account.ID),
 			zap.String("upstream_request_id", upstreamRequestID),
-		).Warn("OpenAI passthrough 上游流在未收到 [DONE] 时结束，疑似断流")
+		).Info("OpenAI passthrough 上游流在未收到 [DONE] 时结束，疑似断流")
 	}
 
 	return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, nil
@@ -1678,7 +1860,13 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	return req, nil
 }
 
-func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) handleErrorResponse(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	requestBody []byte,
+) (*OpenAIForwardResult, error) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
@@ -1692,6 +1880,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *ht
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		logger.LegacyPrintf("service.openai_gateway",
