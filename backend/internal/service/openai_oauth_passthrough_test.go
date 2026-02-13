@@ -81,6 +81,21 @@ func (s *inMemoryLogSink) ContainsMessage(substr string) bool {
 	return false
 }
 
+func (s *inMemoryLogSink) ContainsMessageAtLevel(substr, level string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wantLevel := strings.ToLower(strings.TrimSpace(level))
+	for _, ev := range s.events {
+		if ev == nil {
+			continue
+		}
+		if strings.Contains(ev.Message, substr) && strings.ToLower(strings.TrimSpace(ev.Level)) == wantLevel {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *inMemoryLogSink) ContainsFieldValue(field, substr string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -89,6 +104,20 @@ func (s *inMemoryLogSink) ContainsFieldValue(field, substr string) bool {
 			continue
 		}
 		if v, ok := ev.Fields[field]; ok && strings.Contains(fmt.Sprint(v), substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *inMemoryLogSink) ContainsField(field string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ev := range s.events {
+		if ev == nil || ev.Fields == nil {
+			continue
+		}
+		if _, ok := ev.Fields[field]; ok {
 			return true
 		}
 	}
@@ -712,7 +741,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *
 	require.True(t, logSink.ContainsFieldValue("timeout_headers", "x-stainless-timeout=10000"))
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_WarnWhenStreamEndsWithoutDone(t *testing.T) {
+func TestOpenAIGatewayService_OAuthPassthrough_InfoWhenStreamEndsWithoutDone(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureStructuredLog(t)
 	defer restore()
@@ -750,6 +779,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_WarnWhenStreamEndsWithoutDone(t *
 	_, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.NoError(t, err)
 	require.True(t, logSink.ContainsMessage("上游流在未收到 [DONE] 时结束，疑似断流"))
+	require.True(t, logSink.ContainsMessageAtLevel("上游流在未收到 [DONE] 时结束，疑似断流", "info"))
 	require.True(t, logSink.ContainsFieldValue("upstream_request_id", "rid-truncate"))
 }
 
