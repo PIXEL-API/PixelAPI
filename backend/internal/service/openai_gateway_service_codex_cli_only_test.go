@@ -99,3 +99,23 @@ func TestLogCodexCLIOnlyDetection_NilSafety(t *testing.T) {
 		logCodexCLIOnlyDetection(context.Background(), nil, 0, CodexClientRestrictionDetectionResult{Enabled: false, Matched: false, Reason: "disabled"})
 	})
 }
+
+func TestLogCodexCLIOnlyDetection_LogsBothMatchedAndRejected(t *testing.T) {
+	logSink, restore := captureStructuredLog(t)
+	defer restore()
+
+	account := &Account{ID: 1001}
+	logCodexCLIOnlyDetection(context.Background(), account, 2002, CodexClientRestrictionDetectionResult{
+		Enabled: true,
+		Matched: true,
+		Reason:  CodexClientRestrictionReasonMatchedUA,
+	})
+	logCodexCLIOnlyDetection(context.Background(), account, 2002, CodexClientRestrictionDetectionResult{
+		Enabled: true,
+		Matched: false,
+		Reason:  CodexClientRestrictionReasonNotMatchedUA,
+	})
+
+	require.True(t, logSink.ContainsMessage("OpenAI codex_cli_only 允许官方客户端请求"))
+	require.True(t, logSink.ContainsMessage("OpenAI codex_cli_only 拒绝非官方客户端请求"))
+}
