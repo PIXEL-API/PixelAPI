@@ -3,10 +3,15 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,6 +136,38 @@ func TestConvertClaudeToolsToGeminiTools_CustomType(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGeminiHandleNativeNonStreamingResponse_DebugDisabledDoesNotEmitHeaderLogs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logSink, restore := captureStructuredLog(t)
+	defer restore()
+
+	svc := &GeminiMessagesCompatService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				GeminiDebugResponseHeaders: false,
+			},
+		},
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":      []string{"application/json"},
+			"X-RateLimit-Limit": []string{"60"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}`)),
+	}
+
+	usage, err := svc.handleNativeNonStreamingResponse(c, resp, false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	require.False(t, logSink.ContainsMessage("[GeminiAPI]"), "debug 关闭时不应输出 Gemini 响应头日志")
 }
 
 func TestConvertClaudeMessagesToGeminiGenerateContent_AddsThoughtSignatureForToolUse(t *testing.T) {
