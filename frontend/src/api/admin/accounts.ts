@@ -164,10 +164,10 @@ export async function getUsage(id: number): Promise<AccountUsageInfo> {
 /**
  * Clear account rate limit status
  * @param id - Account ID
- * @returns Success confirmation
+ * @returns Updated account
  */
-export async function clearRateLimit(id: number): Promise<{ message: string }> {
-  const { data } = await apiClient.post<{ message: string }>(
+export async function clearRateLimit(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(
     `/admin/accounts/${id}/clear-rate-limit`
   )
   return data

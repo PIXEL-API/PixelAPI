@@ -216,7 +216,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
-  reauthorized: []
+  reauthorized: [account: Account]
 }>()
 
 const appStore = useAppStore()
@@ -370,10 +370,10 @@ const handleExchangeCode = async () => {
       })
 
       // Clear error status after successful re-authorization
-      await adminAPI.accounts.clearError(props.account.id)
+      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-      emit('reauthorized')
+      emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
       openaiOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
@@ -404,9 +404,9 @@ const handleExchangeCode = async () => {
         type: 'oauth',
         credentials
       })
-      await adminAPI.accounts.clearError(props.account.id)
+      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-      emit('reauthorized')
+      emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
       geminiOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
@@ -436,9 +436,9 @@ const handleExchangeCode = async () => {
         type: 'oauth',
         credentials
       })
-      await adminAPI.accounts.clearError(props.account.id)
+      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-      emit('reauthorized')
+      emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
       antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
@@ -475,10 +475,10 @@ const handleExchangeCode = async () => {
       })
 
       // Clear error status after successful re-authorization
-      await adminAPI.accounts.clearError(props.account.id)
+      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-      emit('reauthorized')
+      emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
       claudeOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
@@ -518,10 +518,10 @@ const handleCookieAuth = async (sessionKey: string) => {
     })
 
     // Clear error status after successful re-authorization
-    await adminAPI.accounts.clearError(props.account.id)
+    const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
 
     appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-    emit('reauthorized')
+    emit('reauthorized', updatedAccount)
     handleClose()
   } catch (error: any) {
     claudeOAuth.error.value =

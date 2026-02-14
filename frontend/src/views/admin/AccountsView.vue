@@ -239,8 +239,8 @@
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
     <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
-    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="load" />
-    <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="load" />
+    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
+    <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @reauth="handleReAuth" @refresh-token="handleRefresh" @reset-status="handleResetStatus" @clear-rate-limit="handleClearRateLimit" />
@@ -694,6 +694,53 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
 }
 const handleBulkUpdated = () => { showBulkEdit.value = false; selIds.value = []; reload() }
 const handleDataImported = () => { showImportData.value = false; reload() }
+const accountMatchesCurrentFilters = (account: Account) => {
+  if (params.platform && account.platform !== params.platform) return false
+  if (params.type && account.type !== params.type) return false
+  if (params.status) {
+    if (params.status === 'rate_limited') {
+      if (!account.rate_limit_reset_at) return false
+      const resetAt = new Date(account.rate_limit_reset_at).getTime()
+      if (!Number.isFinite(resetAt) || resetAt <= Date.now()) return false
+    } else if (account.status !== params.status) {
+      return false
+    }
+  }
+  const search = String(params.search || '').trim().toLowerCase()
+  if (search && !account.name.toLowerCase().includes(search)) return false
+  return true
+}
+const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Account => ({
+  ...updatedAccount,
+  current_concurrency: updatedAccount.current_concurrency ?? oldAccount.current_concurrency,
+  current_window_cost: updatedAccount.current_window_cost ?? oldAccount.current_window_cost,
+  active_sessions: updatedAccount.active_sessions ?? oldAccount.active_sessions
+})
+const patchAccountInList = (updatedAccount: Account) => {
+  const index = accounts.value.findIndex(account => account.id === updatedAccount.id)
+  if (index === -1) return
+  const mergedAccount = mergeRuntimeFields(accounts.value[index], updatedAccount)
+  if (!accountMatchesCurrentFilters(mergedAccount)) {
+    accounts.value = accounts.value.filter(account => account.id !== mergedAccount.id)
+    selIds.value = selIds.value.filter(id => id !== mergedAccount.id)
+    if (menu.acc?.id === mergedAccount.id) {
+      menu.show = false
+      menu.acc = null
+    }
+    return
+  }
+  const nextAccounts = [...accounts.value]
+  nextAccounts[index] = mergedAccount
+  accounts.value = nextAccounts
+  if (edAcc.value?.id === mergedAccount.id) edAcc.value = mergedAccount
+  if (reAuthAcc.value?.id === mergedAccount.id) reAuthAcc.value = mergedAccount
+  if (tempUnschedAcc.value?.id === mergedAccount.id) tempUnschedAcc.value = mergedAccount
+  if (deletingAcc.value?.id === mergedAccount.id) deletingAcc.value = mergedAccount
+  if (menu.acc?.id === mergedAccount.id) menu.acc = mergedAccount
+}
+const handleAccountUpdated = (updatedAccount: Account) => {
+  patchAccountInList(updatedAccount)
+}
 const formatExportTimestamp = () => {
   const now = new Date()
   const pad2 = (value: number) => String(value).padStart(2, '0')
@@ -743,9 +790,32 @@ const closeReAuthModal = () => { showReAuth.value = false; reAuthAcc.value = nul
 const handleTest = (a: Account) => { testingAcc.value = a; showTest.value = true }
 const handleViewStats = (a: Account) => { statsAcc.value = a; showStats.value = true }
 const handleReAuth = (a: Account) => { reAuthAcc.value = a; showReAuth.value = true }
-const handleRefresh = async (a: Account) => { try { await adminAPI.accounts.refreshCredentials(a.id); load() } catch (error) { console.error('Failed to refresh credentials:', error) } }
-const handleResetStatus = async (a: Account) => { try { await adminAPI.accounts.clearError(a.id); appStore.showSuccess(t('common.success')); load() } catch (error) { console.error('Failed to reset status:', error) } }
-const handleClearRateLimit = async (a: Account) => { try { await adminAPI.accounts.clearRateLimit(a.id); appStore.showSuccess(t('common.success')); load() } catch (error) { console.error('Failed to clear rate limit:', error) } }
+const handleRefresh = async (a: Account) => {
+  try {
+    const updated = await adminAPI.accounts.refreshCredentials(a.id)
+    patchAccountInList(updated)
+  } catch (error) {
+    console.error('Failed to refresh credentials:', error)
+  }
+}
+const handleResetStatus = async (a: Account) => {
+  try {
+    const updated = await adminAPI.accounts.clearError(a.id)
+    patchAccountInList(updated)
+    appStore.showSuccess(t('common.success'))
+  } catch (error) {
+    console.error('Failed to reset status:', error)
+  }
+}
+const handleClearRateLimit = async (a: Account) => {
+  try {
+    const updated = await adminAPI.accounts.clearRateLimit(a.id)
+    patchAccountInList(updated)
+    appStore.showSuccess(t('common.success'))
+  } catch (error) {
+    console.error('Failed to clear rate limit:', error)
+  }
+}
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
 const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
 const handleToggleSchedulable = async (a: Account) => {
@@ -762,7 +832,17 @@ const handleToggleSchedulable = async (a: Account) => {
   }
 }
 const handleShowTempUnsched = (a: Account) => { tempUnschedAcc.value = a; showTempUnsched.value = true }
-const handleTempUnschedReset = async () => { if(!tempUnschedAcc.value) return; try { await adminAPI.accounts.clearError(tempUnschedAcc.value.id); showTempUnsched.value = false; tempUnschedAcc.value = null; load() } catch (error) { console.error('Failed to reset temp unscheduled:', error) } }
+const handleTempUnschedReset = async () => {
+  if(!tempUnschedAcc.value) return
+  try {
+    const updated = await adminAPI.accounts.clearError(tempUnschedAcc.value.id)
+    showTempUnsched.value = false
+    tempUnschedAcc.value = null
+    patchAccountInList(updated)
+  } catch (error) {
+    console.error('Failed to reset temp unscheduled:', error)
+  }
+}
 const formatExpiresAt = (value: number | null) => {
   if (!value) return '-'
   return formatDateTime(
