@@ -88,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { totpAPI } from '@/api'
@@ -107,6 +107,7 @@ const loading = ref(false)
 const error = ref('')
 const sendingCode = ref(false)
 const codeCooldown = ref(0)
+const cooldownTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const form = ref({
   emailCode: '',
   password: ''
@@ -139,10 +140,17 @@ const handleSendCode = async () => {
     appStore.showSuccess(t('profile.totp.codeSent'))
     // Start cooldown
     codeCooldown.value = 60
-    const timer = setInterval(() => {
+    if (cooldownTimer.value) {
+      clearInterval(cooldownTimer.value)
+      cooldownTimer.value = null
+    }
+    cooldownTimer.value = setInterval(() => {
       codeCooldown.value--
       if (codeCooldown.value <= 0) {
-        clearInterval(timer)
+        if (cooldownTimer.value) {
+          clearInterval(cooldownTimer.value)
+          cooldownTimer.value = null
+        }
       }
     }, 1000)
   } catch (err: any) {
@@ -175,5 +183,12 @@ const handleDisable = async () => {
 
 onMounted(() => {
   loadVerificationMethod()
+})
+
+onUnmounted(() => {
+  if (cooldownTimer.value) {
+    clearInterval(cooldownTimer.value)
+    cooldownTimer.value = null
+  }
 })
 </script>
