@@ -243,7 +243,7 @@
   }
 
   .stat-value {
-    @apply text-2xl font-bold text-gray-900 dark:text-white;
+    @apply text-2xl font-bold text-gray-900 dark:text-white truncate;
   }
 
   .stat-label {
