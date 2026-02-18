@@ -211,6 +211,13 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 			enabled := true
 			out.EnableSessionIDMasking = &enabled
 		}
+		// 缓存 TTL 强制替换
+		if a.IsCacheTTLOverrideEnabled() {
+			enabled := true
+			out.CacheTTLOverrideEnabled = &enabled
+			target := a.GetCacheTTLOverrideTarget()
+			out.CacheTTLOverrideTarget = &target
+		}
 	}
 
 	return out
@@ -398,6 +405,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		ImageCount:            l.ImageCount,
 		ImageSize:             l.ImageSize,
 		UserAgent:             l.UserAgent,
+		CacheTTLOverridden:    l.CacheTTLOverridden,
 		CreatedAt:             l.CreatedAt,
 		User:                  UserFromServiceShallow(l.User),
 		APIKey:                APIKeyFromService(l.APIKey),
