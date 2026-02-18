@@ -3553,12 +3553,12 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// messages requests typically use only oauth + interleaved-thinking.
 			// Also drop claude-code beta if a downstream client added it.
 			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			drop := map[string]struct{}{claude.BetaClaudeCode: {}}
+			drop := map[string]struct{}{claude.BetaClaudeCode: {}, claude.BetaContext1M: {}}
 			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
-			req.Header.Set("anthropic-beta", s.getBetaHeader(modelID, clientBetaHeader))
+			req.Header.Set("anthropic-beta", stripBetaToken(s.getBetaHeader(modelID, clientBetaHeader), claude.BetaContext1M))
 		}
 	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
 		// API-key：仅在请求显式使用 beta 特性且客户端未提供时，按需补齐（默认关闭）
@@ -3705,6 +3705,23 @@ func mergeAnthropicBetaDropping(required []string, incoming string, drop map[str
 			continue
 		}
 		if _, ok := drop[p]; ok {
+			continue
+		}
+		out = append(out, p)
+	}
+	return strings.Join(out, ",")
+}
+
+// stripBetaToken removes a single beta token from a comma-separated header value.
+// It short-circuits when the token is not present to avoid unnecessary allocations.
+func stripBetaToken(header, token string) string {
+	if !strings.Contains(header, token) {
+		return header
+	}
+	out := make([]string, 0, 8)
+	for _, p := range strings.Split(header, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" || p == token {
 			continue
 		}
 		out = append(out, p)
@@ -5236,7 +5253,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 			incomingBeta := req.Header.Get("anthropic-beta")
 			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
-			req.Header.Set("anthropic-beta", mergeAnthropicBeta(requiredBetas, incomingBeta))
+			drop := map[string]struct{}{claude.BetaContext1M: {}}
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
 		} else {
 			clientBetaHeader := req.Header.Get("anthropic-beta")
 			if clientBetaHeader == "" {
@@ -5246,7 +5264,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 				if !strings.Contains(beta, claude.BetaTokenCounting) {
 					beta = beta + "," + claude.BetaTokenCounting
 				}
-				req.Header.Set("anthropic-beta", beta)
+				req.Header.Set("anthropic-beta", stripBetaToken(beta, claude.BetaContext1M))
 			}
 		}
 	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
