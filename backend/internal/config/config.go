@@ -271,18 +271,27 @@ type SoraConfig struct {
 
 // SoraClientConfig 直连 Sora 客户端配置
 type SoraClientConfig struct {
-	BaseURL                string            `mapstructure:"base_url"`
-	TimeoutSeconds         int               `mapstructure:"timeout_seconds"`
-	MaxRetries             int               `mapstructure:"max_retries"`
-	PollIntervalSeconds    int               `mapstructure:"poll_interval_seconds"`
-	MaxPollAttempts        int               `mapstructure:"max_poll_attempts"`
-	RecentTaskLimit        int               `mapstructure:"recent_task_limit"`
-	RecentTaskLimitMax     int               `mapstructure:"recent_task_limit_max"`
-	Debug                  bool              `mapstructure:"debug"`
-	UseOpenAITokenProvider bool              `mapstructure:"use_openai_token_provider"`
-	Headers                map[string]string `mapstructure:"headers"`
-	UserAgent              string            `mapstructure:"user_agent"`
-	DisableTLSFingerprint  bool              `mapstructure:"disable_tls_fingerprint"`
+	BaseURL                string                    `mapstructure:"base_url"`
+	TimeoutSeconds         int                       `mapstructure:"timeout_seconds"`
+	MaxRetries             int                       `mapstructure:"max_retries"`
+	PollIntervalSeconds    int                       `mapstructure:"poll_interval_seconds"`
+	MaxPollAttempts        int                       `mapstructure:"max_poll_attempts"`
+	RecentTaskLimit        int                       `mapstructure:"recent_task_limit"`
+	RecentTaskLimitMax     int                       `mapstructure:"recent_task_limit_max"`
+	Debug                  bool                      `mapstructure:"debug"`
+	UseOpenAITokenProvider bool                      `mapstructure:"use_openai_token_provider"`
+	Headers                map[string]string         `mapstructure:"headers"`
+	UserAgent              string                    `mapstructure:"user_agent"`
+	DisableTLSFingerprint  bool                      `mapstructure:"disable_tls_fingerprint"`
+	CurlCFFISidecar        SoraCurlCFFISidecarConfig `mapstructure:"curl_cffi_sidecar"`
+}
+
+// SoraCurlCFFISidecarConfig Sora 专用 curl_cffi sidecar 配置
+type SoraCurlCFFISidecarConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	BaseURL        string `mapstructure:"base_url"`
+	Impersonate    string `mapstructure:"impersonate"`
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 }
 
 // SoraStorageConfig 媒体存储配置
@@ -1123,6 +1132,10 @@ func setDefaults() {
 	viper.SetDefault("sora.client.headers", map[string]string{})
 	viper.SetDefault("sora.client.user_agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
 	viper.SetDefault("sora.client.disable_tls_fingerprint", false)
+	viper.SetDefault("sora.client.curl_cffi_sidecar.enabled", true)
+	viper.SetDefault("sora.client.curl_cffi_sidecar.base_url", "http://sora-curl-cffi-sidecar:8080")
+	viper.SetDefault("sora.client.curl_cffi_sidecar.impersonate", "chrome131")
+	viper.SetDefault("sora.client.curl_cffi_sidecar.timeout_seconds", 60)
 
 	viper.SetDefault("sora.storage.type", "local")
 	viper.SetDefault("sora.storage.local_path", "")
@@ -1525,6 +1538,15 @@ func (c *Config) Validate() error {
 	if c.Sora.Client.RecentTaskLimitMax > 0 && c.Sora.Client.RecentTaskLimit > 0 &&
 		c.Sora.Client.RecentTaskLimitMax < c.Sora.Client.RecentTaskLimit {
 		c.Sora.Client.RecentTaskLimitMax = c.Sora.Client.RecentTaskLimit
+	}
+	if c.Sora.Client.CurlCFFISidecar.TimeoutSeconds < 0 {
+		return fmt.Errorf("sora.client.curl_cffi_sidecar.timeout_seconds must be non-negative")
+	}
+	if !c.Sora.Client.CurlCFFISidecar.Enabled {
+		return fmt.Errorf("sora.client.curl_cffi_sidecar.enabled must be true")
+	}
+	if strings.TrimSpace(c.Sora.Client.CurlCFFISidecar.BaseURL) == "" {
+		return fmt.Errorf("sora.client.curl_cffi_sidecar.base_url is required")
 	}
 	if c.Sora.Storage.MaxConcurrentDownloads < 0 {
 		return fmt.Errorf("sora.storage.max_concurrent_downloads must be non-negative")
