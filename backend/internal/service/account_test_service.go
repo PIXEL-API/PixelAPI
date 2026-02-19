@@ -27,11 +27,13 @@ import (
 // sseDataPrefix matches SSE data lines with optional whitespace after colon.
 // Some upstream APIs return non-standard "data:" without space (should be "data: ").
 var sseDataPrefix = regexp.MustCompile(`^data:\s*`)
+var cloudflareRayPattern = regexp.MustCompile(`(?i)cRay:\s*'([a-z0-9-]+)'`)
 
 const (
 	testClaudeAPIURL   = "https://api.anthropic.com/v1/messages"
 	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
 	soraMeAPIURL       = "https://sora.chatgpt.com/backend/me" // Sora 用户信息接口，用于测试连接
+	soraBillingAPIURL  = "https://sora.chatgpt.com/backend/billing/subscriptions"
 )
 
 // TestEvent represents a SSE event for account testing
@@ -502,8 +504,9 @@ func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	enableSoraTLSFingerprint := s.shouldEnableSoraTLSFingerprint()
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, enableSoraTLSFingerprint)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -512,7 +515,10 @@ func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Sora API returned %d: %s", resp.StatusCode, string(body)))
+		if isCloudflareChallengeResponse(resp.StatusCode, body) {
+			return s.sendErrorAndEnd(c, formatCloudflareChallengeMessage("Sora request blocked by Cloudflare challenge (HTTP 403). Please switch to a clean proxy/network and retry.", resp.Header, body))
+		}
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Sora API returned %d: %s", resp.StatusCode, truncateSoraErrorBody(body, 512)))
 	}
 
 	// 解析 /me 响应，提取用户信息
@@ -531,8 +537,127 @@ func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *
 		s.sendEvent(c, TestEvent{Type: "content", Text: info})
 	}
 
+	// 追加轻量能力检查：订阅信息查询（失败仅告警，不中断连接测试）
+	subReq, err := http.NewRequestWithContext(ctx, "GET", soraBillingAPIURL, nil)
+	if err == nil {
+		subReq.Header.Set("Authorization", "Bearer "+authToken)
+		subReq.Header.Set("User-Agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
+		subReq.Header.Set("Accept", "application/json")
+
+		subResp, subErr := s.httpUpstream.DoWithTLS(subReq, proxyURL, account.ID, account.Concurrency, enableSoraTLSFingerprint)
+		if subErr != nil {
+			s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Subscription check skipped: %s", subErr.Error())})
+		} else {
+			subBody, _ := io.ReadAll(subResp.Body)
+			_ = subResp.Body.Close()
+			if subResp.StatusCode == http.StatusOK {
+				if summary := parseSoraSubscriptionSummary(subBody); summary != "" {
+					s.sendEvent(c, TestEvent{Type: "content", Text: summary})
+				} else {
+					s.sendEvent(c, TestEvent{Type: "content", Text: "Subscription check OK"})
+				}
+			} else {
+				if isCloudflareChallengeResponse(subResp.StatusCode, subBody) {
+					s.sendEvent(c, TestEvent{Type: "content", Text: formatCloudflareChallengeMessage("Subscription check blocked by Cloudflare challenge (HTTP 403)", subResp.Header, subBody)})
+				} else {
+					s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Subscription check returned %d", subResp.StatusCode)})
+				}
+			}
+		}
+	}
+
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
+}
+
+func parseSoraSubscriptionSummary(body []byte) string {
+	var subResp struct {
+		Data []struct {
+			Plan struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+			} `json:"plan"`
+			EndTS string `json:"end_ts"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &subResp); err != nil {
+		return ""
+	}
+	if len(subResp.Data) == 0 {
+		return ""
+	}
+
+	first := subResp.Data[0]
+	parts := make([]string, 0, 3)
+	if first.Plan.Title != "" {
+		parts = append(parts, first.Plan.Title)
+	}
+	if first.Plan.ID != "" {
+		parts = append(parts, first.Plan.ID)
+	}
+	if first.EndTS != "" {
+		parts = append(parts, "end="+first.EndTS)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Subscription: " + strings.Join(parts, " | ")
+}
+
+func (s *AccountTestService) shouldEnableSoraTLSFingerprint() bool {
+	if s == nil || s.cfg == nil {
+		return false
+	}
+	return s.cfg.Gateway.TLSFingerprint.Enabled && !s.cfg.Sora.Client.DisableTLSFingerprint
+}
+
+func isCloudflareChallengeResponse(statusCode int, body []byte) bool {
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	preview := strings.ToLower(truncateSoraErrorBody(body, 4096))
+	return strings.Contains(preview, "window._cf_chl_opt") ||
+		strings.Contains(preview, "just a moment") ||
+		strings.Contains(preview, "enable javascript and cookies to continue")
+}
+
+func formatCloudflareChallengeMessage(base string, headers http.Header, body []byte) string {
+	rayID := extractCloudflareRayID(headers, body)
+	if rayID == "" {
+		return base
+	}
+	return fmt.Sprintf("%s (cf-ray: %s)", base, rayID)
+}
+
+func extractCloudflareRayID(headers http.Header, body []byte) string {
+	if headers != nil {
+		rayID := strings.TrimSpace(headers.Get("cf-ray"))
+		if rayID != "" {
+			return rayID
+		}
+		rayID = strings.TrimSpace(headers.Get("Cf-Ray"))
+		if rayID != "" {
+			return rayID
+		}
+	}
+
+	preview := truncateSoraErrorBody(body, 8192)
+	matches := cloudflareRayPattern.FindStringSubmatch(preview)
+	if len(matches) >= 2 {
+		return strings.TrimSpace(matches[1])
+	}
+	return ""
+}
+
+func truncateSoraErrorBody(body []byte, max int) string {
+	if max <= 0 {
+		max = 512
+	}
+	raw := strings.TrimSpace(string(body))
+	if len(raw) <= max {
+		return raw
+	}
+	return raw[:max] + "...(truncated)"
 }
 
 // testAntigravityAccountConnection tests an Antigravity account's connection

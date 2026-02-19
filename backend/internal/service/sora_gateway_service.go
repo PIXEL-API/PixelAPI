@@ -61,6 +61,10 @@ type SoraGatewayService struct {
 	cfg              *config.Config
 }
 
+type soraPreflightChecker interface {
+	PreflightCheck(ctx context.Context, account *Account, requestedModel string, modelCfg SoraModelConfig) error
+}
+
 func NewSoraGatewayService(
 	soraClient SoraClient,
 	mediaStorage *SoraMediaStorage,
@@ -112,11 +116,6 @@ func (s *SoraGatewayService) Forward(ctx context.Context, c *gin.Context, accoun
 		s.writeSoraError(c, http.StatusBadRequest, "invalid_request_error", "Unsupported Sora model", clientStream)
 		return nil, fmt.Errorf("unsupported model: %s", reqModel)
 	}
-	if modelCfg.Type == "prompt_enhance" {
-		s.writeSoraError(c, http.StatusBadRequest, "invalid_request_error", "Prompt-enhance 模型暂未支持", clientStream)
-		return nil, fmt.Errorf("prompt-enhance not supported")
-	}
-
 	prompt, imageInput, videoInput, remixTargetID := extractSoraInput(reqBody)
 	if strings.TrimSpace(prompt) == "" {
 		s.writeSoraError(c, http.StatusBadRequest, "invalid_request_error", "prompt is required", clientStream)
@@ -130,6 +129,41 @@ func (s *SoraGatewayService) Forward(ctx context.Context, c *gin.Context, accoun
 	reqCtx, cancel := s.withSoraTimeout(ctx, reqStream)
 	if cancel != nil {
 		defer cancel()
+	}
+	if checker, ok := s.soraClient.(soraPreflightChecker); ok {
+		if err := checker.PreflightCheck(reqCtx, account, reqModel, modelCfg); err != nil {
+			return nil, s.handleSoraRequestError(ctx, account, err, reqModel, c, clientStream)
+		}
+	}
+
+	if modelCfg.Type == "prompt_enhance" {
+		enhancedPrompt, err := s.soraClient.EnhancePrompt(reqCtx, account, prompt, modelCfg.ExpansionLevel, modelCfg.DurationS)
+		if err != nil {
+			return nil, s.handleSoraRequestError(ctx, account, err, reqModel, c, clientStream)
+		}
+		content := strings.TrimSpace(enhancedPrompt)
+		if content == "" {
+			content = prompt
+		}
+		var firstTokenMs *int
+		if clientStream {
+			ms, streamErr := s.writeSoraStream(c, reqModel, content, startTime)
+			if streamErr != nil {
+				return nil, streamErr
+			}
+			firstTokenMs = ms
+		} else if c != nil {
+			c.JSON(http.StatusOK, buildSoraNonStreamResponse(content, reqModel))
+		}
+		return &ForwardResult{
+			RequestID:    "",
+			Model:        reqModel,
+			Stream:       clientStream,
+			Duration:     time.Since(startTime),
+			FirstTokenMs: firstTokenMs,
+			Usage:        ClaudeUsage{},
+			MediaType:    "prompt",
+		}, nil
 	}
 
 	var imageData []byte
@@ -267,7 +301,7 @@ func (s *SoraGatewayService) withSoraTimeout(ctx context.Context, stream bool) (
 
 func (s *SoraGatewayService) shouldFailoverUpstreamError(statusCode int) bool {
 	switch statusCode {
-	case 401, 402, 403, 429, 529:
+	case 401, 402, 403, 404, 429, 529:
 		return true
 	default:
 		return statusCode >= 500
@@ -460,7 +494,7 @@ func (s *SoraGatewayService) handleSoraRequestError(ctx context.Context, account
 			s.rateLimitService.HandleUpstreamError(ctx, account, upstreamErr.StatusCode, upstreamErr.Headers, upstreamErr.Body)
 		}
 		if s.shouldFailoverUpstreamError(upstreamErr.StatusCode) {
-			return &UpstreamFailoverError{StatusCode: upstreamErr.StatusCode}
+			return &UpstreamFailoverError{StatusCode: upstreamErr.StatusCode, ResponseBody: upstreamErr.Body}
 		}
 		msg := upstreamErr.Message
 		if override := soraProErrorMessage(model, msg); override != "" {
