@@ -228,6 +228,20 @@ func (h *SoraGatewayHandler) ChatCompletions(c *gin.Context) {
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error(), streamStarted)
 				return
 			}
+			rayID, mitigated, contentType := extractSoraFailoverHeaderInsights(lastFailoverHeaders, lastFailoverBody)
+			fields := []zap.Field{
+				zap.Int("last_upstream_status", lastFailoverStatus),
+			}
+			if rayID != "" {
+				fields = append(fields, zap.String("last_upstream_cf_ray", rayID))
+			}
+			if mitigated != "" {
+				fields = append(fields, zap.String("last_upstream_cf_mitigated", mitigated))
+			}
+			if contentType != "" {
+				fields = append(fields, zap.String("last_upstream_content_type", contentType))
+			}
+			reqLog.Warn("sora.failover_exhausted_no_available_accounts", fields...)
 			h.handleFailoverExhausted(c, lastFailoverStatus, lastFailoverHeaders, lastFailoverBody, streamStarted)
 			return
 		}
@@ -291,24 +305,52 @@ func (h *SoraGatewayHandler) ChatCompletions(c *gin.Context) {
 				failedAccountIDs[account.ID] = struct{}{}
 				if switchCount >= maxAccountSwitches {
 					lastFailoverStatus = failoverErr.StatusCode
-					lastFailoverHeaders = failoverErr.ResponseHeaders
+					lastFailoverHeaders = cloneHTTPHeaders(failoverErr.ResponseHeaders)
 					lastFailoverBody = failoverErr.ResponseBody
+					rayID, mitigated, contentType := extractSoraFailoverHeaderInsights(lastFailoverHeaders, lastFailoverBody)
+					fields := []zap.Field{
+						zap.Int64("account_id", account.ID),
+						zap.Int("upstream_status", failoverErr.StatusCode),
+						zap.Int("switch_count", switchCount),
+						zap.Int("max_switches", maxAccountSwitches),
+					}
+					if rayID != "" {
+						fields = append(fields, zap.String("upstream_cf_ray", rayID))
+					}
+					if mitigated != "" {
+						fields = append(fields, zap.String("upstream_cf_mitigated", mitigated))
+					}
+					if contentType != "" {
+						fields = append(fields, zap.String("upstream_content_type", contentType))
+					}
+					reqLog.Warn("sora.upstream_failover_exhausted", fields...)
 					h.handleFailoverExhausted(c, lastFailoverStatus, lastFailoverHeaders, lastFailoverBody, streamStarted)
 					return
 				}
 				lastFailoverStatus = failoverErr.StatusCode
-				lastFailoverHeaders = failoverErr.ResponseHeaders
+				lastFailoverHeaders = cloneHTTPHeaders(failoverErr.ResponseHeaders)
 				lastFailoverBody = failoverErr.ResponseBody
 				switchCount++
 				upstreamErrCode, upstreamErrMsg := extractUpstreamErrorCodeAndMessage(lastFailoverBody)
-				reqLog.Warn("sora.upstream_failover_switching",
+				rayID, mitigated, contentType := extractSoraFailoverHeaderInsights(lastFailoverHeaders, lastFailoverBody)
+				fields := []zap.Field{
 					zap.Int64("account_id", account.ID),
 					zap.Int("upstream_status", failoverErr.StatusCode),
 					zap.String("upstream_error_code", upstreamErrCode),
 					zap.String("upstream_error_message", upstreamErrMsg),
 					zap.Int("switch_count", switchCount),
 					zap.Int("max_switches", maxAccountSwitches),
-				)
+				}
+				if rayID != "" {
+					fields = append(fields, zap.String("upstream_cf_ray", rayID))
+				}
+				if mitigated != "" {
+					fields = append(fields, zap.String("upstream_cf_mitigated", mitigated))
+				}
+				if contentType != "" {
+					fields = append(fields, zap.String("upstream_content_type", contentType))
+				}
+				reqLog.Warn("sora.upstream_failover_switching", fields...)
 				continue
 			}
 			reqLog.Error("sora.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -415,6 +457,25 @@ func (h *SoraGatewayHandler) mapUpstreamError(statusCode int, responseHeaders ht
 	default:
 		return http.StatusBadGateway, "upstream_error", "Upstream request failed"
 	}
+}
+
+func cloneHTTPHeaders(headers http.Header) http.Header {
+	if headers == nil {
+		return nil
+	}
+	return headers.Clone()
+}
+
+func extractSoraFailoverHeaderInsights(headers http.Header, body []byte) (rayID, mitigated, contentType string) {
+	if headers != nil {
+		mitigated = strings.TrimSpace(headers.Get("cf-mitigated"))
+		contentType = strings.TrimSpace(headers.Get("content-type"))
+		if contentType == "" {
+			contentType = strings.TrimSpace(headers.Get("Content-Type"))
+		}
+	}
+	rayID = soraerror.ExtractCloudflareRayID(headers, body)
+	return rayID, mitigated, contentType
 }
 
 func isSoraCloudflareChallengeResponse(statusCode int, headers http.Header, body []byte) bool {

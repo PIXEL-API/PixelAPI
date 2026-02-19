@@ -1036,11 +1036,20 @@ func TestSoraCurlCFFISidecarDefaults(t *testing.T) {
 	if !cfg.Sora.Client.CurlCFFISidecar.Enabled {
 		t.Fatalf("Sora curl_cffi sidecar should be enabled by default")
 	}
+	if cfg.Sora.Client.CloudflareChallengeCooldownSeconds <= 0 {
+		t.Fatalf("Sora cloudflare challenge cooldown should be positive by default")
+	}
 	if cfg.Sora.Client.CurlCFFISidecar.BaseURL == "" {
 		t.Fatalf("Sora curl_cffi sidecar base_url should not be empty by default")
 	}
 	if cfg.Sora.Client.CurlCFFISidecar.Impersonate == "" {
 		t.Fatalf("Sora curl_cffi sidecar impersonate should not be empty by default")
+	}
+	if !cfg.Sora.Client.CurlCFFISidecar.SessionReuseEnabled {
+		t.Fatalf("Sora curl_cffi sidecar session reuse should be enabled by default")
+	}
+	if cfg.Sora.Client.CurlCFFISidecar.SessionTTLSeconds <= 0 {
+		t.Fatalf("Sora curl_cffi sidecar session ttl should be positive by default")
 	}
 }
 
@@ -1071,5 +1080,35 @@ func TestValidateSoraCurlCFFISidecarBaseURLRequired(t *testing.T) {
 	err = cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "sora.client.curl_cffi_sidecar.base_url is required") {
 		t.Fatalf("Validate() error = %v, want sidecar base_url required error", err)
+	}
+}
+
+func TestValidateSoraCurlCFFISidecarSessionTTLNonNegative(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Sora.Client.CurlCFFISidecar.SessionTTLSeconds = -1
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "sora.client.curl_cffi_sidecar.session_ttl_seconds must be non-negative") {
+		t.Fatalf("Validate() error = %v, want sidecar session ttl error", err)
+	}
+}
+
+func TestValidateSoraCloudflareChallengeCooldownNonNegative(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Sora.Client.CloudflareChallengeCooldownSeconds = -1
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "sora.client.cloudflare_challenge_cooldown_seconds must be non-negative") {
+		t.Fatalf("Validate() error = %v, want cloudflare cooldown error", err)
 	}
 }

@@ -23,6 +23,7 @@ type soraCurlCFFISidecarRequest struct {
 	Headers        map[string][]string `json:"headers,omitempty"`
 	BodyBase64     string              `json:"body_base64,omitempty"`
 	ProxyURL       string              `json:"proxy_url,omitempty"`
+	SessionKey     string              `json:"session_key,omitempty"`
 	Impersonate    string              `json:"impersonate,omitempty"`
 	TimeoutSeconds int                 `json:"timeout_seconds,omitempty"`
 }
@@ -36,7 +37,7 @@ type soraCurlCFFISidecarResponse struct {
 	Error      string         `json:"error"`
 }
 
-func (c *SoraDirectClient) doHTTPViaCurlCFFISidecar(req *http.Request, proxyURL string) (*http.Response, error) {
+func (c *SoraDirectClient) doHTTPViaCurlCFFISidecar(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
 	if req == nil || req.URL == nil {
 		return nil, errors.New("request url is nil")
 	}
@@ -73,6 +74,7 @@ func (c *SoraDirectClient) doHTTPViaCurlCFFISidecar(req *http.Request, proxyURL 
 		URL:            req.URL.String(),
 		Headers:        headers,
 		ProxyURL:       strings.TrimSpace(proxyURL),
+		SessionKey:     c.sidecarSessionKey(account, proxyURL),
 		Impersonate:    c.curlCFFIImpersonate(),
 		TimeoutSeconds: c.curlCFFISidecarTimeoutSeconds(),
 	}
@@ -97,7 +99,9 @@ func (c *SoraDirectClient) doHTTPViaCurlCFFISidecar(req *http.Request, proxyURL 
 	if err != nil {
 		return nil, fmt.Errorf("sora curl_cffi sidecar request failed: %w", err)
 	}
-	defer sidecarResp.Body.Close()
+	defer func() {
+		_ = sidecarResp.Body.Close()
+	}()
 
 	sidecarRespBody, err := io.ReadAll(io.LimitReader(sidecarResp.Body, 8<<20))
 	if err != nil {
@@ -200,6 +204,24 @@ func (c *SoraDirectClient) curlCFFIImpersonate() string {
 		return "chrome131"
 	}
 	return impersonate
+}
+
+func (c *SoraDirectClient) sidecarSessionReuseEnabled() bool {
+	if c == nil || c.cfg == nil {
+		return true
+	}
+	return c.cfg.Sora.Client.CurlCFFISidecar.SessionReuseEnabled
+}
+
+func (c *SoraDirectClient) sidecarSessionTTLSeconds() int {
+	if c == nil || c.cfg == nil {
+		return 3600
+	}
+	ttl := c.cfg.Sora.Client.CurlCFFISidecar.SessionTTLSeconds
+	if ttl < 0 {
+		return 3600
+	}
+	return ttl
 }
 
 func convertSidecarHeaderValue(raw any) []string {

@@ -397,6 +397,34 @@ func TestSoraGatewayService_WriteSoraError_StreamEscapesJSON(t *testing.T) {
 	require.Equal(t, "invalid \"prompt\"\nline2", errObj["message"])
 }
 
+func TestSoraGatewayService_HandleSoraRequestError_FailoverHeadersCloned(t *testing.T) {
+	svc := NewSoraGatewayService(nil, nil, nil, &config.Config{})
+	sourceHeaders := http.Header{}
+	sourceHeaders.Set("cf-ray", "9d01b0e9ecc35829-SEA")
+
+	err := svc.handleSoraRequestError(
+		context.Background(),
+		&Account{ID: 1, Platform: PlatformSora},
+		&SoraUpstreamError{
+			StatusCode: http.StatusForbidden,
+			Message:    "forbidden",
+			Headers:    sourceHeaders,
+			Body:       []byte(`<!DOCTYPE html><title>Just a moment...</title>`),
+		},
+		"sora2-landscape-10s",
+		nil,
+		false,
+	)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.NotNil(t, failoverErr.ResponseHeaders)
+	require.Equal(t, "9d01b0e9ecc35829-SEA", failoverErr.ResponseHeaders.Get("cf-ray"))
+
+	sourceHeaders.Set("cf-ray", "mutated-after-return")
+	require.Equal(t, "9d01b0e9ecc35829-SEA", failoverErr.ResponseHeaders.Get("cf-ray"))
+}
+
 func TestShouldFailoverUpstreamError(t *testing.T) {
 	svc := NewSoraGatewayService(nil, nil, nil, &config.Config{})
 	require.True(t, svc.shouldFailoverUpstreamError(401))

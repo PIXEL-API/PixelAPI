@@ -906,10 +906,14 @@ func (s *SoraGatewayService) handleSoraRequestError(ctx context.Context, account
 			s.rateLimitService.HandleUpstreamError(ctx, account, upstreamErr.StatusCode, upstreamErr.Headers, upstreamErr.Body)
 		}
 		if s.shouldFailoverUpstreamError(upstreamErr.StatusCode) {
+			var responseHeaders http.Header
+			if upstreamErr.Headers != nil {
+				responseHeaders = upstreamErr.Headers.Clone()
+			}
 			return &UpstreamFailoverError{
 				StatusCode:      upstreamErr.StatusCode,
 				ResponseBody:    upstreamErr.Body,
-				ResponseHeaders: upstreamErr.Headers,
+				ResponseHeaders: responseHeaders,
 			}
 		}
 		msg := upstreamErr.Message

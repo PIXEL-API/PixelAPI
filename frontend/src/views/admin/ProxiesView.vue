@@ -56,6 +56,15 @@
               {{ t('admin.proxies.testConnection') }}
             </button>
             <button
+              @click="handleBatchQualityCheck"
+              :disabled="batchQualityChecking || loading"
+              class="btn btn-secondary"
+              :title="t('admin.proxies.batchQualityCheck')"
+            >
+              <Icon name="shield" size="md" class="mr-2" :class="batchQualityChecking ? 'animate-pulse' : ''" />
+              {{ t('admin.proxies.batchQualityCheck') }}
+            </button>
+            <button
               @click="openBatchDelete"
               :disabled="selectedCount === 0"
               class="btn btn-danger"
@@ -202,6 +211,34 @@
                 </svg>
                 <Icon v-else name="checkCircle" size="sm" />
                 <span class="text-xs">{{ t('admin.proxies.testConnection') }}</span>
+              </button>
+              <button
+                @click="handleQualityCheck(row)"
+                :disabled="qualityCheckingProxyIds.has(row.id)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+              >
+                <svg
+                  v-if="qualityCheckingProxyIds.has(row.id)"
+                  class="h-4 w-4 animate-spin"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    class="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="4"
+                  ></circle>
+                  <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+                <Icon v-else name="shield" size="sm" />
+                <span class="text-xs">{{ t('admin.proxies.qualityCheck') }}</span>
               </button>
               <button
                 @click="handleEdit(row)"
@@ -623,6 +660,82 @@
       @imported="handleDataImported"
     />
 
+    <BaseDialog
+      :show="showQualityReportDialog"
+      :title="t('admin.proxies.qualityReportTitle')"
+      width="normal"
+      @close="closeQualityReportDialog"
+    >
+      <div v-if="qualityReport" class="space-y-4">
+        <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-700">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <div class="text-sm text-gray-500 dark:text-gray-400">
+                {{ qualityReportProxy?.name || '-' }}
+              </div>
+              <div class="mt-1 text-sm text-gray-700 dark:text-gray-200">
+                {{ qualityReport.summary }}
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="text-2xl font-semibold text-gray-900 dark:text-white">
+                {{ qualityReport.score }}
+              </div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.proxies.qualityGrade', { grade: qualityReport.grade }) }}
+              </div>
+            </div>
+          </div>
+          <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-300">
+            <div>{{ t('admin.proxies.qualityExitIP') }}: {{ qualityReport.exit_ip || '-' }}</div>
+            <div>{{ t('admin.proxies.qualityCountry') }}: {{ qualityReport.country || '-' }}</div>
+            <div>
+              {{ t('admin.proxies.qualityBaseLatency') }}:
+              {{ typeof qualityReport.base_latency_ms === 'number' ? `${qualityReport.base_latency_ms}ms` : '-' }}
+            </div>
+            <div>{{ t('admin.proxies.qualityCheckedAt') }}: {{ new Date(qualityReport.checked_at * 1000).toLocaleString() }}</div>
+          </div>
+        </div>
+
+        <div class="max-h-80 overflow-auto rounded-lg border border-gray-200 dark:border-dark-600">
+          <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-dark-700">
+            <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-dark-400">
+              <tr>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.qualityTableTarget') }}</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.qualityTableStatus') }}</th>
+                <th class="px-3 py-2 text-left">HTTP</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.qualityTableLatency') }}</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.qualityTableMessage') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
+              <tr v-for="item in qualityReport.items" :key="item.target">
+                <td class="px-3 py-2 text-gray-900 dark:text-white">{{ qualityTargetLabel(item.target) }}</td>
+                <td class="px-3 py-2">
+                  <span class="badge" :class="qualityStatusClass(item.status)">{{ qualityStatusLabel(item.status) }}</span>
+                </td>
+                <td class="px-3 py-2 text-gray-600 dark:text-gray-300">{{ item.http_status ?? '-' }}</td>
+                <td class="px-3 py-2 text-gray-600 dark:text-gray-300">
+                  {{ typeof item.latency_ms === 'number' ? `${item.latency_ms}ms` : '-' }}
+                </td>
+                <td class="px-3 py-2 text-gray-600 dark:text-gray-300">
+                  <span>{{ item.message || '-' }}</span>
+                  <span v-if="item.cf_ray" class="ml-1 text-xs text-gray-400">(cf-ray: {{ item.cf_ray }})</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end">
+          <button @click="closeQualityReportDialog" class="btn btn-secondary">
+            {{ t('common.close') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
+
     <!-- Proxy Accounts Dialog -->
     <BaseDialog
       :show="showAccountsModal"
@@ -675,7 +788,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyAccountSummary, ProxyProtocol } from '@/types'
+import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -756,13 +869,18 @@ const showAccountsModal = ref(false)
 const submitting = ref(false)
 const exportingData = ref(false)
 const testingProxyIds = ref<Set<number>>(new Set())
+const qualityCheckingProxyIds = ref<Set<number>>(new Set())
 const batchTesting = ref(false)
+const batchQualityChecking = ref(false)
 const selectedProxyIds = ref<Set<number>>(new Set())
 const accountsProxy = ref<Proxy | null>(null)
 const proxyAccounts = ref<ProxyAccountSummary[]>([])
 const accountsLoading = ref(false)
 const editingProxy = ref<Proxy | null>(null)
 const deletingProxy = ref<Proxy | null>(null)
+const showQualityReportDialog = ref(false)
+const qualityReportProxy = ref<Proxy | null>(null)
+const qualityReport = ref<ProxyQualityCheckResult | null>(null)
 
 const selectedCount = computed(() => selectedProxyIds.value.size)
 const allVisibleSelected = computed(() => {
@@ -1150,6 +1268,16 @@ const stopTestingProxy = (proxyId: number) => {
   testingProxyIds.value = next
 }
 
+const startQualityCheckingProxy = (proxyId: number) => {
+  qualityCheckingProxyIds.value = new Set([...qualityCheckingProxyIds.value, proxyId])
+}
+
+const stopQualityCheckingProxy = (proxyId: number) => {
+  const next = new Set(qualityCheckingProxyIds.value)
+  next.delete(proxyId)
+  qualityCheckingProxyIds.value = next
+}
+
 const runProxyTest = async (proxyId: number, notify: boolean) => {
   startTestingProxy(proxyId)
   try {
@@ -1181,6 +1309,134 @@ const runProxyTest = async (proxyId: number, notify: boolean) => {
 
 const handleTestConnection = async (proxy: Proxy) => {
   await runProxyTest(proxy.id, true)
+}
+
+const handleQualityCheck = async (proxy: Proxy) => {
+  startQualityCheckingProxy(proxy.id)
+  try {
+    const result = await adminAPI.proxies.checkProxyQuality(proxy.id)
+    qualityReportProxy.value = proxy
+    qualityReport.value = result
+    showQualityReportDialog.value = true
+
+    const baseStep = result.items.find((item) => item.target === 'base_connectivity')
+    if (baseStep && baseStep.status === 'pass') {
+      applyLatencyResult(proxy.id, {
+        success: true,
+        latency_ms: result.base_latency_ms,
+        message: result.summary,
+        ip_address: result.exit_ip,
+        country: result.country,
+        country_code: result.country_code
+      })
+    }
+
+    appStore.showSuccess(
+      t('admin.proxies.qualityCheckDone', { score: result.score, grade: result.grade })
+    )
+  } catch (error: any) {
+    const message = error.response?.data?.detail || t('admin.proxies.qualityCheckFailed')
+    appStore.showError(message)
+    console.error('Error checking proxy quality:', error)
+  } finally {
+    stopQualityCheckingProxy(proxy.id)
+  }
+}
+
+const runBatchProxyQualityChecks = async (ids: number[]) => {
+  if (ids.length === 0) return { total: 0, healthy: 0, warn: 0, challenge: 0, failed: 0 }
+
+  const concurrency = 3
+  let index = 0
+  let healthy = 0
+  let warn = 0
+  let challenge = 0
+  let failed = 0
+
+  const worker = async () => {
+    while (index < ids.length) {
+      const current = ids[index]
+      index++
+      startQualityCheckingProxy(current)
+      try {
+        const result = await adminAPI.proxies.checkProxyQuality(current)
+        const target = proxies.value.find((proxy) => proxy.id === current)
+        if (target) {
+          const baseStep = result.items.find((item) => item.target === 'base_connectivity')
+          if (baseStep && baseStep.status === 'pass') {
+            applyLatencyResult(current, {
+              success: true,
+              latency_ms: result.base_latency_ms,
+              message: result.summary,
+              ip_address: result.exit_ip,
+              country: result.country,
+              country_code: result.country_code
+            })
+          }
+        }
+        if (result.challenge_count > 0) {
+          challenge++
+        } else if (result.failed_count > 0) {
+          failed++
+        } else if (result.warn_count > 0) {
+          warn++
+        } else {
+          healthy++
+        }
+      } catch {
+        failed++
+      } finally {
+        stopQualityCheckingProxy(current)
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, ids.length) }, () => worker())
+  await Promise.all(workers)
+  return {
+    total: ids.length,
+    healthy,
+    warn,
+    challenge,
+    failed
+  }
+}
+
+const closeQualityReportDialog = () => {
+  showQualityReportDialog.value = false
+  qualityReportProxy.value = null
+  qualityReport.value = null
+}
+
+const qualityStatusClass = (status: string) => {
+  if (status === 'pass') return 'badge-success'
+  if (status === 'warn') return 'badge-warning'
+  if (status === 'challenge') return 'badge-danger'
+  return 'badge-danger'
+}
+
+const qualityStatusLabel = (status: string) => {
+  if (status === 'pass') return t('admin.proxies.qualityStatusPass')
+  if (status === 'warn') return t('admin.proxies.qualityStatusWarn')
+  if (status === 'challenge') return t('admin.proxies.qualityStatusChallenge')
+  return t('admin.proxies.qualityStatusFail')
+}
+
+const qualityTargetLabel = (target: string) => {
+  switch (target) {
+    case 'base_connectivity':
+      return t('admin.proxies.qualityTargetBase')
+    case 'openai':
+      return 'OpenAI'
+    case 'anthropic':
+      return 'Anthropic'
+    case 'gemini':
+      return 'Gemini'
+    case 'sora':
+      return 'Sora'
+    default:
+      return target
+  }
 }
 
 const fetchAllProxiesForBatch = async (): Promise<Proxy[]> => {
@@ -1250,6 +1506,43 @@ const handleBatchTest = async () => {
     console.error('Error batch testing proxies:', error)
   } finally {
     batchTesting.value = false
+  }
+}
+
+const handleBatchQualityCheck = async () => {
+  if (batchQualityChecking.value) return
+
+  batchQualityChecking.value = true
+  try {
+    let ids: number[] = []
+    if (selectedCount.value > 0) {
+      ids = Array.from(selectedProxyIds.value)
+    } else {
+      const allProxies = await fetchAllProxiesForBatch()
+      ids = allProxies.map((proxy) => proxy.id)
+    }
+
+    if (ids.length === 0) {
+      appStore.showInfo(t('admin.proxies.batchQualityEmpty'))
+      return
+    }
+
+    const summary = await runBatchProxyQualityChecks(ids)
+    appStore.showSuccess(
+      t('admin.proxies.batchQualityDone', {
+        count: summary.total,
+        healthy: summary.healthy,
+        warn: summary.warn,
+        challenge: summary.challenge,
+        failed: summary.failed
+      })
+    )
+    loadProxies()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.proxies.batchQualityFailed'))
+    console.error('Error batch checking quality:', error)
+  } finally {
+    batchQualityChecking.value = false
   }
 }
 
