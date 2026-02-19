@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,6 +26,11 @@ type stubSoraClientForPoll struct {
 	videoCalls  int
 	enhanced    string
 	enhanceErr  error
+	storyboard  bool
+	videoReq    SoraVideoRequest
+	parseErr    error
+	postCalls   int
+	deleteCalls int
 }
 
 func (s *stubSoraClientForPoll) Enabled() bool { return true }
@@ -35,7 +41,53 @@ func (s *stubSoraClientForPoll) CreateImageTask(ctx context.Context, account *Ac
 	return "task-image", nil
 }
 func (s *stubSoraClientForPoll) CreateVideoTask(ctx context.Context, account *Account, req SoraVideoRequest) (string, error) {
+	s.videoReq = req
 	return "task-video", nil
+}
+func (s *stubSoraClientForPoll) CreateStoryboardTask(ctx context.Context, account *Account, req SoraStoryboardRequest) (string, error) {
+	s.storyboard = true
+	return "task-video", nil
+}
+func (s *stubSoraClientForPoll) UploadCharacterVideo(ctx context.Context, account *Account, data []byte) (string, error) {
+	return "cameo-1", nil
+}
+func (s *stubSoraClientForPoll) GetCameoStatus(ctx context.Context, account *Account, cameoID string) (*SoraCameoStatus, error) {
+	return &SoraCameoStatus{
+		Status:          "finalized",
+		StatusMessage:   "Completed",
+		DisplayNameHint: "Character",
+		UsernameHint:    "user.character",
+		ProfileAssetURL: "https://example.com/avatar.webp",
+	}, nil
+}
+func (s *stubSoraClientForPoll) DownloadCharacterImage(ctx context.Context, account *Account, imageURL string) ([]byte, error) {
+	return []byte("avatar"), nil
+}
+func (s *stubSoraClientForPoll) UploadCharacterImage(ctx context.Context, account *Account, data []byte) (string, error) {
+	return "asset-pointer", nil
+}
+func (s *stubSoraClientForPoll) FinalizeCharacter(ctx context.Context, account *Account, req SoraCharacterFinalizeRequest) (string, error) {
+	return "character-1", nil
+}
+func (s *stubSoraClientForPoll) SetCharacterPublic(ctx context.Context, account *Account, cameoID string) error {
+	return nil
+}
+func (s *stubSoraClientForPoll) DeleteCharacter(ctx context.Context, account *Account, characterID string) error {
+	return nil
+}
+func (s *stubSoraClientForPoll) PostVideoForWatermarkFree(ctx context.Context, account *Account, generationID string) (string, error) {
+	s.postCalls++
+	return "s_post", nil
+}
+func (s *stubSoraClientForPoll) DeletePost(ctx context.Context, account *Account, postID string) error {
+	s.deleteCalls++
+	return nil
+}
+func (s *stubSoraClientForPoll) GetWatermarkFreeURLCustom(ctx context.Context, account *Account, parseURL, parseToken, postID string) (string, error) {
+	if s.parseErr != nil {
+		return "", s.parseErr
+	}
+	return "https://example.com/no-watermark.mp4", nil
 }
 func (s *stubSoraClientForPoll) EnhancePrompt(ctx context.Context, account *Account, prompt, expansionLevel string, durationS int) (string, error) {
 	if s.enhanced != "" {
@@ -102,6 +154,109 @@ func TestSoraGatewayService_ForwardPromptEnhance(t *testing.T) {
 	require.Equal(t, "prompt-enhance-short-10s", result.Model)
 }
 
+func TestSoraGatewayService_ForwardStoryboardPrompt(t *testing.T) {
+	client := &stubSoraClientForPoll{
+		videoStatus: &SoraVideoTaskStatus{
+			Status: "completed",
+			URLs:   []string{"https://example.com/v.mp4"},
+		},
+	}
+	cfg := &config.Config{
+		Sora: config.SoraConfig{
+			Client: config.SoraClientConfig{
+				PollIntervalSeconds: 1,
+				MaxPollAttempts:     1,
+			},
+		},
+	}
+	svc := NewSoraGatewayService(client, nil, nil, cfg)
+	account := &Account{ID: 1, Platform: PlatformSora, Status: StatusActive}
+	body := []byte(`{"model":"sora2-landscape-10s","messages":[{"role":"user","content":"[5.0s]猫猫跳伞 [5.0s]猫猫落地"}],"stream":false}`)
+
+	result, err := svc.Forward(context.Background(), nil, account, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, client.storyboard)
+}
+
+func TestSoraGatewayService_ForwardCharacterOnly(t *testing.T) {
+	client := &stubSoraClientForPoll{}
+	cfg := &config.Config{
+		Sora: config.SoraConfig{
+			Client: config.SoraClientConfig{
+				PollIntervalSeconds: 1,
+				MaxPollAttempts:     1,
+			},
+		},
+	}
+	svc := NewSoraGatewayService(client, nil, nil, cfg)
+	account := &Account{ID: 1, Platform: PlatformSora, Status: StatusActive}
+	body := []byte(`{"model":"sora2-landscape-10s","video":"aGVsbG8=","stream":false}`)
+
+	result, err := svc.Forward(context.Background(), nil, account, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "prompt", result.MediaType)
+	require.Equal(t, 0, client.videoCalls)
+}
+
+func TestSoraGatewayService_ForwardWatermarkFallback(t *testing.T) {
+	client := &stubSoraClientForPoll{
+		videoStatus: &SoraVideoTaskStatus{
+			Status:       "completed",
+			URLs:         []string{"https://example.com/original.mp4"},
+			GenerationID: "gen_1",
+		},
+		parseErr: errors.New("parse failed"),
+	}
+	cfg := &config.Config{
+		Sora: config.SoraConfig{
+			Client: config.SoraClientConfig{
+				PollIntervalSeconds: 1,
+				MaxPollAttempts:     1,
+			},
+		},
+	}
+	svc := NewSoraGatewayService(client, nil, nil, cfg)
+	account := &Account{ID: 1, Platform: PlatformSora, Status: StatusActive}
+	body := []byte(`{"model":"sora2-landscape-10s","messages":[{"role":"user","content":"cat running"}],"stream":false,"watermark_free":true,"watermark_parse_method":"custom","watermark_parse_url":"https://parser.example.com","watermark_parse_token":"token","watermark_fallback_on_failure":true}`)
+
+	result, err := svc.Forward(context.Background(), nil, account, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "https://example.com/original.mp4", result.MediaURL)
+	require.Equal(t, 1, client.postCalls)
+	require.Equal(t, 0, client.deleteCalls)
+}
+
+func TestSoraGatewayService_ForwardWatermarkCustomSuccessAndDelete(t *testing.T) {
+	client := &stubSoraClientForPoll{
+		videoStatus: &SoraVideoTaskStatus{
+			Status:       "completed",
+			URLs:         []string{"https://example.com/original.mp4"},
+			GenerationID: "gen_1",
+		},
+	}
+	cfg := &config.Config{
+		Sora: config.SoraConfig{
+			Client: config.SoraClientConfig{
+				PollIntervalSeconds: 1,
+				MaxPollAttempts:     1,
+			},
+		},
+	}
+	svc := NewSoraGatewayService(client, nil, nil, cfg)
+	account := &Account{ID: 1, Platform: PlatformSora, Status: StatusActive}
+	body := []byte(`{"model":"sora2-landscape-10s","messages":[{"role":"user","content":"cat running"}],"stream":false,"watermark_free":true,"watermark_parse_method":"custom","watermark_parse_url":"https://parser.example.com","watermark_parse_token":"token","watermark_delete_post":true}`)
+
+	result, err := svc.Forward(context.Background(), nil, account, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "https://example.com/no-watermark.mp4", result.MediaURL)
+	require.Equal(t, 1, client.postCalls)
+	require.Equal(t, 1, client.deleteCalls)
+}
+
 func TestSoraGatewayService_PollVideoTaskFailed(t *testing.T) {
 	client := &stubSoraClientForPoll{
 		videoStatus: &SoraVideoTaskStatus{
@@ -119,9 +274,9 @@ func TestSoraGatewayService_PollVideoTaskFailed(t *testing.T) {
 	}
 	service := NewSoraGatewayService(client, nil, nil, cfg)
 
-	urls, err := service.pollVideoTask(context.Background(), nil, &Account{ID: 1}, "task", false)
+	status, err := service.pollVideoTaskDetailed(context.Background(), nil, &Account{ID: 1}, "task", false)
 	require.Error(t, err)
-	require.Empty(t, urls)
+	require.Nil(t, status)
 	require.Contains(t, err.Error(), "reject")
 	require.Equal(t, 1, client.videoCalls)
 }
@@ -324,4 +479,20 @@ func TestDecodeSoraImageInput_DataURL(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	require.Contains(t, filename, ".png")
+}
+
+func TestDecodeBase64WithLimit_ExceedLimit(t *testing.T) {
+	data, err := decodeBase64WithLimit("aGVsbG8=", 3)
+	require.Error(t, err)
+	require.Nil(t, data)
+}
+
+func TestParseSoraWatermarkOptions_NumericBool(t *testing.T) {
+	body := map[string]any{
+		"watermark_free":                float64(1),
+		"watermark_fallback_on_failure": float64(0),
+	}
+	opts := parseSoraWatermarkOptions(body)
+	require.True(t, opts.Enabled)
+	require.False(t, opts.FallbackOnFailure)
 }

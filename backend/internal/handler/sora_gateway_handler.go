@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -22,14 +21,13 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/util/soraerror"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
-
-var soraCloudflareRayPattern = regexp.MustCompile(`(?i)cf-ray[:\s=]+([a-z0-9-]+)`)
 
 // SoraGatewayHandler handles Sora chat completions requests
 type SoraGatewayHandler struct {
@@ -385,6 +383,10 @@ func (h *SoraGatewayHandler) mapUpstreamError(statusCode int, responseHeaders ht
 	}
 
 	upstreamCode, upstreamMessage := extractUpstreamErrorCodeAndMessage(responseBody)
+	if strings.EqualFold(upstreamCode, "cf_shield_429") {
+		baseMsg := "Sora request blocked by Cloudflare shield (429). Please switch to a clean proxy/network and retry."
+		return http.StatusTooManyRequests, "rate_limit_error", formatSoraCloudflareChallengeMessage(baseMsg, responseHeaders, responseBody)
+	}
 	if shouldPassthroughSoraUpstreamMessage(statusCode, upstreamMessage) {
 		switch statusCode {
 		case 401, 403, 404, 500, 502, 503, 504:
@@ -416,27 +418,7 @@ func (h *SoraGatewayHandler) mapUpstreamError(statusCode int, responseHeaders ht
 }
 
 func isSoraCloudflareChallengeResponse(statusCode int, headers http.Header, body []byte) bool {
-	if statusCode != http.StatusForbidden && statusCode != http.StatusTooManyRequests {
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(headers.Get("cf-mitigated")), "challenge") {
-		return true
-	}
-	preview := strings.ToLower(truncateSoraErrorBody(body, 4096))
-	if strings.Contains(preview, "window._cf_chl_opt") ||
-		strings.Contains(preview, "just a moment") ||
-		strings.Contains(preview, "enable javascript and cookies to continue") ||
-		strings.Contains(preview, "__cf_chl_") ||
-		strings.Contains(preview, "challenge-platform") {
-		return true
-	}
-	contentType := strings.ToLower(strings.TrimSpace(headers.Get("content-type")))
-	if strings.Contains(contentType, "text/html") &&
-		(strings.Contains(preview, "<html") || strings.Contains(preview, "<!doctype html")) &&
-		(strings.Contains(preview, "cloudflare") || strings.Contains(preview, "challenge")) {
-		return true
-	}
-	return false
+	return soraerror.IsCloudflareChallengeResponse(statusCode, headers, body)
 }
 
 func shouldPassthroughSoraUpstreamMessage(statusCode int, message string) bool {
@@ -454,76 +436,11 @@ func shouldPassthroughSoraUpstreamMessage(statusCode int, message string) bool {
 }
 
 func formatSoraCloudflareChallengeMessage(base string, headers http.Header, body []byte) string {
-	rayID := extractSoraCloudflareRayID(headers, body)
-	if rayID == "" {
-		return base
-	}
-	return fmt.Sprintf("%s (cf-ray: %s)", base, rayID)
-}
-
-func extractSoraCloudflareRayID(headers http.Header, body []byte) string {
-	if headers != nil {
-		rayID := strings.TrimSpace(headers.Get("cf-ray"))
-		if rayID != "" {
-			return rayID
-		}
-		rayID = strings.TrimSpace(headers.Get("Cf-Ray"))
-		if rayID != "" {
-			return rayID
-		}
-	}
-	preview := truncateSoraErrorBody(body, 8192)
-	matches := soraCloudflareRayPattern.FindStringSubmatch(preview)
-	if len(matches) >= 2 {
-		return strings.TrimSpace(matches[1])
-	}
-	return ""
+	return soraerror.FormatCloudflareChallengeMessage(base, headers, body)
 }
 
 func extractUpstreamErrorCodeAndMessage(body []byte) (string, string) {
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "" {
-		return "", ""
-	}
-	if !gjson.Valid(trimmed) {
-		return "", truncateSoraErrorMessage(trimmed, 256)
-	}
-	code := strings.TrimSpace(gjson.Get(trimmed, "error.code").String())
-	if code == "" {
-		code = strings.TrimSpace(gjson.Get(trimmed, "code").String())
-	}
-	message := strings.TrimSpace(gjson.Get(trimmed, "error.message").String())
-	if message == "" {
-		message = strings.TrimSpace(gjson.Get(trimmed, "message").String())
-	}
-	if message == "" {
-		message = strings.TrimSpace(gjson.Get(trimmed, "error.detail").String())
-	}
-	if message == "" {
-		message = strings.TrimSpace(gjson.Get(trimmed, "detail").String())
-	}
-	return code, truncateSoraErrorMessage(message, 512)
-}
-
-func truncateSoraErrorMessage(s string, maxLen int) string {
-	if maxLen <= 0 {
-		return ""
-	}
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "...(truncated)"
-}
-
-func truncateSoraErrorBody(body []byte, maxLen int) string {
-	if maxLen <= 0 {
-		maxLen = 512
-	}
-	raw := strings.TrimSpace(string(body))
-	if len(raw) <= maxLen {
-		return raw
-	}
-	return raw[:maxLen] + "...(truncated)"
+	return soraerror.ExtractUpstreamErrorCodeAndMessage(body)
 }
 
 func (h *SoraGatewayHandler) handleStreamingAwareError(c *gin.Context, status int, errType, message string, streamStarted bool) {

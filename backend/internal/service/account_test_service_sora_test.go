@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
@@ -109,6 +110,8 @@ func TestAccountTestService_testSoraAccountConnection_WithSubscription(t *testin
 	require.Contains(t, body, "Subscription: ChatGPT Plus | chatgpt_plus | end=2026-12-31T00:00:00Z")
 	require.Contains(t, body, "Sora2: supported | invite=inv_abc | used=3/50")
 	require.Contains(t, body, "Sora2 remaining: 27 | reset_in=46833s")
+	require.Contains(t, body, `"type":"sora_test_result"`)
+	require.Contains(t, body, `"status":"success"`)
 	require.Contains(t, body, `"type":"test_complete","success":true`)
 }
 
@@ -141,6 +144,8 @@ func TestAccountTestService_testSoraAccountConnection_SubscriptionFailedStillSuc
 	require.Contains(t, body, "Sora connection OK - User: demo-user")
 	require.Contains(t, body, "Subscription check returned 403")
 	require.Contains(t, body, "Sora2 invite check returned 401")
+	require.Contains(t, body, `"type":"sora_test_result"`)
+	require.Contains(t, body, `"status":"partial_success"`)
 	require.Contains(t, body, `"type":"test_complete","success":true`)
 }
 
@@ -171,6 +176,97 @@ func TestAccountTestService_testSoraAccountConnection_CloudflareChallenge(t *tes
 	require.Contains(t, body, `"type":"error"`)
 	require.Contains(t, body, "Cloudflare challenge")
 	require.Contains(t, body, "cf-ray: 9cff2d62d83bb98d")
+}
+
+func TestAccountTestService_testSoraAccountConnection_CloudflareChallenge429WithHeader(t *testing.T) {
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponseWithHeader(http.StatusTooManyRequests, `<!DOCTYPE html><html><head><title>Just a moment...</title></head><body></body></html>`, "cf-mitigated", "challenge"),
+		},
+	}
+	svc := &AccountTestService{httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Platform:    PlatformSora,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test_token",
+		},
+	}
+
+	c, rec := newSoraTestContext()
+	err := svc.testSoraAccountConnection(c, account)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Cloudflare challenge")
+	require.Contains(t, err.Error(), "HTTP 429")
+	body := rec.Body.String()
+	require.Contains(t, body, "Cloudflare challenge")
+}
+
+func TestAccountTestService_testSoraAccountConnection_TokenInvalidated(t *testing.T) {
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusUnauthorized, `{"error":{"code":"token_invalidated","message":"Token invalid"}}`),
+		},
+	}
+	svc := &AccountTestService{httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Platform:    PlatformSora,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test_token",
+		},
+	}
+
+	c, rec := newSoraTestContext()
+	err := svc.testSoraAccountConnection(c, account)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "token_invalidated")
+	body := rec.Body.String()
+	require.Contains(t, body, `"type":"sora_test_result"`)
+	require.Contains(t, body, `"status":"failed"`)
+	require.Contains(t, body, "token_invalidated")
+	require.NotContains(t, body, `"type":"test_complete","success":true`)
+}
+
+func TestAccountTestService_testSoraAccountConnection_RateLimited(t *testing.T) {
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusOK, `{"email":"demo@example.com"}`),
+		},
+	}
+	svc := &AccountTestService{
+		httpUpstream:     upstream,
+		soraTestCooldown: time.Hour,
+	}
+	account := &Account{
+		ID:          1,
+		Platform:    PlatformSora,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test_token",
+		},
+	}
+
+	c1, _ := newSoraTestContext()
+	err := svc.testSoraAccountConnection(c1, account)
+	require.NoError(t, err)
+
+	c2, rec2 := newSoraTestContext()
+	err = svc.testSoraAccountConnection(c2, account)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "测试过于频繁")
+	body := rec2.Body.String()
+	require.Contains(t, body, `"type":"sora_test_result"`)
+	require.Contains(t, body, `"code":"test_rate_limited"`)
+	require.Contains(t, body, `"status":"failed"`)
+	require.NotContains(t, body, `"type":"test_complete","success":true`)
 }
 
 func TestAccountTestService_testSoraAccountConnection_SubscriptionCloudflareChallengeWithRay(t *testing.T) {
