@@ -781,9 +781,9 @@ func parseSoraRemainingSummary(body []byte) string {
 
 func (s *AccountTestService) shouldEnableSoraTLSFingerprint() bool {
 	if s == nil || s.cfg == nil {
-		return false
+		return true
 	}
-	return s.cfg.Gateway.TLSFingerprint.Enabled && !s.cfg.Sora.Client.DisableTLSFingerprint
+	return !s.cfg.Sora.Client.DisableTLSFingerprint
 }
 
 func isCloudflareChallengeResponse(statusCode int, body []byte) bool {
