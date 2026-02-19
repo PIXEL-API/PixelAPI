@@ -34,6 +34,9 @@ const (
 	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
 	soraMeAPIURL       = "https://sora.chatgpt.com/backend/me" // Sora 用户信息接口，用于测试连接
 	soraBillingAPIURL  = "https://sora.chatgpt.com/backend/billing/subscriptions"
+	soraInviteMineURL  = "https://sora.chatgpt.com/backend/project_y/invite/mine"
+	soraBootstrapURL   = "https://sora.chatgpt.com/backend/m/bootstrap"
+	soraRemainingURL   = "https://sora.chatgpt.com/backend/nf/check"
 )
 
 // TestEvent represents a SSE event for account testing
@@ -498,6 +501,9 @@ func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	req.Header.Set("User-Agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Origin", "https://sora.chatgpt.com")
+	req.Header.Set("Referer", "https://sora.chatgpt.com/")
 
 	// Get proxy URL
 	proxyURL := ""
@@ -543,6 +549,9 @@ func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *
 		subReq.Header.Set("Authorization", "Bearer "+authToken)
 		subReq.Header.Set("User-Agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
 		subReq.Header.Set("Accept", "application/json")
+		subReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		subReq.Header.Set("Origin", "https://sora.chatgpt.com")
+		subReq.Header.Set("Referer", "https://sora.chatgpt.com/")
 
 		subResp, subErr := s.httpUpstream.DoWithTLS(subReq, proxyURL, account.ID, account.Concurrency, enableSoraTLSFingerprint)
 		if subErr != nil {
@@ -566,8 +575,132 @@ func (s *AccountTestService) testSoraAccountConnection(c *gin.Context, account *
 		}
 	}
 
+	// 追加 Sora2 能力探测（对齐 sora2api 的测试思路）：邀请码 + 剩余额度。
+	s.testSora2Capabilities(c, ctx, account, authToken, proxyURL, enableSoraTLSFingerprint)
+
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
+}
+
+func (s *AccountTestService) testSora2Capabilities(
+	c *gin.Context,
+	ctx context.Context,
+	account *Account,
+	authToken string,
+	proxyURL string,
+	enableTLSFingerprint bool,
+) {
+	inviteStatus, inviteHeader, inviteBody, err := s.fetchSoraTestEndpoint(
+		ctx,
+		account,
+		authToken,
+		soraInviteMineURL,
+		proxyURL,
+		enableTLSFingerprint,
+	)
+	if err != nil {
+		s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Sora2 invite check skipped: %s", err.Error())})
+		return
+	}
+
+	if inviteStatus == http.StatusUnauthorized {
+		bootstrapStatus, _, _, bootstrapErr := s.fetchSoraTestEndpoint(
+			ctx,
+			account,
+			authToken,
+			soraBootstrapURL,
+			proxyURL,
+			enableTLSFingerprint,
+		)
+		if bootstrapErr == nil && bootstrapStatus == http.StatusOK {
+			s.sendEvent(c, TestEvent{Type: "content", Text: "Sora2 bootstrap OK, retry invite check"})
+			inviteStatus, inviteHeader, inviteBody, err = s.fetchSoraTestEndpoint(
+				ctx,
+				account,
+				authToken,
+				soraInviteMineURL,
+				proxyURL,
+				enableTLSFingerprint,
+			)
+			if err != nil {
+				s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Sora2 invite retry failed: %s", err.Error())})
+				return
+			}
+		}
+	}
+
+	if inviteStatus != http.StatusOK {
+		if isCloudflareChallengeResponse(inviteStatus, inviteBody) {
+			s.sendEvent(c, TestEvent{Type: "content", Text: formatCloudflareChallengeMessage("Sora2 invite check blocked by Cloudflare challenge (HTTP 403)", inviteHeader, inviteBody)})
+			return
+		}
+		s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Sora2 invite check returned %d", inviteStatus)})
+		return
+	}
+
+	if summary := parseSoraInviteSummary(inviteBody); summary != "" {
+		s.sendEvent(c, TestEvent{Type: "content", Text: summary})
+	} else {
+		s.sendEvent(c, TestEvent{Type: "content", Text: "Sora2 invite check OK"})
+	}
+
+	remainingStatus, remainingHeader, remainingBody, remainingErr := s.fetchSoraTestEndpoint(
+		ctx,
+		account,
+		authToken,
+		soraRemainingURL,
+		proxyURL,
+		enableTLSFingerprint,
+	)
+	if remainingErr != nil {
+		s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Sora2 remaining check skipped: %s", remainingErr.Error())})
+		return
+	}
+	if remainingStatus != http.StatusOK {
+		if isCloudflareChallengeResponse(remainingStatus, remainingBody) {
+			s.sendEvent(c, TestEvent{Type: "content", Text: formatCloudflareChallengeMessage("Sora2 remaining check blocked by Cloudflare challenge (HTTP 403)", remainingHeader, remainingBody)})
+			return
+		}
+		s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Sora2 remaining check returned %d", remainingStatus)})
+		return
+	}
+	if summary := parseSoraRemainingSummary(remainingBody); summary != "" {
+		s.sendEvent(c, TestEvent{Type: "content", Text: summary})
+	} else {
+		s.sendEvent(c, TestEvent{Type: "content", Text: "Sora2 remaining check OK"})
+	}
+}
+
+func (s *AccountTestService) fetchSoraTestEndpoint(
+	ctx context.Context,
+	account *Account,
+	authToken string,
+	url string,
+	proxyURL string,
+	enableTLSFingerprint bool,
+) (int, http.Header, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	req.Header.Set("User-Agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Origin", "https://sora.chatgpt.com")
+	req.Header.Set("Referer", "https://sora.chatgpt.com/")
+
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, enableTLSFingerprint)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return resp.StatusCode, resp.Header, nil, readErr
+	}
+	return resp.StatusCode, resp.Header, body, nil
 }
 
 func parseSoraSubscriptionSummary(body []byte) string {
@@ -602,6 +735,48 @@ func parseSoraSubscriptionSummary(body []byte) string {
 		return ""
 	}
 	return "Subscription: " + strings.Join(parts, " | ")
+}
+
+func parseSoraInviteSummary(body []byte) string {
+	var inviteResp struct {
+		InviteCode    string `json:"invite_code"`
+		RedeemedCount int64  `json:"redeemed_count"`
+		TotalCount    int64  `json:"total_count"`
+	}
+	if err := json.Unmarshal(body, &inviteResp); err != nil {
+		return ""
+	}
+
+	parts := []string{"Sora2: supported"}
+	if inviteResp.InviteCode != "" {
+		parts = append(parts, "invite="+inviteResp.InviteCode)
+	}
+	if inviteResp.TotalCount > 0 {
+		parts = append(parts, fmt.Sprintf("used=%d/%d", inviteResp.RedeemedCount, inviteResp.TotalCount))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func parseSoraRemainingSummary(body []byte) string {
+	var remainingResp struct {
+		RateLimitAndCreditBalance struct {
+			EstimatedNumVideosRemaining int64 `json:"estimated_num_videos_remaining"`
+			RateLimitReached            bool  `json:"rate_limit_reached"`
+			AccessResetsInSeconds       int64 `json:"access_resets_in_seconds"`
+		} `json:"rate_limit_and_credit_balance"`
+	}
+	if err := json.Unmarshal(body, &remainingResp); err != nil {
+		return ""
+	}
+	info := remainingResp.RateLimitAndCreditBalance
+	parts := []string{fmt.Sprintf("Sora2 remaining: %d", info.EstimatedNumVideosRemaining)}
+	if info.RateLimitReached {
+		parts = append(parts, "rate_limited=true")
+	}
+	if info.AccessResetsInSeconds > 0 {
+		parts = append(parts, fmt.Sprintf("reset_in=%ds", info.AccessResetsInSeconds))
+	}
+	return strings.Join(parts, " | ")
 }
 
 func (s *AccountTestService) shouldEnableSoraTLSFingerprint() bool {
