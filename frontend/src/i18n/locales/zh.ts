@@ -2310,6 +2310,8 @@ export default {
       qualityTableStatus: '状态',
       qualityTableLatency: '延迟',
       qualityTableMessage: '说明',
+      qualityInline: '质量 {grade}/{score}',
+      qualityStatusHealthy: '优质',
       qualityStatusPass: '通过',
       qualityStatusWarn: '告警',
       qualityStatusFail: '失败',

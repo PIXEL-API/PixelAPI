@@ -1796,6 +1796,7 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 		})
 		result.FailedCount++
 		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
 		return result, nil
 	}
 
@@ -1809,6 +1810,7 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 		})
 		result.FailedCount++
 		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
 		return result, nil
 	}
 
@@ -1838,6 +1840,7 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 		})
 		result.FailedCount++
 		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, exitInfo)
 		return result, nil
 	}
 
@@ -1857,6 +1860,7 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 	}
 
 	finalizeProxyQualityResult(result)
+	s.saveProxyQualitySnapshot(ctx, id, result, exitInfo)
 	return result, nil
 }
 
@@ -1952,6 +1956,80 @@ func proxyQualityGrade(score int) string {
 	default:
 		return "F"
 	}
+}
+
+func proxyQualityOverallStatus(result *ProxyQualityCheckResult) string {
+	if result == nil {
+		return ""
+	}
+	if result.ChallengeCount > 0 {
+		return "challenge"
+	}
+	if result.FailedCount > 0 {
+		return "failed"
+	}
+	if result.WarnCount > 0 {
+		return "warn"
+	}
+	if result.PassedCount > 0 {
+		return "healthy"
+	}
+	return "failed"
+}
+
+func proxyQualityFirstCFRay(result *ProxyQualityCheckResult) string {
+	if result == nil {
+		return ""
+	}
+	for _, item := range result.Items {
+		if item.CFRay != "" {
+			return item.CFRay
+		}
+	}
+	return ""
+}
+
+func proxyQualityBaseConnectivityPass(result *ProxyQualityCheckResult) bool {
+	if result == nil {
+		return false
+	}
+	for _, item := range result.Items {
+		if item.Target == "base_connectivity" {
+			return item.Status == "pass"
+		}
+	}
+	return false
+}
+
+func (s *adminServiceImpl) saveProxyQualitySnapshot(ctx context.Context, proxyID int64, result *ProxyQualityCheckResult, exitInfo *ProxyExitInfo) {
+	if result == nil {
+		return
+	}
+	score := result.Score
+	checkedAt := result.CheckedAt
+	info := &ProxyLatencyInfo{
+		Success:          proxyQualityBaseConnectivityPass(result),
+		Message:          result.Summary,
+		QualityStatus:    proxyQualityOverallStatus(result),
+		QualityScore:     &score,
+		QualityGrade:     result.Grade,
+		QualitySummary:   result.Summary,
+		QualityCheckedAt: &checkedAt,
+		QualityCFRay:     proxyQualityFirstCFRay(result),
+		UpdatedAt:        time.Now(),
+	}
+	if result.BaseLatencyMs > 0 {
+		latency := result.BaseLatencyMs
+		info.LatencyMs = &latency
+	}
+	if exitInfo != nil {
+		info.IPAddress = exitInfo.IP
+		info.Country = exitInfo.Country
+		info.CountryCode = exitInfo.CountryCode
+		info.Region = exitInfo.Region
+		info.City = exitInfo.City
+	}
+	s.saveProxyLatency(ctx, proxyID, info)
 }
 
 func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) {
@@ -2064,6 +2142,11 @@ func (s *adminServiceImpl) attachProxyLatency(ctx context.Context, proxies []Pro
 		proxies[i].CountryCode = info.CountryCode
 		proxies[i].Region = info.Region
 		proxies[i].City = info.City
+		proxies[i].QualityStatus = info.QualityStatus
+		proxies[i].QualityScore = info.QualityScore
+		proxies[i].QualityGrade = info.QualityGrade
+		proxies[i].QualitySummary = info.QualitySummary
+		proxies[i].QualityChecked = info.QualityCheckedAt
 	}
 }
 
@@ -2071,7 +2154,27 @@ func (s *adminServiceImpl) saveProxyLatency(ctx context.Context, proxyID int64, 
 	if s.proxyLatencyCache == nil || info == nil {
 		return
 	}
-	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, info); err != nil {
+
+	merged := *info
+	if latencies, err := s.proxyLatencyCache.GetProxyLatencies(ctx, []int64{proxyID}); err == nil {
+		if existing := latencies[proxyID]; existing != nil {
+			if merged.QualityCheckedAt == nil &&
+				merged.QualityScore == nil &&
+				merged.QualityGrade == "" &&
+				merged.QualityStatus == "" &&
+				merged.QualitySummary == "" &&
+				merged.QualityCFRay == "" {
+				merged.QualityStatus = existing.QualityStatus
+				merged.QualityScore = existing.QualityScore
+				merged.QualityGrade = existing.QualityGrade
+				merged.QualitySummary = existing.QualitySummary
+				merged.QualityCheckedAt = existing.QualityCheckedAt
+				merged.QualityCFRay = existing.QualityCFRay
+			}
+		}
+	}
+
+	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, &merged); err != nil {
 		logger.LegacyPrintf("service.admin", "Warning: store proxy latency cache failed: %v", err)
 	}
 }
