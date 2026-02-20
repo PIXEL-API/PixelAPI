@@ -53,6 +53,27 @@ func TestRunProxyQualityTarget_SoraChallenge(t *testing.T) {
 
 func TestRunProxyQualityTarget_AllowedStatusPass(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	defer server.Close()
+
+	target := proxyQualityTarget{
+		Target: "gemini",
+		URL:    server.URL,
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusOK: {},
+		},
+	}
+
+	item := runProxyQualityTarget(context.Background(), server.Client(), target)
+	require.Equal(t, "pass", item.Status)
+	require.Equal(t, http.StatusOK, item.HTTPStatus)
+}
+
+func TestRunProxyQualityTarget_AllowedStatusWarnForUnauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	}))
@@ -68,6 +89,7 @@ func TestRunProxyQualityTarget_AllowedStatusPass(t *testing.T) {
 	}
 
 	item := runProxyQualityTarget(context.Background(), server.Client(), target)
-	require.Equal(t, "pass", item.Status)
+	require.Equal(t, "warn", item.Status)
 	require.Equal(t, http.StatusUnauthorized, item.HTTPStatus)
+	require.Contains(t, item.Message, "目标可达")
 }
