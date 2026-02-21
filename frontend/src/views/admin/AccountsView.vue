@@ -6,6 +6,7 @@
           <AccountTableFilters
             v-model:searchQuery="params.search"
             :filters="params"
+            :groups="groups"
             @update:filters="(newFilters) => Object.assign(params, newFilters)"
             @change="debouncedReload"
             @update:searchQuery="debouncedReload"
@@ -466,7 +467,7 @@ const {
   handlePageSizeChange: baseHandlePageSizeChange
 } = useTableLoader<Account, any>({
   fetchFn: adminAPI.accounts.list,
-  initialParams: { platform: '', type: '', status: '', search: '' }
+  initialParams: { platform: '', type: '', status: '', group: '', search: '' }
 })
 
 const resetAutoRefreshCache = () => {

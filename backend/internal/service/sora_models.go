@@ -17,6 +17,9 @@ type SoraModelConfig struct {
 	Model       string
 	Size        string
 	RequirePro  bool
+	// Prompt-enhance 专用参数
+	ExpansionLevel string
+	DurationS      int
 }
 
 var soraModelConfigs = map[string]SoraModelConfig{
@@ -160,31 +163,49 @@ var soraModelConfigs = map[string]SoraModelConfig{
 		RequirePro:  true,
 	},
 	"prompt-enhance-short-10s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "short",
+		DurationS:      10,
 	},
 	"prompt-enhance-short-15s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "short",
+		DurationS:      15,
 	},
 	"prompt-enhance-short-20s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "short",
+		DurationS:      20,
 	},
 	"prompt-enhance-medium-10s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "medium",
+		DurationS:      10,
 	},
 	"prompt-enhance-medium-15s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "medium",
+		DurationS:      15,
 	},
 	"prompt-enhance-medium-20s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "medium",
+		DurationS:      20,
 	},
 	"prompt-enhance-long-10s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "long",
+		DurationS:      10,
 	},
 	"prompt-enhance-long-15s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "long",
+		DurationS:      15,
 	},
 	"prompt-enhance-long-20s": {
-		Type: "prompt_enhance",
+		Type:           "prompt_enhance",
+		ExpansionLevel: "long",
+		DurationS:      20,
 	},
 }
 

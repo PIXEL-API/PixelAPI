@@ -2,12 +2,19 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
+
+var openAISoraSessionAuthURL = "https://sora.chatgpt.com/api/auth/session"
 
 // OpenAIOAuthService handles OpenAI OAuth authentication flows
 type OpenAIOAuthService struct {
@@ -92,6 +99,7 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 type OpenAIExchangeCodeInput struct {
 	SessionID   string
 	Code        string
+	State       string
 	RedirectURI string
 	ProxyID     *int64
 }
@@ -115,6 +123,12 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
+	}
+	if input.State == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_STATE_REQUIRED", "oauth state is required")
+	}
+	if subtle.ConstantTimeCompare([]byte(input.State), []byte(session.State)) != 1 {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_STATE", "invalid oauth state")
 	}
 
 	// Get proxy URL: prefer input.ProxyID, fallback to session.ProxyURL
@@ -173,7 +187,12 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 
 // RefreshToken refreshes an OpenAI OAuth token
 func (s *OpenAIOAuthService) RefreshToken(ctx context.Context, refreshToken string, proxyURL string) (*OpenAITokenInfo, error) {
-	tokenResp, err := s.oauthClient.RefreshToken(ctx, refreshToken, proxyURL)
+	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, "")
+}
+
+// RefreshTokenWithClientID refreshes an OpenAI/Sora OAuth token with optional client_id.
+func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refreshToken string, proxyURL string, clientID string) (*OpenAITokenInfo, error) {
+	tokenResp, err := s.oauthClient.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -205,13 +224,83 @@ func (s *OpenAIOAuthService) RefreshToken(ctx context.Context, refreshToken stri
 	return tokenInfo, nil
 }
 
-// RefreshAccountToken refreshes token for an OpenAI account
-func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
-	if !account.IsOpenAI() {
-		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT", "account is not an OpenAI account")
+// ExchangeSoraSessionToken exchanges Sora session_token to access_token.
+func (s *OpenAIOAuthService) ExchangeSoraSessionToken(ctx context.Context, sessionToken string, proxyID *int64) (*OpenAITokenInfo, error) {
+	if strings.TrimSpace(sessionToken) == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "SORA_SESSION_TOKEN_REQUIRED", "session_token is required")
 	}
 
-	refreshToken := account.GetOpenAIRefreshToken()
+	proxyURL, err := s.resolveProxyURL(ctx, proxyID)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openAISoraSessionAuthURL, nil)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "SORA_SESSION_REQUEST_BUILD_FAILED", "failed to build request: %v", err)
+	}
+	req.Header.Set("Cookie", "__Secure-next-auth.session-token="+strings.TrimSpace(sessionToken))
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://sora.chatgpt.com")
+	req.Header.Set("Referer", "https://sora.chatgpt.com/")
+	req.Header.Set("User-Agent", "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)")
+
+	client := newOpenAIOAuthHTTPClient(proxyURL)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "SORA_SESSION_REQUEST_FAILED", "request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "SORA_SESSION_EXCHANGE_FAILED", "status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var sessionResp struct {
+		AccessToken string `json:"accessToken"`
+		Expires     string `json:"expires"`
+		User        struct {
+			Email string `json:"email"`
+			Name  string `json:"name"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &sessionResp); err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "SORA_SESSION_PARSE_FAILED", "failed to parse response: %v", err)
+	}
+	if strings.TrimSpace(sessionResp.AccessToken) == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "SORA_SESSION_ACCESS_TOKEN_MISSING", "session exchange response missing access token")
+	}
+
+	expiresAt := time.Now().Add(time.Hour).Unix()
+	if strings.TrimSpace(sessionResp.Expires) != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339, sessionResp.Expires); parseErr == nil {
+			expiresAt = parsed.Unix()
+		}
+	}
+	expiresIn := expiresAt - time.Now().Unix()
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+
+	return &OpenAITokenInfo{
+		AccessToken: strings.TrimSpace(sessionResp.AccessToken),
+		ExpiresIn:   expiresIn,
+		ExpiresAt:   expiresAt,
+		Email:       strings.TrimSpace(sessionResp.User.Email),
+	}, nil
+}
+
+// RefreshAccountToken refreshes token for an OpenAI/Sora OAuth account
+func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
+	if account.Platform != PlatformOpenAI && account.Platform != PlatformSora {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT", "account is not an OpenAI/Sora account")
+	}
+	if account.Type != AccountTypeOAuth {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT_TYPE", "account is not an OAuth account")
+	}
+
+	refreshToken := account.GetCredential("refresh_token")
 	if refreshToken == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
 	}
@@ -224,7 +313,8 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		}
 	}
 
-	return s.RefreshToken(ctx, refreshToken, proxyURL)
+	clientID := account.GetCredential("client_id")
+	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
 }
 
 // BuildAccountCredentials builds credentials map from token info
@@ -259,4 +349,31 @@ func (s *OpenAIOAuthService) BuildAccountCredentials(tokenInfo *OpenAITokenInfo)
 // Stop stops the session store cleanup goroutine
 func (s *OpenAIOAuthService) Stop() {
 	s.sessionStore.Stop()
+}
+
+func (s *OpenAIOAuthService) resolveProxyURL(ctx context.Context, proxyID *int64) (string, error) {
+	if proxyID == nil {
+		return "", nil
+	}
+	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
+	if err != nil {
+		return "", infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
+	}
+	if proxy == nil {
+		return "", nil
+	}
+	return proxy.URL(), nil
+}
+
+func newOpenAIOAuthHTTPClient(proxyURL string) *http.Client {
+	transport := &http.Transport{}
+	if strings.TrimSpace(proxyURL) != "" {
+		if parsed, err := url.Parse(proxyURL); err == nil && parsed.Host != "" {
+			transport.Proxy = http.ProxyURL(parsed)
+		}
+	}
+	return &http.Client{
+		Timeout:   120 * time.Second,
+		Transport: transport,
+	}
 }

@@ -32,6 +32,7 @@ export async function list(
     platform?: string
     type?: string
     status?: string
+    group?: string
     search?: string
   },
   options?: {
@@ -271,7 +272,7 @@ export async function generateAuthUrl(
  */
 export async function exchangeCode(
   endpoint: string,
-  exchangeData: { session_id: string; code: string; proxy_id?: number }
+  exchangeData: { session_id: string; code: string; state?: string; proxy_id?: number }
 ): Promise<Record<string, unknown>> {
   const { data } = await apiClient.post<Record<string, unknown>>(endpoint, exchangeData)
   return data
@@ -493,7 +494,8 @@ export async function getAntigravityDefaultModelMapping(): Promise<Record<string
  */
 export async function refreshOpenAIToken(
   refreshToken: string,
-  proxyId?: number | null
+  proxyId?: number | null,
+  endpoint: string = '/admin/openai/refresh-token'
 ): Promise<Record<string, unknown>> {
   const payload: { refresh_token: string; proxy_id?: number } = {
     refresh_token: refreshToken
@@ -501,7 +503,29 @@ export async function refreshOpenAIToken(
   if (proxyId) {
     payload.proxy_id = proxyId
   }
-  const { data } = await apiClient.post<Record<string, unknown>>('/admin/openai/refresh-token', payload)
+  const { data } = await apiClient.post<Record<string, unknown>>(endpoint, payload)
+  return data
+}
+
+/**
+ * Validate Sora session token and exchange to access token
+ * @param sessionToken - Sora session token
+ * @param proxyId - Optional proxy ID
+ * @param endpoint - API endpoint path
+ * @returns Token information including access_token
+ */
+export async function validateSoraSessionToken(
+  sessionToken: string,
+  proxyId?: number | null,
+  endpoint: string = '/admin/sora/st2at'
+): Promise<Record<string, unknown>> {
+  const payload: { session_token: string; proxy_id?: number } = {
+    session_token: sessionToken
+  }
+  if (proxyId) {
+    payload.proxy_id = proxyId
+  }
+  const { data } = await apiClient.post<Record<string, unknown>>(endpoint, payload)
   return data
 }
 
@@ -527,6 +551,7 @@ export const accountsAPI = {
   generateAuthUrl,
   exchangeCode,
   refreshOpenAIToken,
+  validateSoraSessionToken,
   batchCreate,
   batchUpdateCredentials,
   bulkUpdate,

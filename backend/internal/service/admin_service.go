@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/util/soraerror"
 )
 
 // AdminService interface defines admin management operations
@@ -39,7 +43,7 @@ type AdminService interface {
 	UpdateGroupSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
 
 	// Account management
-	ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string) ([]Account, int64, error)
+	ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64) ([]Account, int64, error)
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
@@ -65,6 +69,7 @@ type AdminService interface {
 	GetProxyAccounts(ctx context.Context, proxyID int64) ([]ProxyAccountSummary, error)
 	CheckProxyExists(ctx context.Context, host string, port int, username, password string) (bool, error)
 	TestProxy(ctx context.Context, id int64) (*ProxyTestResult, error)
+	CheckProxyQuality(ctx context.Context, id int64) (*ProxyQualityCheckResult, error)
 
 	// Redeem code management
 	ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, search string) ([]RedeemCode, int64, error)
@@ -288,6 +293,32 @@ type ProxyTestResult struct {
 	CountryCode string `json:"country_code,omitempty"`
 }
 
+type ProxyQualityCheckResult struct {
+	ProxyID        int64                   `json:"proxy_id"`
+	Score          int                     `json:"score"`
+	Grade          string                  `json:"grade"`
+	Summary        string                  `json:"summary"`
+	ExitIP         string                  `json:"exit_ip,omitempty"`
+	Country        string                  `json:"country,omitempty"`
+	CountryCode    string                  `json:"country_code,omitempty"`
+	BaseLatencyMs  int64                   `json:"base_latency_ms,omitempty"`
+	PassedCount    int                     `json:"passed_count"`
+	WarnCount      int                     `json:"warn_count"`
+	FailedCount    int                     `json:"failed_count"`
+	ChallengeCount int                     `json:"challenge_count"`
+	CheckedAt      int64                   `json:"checked_at"`
+	Items          []ProxyQualityCheckItem `json:"items"`
+}
+
+type ProxyQualityCheckItem struct {
+	Target     string `json:"target"`
+	Status     string `json:"status"` // pass/warn/fail/challenge
+	HTTPStatus int    `json:"http_status,omitempty"`
+	LatencyMs  int64  `json:"latency_ms,omitempty"`
+	Message    string `json:"message,omitempty"`
+	CFRay      string `json:"cf_ray,omitempty"`
+}
+
 // ProxyExitInfo represents proxy exit information from ip-api.com
 type ProxyExitInfo struct {
 	IP          string
@@ -301,6 +332,58 @@ type ProxyExitInfo struct {
 type ProxyExitInfoProber interface {
 	ProbeProxy(ctx context.Context, proxyURL string) (*ProxyExitInfo, int64, error)
 }
+
+type proxyQualityTarget struct {
+	Target          string
+	URL             string
+	Method          string
+	AllowedStatuses map[int]struct{}
+}
+
+var proxyQualityTargets = []proxyQualityTarget{
+	{
+		Target: "openai",
+		URL:    "https://api.openai.com/v1/models",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized: {},
+		},
+	},
+	{
+		Target: "anthropic",
+		URL:    "https://api.anthropic.com/v1/messages",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized:     {},
+			http.StatusMethodNotAllowed: {},
+			http.StatusNotFound:         {},
+			http.StatusBadRequest:       {},
+		},
+	},
+	{
+		Target: "gemini",
+		URL:    "https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusOK: {},
+		},
+	},
+	{
+		Target: "sora",
+		URL:    "https://sora.chatgpt.com/backend/me",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized: {},
+		},
+	},
+}
+
+const (
+	proxyQualityRequestTimeout        = 15 * time.Second
+	proxyQualityResponseHeaderTimeout = 10 * time.Second
+	proxyQualityMaxBodyBytes          = int64(8 * 1024)
+	proxyQualityClientUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+)
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
@@ -1054,9 +1137,9 @@ func (s *adminServiceImpl) UpdateGroupSortOrders(ctx context.Context, updates []
 }
 
 // Account management implementations
-func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string) ([]Account, int64, error) {
+func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64) ([]Account, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize}
-	accounts, result, err := s.accountRepo.ListWithFilters(ctx, params, platform, accountType, status, search)
+	accounts, result, err := s.accountRepo.ListWithFilters(ctx, params, platform, accountType, status, search, groupID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1690,6 +1773,270 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 	}, nil
 }
 
+func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*ProxyQualityCheckResult, error) {
+	proxy, err := s.proxyRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ProxyQualityCheckResult{
+		ProxyID:   id,
+		Score:     100,
+		Grade:     "A",
+		CheckedAt: time.Now().Unix(),
+		Items:     make([]ProxyQualityCheckItem, 0, len(proxyQualityTargets)+1),
+	}
+
+	proxyURL := proxy.URL()
+	if s.proxyProber == nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:  "base_connectivity",
+			Status:  "fail",
+			Message: "代理探测服务未配置",
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
+		return result, nil
+	}
+
+	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxyURL)
+	if err != nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:    "base_connectivity",
+			Status:    "fail",
+			LatencyMs: latencyMs,
+			Message:   err.Error(),
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
+		return result, nil
+	}
+
+	result.ExitIP = exitInfo.IP
+	result.Country = exitInfo.Country
+	result.CountryCode = exitInfo.CountryCode
+	result.BaseLatencyMs = latencyMs
+	result.Items = append(result.Items, ProxyQualityCheckItem{
+		Target:    "base_connectivity",
+		Status:    "pass",
+		LatencyMs: latencyMs,
+		Message:   "代理出口连通正常",
+	})
+	result.PassedCount++
+
+	client, err := httpclient.GetClient(httpclient.Options{
+		ProxyURL:              proxyURL,
+		Timeout:               proxyQualityRequestTimeout,
+		ResponseHeaderTimeout: proxyQualityResponseHeaderTimeout,
+		ProxyStrict:           true,
+	})
+	if err != nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:  "http_client",
+			Status:  "fail",
+			Message: fmt.Sprintf("创建检测客户端失败: %v", err),
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, exitInfo)
+		return result, nil
+	}
+
+	for _, target := range proxyQualityTargets {
+		item := runProxyQualityTarget(ctx, client, target)
+		result.Items = append(result.Items, item)
+		switch item.Status {
+		case "pass":
+			result.PassedCount++
+		case "warn":
+			result.WarnCount++
+		case "challenge":
+			result.ChallengeCount++
+		default:
+			result.FailedCount++
+		}
+	}
+
+	finalizeProxyQualityResult(result)
+	s.saveProxyQualitySnapshot(ctx, id, result, exitInfo)
+	return result, nil
+}
+
+func runProxyQualityTarget(ctx context.Context, client *http.Client, target proxyQualityTarget) ProxyQualityCheckItem {
+	item := ProxyQualityCheckItem{
+		Target: target.Target,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, target.Method, target.URL, nil)
+	if err != nil {
+		item.Status = "fail"
+		item.Message = fmt.Sprintf("构建请求失败: %v", err)
+		return item
+	}
+	req.Header.Set("Accept", "application/json,text/html,*/*")
+	req.Header.Set("User-Agent", proxyQualityClientUserAgent)
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		item.Status = "fail"
+		item.LatencyMs = time.Since(start).Milliseconds()
+		item.Message = fmt.Sprintf("请求失败: %v", err)
+		return item
+	}
+	defer func() { _ = resp.Body.Close() }()
+	item.LatencyMs = time.Since(start).Milliseconds()
+	item.HTTPStatus = resp.StatusCode
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, proxyQualityMaxBodyBytes+1))
+	if readErr != nil {
+		item.Status = "fail"
+		item.Message = fmt.Sprintf("读取响应失败: %v", readErr)
+		return item
+	}
+	if int64(len(body)) > proxyQualityMaxBodyBytes {
+		body = body[:proxyQualityMaxBodyBytes]
+	}
+
+	if target.Target == "sora" && soraerror.IsCloudflareChallengeResponse(resp.StatusCode, resp.Header, body) {
+		item.Status = "challenge"
+		item.CFRay = soraerror.ExtractCloudflareRayID(resp.Header, body)
+		item.Message = "Sora 命中 Cloudflare challenge"
+		return item
+	}
+
+	if _, ok := target.AllowedStatuses[resp.StatusCode]; ok {
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			item.Status = "pass"
+			item.Message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		} else {
+			item.Status = "warn"
+			item.Message = fmt.Sprintf("HTTP %d（目标可达，但鉴权或方法受限）", resp.StatusCode)
+		}
+		return item
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		item.Status = "warn"
+		item.Message = "目标返回 429，可能存在频控"
+		return item
+	}
+
+	item.Status = "fail"
+	item.Message = fmt.Sprintf("非预期状态码: %d", resp.StatusCode)
+	return item
+}
+
+func finalizeProxyQualityResult(result *ProxyQualityCheckResult) {
+	if result == nil {
+		return
+	}
+	score := 100 - result.WarnCount*10 - result.FailedCount*22 - result.ChallengeCount*30
+	if score < 0 {
+		score = 0
+	}
+	result.Score = score
+	result.Grade = proxyQualityGrade(score)
+	result.Summary = fmt.Sprintf(
+		"通过 %d 项，告警 %d 项，失败 %d 项，挑战 %d 项",
+		result.PassedCount,
+		result.WarnCount,
+		result.FailedCount,
+		result.ChallengeCount,
+	)
+}
+
+func proxyQualityGrade(score int) string {
+	switch {
+	case score >= 90:
+		return "A"
+	case score >= 75:
+		return "B"
+	case score >= 60:
+		return "C"
+	case score >= 40:
+		return "D"
+	default:
+		return "F"
+	}
+}
+
+func proxyQualityOverallStatus(result *ProxyQualityCheckResult) string {
+	if result == nil {
+		return ""
+	}
+	if result.ChallengeCount > 0 {
+		return "challenge"
+	}
+	if result.FailedCount > 0 {
+		return "failed"
+	}
+	if result.WarnCount > 0 {
+		return "warn"
+	}
+	if result.PassedCount > 0 {
+		return "healthy"
+	}
+	return "failed"
+}
+
+func proxyQualityFirstCFRay(result *ProxyQualityCheckResult) string {
+	if result == nil {
+		return ""
+	}
+	for _, item := range result.Items {
+		if item.CFRay != "" {
+			return item.CFRay
+		}
+	}
+	return ""
+}
+
+func proxyQualityBaseConnectivityPass(result *ProxyQualityCheckResult) bool {
+	if result == nil {
+		return false
+	}
+	for _, item := range result.Items {
+		if item.Target == "base_connectivity" {
+			return item.Status == "pass"
+		}
+	}
+	return false
+}
+
+func (s *adminServiceImpl) saveProxyQualitySnapshot(ctx context.Context, proxyID int64, result *ProxyQualityCheckResult, exitInfo *ProxyExitInfo) {
+	if result == nil {
+		return
+	}
+	score := result.Score
+	checkedAt := result.CheckedAt
+	info := &ProxyLatencyInfo{
+		Success:          proxyQualityBaseConnectivityPass(result),
+		Message:          result.Summary,
+		QualityStatus:    proxyQualityOverallStatus(result),
+		QualityScore:     &score,
+		QualityGrade:     result.Grade,
+		QualitySummary:   result.Summary,
+		QualityCheckedAt: &checkedAt,
+		QualityCFRay:     proxyQualityFirstCFRay(result),
+		UpdatedAt:        time.Now(),
+	}
+	if result.BaseLatencyMs > 0 {
+		latency := result.BaseLatencyMs
+		info.LatencyMs = &latency
+	}
+	if exitInfo != nil {
+		info.IPAddress = exitInfo.IP
+		info.Country = exitInfo.Country
+		info.CountryCode = exitInfo.CountryCode
+		info.Region = exitInfo.Region
+		info.City = exitInfo.City
+	}
+	s.saveProxyLatency(ctx, proxyID, info)
+}
+
 func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) {
 	if s.proxyProber == nil || proxy == nil {
 		return
@@ -1800,6 +2147,11 @@ func (s *adminServiceImpl) attachProxyLatency(ctx context.Context, proxies []Pro
 		proxies[i].CountryCode = info.CountryCode
 		proxies[i].Region = info.Region
 		proxies[i].City = info.City
+		proxies[i].QualityStatus = info.QualityStatus
+		proxies[i].QualityScore = info.QualityScore
+		proxies[i].QualityGrade = info.QualityGrade
+		proxies[i].QualitySummary = info.QualitySummary
+		proxies[i].QualityChecked = info.QualityCheckedAt
 	}
 }
 
@@ -1807,7 +2159,27 @@ func (s *adminServiceImpl) saveProxyLatency(ctx context.Context, proxyID int64, 
 	if s.proxyLatencyCache == nil || info == nil {
 		return
 	}
-	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, info); err != nil {
+
+	merged := *info
+	if latencies, err := s.proxyLatencyCache.GetProxyLatencies(ctx, []int64{proxyID}); err == nil {
+		if existing := latencies[proxyID]; existing != nil {
+			if merged.QualityCheckedAt == nil &&
+				merged.QualityScore == nil &&
+				merged.QualityGrade == "" &&
+				merged.QualityStatus == "" &&
+				merged.QualitySummary == "" &&
+				merged.QualityCFRay == "" {
+				merged.QualityStatus = existing.QualityStatus
+				merged.QualityScore = existing.QualityScore
+				merged.QualityGrade = existing.QualityGrade
+				merged.QualitySummary = existing.QualitySummary
+				merged.QualityCheckedAt = existing.QualityCheckedAt
+				merged.QualityCFRay = existing.QualityCFRay
+			}
+		}
+	}
+
+	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, &merged); err != nil {
 		logger.LegacyPrintf("service.admin", "Warning: store proxy latency cache failed: %v", err)
 	}
 }

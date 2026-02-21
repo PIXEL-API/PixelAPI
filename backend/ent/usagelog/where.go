@@ -205,6 +205,11 @@ func MediaType(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldMediaType, v))
 }
 
+// CacheTTLOverridden applies equality check predicate on the "cache_ttl_overridden" field. It's identical to CacheTTLOverriddenEQ.
+func CacheTTLOverridden(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCacheTTLOverridden, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldCreatedAt, v))
@@ -1518,6 +1523,16 @@ func MediaTypeEqualFold(v string) predicate.UsageLog {
 // MediaTypeContainsFold applies the ContainsFold predicate on the "media_type" field.
 func MediaTypeContainsFold(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldContainsFold(FieldMediaType, v))
+}
+
+// CacheTTLOverriddenEQ applies the EQ predicate on the "cache_ttl_overridden" field.
+func CacheTTLOverriddenEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCacheTTLOverridden, v))
+}
+
+// CacheTTLOverriddenNEQ applies the NEQ predicate on the "cache_ttl_overridden" field.
+func CacheTTLOverriddenNEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldCacheTTLOverridden, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

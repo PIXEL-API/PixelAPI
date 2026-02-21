@@ -349,6 +349,8 @@ type ClaudeUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreation5mTokens    int // 5分钟缓存创建token（来自嵌套 cache_creation 对象）
+	CacheCreation1hTokens    int // 1小时缓存创建token（来自嵌套 cache_creation 对象）
 }
 
 // ForwardResult 转发结果
@@ -373,9 +375,10 @@ type ForwardResult struct {
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
 	StatusCode             int
-	ResponseBody           []byte // 上游响应体，用于错误透传规则匹配
-	ForceCacheBilling      bool   // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount bool   // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	ResponseBody           []byte      // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -3580,12 +3583,12 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// messages requests typically use only oauth + interleaved-thinking.
 			// Also drop claude-code beta if a downstream client added it.
 			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			drop := map[string]struct{}{claude.BetaClaudeCode: {}}
+			drop := map[string]struct{}{claude.BetaClaudeCode: {}, claude.BetaContext1M: {}}
 			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
-			req.Header.Set("anthropic-beta", s.getBetaHeader(modelID, clientBetaHeader))
+			req.Header.Set("anthropic-beta", stripBetaToken(s.getBetaHeader(modelID, clientBetaHeader), claude.BetaContext1M))
 		}
 	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
 		// API-key：仅在请求显式使用 beta 特性且客户端未提供时，按需补齐（默认关闭）
@@ -3732,6 +3735,23 @@ func mergeAnthropicBetaDropping(required []string, incoming string, drop map[str
 			continue
 		}
 		if _, ok := drop[p]; ok {
+			continue
+		}
+		out = append(out, p)
+	}
+	return strings.Join(out, ",")
+}
+
+// stripBetaToken removes a single beta token from a comma-separated header value.
+// It short-circuits when the token is not present to avoid unnecessary allocations.
+func stripBetaToken(header, token string) string {
+	if !strings.Contains(header, token) {
+		return header
+	}
+	out := make([]string, 0, 8)
+	for _, p := range strings.Split(header, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" || p == token {
 			continue
 		}
 		out = append(out, p)
@@ -4305,6 +4325,23 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			}
 		}
 
+		// Cache TTL Override: 重写 SSE 事件中的 cache_creation 分类
+		if account.IsCacheTTLOverrideEnabled() {
+			overrideTarget := account.GetCacheTTLOverrideTarget()
+			if eventType == "message_start" {
+				if msg, ok := event["message"].(map[string]any); ok {
+					if u, ok := msg["usage"].(map[string]any); ok {
+						rewriteCacheCreationJSON(u, overrideTarget)
+					}
+				}
+			}
+			if eventType == "message_delta" {
+				if u, ok := event["usage"].(map[string]any); ok {
+					rewriteCacheCreationJSON(u, overrideTarget)
+				}
+			}
+		}
+
 		if needModelReplace {
 			if msg, ok := event["message"].(map[string]any); ok {
 				if model, ok := msg["model"].(string); ok && model == mappedModel {
@@ -4432,6 +4469,14 @@ func (s *GatewayService) parseSSEUsage(data string, usage *ClaudeUsage) {
 		usage.InputTokens = msgStart.Message.Usage.InputTokens
 		usage.CacheCreationInputTokens = msgStart.Message.Usage.CacheCreationInputTokens
 		usage.CacheReadInputTokens = msgStart.Message.Usage.CacheReadInputTokens
+
+		// 解析嵌套的 cache_creation 对象中的 5m/1h 明细
+		cc5m := gjson.Get(data, "message.usage.cache_creation.ephemeral_5m_input_tokens")
+		cc1h := gjson.Get(data, "message.usage.cache_creation.ephemeral_1h_input_tokens")
+		if cc5m.Exists() || cc1h.Exists() {
+			usage.CacheCreation5mTokens = int(cc5m.Int())
+			usage.CacheCreation1hTokens = int(cc1h.Int())
+		}
 	}
 
 	// 解析message_delta获取tokens（兼容GLM等把所有usage放在delta中的API）
@@ -4460,6 +4505,68 @@ func (s *GatewayService) parseSSEUsage(data string, usage *ClaudeUsage) {
 		if msgDelta.Usage.CacheReadInputTokens > 0 {
 			usage.CacheReadInputTokens = msgDelta.Usage.CacheReadInputTokens
 		}
+
+		// 解析嵌套的 cache_creation 对象中的 5m/1h 明细
+		cc5m := gjson.Get(data, "usage.cache_creation.ephemeral_5m_input_tokens")
+		cc1h := gjson.Get(data, "usage.cache_creation.ephemeral_1h_input_tokens")
+		if cc5m.Exists() && cc5m.Int() > 0 {
+			usage.CacheCreation5mTokens = int(cc5m.Int())
+		}
+		if cc1h.Exists() && cc1h.Int() > 0 {
+			usage.CacheCreation1hTokens = int(cc1h.Int())
+		}
+	}
+}
+
+// applyCacheTTLOverride 将所有 cache creation tokens 归入指定的 TTL 类型。
+// target 为 "5m" 或 "1h"。返回 true 表示发生了变更。
+func applyCacheTTLOverride(usage *ClaudeUsage, target string) bool {
+	// Fallback: 如果只有聚合字段但无 5m/1h 明细，将聚合字段归入 5m 默认类别
+	if usage.CacheCreation5mTokens == 0 && usage.CacheCreation1hTokens == 0 && usage.CacheCreationInputTokens > 0 {
+		usage.CacheCreation5mTokens = usage.CacheCreationInputTokens
+	}
+
+	total := usage.CacheCreation5mTokens + usage.CacheCreation1hTokens
+	if total == 0 {
+		return false
+	}
+	switch target {
+	case "1h":
+		if usage.CacheCreation1hTokens == total {
+			return false // 已经全是 1h
+		}
+		usage.CacheCreation1hTokens = total
+		usage.CacheCreation5mTokens = 0
+	default: // "5m"
+		if usage.CacheCreation5mTokens == total {
+			return false // 已经全是 5m
+		}
+		usage.CacheCreation5mTokens = total
+		usage.CacheCreation1hTokens = 0
+	}
+	return true
+}
+
+// rewriteCacheCreationJSON 在 JSON usage 对象中重写 cache_creation 嵌套对象的 TTL 分类。
+// usageObj 是 usage JSON 对象（map[string]any）。
+func rewriteCacheCreationJSON(usageObj map[string]any, target string) {
+	ccObj, ok := usageObj["cache_creation"].(map[string]any)
+	if !ok {
+		return
+	}
+	v5m, _ := ccObj["ephemeral_5m_input_tokens"].(float64)
+	v1h, _ := ccObj["ephemeral_1h_input_tokens"].(float64)
+	total := v5m + v1h
+	if total == 0 {
+		return
+	}
+	switch target {
+	case "1h":
+		ccObj["ephemeral_1h_input_tokens"] = total
+		ccObj["ephemeral_5m_input_tokens"] = float64(0)
+	default: // "5m"
+		ccObj["ephemeral_5m_input_tokens"] = total
+		ccObj["ephemeral_1h_input_tokens"] = float64(0)
 	}
 }
 
@@ -4491,12 +4598,34 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
+	// 解析嵌套的 cache_creation 对象中的 5m/1h 明细
+	cc5m := gjson.GetBytes(body, "usage.cache_creation.ephemeral_5m_input_tokens")
+	cc1h := gjson.GetBytes(body, "usage.cache_creation.ephemeral_1h_input_tokens")
+	if cc5m.Exists() || cc1h.Exists() {
+		response.Usage.CacheCreation5mTokens = int(cc5m.Int())
+		response.Usage.CacheCreation1hTokens = int(cc1h.Int())
+	}
+
 	// 兼容 Kimi cached_tokens → cache_read_input_tokens
 	if response.Usage.CacheReadInputTokens == 0 {
 		cachedTokens := gjson.GetBytes(body, "usage.cached_tokens").Int()
 		if cachedTokens > 0 {
 			response.Usage.CacheReadInputTokens = int(cachedTokens)
 			if newBody, err := sjson.SetBytes(body, "usage.cache_read_input_tokens", cachedTokens); err == nil {
+				body = newBody
+			}
+		}
+	}
+
+	// Cache TTL Override: 重写 non-streaming 响应中的 cache_creation 分类
+	if account.IsCacheTTLOverrideEnabled() {
+		overrideTarget := account.GetCacheTTLOverrideTarget()
+		if applyCacheTTLOverride(&response.Usage, overrideTarget) {
+			// 同步更新 body JSON 中的嵌套 cache_creation 对象
+			if newBody, err := sjson.SetBytes(body, "usage.cache_creation.ephemeral_5m_input_tokens", response.Usage.CacheCreation5mTokens); err == nil {
+				body = newBody
+			}
+			if newBody, err := sjson.SetBytes(body, "usage.cache_creation.ephemeral_1h_input_tokens", response.Usage.CacheCreation1hTokens); err == nil {
 				body = newBody
 			}
 		}
@@ -4570,6 +4699,13 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		result.Usage.InputTokens = 0
 	}
 
+	// Cache TTL Override: 确保计费时 token 分类与账号设置一致
+	cacheTTLOverridden := false
+	if account.IsCacheTTLOverrideEnabled() {
+		applyCacheTTLOverride(&result.Usage, account.GetCacheTTLOverrideTarget())
+		cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
+	}
+
 	// 获取费率倍数（优先级：用户专属 > 分组默认 > 系统默认）
 	multiplier := s.cfg.Default.RateMultiplier
 	if apiKey.GroupID != nil && apiKey.Group != nil {
@@ -4617,10 +4753,12 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 	} else {
 		// Token 计费
 		tokens := UsageTokens{
-			InputTokens:         result.Usage.InputTokens,
-			OutputTokens:        result.Usage.OutputTokens,
-			CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-			CacheReadTokens:     result.Usage.CacheReadInputTokens,
+			InputTokens:           result.Usage.InputTokens,
+			OutputTokens:          result.Usage.OutputTokens,
+			CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
+			CacheReadTokens:       result.Usage.CacheReadInputTokens,
+			CacheCreation5mTokens: result.Usage.CacheCreation5mTokens,
+			CacheCreation1hTokens: result.Usage.CacheCreation1hTokens,
 		}
 		var err error
 		cost, err = s.billingService.CalculateCost(result.Model, tokens, multiplier)
@@ -4658,6 +4796,8 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		OutputTokens:          result.Usage.OutputTokens,
 		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
 		CacheReadTokens:       result.Usage.CacheReadInputTokens,
+		CacheCreation5mTokens: result.Usage.CacheCreation5mTokens,
+		CacheCreation1hTokens: result.Usage.CacheCreation1hTokens,
 		InputCost:             cost.InputCost,
 		OutputCost:            cost.OutputCost,
 		CacheCreationCost:     cost.CacheCreationCost,
@@ -4673,6 +4813,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		ImageCount:            result.ImageCount,
 		ImageSize:             imageSize,
 		MediaType:             mediaType,
+		CacheTTLOverridden:    cacheTTLOverridden,
 		CreatedAt:             time.Now(),
 	}
 
@@ -4773,6 +4914,13 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		result.Usage.InputTokens = 0
 	}
 
+	// Cache TTL Override: 确保计费时 token 分类与账号设置一致
+	cacheTTLOverridden := false
+	if account.IsCacheTTLOverrideEnabled() {
+		applyCacheTTLOverride(&result.Usage, account.GetCacheTTLOverrideTarget())
+		cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
+	}
+
 	// 获取费率倍数（优先级：用户专属 > 分组默认 > 系统默认）
 	multiplier := s.cfg.Default.RateMultiplier
 	if apiKey.GroupID != nil && apiKey.Group != nil {
@@ -4803,10 +4951,12 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 	} else {
 		// Token 计费（使用长上下文计费方法）
 		tokens := UsageTokens{
-			InputTokens:         result.Usage.InputTokens,
-			OutputTokens:        result.Usage.OutputTokens,
-			CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-			CacheReadTokens:     result.Usage.CacheReadInputTokens,
+			InputTokens:           result.Usage.InputTokens,
+			OutputTokens:          result.Usage.OutputTokens,
+			CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
+			CacheReadTokens:       result.Usage.CacheReadInputTokens,
+			CacheCreation5mTokens: result.Usage.CacheCreation5mTokens,
+			CacheCreation1hTokens: result.Usage.CacheCreation1hTokens,
 		}
 		var err error
 		cost, err = s.billingService.CalculateCostWithLongContext(result.Model, tokens, multiplier, input.LongContextThreshold, input.LongContextMultiplier)
@@ -4840,6 +4990,8 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		OutputTokens:          result.Usage.OutputTokens,
 		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
 		CacheReadTokens:       result.Usage.CacheReadInputTokens,
+		CacheCreation5mTokens: result.Usage.CacheCreation5mTokens,
+		CacheCreation1hTokens: result.Usage.CacheCreation1hTokens,
 		InputCost:             cost.InputCost,
 		OutputCost:            cost.OutputCost,
 		CacheCreationCost:     cost.CacheCreationCost,
@@ -4854,6 +5006,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		FirstTokenMs:          result.FirstTokenMs,
 		ImageCount:            result.ImageCount,
 		ImageSize:             imageSize,
+		CacheTTLOverridden:    cacheTTLOverridden,
 		CreatedAt:             time.Now(),
 	}
 
@@ -5170,7 +5323,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 			incomingBeta := req.Header.Get("anthropic-beta")
 			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
-			req.Header.Set("anthropic-beta", mergeAnthropicBeta(requiredBetas, incomingBeta))
+			drop := map[string]struct{}{claude.BetaContext1M: {}}
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
 		} else {
 			clientBetaHeader := req.Header.Get("anthropic-beta")
 			if clientBetaHeader == "" {
@@ -5180,7 +5334,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 				if !strings.Contains(beta, claude.BetaTokenCounting) {
 					beta = beta + "," + claude.BetaTokenCounting
 				}
-				req.Header.Set("anthropic-beta", beta)
+				req.Header.Set("anthropic-beta", stripBetaToken(beta, claude.BetaContext1M))
 			}
 		}
 	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
