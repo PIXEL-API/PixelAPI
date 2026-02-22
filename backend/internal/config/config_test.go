@@ -943,6 +943,74 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.max_line_size must be non-negative",
 		},
 		{
+			name:    "gateway usage record worker count",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.WorkerCount = 0 },
+			wantErr: "gateway.usage_record.worker_count",
+		},
+		{
+			name:    "gateway usage record queue size",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.QueueSize = 0 },
+			wantErr: "gateway.usage_record.queue_size",
+		},
+		{
+			name:    "gateway usage record timeout",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.TaskTimeoutSeconds = 0 },
+			wantErr: "gateway.usage_record.task_timeout_seconds",
+		},
+		{
+			name:    "gateway usage record overflow policy",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.OverflowPolicy = "invalid" },
+			wantErr: "gateway.usage_record.overflow_policy",
+		},
+		{
+			name:    "gateway usage record sample percent range",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.OverflowSamplePercent = 101 },
+			wantErr: "gateway.usage_record.overflow_sample_percent",
+		},
+		{
+			name: "gateway usage record sample percent required for sample policy",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.OverflowPolicy = UsageRecordOverflowPolicySample
+				c.Gateway.UsageRecord.OverflowSamplePercent = 0
+			},
+			wantErr: "gateway.usage_record.overflow_sample_percent must be positive",
+		},
+		{
+			name: "gateway usage record auto scale max gte min",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.AutoScaleMinWorkers = 256
+				c.Gateway.UsageRecord.AutoScaleMaxWorkers = 128
+			},
+			wantErr: "gateway.usage_record.auto_scale_max_workers",
+		},
+		{
+			name: "gateway usage record worker in auto scale range",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.AutoScaleMinWorkers = 200
+				c.Gateway.UsageRecord.AutoScaleMaxWorkers = 300
+				c.Gateway.UsageRecord.WorkerCount = 128
+			},
+			wantErr: "gateway.usage_record.worker_count must be between auto_scale_min_workers and auto_scale_max_workers",
+		},
+		{
+			name: "gateway usage record auto scale queue thresholds order",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.AutoScaleUpQueuePercent = 50
+				c.Gateway.UsageRecord.AutoScaleDownQueuePercent = 50
+			},
+			wantErr: "gateway.usage_record.auto_scale_down_queue_percent must be less",
+		},
+		{
+			name:    "gateway usage record auto scale up step",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.AutoScaleUpStep = 0 },
+			wantErr: "gateway.usage_record.auto_scale_up_step",
+		},
+		{
+			name:    "gateway usage record auto scale interval",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds = 0 },
+			wantErr: "gateway.usage_record.auto_scale_check_interval_seconds",
+		},
+		{
 			name:    "gateway scheduling sticky waiting",
 			mutate:  func(c *Config) { c.Gateway.Scheduling.StickySessionMaxWaiting = 0 },
 			wantErr: "gateway.scheduling.sticky_session_max_waiting",
@@ -1018,6 +1086,99 @@ func TestValidateConfigErrors(t *testing.T) {
 			cfg := buildValid(t)
 			tt.mutate(cfg)
 			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateConfig_AutoScaleDisabledIgnoreAutoScaleFields(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Gateway.UsageRecord.AutoScaleEnabled = false
+	cfg.Gateway.UsageRecord.WorkerCount = 64
+
+	// 自动扩缩容关闭时，这些字段应被忽略，不应导致校验失败。
+	cfg.Gateway.UsageRecord.AutoScaleMinWorkers = 0
+	cfg.Gateway.UsageRecord.AutoScaleMaxWorkers = 0
+	cfg.Gateway.UsageRecord.AutoScaleUpQueuePercent = 0
+	cfg.Gateway.UsageRecord.AutoScaleDownQueuePercent = 100
+	cfg.Gateway.UsageRecord.AutoScaleUpStep = 0
+	cfg.Gateway.UsageRecord.AutoScaleDownStep = 0
+	cfg.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds = 0
+	cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds = -1
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() should ignore auto scale fields when disabled: %v", err)
+	}
+}
+
+func TestValidateConfig_LogRequiredAndRotationBounds(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "log level required",
+			mutate: func(c *Config) {
+				c.Log.Level = ""
+			},
+			wantErr: "log.level is required",
+		},
+		{
+			name: "log format required",
+			mutate: func(c *Config) {
+				c.Log.Format = ""
+			},
+			wantErr: "log.format is required",
+		},
+		{
+			name: "log stacktrace required",
+			mutate: func(c *Config) {
+				c.Log.StacktraceLevel = ""
+			},
+			wantErr: "log.stacktrace_level is required",
+		},
+		{
+			name: "log max backups non-negative",
+			mutate: func(c *Config) {
+				c.Log.Rotation.MaxBackups = -1
+			},
+			wantErr: "log.rotation.max_backups must be non-negative",
+		},
+		{
+			name: "log max age non-negative",
+			mutate: func(c *Config) {
+				c.Log.Rotation.MaxAgeDays = -1
+			},
+			wantErr: "log.rotation.max_age_days must be non-negative",
+		},
+		{
+			name: "sampling thereafter non-negative when disabled",
+			mutate: func(c *Config) {
+				c.Log.Sampling.Enabled = false
+				c.Log.Sampling.Thereafter = -1
+			},
+			wantErr: "log.sampling.thereafter must be non-negative",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			tt.mutate(cfg)
+			err = cfg.Validate()
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
 			}
@@ -1110,5 +1271,55 @@ func TestValidateSoraCloudflareChallengeCooldownNonNegative(t *testing.T) {
 	err = cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "sora.client.cloudflare_challenge_cooldown_seconds must be non-negative") {
 		t.Fatalf("Validate() error = %v, want cloudflare cooldown error", err)
+	}
+}
+
+func TestLoad_DefaultGatewayUsageRecordConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Gateway.UsageRecord.WorkerCount != 128 {
+		t.Fatalf("worker_count = %d, want 128", cfg.Gateway.UsageRecord.WorkerCount)
+	}
+	if cfg.Gateway.UsageRecord.QueueSize != 16384 {
+		t.Fatalf("queue_size = %d, want 16384", cfg.Gateway.UsageRecord.QueueSize)
+	}
+	if cfg.Gateway.UsageRecord.TaskTimeoutSeconds != 5 {
+		t.Fatalf("task_timeout_seconds = %d, want 5", cfg.Gateway.UsageRecord.TaskTimeoutSeconds)
+	}
+	if cfg.Gateway.UsageRecord.OverflowPolicy != UsageRecordOverflowPolicySample {
+		t.Fatalf("overflow_policy = %s, want %s", cfg.Gateway.UsageRecord.OverflowPolicy, UsageRecordOverflowPolicySample)
+	}
+	if cfg.Gateway.UsageRecord.OverflowSamplePercent != 10 {
+		t.Fatalf("overflow_sample_percent = %d, want 10", cfg.Gateway.UsageRecord.OverflowSamplePercent)
+	}
+	if !cfg.Gateway.UsageRecord.AutoScaleEnabled {
+		t.Fatalf("auto_scale_enabled = false, want true")
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleMinWorkers != 128 {
+		t.Fatalf("auto_scale_min_workers = %d, want 128", cfg.Gateway.UsageRecord.AutoScaleMinWorkers)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleMaxWorkers != 512 {
+		t.Fatalf("auto_scale_max_workers = %d, want 512", cfg.Gateway.UsageRecord.AutoScaleMaxWorkers)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleUpQueuePercent != 70 {
+		t.Fatalf("auto_scale_up_queue_percent = %d, want 70", cfg.Gateway.UsageRecord.AutoScaleUpQueuePercent)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleDownQueuePercent != 15 {
+		t.Fatalf("auto_scale_down_queue_percent = %d, want 15", cfg.Gateway.UsageRecord.AutoScaleDownQueuePercent)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleUpStep != 32 {
+		t.Fatalf("auto_scale_up_step = %d, want 32", cfg.Gateway.UsageRecord.AutoScaleUpStep)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleDownStep != 16 {
+		t.Fatalf("auto_scale_down_step = %d, want 16", cfg.Gateway.UsageRecord.AutoScaleDownStep)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds != 3 {
+		t.Fatalf("auto_scale_check_interval_seconds = %d, want 3", cfg.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds != 10 {
+		t.Fatalf("auto_scale_cooldown_seconds = %d, want 10", cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds)
 	}
 }
