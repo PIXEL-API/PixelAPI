@@ -83,6 +83,7 @@ func TestAPIContracts(t *testing.T) {
 					"status": "active",
 					"ip_whitelist": null,
 					"ip_blacklist": null,
+					"last_used_at": null,
 					"quota": 0,
 					"quota_used": 0,
 					"expires_at": null,
@@ -122,6 +123,7 @@ func TestAPIContracts(t *testing.T) {
 							"status": "active",
 							"ip_whitelist": null,
 							"ip_blacklist": null,
+							"last_used_at": null,
 							"quota": 0,
 							"quota_used": 0,
 							"expires_at": null,
@@ -1469,6 +1471,20 @@ func (r *stubApiKeyRepo) ListKeysByGroupID(ctx context.Context, groupID int64) (
 
 func (r *stubApiKeyRepo) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) (float64, error) {
 	return 0, errors.New("not implemented")
+}
+
+func (r *stubApiKeyRepo) UpdateLastUsed(ctx context.Context, id int64, usedAt time.Time) error {
+	key, ok := r.byID[id]
+	if !ok {
+		return service.ErrAPIKeyNotFound
+	}
+	ts := usedAt
+	key.LastUsedAt = &ts
+	key.UpdatedAt = usedAt
+	clone := *key
+	r.byID[id] = &clone
+	r.byKey[clone.Key] = &clone
+	return nil
 }
 
 type stubUsageLogRepo struct {
