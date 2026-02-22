@@ -373,8 +373,26 @@ func modelsListCacheKey(groupID *int64, platform string) string {
 	return fmt.Sprintf("%d|%s", derefGroupID(groupID), strings.TrimSpace(platform))
 }
 
-func prefetchedStickyAccountIDFromContext(ctx context.Context) int64 {
+func prefetchedStickyGroupIDFromContext(ctx context.Context) (int64, bool) {
 	if ctx == nil {
+		return 0, false
+	}
+	v := ctx.Value(ctxkey.PrefetchedStickyGroupID)
+	switch t := v.(type) {
+	case int64:
+		return t, true
+	case int:
+		return int64(t), true
+	}
+	return 0, false
+}
+
+func prefetchedStickyAccountIDFromContext(ctx context.Context, groupID *int64) int64 {
+	if ctx == nil {
+		return 0
+	}
+	prefetchedGroupID, ok := prefetchedStickyGroupIDFromContext(ctx)
+	if !ok || prefetchedGroupID != derefGroupID(groupID) {
 		return 0
 	}
 	v := ctx.Value(ctxkey.PrefetchedStickyAccountID)
@@ -1035,21 +1053,21 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	cfg := s.schedulingConfig()
 
-	var stickyAccountID int64
-	if prefetch := prefetchedStickyAccountIDFromContext(ctx); prefetch > 0 {
-		stickyAccountID = prefetch
-	} else if sessionHash != "" && s.cache != nil {
-		if accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash); err == nil {
-			stickyAccountID = accountID
-		}
-	}
-
 	// 检查 Claude Code 客户端限制（可能会替换 groupID 为降级分组）
 	group, groupID, err := s.checkClaudeCodeRestriction(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}
 	ctx = s.withGroupContext(ctx, group)
+
+	var stickyAccountID int64
+	if prefetch := prefetchedStickyAccountIDFromContext(ctx, groupID); prefetch > 0 {
+		stickyAccountID = prefetch
+	} else if sessionHash != "" && s.cache != nil {
+		if accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash); err == nil {
+			stickyAccountID = accountID
+		}
+	}
 
 	if s.debugModelRoutingEnabled() && requestedModel != "" {
 		groupPlatform := ""

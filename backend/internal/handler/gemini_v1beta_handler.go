@@ -264,7 +264,12 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	if sessionKey != "" {
 		sessionBoundAccountID, _ = h.gatewayService.GetCachedSessionAccountID(c.Request.Context(), apiKey.GroupID, sessionKey)
 		if sessionBoundAccountID > 0 {
+			prefetchedGroupID := int64(0)
+			if apiKey.GroupID != nil {
+				prefetchedGroupID = *apiKey.GroupID
+			}
 			ctx := context.WithValue(c.Request.Context(), ctxkey.PrefetchedStickyAccountID, sessionBoundAccountID)
+			ctx = context.WithValue(ctx, ctxkey.PrefetchedStickyGroupID, prefetchedGroupID)
 			c.Request = c.Request.WithContext(ctx)
 		}
 	}
