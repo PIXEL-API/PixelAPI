@@ -220,17 +220,20 @@ func (s *SoraMediaStorage) downloadOnce(ctx context.Context, root, mediaType, ra
 		return "", fmt.Errorf("download size exceeds limit: %d", resp.ContentLength)
 	}
 
-	datePath := time.Now().Format("2006/01/02")
-	destDir := filepath.Join(root, filepath.FromSlash(datePath))
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return "", err
-	}
-	filename := uuid.NewString() + ext
-	destPath, err := joinPathWithinDir(destDir, filename)
+	storageRoot, err := os.OpenRoot(root)
 	if err != nil {
 		return "", err
 	}
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	defer func() { _ = storageRoot.Close() }()
+
+	datePath := time.Now().Format("2006/01/02")
+	datePathFS := filepath.FromSlash(datePath)
+	if err := storageRoot.MkdirAll(datePathFS, 0o755); err != nil {
+		return "", err
+	}
+	filename := uuid.NewString() + ext
+	filePath := filepath.Join(datePathFS, filename)
+	out, err := storageRoot.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return "", err
 	}
@@ -239,11 +242,11 @@ func (s *SoraMediaStorage) downloadOnce(ctx context.Context, root, mediaType, ra
 	limited := io.LimitReader(resp.Body, s.maxDownloadBytes+1)
 	written, err := io.Copy(out, limited)
 	if err != nil {
-		removePartialDownload(destDir, filename)
+		removePartialDownload(storageRoot, filePath)
 		return "", err
 	}
 	if s.maxDownloadBytes > 0 && written > s.maxDownloadBytes {
-		removePartialDownload(destDir, filename)
+		removePartialDownload(storageRoot, filePath)
 		return "", fmt.Errorf("download size exceeds limit: %d", written)
 	}
 
@@ -296,26 +299,9 @@ func normalizeSoraFileExt(ext string) string {
 	}
 }
 
-func joinPathWithinDir(baseDir, filename string) (string, error) {
-	baseDir = filepath.Clean(baseDir)
-	if strings.TrimSpace(filename) == "" {
-		return "", errors.New("empty filename")
-	}
-	joined := filepath.Clean(filepath.Join(baseDir, filename))
-	rel, err := filepath.Rel(baseDir, joined)
-	if err != nil {
-		return "", fmt.Errorf("resolve path rel: %w", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("path traversal detected: %s", filename)
-	}
-	return joined, nil
-}
-
-func removePartialDownload(baseDir, filename string) {
-	target, err := joinPathWithinDir(baseDir, filename)
-	if err != nil {
+func removePartialDownload(root *os.Root, filePath string) {
+	if root == nil || strings.TrimSpace(filePath) == "" {
 		return
 	}
-	_ = os.Remove(target)
+	_ = root.Remove(filePath)
 }
