@@ -91,3 +91,21 @@ func TestSoraMediaStorage_MaxDownloadBytes(t *testing.T) {
 	_, err := storage.StoreFromURLs(context.Background(), "image", []string{server.URL + "/img.png"})
 	require.Error(t, err)
 }
+
+func TestJoinPathWithinDir(t *testing.T) {
+	baseDir := t.TempDir()
+
+	path1, err := joinPathWithinDir(baseDir, "ok.png")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(baseDir, "ok.png"), path1)
+
+	_, err = joinPathWithinDir(baseDir, "../escape.png")
+	require.Error(t, err)
+}
+
+func TestNormalizeSoraFileExt(t *testing.T) {
+	require.Equal(t, ".png", normalizeSoraFileExt(".PNG"))
+	require.Equal(t, ".mp4", normalizeSoraFileExt(".mp4"))
+	require.Equal(t, "", normalizeSoraFileExt("../../etc/passwd"))
+	require.Equal(t, "", normalizeSoraFileExt(".php"))
+}
