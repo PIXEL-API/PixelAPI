@@ -49,3 +49,27 @@ func TestValidateURLFormat(t *testing.T) {
 		t.Fatalf("expected trailing slash to be removed from path, got %s", normalized)
 	}
 }
+
+func TestValidateHTTPURL(t *testing.T) {
+	if _, err := ValidateHTTPURL("http://example.com", false, ValidationOptions{}); err == nil {
+		t.Fatalf("expected http to fail when allow_insecure_http is false")
+	}
+	if _, err := ValidateHTTPURL("http://example.com", true, ValidationOptions{}); err != nil {
+		t.Fatalf("expected http to pass when allow_insecure_http is true, got %v", err)
+	}
+	if _, err := ValidateHTTPURL("https://example.com", false, ValidationOptions{RequireAllowlist: true}); err == nil {
+		t.Fatalf("expected require allowlist to fail when empty")
+	}
+	if _, err := ValidateHTTPURL("https://example.com", false, ValidationOptions{AllowedHosts: []string{"api.example.com"}}); err == nil {
+		t.Fatalf("expected host not in allowlist to fail")
+	}
+	if _, err := ValidateHTTPURL("https://api.example.com", false, ValidationOptions{AllowedHosts: []string{"api.example.com"}}); err != nil {
+		t.Fatalf("expected allowlisted host to pass, got %v", err)
+	}
+	if _, err := ValidateHTTPURL("https://sub.api.example.com", false, ValidationOptions{AllowedHosts: []string{"*.example.com"}}); err != nil {
+		t.Fatalf("expected wildcard allowlist to pass, got %v", err)
+	}
+	if _, err := ValidateHTTPURL("https://localhost", false, ValidationOptions{AllowPrivate: false}); err == nil {
+		t.Fatalf("expected localhost to be blocked when allow_private_hosts is false")
+	}
+}

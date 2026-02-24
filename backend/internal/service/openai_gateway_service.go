@@ -10,9 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,10 +18,14 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 const (
@@ -32,13 +34,15 @@ const (
 	// OpenAI Platform API for API Key accounts (fallback)
 	openaiPlatformAPIURL   = "https://api.openai.com/v1/responses"
 	openaiStickySessionTTL = time.Hour // 粘性会话TTL
+	codexCLIUserAgent      = "codex_cli_rs/0.98.0"
+	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
+	codexCLIOnlyHeaderValueMaxBytes = 256
+
+	// OpenAIParsedRequestBodyKey 缓存 handler 侧已解析的请求体，避免重复解析。
+	OpenAIParsedRequestBodyKey = "openai_parsed_request_body"
 )
 
-// openaiSSEDataRe matches SSE data lines with optional whitespace after colon.
-// Some upstream APIs return non-standard "data:" without space (should be "data: ").
-var openaiSSEDataRe = regexp.MustCompile(`^data:\s*`)
-
-// OpenAI allowed headers whitelist (for non-OAuth accounts)
+// OpenAI allowed headers whitelist (for non-passthrough).
 var openaiAllowedHeaders = map[string]bool{
 	"accept-language": true,
 	"content-type":    true,
@@ -46,6 +50,35 @@ var openaiAllowedHeaders = map[string]bool{
 	"user-agent":      true,
 	"originator":      true,
 	"session_id":      true,
+}
+
+// OpenAI passthrough allowed headers whitelist.
+// 透传模式下仅放行这些低风险请求头，避免将非标准/环境噪声头传给上游触发风控。
+var openaiPassthroughAllowedHeaders = map[string]bool{
+	"accept":          true,
+	"accept-language": true,
+	"content-type":    true,
+	"conversation_id": true,
+	"openai-beta":     true,
+	"user-agent":      true,
+	"originator":      true,
+	"session_id":      true,
+}
+
+// codex_cli_only 拒绝时记录的请求头白名单（仅用于诊断日志，不参与上游透传）
+var codexCLIOnlyDebugHeaderWhitelist = []string{
+	"User-Agent",
+	"Content-Type",
+	"Accept",
+	"Accept-Language",
+	"OpenAI-Beta",
+	"Originator",
+	"Session_ID",
+	"Conversation_ID",
+	"X-Request-ID",
+	"X-Client-Request-ID",
+	"X-Forwarded-For",
+	"X-Real-IP",
 }
 
 // OpenAICodexUsageSnapshot represents Codex API usage limits from response headers
@@ -175,6 +208,7 @@ type OpenAIGatewayService struct {
 	userSubRepo         UserSubscriptionRepository
 	cache               GatewayCache
 	cfg                 *config.Config
+	codexDetector       CodexClientRestrictionDetector
 	schedulerSnapshot   *SchedulerSnapshotService
 	concurrencyService  *ConcurrencyService
 	billingService      *BillingService
@@ -210,6 +244,7 @@ func NewOpenAIGatewayService(
 		userSubRepo:         userSubRepo,
 		cache:               cache,
 		cfg:                 cfg,
+		codexDetector:       NewOpenAICodexClientRestrictionDetector(cfg),
 		schedulerSnapshot:   schedulerSnapshot,
 		concurrencyService:  concurrencyService,
 		billingService:      billingService,
@@ -222,13 +257,228 @@ func NewOpenAIGatewayService(
 	}
 }
 
+func (s *OpenAIGatewayService) getCodexClientRestrictionDetector() CodexClientRestrictionDetector {
+	if s != nil && s.codexDetector != nil {
+		return s.codexDetector
+	}
+	var cfg *config.Config
+	if s != nil {
+		cfg = s.cfg
+	}
+	return NewOpenAICodexClientRestrictionDetector(cfg)
+}
+
+func (s *OpenAIGatewayService) detectCodexClientRestriction(c *gin.Context, account *Account) CodexClientRestrictionDetectionResult {
+	return s.getCodexClientRestrictionDetector().Detect(c, account)
+}
+
+func getAPIKeyIDFromContext(c *gin.Context) int64 {
+	if c == nil {
+		return 0
+	}
+	v, exists := c.Get("api_key")
+	if !exists {
+		return 0
+	}
+	apiKey, ok := v.(*APIKey)
+	if !ok || apiKey == nil {
+		return 0
+	}
+	return apiKey.ID
+}
+
+func logCodexCLIOnlyDetection(ctx context.Context, c *gin.Context, account *Account, apiKeyID int64, result CodexClientRestrictionDetectionResult, body []byte) {
+	if !result.Enabled {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	fields := []zap.Field{
+		zap.String("component", "service.openai_gateway"),
+		zap.Int64("account_id", accountID),
+		zap.Bool("codex_cli_only_enabled", result.Enabled),
+		zap.Bool("codex_official_client_match", result.Matched),
+		zap.String("reject_reason", result.Reason),
+	}
+	if apiKeyID > 0 {
+		fields = append(fields, zap.Int64("api_key_id", apiKeyID))
+	}
+	if !result.Matched {
+		fields = appendCodexCLIOnlyRejectedRequestFields(fields, c, body)
+	}
+	log := logger.FromContext(ctx).With(fields...)
+	if result.Matched {
+		return
+	}
+	log.Warn("OpenAI codex_cli_only 拒绝非官方客户端请求")
+}
+
+func appendCodexCLIOnlyRejectedRequestFields(fields []zap.Field, c *gin.Context, body []byte) []zap.Field {
+	if c == nil || c.Request == nil {
+		return fields
+	}
+
+	req := c.Request
+	requestModel, requestStream, promptCacheKey := extractOpenAIRequestMetaFromBody(body)
+	fields = append(fields,
+		zap.String("request_method", strings.TrimSpace(req.Method)),
+		zap.String("request_path", strings.TrimSpace(req.URL.Path)),
+		zap.String("request_query", strings.TrimSpace(req.URL.RawQuery)),
+		zap.String("request_host", strings.TrimSpace(req.Host)),
+		zap.String("request_client_ip", strings.TrimSpace(c.ClientIP())),
+		zap.String("request_remote_addr", strings.TrimSpace(req.RemoteAddr)),
+		zap.String("request_user_agent", strings.TrimSpace(req.Header.Get("User-Agent"))),
+		zap.String("request_content_type", strings.TrimSpace(req.Header.Get("Content-Type"))),
+		zap.Int64("request_content_length", req.ContentLength),
+		zap.Bool("request_stream", requestStream),
+	)
+	if requestModel != "" {
+		fields = append(fields, zap.String("request_model", requestModel))
+	}
+	if promptCacheKey != "" {
+		fields = append(fields, zap.String("request_prompt_cache_key_sha256", hashSensitiveValueForLog(promptCacheKey)))
+	}
+
+	if headers := snapshotCodexCLIOnlyHeaders(req.Header); len(headers) > 0 {
+		fields = append(fields, zap.Any("request_headers", headers))
+	}
+	fields = append(fields, zap.Int("request_body_size", len(body)))
+	return fields
+}
+
+func snapshotCodexCLIOnlyHeaders(header http.Header) map[string]string {
+	if len(header) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(codexCLIOnlyDebugHeaderWhitelist))
+	for _, key := range codexCLIOnlyDebugHeaderWhitelist {
+		value := strings.TrimSpace(header.Get(key))
+		if value == "" {
+			continue
+		}
+		result[strings.ToLower(key)] = truncateString(value, codexCLIOnlyHeaderValueMaxBytes)
+	}
+	return result
+}
+
+func hashSensitiveValueForLog(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:8])
+}
+
+func logOpenAIInstructionsRequiredDebug(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	upstreamStatusCode int,
+	upstreamMsg string,
+	requestBody []byte,
+	upstreamBody []byte,
+) {
+	msg := strings.TrimSpace(upstreamMsg)
+	if !isOpenAIInstructionsRequiredError(upstreamStatusCode, msg, upstreamBody) {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	accountID := int64(0)
+	accountName := ""
+	if account != nil {
+		accountID = account.ID
+		accountName = strings.TrimSpace(account.Name)
+	}
+
+	userAgent := ""
+	if c != nil {
+		userAgent = strings.TrimSpace(c.GetHeader("User-Agent"))
+	}
+
+	fields := []zap.Field{
+		zap.String("component", "service.openai_gateway"),
+		zap.Int64("account_id", accountID),
+		zap.String("account_name", accountName),
+		zap.Int("upstream_status_code", upstreamStatusCode),
+		zap.String("upstream_error_message", msg),
+		zap.String("request_user_agent", userAgent),
+		zap.Bool("codex_official_client_match", openai.IsCodexCLIRequest(userAgent)),
+	}
+	fields = appendCodexCLIOnlyRejectedRequestFields(fields, c, requestBody)
+
+	logger.FromContext(ctx).With(fields...).Warn("OpenAI 上游返回 Instructions are required，已记录请求详情用于排查")
+}
+
+func isOpenAIInstructionsRequiredError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if upstreamStatusCode != http.StatusBadRequest {
+		return false
+	}
+
+	hasInstructionRequired := func(text string) bool {
+		lower := strings.ToLower(strings.TrimSpace(text))
+		if lower == "" {
+			return false
+		}
+		if strings.Contains(lower, "instructions are required") {
+			return true
+		}
+		if strings.Contains(lower, "required parameter: 'instructions'") {
+			return true
+		}
+		if strings.Contains(lower, "required parameter: instructions") {
+			return true
+		}
+		if strings.Contains(lower, "missing required parameter") && strings.Contains(lower, "instructions") {
+			return true
+		}
+		return strings.Contains(lower, "instruction") && strings.Contains(lower, "required")
+	}
+
+	if hasInstructionRequired(upstreamMsg) {
+		return true
+	}
+	if len(upstreamBody) == 0 {
+		return false
+	}
+
+	errMsg := gjson.GetBytes(upstreamBody, "error.message").String()
+	errMsgLower := strings.ToLower(strings.TrimSpace(errMsg))
+	errCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.code").String()))
+	errParam := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.param").String()))
+	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.type").String()))
+
+	if errParam == "instructions" {
+		return true
+	}
+	if hasInstructionRequired(errMsg) {
+		return true
+	}
+	if strings.Contains(errCode, "missing_required_parameter") && strings.Contains(errMsgLower, "instructions") {
+		return true
+	}
+	if strings.Contains(errType, "invalid_request") && strings.Contains(errMsgLower, "instructions") && strings.Contains(errMsgLower, "required") {
+		return true
+	}
+
+	return false
+}
+
 // GenerateSessionHash generates a sticky-session hash for OpenAI requests.
 //
 // Priority:
 //  1. Header: session_id
 //  2. Header: conversation_id
 //  3. Body:   prompt_cache_key (opencode)
-func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, reqBody map[string]any) string {
+func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) string {
 	if c == nil {
 		return ""
 	}
@@ -237,10 +487,8 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, reqBody map[s
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(c.GetHeader("conversation_id"))
 	}
-	if sessionID == "" && reqBody != nil {
-		if v, ok := reqBody["prompt_cache_key"].(string); ok {
-			sessionID = strings.TrimSpace(v)
-		}
+	if sessionID == "" && len(body) > 0 {
+		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
 	}
 	if sessionID == "" {
 		return ""
@@ -744,30 +992,64 @@ func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, re
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
 
-	// Parse request body once (avoid multiple parse/serialize cycles)
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
-		return nil, fmt.Errorf("parse request: %w", err)
+	restrictionResult := s.detectCodexClientRestriction(c, account)
+	apiKeyID := getAPIKeyIDFromContext(c)
+	logCodexCLIOnlyDetection(ctx, c, account, apiKeyID, restrictionResult, body)
+	if restrictionResult.Enabled && !restrictionResult.Matched {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"type":    "forbidden_error",
+				"message": "This account only allows Codex official clients",
+			},
+		})
+		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
-	// Extract model and stream from parsed body
-	reqModel, _ := reqBody["model"].(string)
-	reqStream, _ := reqBody["stream"].(bool)
-	promptCacheKey := ""
-	if v, ok := reqBody["prompt_cache_key"].(string); ok {
-		promptCacheKey = strings.TrimSpace(v)
+	originalBody := body
+	reqModel, reqStream, promptCacheKey := extractOpenAIRequestMetaFromBody(body)
+	originalModel := reqModel
+
+	isCodexCLI := openai.IsCodexCLIRequest(c.GetHeader("User-Agent")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
+	if passthroughEnabled {
+		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
+		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, reqModel)
+		return s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
+	}
+
+	reqBody, err := getOpenAIRequestBodyMap(c, body)
+	if err != nil {
+		return nil, err
+	}
+
+	if v, ok := reqBody["model"].(string); ok {
+		reqModel = v
+		originalModel = reqModel
+	}
+	if v, ok := reqBody["stream"].(bool); ok {
+		reqStream = v
+	}
+	if promptCacheKey == "" {
+		if v, ok := reqBody["prompt_cache_key"].(string); ok {
+			promptCacheKey = strings.TrimSpace(v)
+		}
 	}
 
 	// Track if body needs re-serialization
 	bodyModified := false
-	originalModel := reqModel
 
-	isCodexCLI := openai.IsCodexCLIRequest(c.GetHeader("User-Agent"))
+	// 非透传模式下，保持历史行为：非 Codex CLI 请求在 instructions 为空时注入默认指令。
+	if !isCodexCLI && isInstructionsEmpty(reqBody) {
+		if instructions := strings.TrimSpace(GetOpenCodeInstructions()); instructions != "" {
+			reqBody["instructions"] = instructions
+			bodyModified = true
+		}
+	}
 
 	// 对所有请求执行模型映射（包含 Codex CLI）。
 	mappedModel := account.GetMappedModel(reqModel)
 	if mappedModel != reqModel {
-		log.Printf("[OpenAI] Model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", reqModel, mappedModel, account.Name, isCodexCLI)
+		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", reqModel, mappedModel, account.Name, isCodexCLI)
 		reqBody["model"] = mappedModel
 		bodyModified = true
 	}
@@ -776,7 +1058,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if model, ok := reqBody["model"].(string); ok {
 		normalizedModel := normalizeCodexModel(model)
 		if normalizedModel != "" && normalizedModel != model {
-			log.Printf("[OpenAI] Codex model normalization: %s -> %s (account: %s, type: %s, isCodexCLI: %v)",
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Codex model normalization: %s -> %s (account: %s, type: %s, isCodexCLI: %v)",
 				model, normalizedModel, account.Name, account.Type, isCodexCLI)
 			reqBody["model"] = normalizedModel
 			mappedModel = normalizedModel
@@ -789,7 +1071,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if effort, ok := reasoning["effort"].(string); ok && effort == "minimal" {
 			reasoning["effort"] = "none"
 			bodyModified = true
-			log.Printf("[OpenAI] Normalized reasoning.effort: minimal -> none (account: %s)", account.Name)
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Normalized reasoning.effort: minimal -> none (account: %s)", account.Name)
 		}
 	}
 
@@ -880,12 +1162,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	// Capture upstream request body for ops retry of this attempt.
-	if c != nil {
-		c.Set(OpsUpstreamRequestBodyKey, string(body))
-	}
+	setOpsUpstreamRequestBody(c, body)
 
 	// Send request
+	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		// Ensure the client receives an error response (handlers assume Forward writes on non-failover errors).
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -939,7 +1221,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			s.handleFailoverSideEffects(ctx, resp, account)
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
 		}
-		return s.handleErrorResponse(ctx, resp, c, account)
+		return s.handleErrorResponse(ctx, resp, c, account, body)
 	}
 
 	// Handle normal response
@@ -966,6 +1248,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
+	if usage == nil {
+		usage = &OpenAIUsage{}
+	}
+
 	reasoningEffort := extractOpenAIReasoningEffort(reqBody, originalModel)
 
 	return &OpenAIForwardResult{
@@ -977,6 +1263,579 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
 	}, nil
+}
+
+func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	reqModel string,
+	reasoningEffort *string,
+	reqStream bool,
+	startTime time.Time,
+) (*OpenAIForwardResult, error) {
+	if account != nil && account.Type == AccountTypeOAuth {
+		if rejectReason := detectOpenAIPassthroughInstructionsRejectReason(reqModel, body); rejectReason != "" {
+			rejectMsg := "OpenAI codex passthrough requires a non-empty instructions field"
+			setOpsUpstreamError(c, http.StatusForbidden, rejectMsg, "")
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: http.StatusForbidden,
+				Passthrough:        true,
+				Kind:               "request_error",
+				Message:            rejectMsg,
+				Detail:             rejectReason,
+			})
+			logOpenAIPassthroughInstructionsRejected(ctx, c, account, reqModel, rejectReason, body)
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": gin.H{
+					"type":    "forbidden_error",
+					"message": rejectMsg,
+				},
+			})
+			return nil, fmt.Errorf("openai passthrough rejected before upstream: %s", rejectReason)
+		}
+
+		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body)
+		if err != nil {
+			return nil, err
+		}
+		if normalized {
+			body = normalizedBody
+			reqStream = true
+		}
+	}
+
+	logger.LegacyPrintf("service.openai_gateway",
+		"[OpenAI 自动透传] 命中自动透传分支: account=%d name=%s type=%s model=%s stream=%v",
+		account.ID,
+		account.Name,
+		account.Type,
+		reqModel,
+		reqStream,
+	)
+	if reqStream && c != nil && c.Request != nil {
+		if timeoutHeaders := collectOpenAIPassthroughTimeoutHeaders(c.Request.Header); len(timeoutHeaders) > 0 {
+			streamWarnLogger := logger.FromContext(ctx).With(
+				zap.String("component", "service.openai_gateway"),
+				zap.Int64("account_id", account.ID),
+				zap.Strings("timeout_headers", timeoutHeaders),
+			)
+			if s.isOpenAIPassthroughTimeoutHeadersAllowed() {
+				streamWarnLogger.Warn("OpenAI passthrough 透传请求包含超时相关请求头，且当前配置为放行，可能导致上游提前断流")
+			} else {
+				streamWarnLogger.Warn("OpenAI passthrough 检测到超时相关请求头，将按配置过滤以降低断流风险")
+			}
+		}
+	}
+
+	// Get access token
+	token, _, err := s.GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+
+	upstreamReq, err := s.buildUpstreamRequestOpenAIPassthrough(ctx, c, account, body, token)
+	if err != nil {
+		return nil, err
+	}
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	setOpsUpstreamRequestBody(c, body)
+	if c != nil {
+		c.Set("openai_passthrough", true)
+	}
+
+	upstreamStart := time.Now()
+	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if err != nil {
+		safeErr := sanitizeUpstreamErrorMessage(err.Error())
+		setOpsUpstreamError(c, 0, safeErr, "")
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: 0,
+			Passthrough:        true,
+			Kind:               "request_error",
+			Message:            safeErr,
+		})
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{
+				"type":    "upstream_error",
+				"message": "Upstream request failed",
+			},
+		})
+		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		// 透传模式不做 failover（避免改变原始上游语义），按上游原样返回错误响应。
+		return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)
+	}
+
+	var usage *OpenAIUsage
+	var firstTokenMs *int
+	if reqStream {
+		result, err := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime)
+		if err != nil {
+			return nil, err
+		}
+		usage = result.usage
+		firstTokenMs = result.firstTokenMs
+	} else {
+		usage, err = s.handleNonStreamingResponsePassthrough(ctx, resp, c)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
+		s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
+	}
+
+	if usage == nil {
+		usage = &OpenAIUsage{}
+	}
+
+	return &OpenAIForwardResult{
+		RequestID:       resp.Header.Get("x-request-id"),
+		Usage:           *usage,
+		Model:           reqModel,
+		ReasoningEffort: reasoningEffort,
+		Stream:          reqStream,
+		Duration:        time.Since(startTime),
+		FirstTokenMs:    firstTokenMs,
+	}, nil
+}
+
+func logOpenAIPassthroughInstructionsRejected(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	reqModel string,
+	rejectReason string,
+	body []byte,
+) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	accountID := int64(0)
+	accountName := ""
+	accountType := ""
+	if account != nil {
+		accountID = account.ID
+		accountName = strings.TrimSpace(account.Name)
+		accountType = strings.TrimSpace(string(account.Type))
+	}
+	fields := []zap.Field{
+		zap.String("component", "service.openai_gateway"),
+		zap.Int64("account_id", accountID),
+		zap.String("account_name", accountName),
+		zap.String("account_type", accountType),
+		zap.String("request_model", strings.TrimSpace(reqModel)),
+		zap.String("reject_reason", strings.TrimSpace(rejectReason)),
+	}
+	fields = appendCodexCLIOnlyRejectedRequestFields(fields, c, body)
+	logger.FromContext(ctx).With(fields...).Warn("OpenAI passthrough 本地拦截：Codex 请求缺少有效 instructions")
+}
+
+func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	token string,
+) (*http.Request, error) {
+	targetURL := openaiPlatformAPIURL
+	switch account.Type {
+	case AccountTypeOAuth:
+		targetURL = chatgptCodexURL
+	case AccountTypeAPIKey:
+		baseURL := account.GetOpenAIBaseURL()
+		if baseURL != "" {
+			validatedURL, err := s.validateUpstreamBaseURL(baseURL)
+			if err != nil {
+				return nil, err
+			}
+			targetURL = buildOpenAIResponsesURL(validatedURL)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	// 透传客户端请求头（安全白名单）。
+	allowTimeoutHeaders := s.isOpenAIPassthroughTimeoutHeadersAllowed()
+	if c != nil && c.Request != nil {
+		for key, values := range c.Request.Header {
+			lower := strings.ToLower(strings.TrimSpace(key))
+			if !isOpenAIPassthroughAllowedRequestHeader(lower, allowTimeoutHeaders) {
+				continue
+			}
+			for _, v := range values {
+				req.Header.Add(key, v)
+			}
+		}
+	}
+
+	// 覆盖入站鉴权残留，并注入上游认证
+	req.Header.Del("authorization")
+	req.Header.Del("x-api-key")
+	req.Header.Del("x-goog-api-key")
+	req.Header.Set("authorization", "Bearer "+token)
+
+	// OAuth 透传到 ChatGPT internal API 时补齐必要头。
+	if account.Type == AccountTypeOAuth {
+		promptCacheKey := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+		req.Host = "chatgpt.com"
+		if chatgptAccountID := account.GetChatGPTAccountID(); chatgptAccountID != "" {
+			req.Header.Set("chatgpt-account-id", chatgptAccountID)
+		}
+		if req.Header.Get("accept") == "" {
+			req.Header.Set("accept", "text/event-stream")
+		}
+		if req.Header.Get("OpenAI-Beta") == "" {
+			req.Header.Set("OpenAI-Beta", "responses=experimental")
+		}
+		if req.Header.Get("originator") == "" {
+			req.Header.Set("originator", "codex_cli_rs")
+		}
+		if promptCacheKey != "" {
+			if req.Header.Get("conversation_id") == "" {
+				req.Header.Set("conversation_id", promptCacheKey)
+			}
+			if req.Header.Get("session_id") == "" {
+				req.Header.Set("session_id", promptCacheKey)
+			}
+		}
+	}
+
+	// 透传模式也支持账户自定义 User-Agent 与 ForceCodexCLI 兜底。
+	customUA := account.GetOpenAIUserAgent()
+	if customUA != "" {
+		req.Header.Set("user-agent", customUA)
+	}
+	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+		req.Header.Set("user-agent", codexCLIUserAgent)
+	}
+	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
+	if account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(req.Header.Get("user-agent")) {
+		req.Header.Set("user-agent", codexCLIUserAgent)
+	}
+
+	if req.Header.Get("content-type") == "" {
+		req.Header.Set("content-type", "application/json")
+	}
+
+	return req, nil
+}
+
+func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	requestBody []byte,
+) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+
+	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+	upstreamDetail := ""
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 2048
+		}
+		upstreamDetail = truncateString(string(body), maxBytes)
+	}
+	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:             account.Platform,
+		AccountID:            account.ID,
+		AccountName:          account.Name,
+		UpstreamStatusCode:   resp.StatusCode,
+		UpstreamRequestID:    resp.Header.Get("x-request-id"),
+		Passthrough:          true,
+		Kind:                 "http_error",
+		Message:              upstreamMsg,
+		Detail:               upstreamDetail,
+		UpstreamResponseBody: upstreamDetail,
+	})
+
+	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.cfg)
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	c.Data(resp.StatusCode, contentType, body)
+
+	if upstreamMsg == "" {
+		return fmt.Errorf("upstream error: %d", resp.StatusCode)
+	}
+	return fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+}
+
+func isOpenAIPassthroughAllowedRequestHeader(lowerKey string, allowTimeoutHeaders bool) bool {
+	if lowerKey == "" {
+		return false
+	}
+	if isOpenAIPassthroughTimeoutHeader(lowerKey) {
+		return allowTimeoutHeaders
+	}
+	return openaiPassthroughAllowedHeaders[lowerKey]
+}
+
+func isOpenAIPassthroughTimeoutHeader(lowerKey string) bool {
+	switch lowerKey {
+	case "x-stainless-timeout", "x-stainless-read-timeout", "x-stainless-connect-timeout", "x-request-timeout", "request-timeout", "grpc-timeout":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *OpenAIGatewayService) isOpenAIPassthroughTimeoutHeadersAllowed() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIPassthroughAllowTimeoutHeaders
+}
+
+func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
+	if h == nil {
+		return nil
+	}
+	var matched []string
+	for key, values := range h {
+		lowerKey := strings.ToLower(strings.TrimSpace(key))
+		if isOpenAIPassthroughTimeoutHeader(lowerKey) {
+			entry := lowerKey
+			if len(values) > 0 {
+				entry = fmt.Sprintf("%s=%s", lowerKey, strings.Join(values, "|"))
+			}
+			matched = append(matched, entry)
+		}
+	}
+	sort.Strings(matched)
+	return matched
+}
+
+type openaiStreamingResultPassthrough struct {
+	usage        *OpenAIUsage
+	firstTokenMs *int
+}
+
+func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	startTime time.Time,
+) (*openaiStreamingResultPassthrough, error) {
+	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.cfg)
+
+	// SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	if v := resp.Header.Get("x-request-id"); v != "" {
+		c.Header("x-request-id", v)
+	}
+
+	w := c.Writer
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return nil, errors.New("streaming not supported")
+	}
+
+	usage := &OpenAIUsage{}
+	var firstTokenMs *int
+	clientDisconnected := false
+	sawDone := false
+	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
+
+	scanner := bufio.NewScanner(resp.Body)
+	maxLineSize := defaultMaxLineSize
+	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
+		maxLineSize = s.cfg.Gateway.MaxLineSize
+	}
+	scanBuf := getSSEScannerBuf64K()
+	scanner.Buffer(scanBuf[:0], maxLineSize)
+	defer putSSEScannerBuf64K(scanBuf)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if data, ok := extractOpenAISSEDataLine(line); ok {
+			trimmedData := strings.TrimSpace(data)
+			if trimmedData == "[DONE]" {
+				sawDone = true
+			}
+			if firstTokenMs == nil && trimmedData != "" && trimmedData != "[DONE]" {
+				ms := int(time.Since(startTime).Milliseconds())
+				firstTokenMs = &ms
+			}
+			s.parseSSEUsage(data, usage)
+		}
+
+		if !clientDisconnected {
+			if _, err := fmt.Fprintln(w, line); err != nil {
+				clientDisconnected = true
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+			} else {
+				flusher.Flush()
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if clientDisconnected {
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Upstream read error after client disconnect: account=%d err=%v", account.ID, err)
+			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			logger.LegacyPrintf("service.openai_gateway",
+				"[OpenAI passthrough] 流读取被取消，可能发生断流: account=%d request_id=%s err=%v ctx_err=%v",
+				account.ID,
+				upstreamRequestID,
+				err,
+				ctx.Err(),
+			)
+			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, nil
+		}
+		if errors.Is(err, bufio.ErrTooLong) {
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, err)
+			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, err
+		}
+		logger.LegacyPrintf("service.openai_gateway",
+			"[OpenAI passthrough] 流读取异常中断: account=%d request_id=%s err=%v",
+			account.ID,
+			upstreamRequestID,
+			err,
+		)
+		return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream read error: %w", err)
+	}
+	if !clientDisconnected && !sawDone && ctx.Err() == nil {
+		logger.FromContext(ctx).With(
+			zap.String("component", "service.openai_gateway"),
+			zap.Int64("account_id", account.ID),
+			zap.String("upstream_request_id", upstreamRequestID),
+		).Info("OpenAI passthrough 上游流在未收到 [DONE] 时结束，疑似断流")
+	}
+
+	return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, nil
+}
+
+func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+) (*OpenAIUsage, error) {
+	maxBytes := resolveUpstreamResponseReadLimit(s.cfg)
+	body, err := readUpstreamResponseBodyLimited(resp.Body, maxBytes)
+	if err != nil {
+		if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
+			setOpsUpstreamError(c, http.StatusBadGateway, "upstream response too large", "")
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": gin.H{
+					"type":    "upstream_error",
+					"message": "Upstream response too large",
+				},
+			})
+		}
+		return nil, err
+	}
+
+	usage := &OpenAIUsage{}
+	usageParsed := false
+	if len(body) > 0 {
+		var response struct {
+			Usage struct {
+				InputTokens       int `json:"input_tokens"`
+				OutputTokens      int `json:"output_tokens"`
+				InputTokenDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"input_tokens_details"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(body, &response) == nil {
+			usage.InputTokens = response.Usage.InputTokens
+			usage.OutputTokens = response.Usage.OutputTokens
+			usage.CacheReadInputTokens = response.Usage.InputTokenDetails.CachedTokens
+			usageParsed = true
+		}
+	}
+	if !usageParsed {
+		// 兜底：尝试从 SSE 文本中解析 usage
+		usage = s.parseSSEUsageFromBody(string(body))
+	}
+
+	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.cfg)
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	c.Data(resp.StatusCode, contentType, body)
+	return usage, nil
+}
+
+func writeOpenAIPassthroughResponseHeaders(dst http.Header, src http.Header, cfg *config.Config) {
+	if dst == nil || src == nil {
+		return
+	}
+	if cfg != nil {
+		responseheaders.WriteFilteredHeaders(dst, src, cfg.Security.ResponseHeaders)
+	} else {
+		// 兜底：尽量保留最基础的 content-type
+		if v := strings.TrimSpace(src.Get("Content-Type")); v != "" {
+			dst.Set("Content-Type", v)
+		}
+	}
+	// 透传模式强制放行 x-codex-* 响应头（若上游返回）。
+	// 注意：真实 http.Response.Header 的 key 一般会被 canonicalize；但为了兼容测试/自建响应，
+	// 这里用 EqualFold 做一次大小写不敏感的查找。
+	getCaseInsensitiveValues := func(h http.Header, want string) []string {
+		if h == nil {
+			return nil
+		}
+		for k, vals := range h {
+			if strings.EqualFold(k, want) {
+				return vals
+			}
+		}
+		return nil
+	}
+
+	for _, rawKey := range []string{
+		"x-codex-primary-used-percent",
+		"x-codex-primary-reset-after-seconds",
+		"x-codex-primary-window-minutes",
+		"x-codex-secondary-used-percent",
+		"x-codex-secondary-reset-after-seconds",
+		"x-codex-secondary-window-minutes",
+		"x-codex-primary-over-secondary-limit-percent",
+	} {
+		vals := getCaseInsensitiveValues(src, rawKey)
+		if len(vals) == 0 {
+			continue
+		}
+		key := http.CanonicalHeaderKey(rawKey)
+		dst.Del(key)
+		for _, v := range vals {
+			dst.Add(key, v)
+		}
+	}
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {
@@ -996,7 +1855,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 			if err != nil {
 				return nil, err
 			}
-			targetURL = validatedURL + "/responses"
+			targetURL = buildOpenAIResponsesURL(validatedURL)
 		}
 	default:
 		targetURL = openaiPlatformAPIURL
@@ -1050,6 +1909,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("user-agent", customUA)
 	}
 
+	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为 Codex CLI。
+	// 用于网关未透传/改写 User-Agent 时，仍能命中 Codex 侧识别逻辑。
+	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+		req.Header.Set("user-agent", codexCLIUserAgent)
+	}
+
 	// Ensure required headers exist
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
@@ -1058,7 +1923,13 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	return req, nil
 }
 
-func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) handleErrorResponse(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	requestBody []byte,
+) (*OpenAIForwardResult, error) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
@@ -1072,9 +1943,10 @@ func (s *OpenAIGatewayService) handleErrorResponse(ctx context.Context, resp *ht
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
-		log.Printf(
+		logger.LegacyPrintf("service.openai_gateway",
 			"OpenAI upstream error %d (account=%d platform=%s type=%s): %s",
 			resp.StatusCode,
 			account.ID,
@@ -1230,7 +2102,8 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
-	scanner.Buffer(make([]byte, 64*1024), maxLineSize)
+	scanBuf := getSSEScannerBuf64K()
+	scanner.Buffer(scanBuf[:0], maxLineSize)
 
 	type scanEvent struct {
 		line string
@@ -1249,7 +2122,8 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	}
 	var lastReadAt int64
 	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
-	go func() {
+	go func(scanBuf *sseScannerBuf64K) {
+		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
 		for scanner.Scan() {
 			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
@@ -1260,7 +2134,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		if err := scanner.Err(); err != nil {
 			_ = sendEvent(scanEvent{err: err})
 		}
-	}()
+	}(scanBuf)
 	defer close(done)
 
 	streamInterval := time.Duration(0)
@@ -1332,16 +2206,16 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				// 客户端断开/取消请求时，上游读取往往会返回 context canceled。
 				// /v1/responses 的 SSE 事件必须符合 OpenAI 协议；这里不注入自定义 error event，避免下游 SDK 解析失败。
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
-					log.Printf("Context canceled during streaming, returning collected usage")
+					logger.LegacyPrintf("service.openai_gateway", "Context canceled during streaming, returning collected usage")
 					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 				}
 				// 客户端已断开时，上游出错仅影响体验，不影响计费；返回已收集 usage
 				if clientDisconnected {
-					log.Printf("Upstream read error after client disconnect: %v, returning collected usage", ev.err)
+					logger.LegacyPrintf("service.openai_gateway", "Upstream read error after client disconnect: %v, returning collected usage", ev.err)
 					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 				}
 				if errors.Is(ev.err, bufio.ErrTooLong) {
-					log.Printf("SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, ev.err)
+					logger.LegacyPrintf("service.openai_gateway", "SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, ev.err)
 					sendErrorEvent("response_too_large")
 					return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, ev.err
 				}
@@ -1353,8 +2227,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			lastDataAt = time.Now()
 
 			// Extract data from SSE line (supports both "data: " and "data:" formats)
-			if openaiSSEDataRe.MatchString(line) {
-				data := openaiSSEDataRe.ReplaceAllString(line, "")
+			if data, ok := extractOpenAISSEDataLine(line); ok {
 
 				// Replace model in response if needed
 				if needModelReplace {
@@ -1371,7 +2244,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				if !clientDisconnected {
 					if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
 						clientDisconnected = true
-						log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+						logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
 					} else {
 						flusher.Flush()
 					}
@@ -1388,7 +2261,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				if !clientDisconnected {
 					if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
 						clientDisconnected = true
-						log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+						logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
 					} else {
 						flusher.Flush()
 					}
@@ -1401,10 +2274,10 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				continue
 			}
 			if clientDisconnected {
-				log.Printf("Upstream timeout after client disconnect, returning collected usage")
+				logger.LegacyPrintf("service.openai_gateway", "Upstream timeout after client disconnect, returning collected usage")
 				return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 			}
-			log.Printf("Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
+			logger.LegacyPrintf("service.openai_gateway", "Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
 			// 处理流超时，可能标记账户为临时不可调度或错误状态
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
@@ -1421,7 +2294,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			}
 			if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
 				clientDisconnected = true
-				log.Printf("Client disconnected during streaming, continuing to drain upstream for billing")
+				logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
 				continue
 			}
 			flusher.Flush()
@@ -1430,40 +2303,47 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 }
 
+// extractOpenAISSEDataLine 低开销提取 SSE `data:` 行内容。
+// 兼容 `data: xxx` 与 `data:xxx` 两种格式。
+func extractOpenAISSEDataLine(line string) (string, bool) {
+	if !strings.HasPrefix(line, "data:") {
+		return "", false
+	}
+	start := len("data:")
+	for start < len(line) {
+		if line[start] != ' ' && line[start] != '	' {
+			break
+		}
+		start++
+	}
+	return line[start:], true
+}
+
 func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel string) string {
-	if !openaiSSEDataRe.MatchString(line) {
+	data, ok := extractOpenAISSEDataLine(line)
+	if !ok {
 		return line
 	}
-	data := openaiSSEDataRe.ReplaceAllString(line, "")
 	if data == "" || data == "[DONE]" {
 		return line
 	}
 
-	var event map[string]any
-	if err := json.Unmarshal([]byte(data), &event); err != nil {
-		return line
-	}
-
-	// Replace model in response
-	if m, ok := event["model"].(string); ok && m == fromModel {
-		event["model"] = toModel
-		newData, err := json.Marshal(event)
+	// 使用 gjson 精确检查 model 字段，避免全量 JSON 反序列化
+	if m := gjson.Get(data, "model"); m.Exists() && m.Str == fromModel {
+		newData, err := sjson.Set(data, "model", toModel)
 		if err != nil {
 			return line
 		}
-		return "data: " + string(newData)
+		return "data: " + newData
 	}
 
-	// Check nested response
-	if response, ok := event["response"].(map[string]any); ok {
-		if m, ok := response["model"].(string); ok && m == fromModel {
-			response["model"] = toModel
-			newData, err := json.Marshal(event)
-			if err != nil {
-				return line
-			}
-			return "data: " + string(newData)
+	// 检查嵌套的 response.model 字段
+	if m := gjson.Get(data, "response.model"); m.Exists() && m.Str == fromModel {
+		newData, err := sjson.Set(data, "response.model", toModel)
+		if err != nil {
+			return line
 		}
+		return "data: " + newData
 	}
 
 	return line
@@ -1484,30 +2364,35 @@ func (s *OpenAIGatewayService) correctToolCallsInResponseBody(body []byte) []byt
 }
 
 func (s *OpenAIGatewayService) parseSSEUsage(data string, usage *OpenAIUsage) {
-	// Parse response.completed event for usage (OpenAI Responses format)
-	var event struct {
-		Type     string `json:"type"`
-		Response struct {
-			Usage struct {
-				InputTokens       int `json:"input_tokens"`
-				OutputTokens      int `json:"output_tokens"`
-				InputTokenDetails struct {
-					CachedTokens int `json:"cached_tokens"`
-				} `json:"input_tokens_details"`
-			} `json:"usage"`
-		} `json:"response"`
+	if usage == nil || data == "" || data == "[DONE]" {
+		return
+	}
+	// 选择性解析：仅在数据中包含 completed 事件标识时才进入字段提取。
+	if !strings.Contains(data, `"response.completed"`) {
+		return
+	}
+	if gjson.Get(data, "type").String() != "response.completed" {
+		return
 	}
 
-	if json.Unmarshal([]byte(data), &event) == nil && event.Type == "response.completed" {
-		usage.InputTokens = event.Response.Usage.InputTokens
-		usage.OutputTokens = event.Response.Usage.OutputTokens
-		usage.CacheReadInputTokens = event.Response.Usage.InputTokenDetails.CachedTokens
-	}
+	usage.InputTokens = int(gjson.Get(data, "response.usage.input_tokens").Int())
+	usage.OutputTokens = int(gjson.Get(data, "response.usage.output_tokens").Int())
+	usage.CacheReadInputTokens = int(gjson.Get(data, "response.usage.input_tokens_details.cached_tokens").Int())
 }
 
 func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*OpenAIUsage, error) {
-	body, err := io.ReadAll(resp.Body)
+	maxBytes := resolveUpstreamResponseReadLimit(s.cfg)
+	body, err := readUpstreamResponseBodyLimited(resp.Body, maxBytes)
 	if err != nil {
+		if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
+			setOpsUpstreamError(c, http.StatusBadGateway, "upstream response too large", "")
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": gin.H{
+					"type":    "upstream_error",
+					"message": "Upstream response too large",
+				},
+			})
+		}
 		return nil, err
 	}
 
@@ -1613,10 +2498,10 @@ func (s *OpenAIGatewayService) handleOAuthSSEToJSON(resp *http.Response, c *gin.
 func extractCodexFinalResponse(body string) ([]byte, bool) {
 	lines := strings.Split(body, "\n")
 	for _, line := range lines {
-		if !openaiSSEDataRe.MatchString(line) {
+		data, ok := extractOpenAISSEDataLine(line)
+		if !ok {
 			continue
 		}
-		data := openaiSSEDataRe.ReplaceAllString(line, "")
 		if data == "" || data == "[DONE]" {
 			continue
 		}
@@ -1640,10 +2525,10 @@ func (s *OpenAIGatewayService) parseSSEUsageFromBody(body string) *OpenAIUsage {
 	usage := &OpenAIUsage{}
 	lines := strings.Split(body, "\n")
 	for _, line := range lines {
-		if !openaiSSEDataRe.MatchString(line) {
+		data, ok := extractOpenAISSEDataLine(line)
+		if !ok {
 			continue
 		}
-		data := openaiSSEDataRe.ReplaceAllString(line, "")
 		if data == "" || data == "[DONE]" {
 			continue
 		}
@@ -1655,7 +2540,7 @@ func (s *OpenAIGatewayService) parseSSEUsageFromBody(body string) *OpenAIUsage {
 func (s *OpenAIGatewayService) replaceModelInSSEBody(body, fromModel, toModel string) string {
 	lines := strings.Split(body, "\n")
 	for i, line := range lines {
-		if !openaiSSEDataRe.MatchString(line) {
+		if _, ok := extractOpenAISSEDataLine(line); !ok {
 			continue
 		}
 		lines[i] = s.replaceModelInSSELine(line, fromModel, toModel)
@@ -1682,24 +2567,31 @@ func (s *OpenAIGatewayService) validateUpstreamBaseURL(raw string) (string, erro
 	return normalized, nil
 }
 
+// buildOpenAIResponsesURL 组装 OpenAI Responses 端点。
+// - base 以 /v1 结尾：追加 /responses
+// - base 已是 /responses：原样返回
+// - 其他情况：追加 /v1/responses
+func buildOpenAIResponsesURL(base string) string {
+	normalized := strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(normalized, "/responses") {
+		return normalized
+	}
+	if strings.HasSuffix(normalized, "/v1") {
+		return normalized + "/responses"
+	}
+	return normalized + "/v1/responses"
+}
+
 func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel, toModel string) []byte {
-	var resp map[string]any
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return body
+	// 使用 gjson/sjson 精确替换 model 字段，避免全量 JSON 反序列化
+	if m := gjson.GetBytes(body, "model"); m.Exists() && m.Str == fromModel {
+		newBody, err := sjson.SetBytes(body, "model", toModel)
+		if err != nil {
+			return body
+		}
+		return newBody
 	}
-
-	model, ok := resp["model"].(string)
-	if !ok || model != fromModel {
-		return body
-	}
-
-	resp["model"] = toModel
-	newBody, err := json.Marshal(resp)
-	if err != nil {
-		return body
-	}
-
-	return newBody
+	return body
 }
 
 // OpenAIRecordUsageInput input for recording usage
@@ -1803,7 +2695,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	inserted, err := s.usageLogRepo.Create(ctx, usageLog)
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		log.Printf("[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
+		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
 	}
@@ -1826,7 +2718,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// Update API key quota if applicable (only for balance mode with quota set)
 	if shouldBill && cost.ActualCost > 0 && apiKey.Quota > 0 && input.APIKeyService != nil {
 		if err := input.APIKeyService.UpdateQuotaUsed(ctx, apiKey.ID, cost.ActualCost); err != nil {
-			log.Printf("Update API key quota failed: %v", err)
+			logger.LegacyPrintf("service.openai_gateway", "Update API key quota failed: %v", err)
 		}
 	}
 
@@ -1904,16 +2796,41 @@ func ParseCodexRateLimitHeaders(headers http.Header) *OpenAICodexUsageSnapshot {
 	return snapshot
 }
 
-// updateCodexUsageSnapshot saves the Codex usage snapshot to account's Extra field
-func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, accountID int64, snapshot *OpenAICodexUsageSnapshot) {
+func codexSnapshotBaseTime(snapshot *OpenAICodexUsageSnapshot, fallback time.Time) time.Time {
 	if snapshot == nil {
-		return
+		return fallback
+	}
+	if snapshot.UpdatedAt == "" {
+		return fallback
+	}
+	base, err := time.Parse(time.RFC3339, snapshot.UpdatedAt)
+	if err != nil {
+		return fallback
+	}
+	return base
+}
+
+func codexResetAtRFC3339(base time.Time, resetAfterSeconds *int) *string {
+	if resetAfterSeconds == nil {
+		return nil
+	}
+	sec := *resetAfterSeconds
+	if sec < 0 {
+		sec = 0
+	}
+	resetAt := base.Add(time.Duration(sec) * time.Second).Format(time.RFC3339)
+	return &resetAt
+}
+
+func buildCodexUsageExtraUpdates(snapshot *OpenAICodexUsageSnapshot, fallbackNow time.Time) map[string]any {
+	if snapshot == nil {
+		return nil
 	}
 
-	// Convert snapshot to map for merging into Extra
+	baseTime := codexSnapshotBaseTime(snapshot, fallbackNow)
 	updates := make(map[string]any)
 
-	// Save raw primary/secondary fields for debugging/tracing
+	// 保存原始 primary/secondary 字段，便于排查问题
 	if snapshot.PrimaryUsedPercent != nil {
 		updates["codex_primary_used_percent"] = *snapshot.PrimaryUsedPercent
 	}
@@ -1935,9 +2852,9 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 	if snapshot.PrimaryOverSecondaryPercent != nil {
 		updates["codex_primary_over_secondary_percent"] = *snapshot.PrimaryOverSecondaryPercent
 	}
-	updates["codex_usage_updated_at"] = snapshot.UpdatedAt
+	updates["codex_usage_updated_at"] = baseTime.Format(time.RFC3339)
 
-	// Normalize to canonical 5h/7d fields
+	// 归一化到 5h/7d 规范字段
 	if normalized := snapshot.Normalize(); normalized != nil {
 		if normalized.Used5hPercent != nil {
 			updates["codex_5h_used_percent"] = *normalized.Used5hPercent
@@ -1957,6 +2874,29 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 		if normalized.Window7dMinutes != nil {
 			updates["codex_7d_window_minutes"] = *normalized.Window7dMinutes
 		}
+		if reset5hAt := codexResetAtRFC3339(baseTime, normalized.Reset5hSeconds); reset5hAt != nil {
+			updates["codex_5h_reset_at"] = *reset5hAt
+		}
+		if reset7dAt := codexResetAtRFC3339(baseTime, normalized.Reset7dSeconds); reset7dAt != nil {
+			updates["codex_7d_reset_at"] = *reset7dAt
+		}
+	}
+
+	return updates
+}
+
+// updateCodexUsageSnapshot saves the Codex usage snapshot to account's Extra field
+func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, accountID int64, snapshot *OpenAICodexUsageSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	if s == nil || s.accountRepo == nil {
+		return
+	}
+
+	updates := buildCodexUsageExtraUpdates(snapshot, time.Now())
+	if len(updates) == 0 {
+		return
 	}
 
 	// Update account's Extra field asynchronously
@@ -2011,6 +2951,103 @@ func deriveOpenAIReasoningEffortFromModel(model string) string {
 	}
 
 	return normalizeOpenAIReasoningEffort(parts[len(parts)-1])
+}
+
+func extractOpenAIRequestMetaFromBody(body []byte) (model string, stream bool, promptCacheKey string) {
+	if len(body) == 0 {
+		return "", false, ""
+	}
+
+	model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	stream = gjson.GetBytes(body, "stream").Bool()
+	promptCacheKey = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+	return model, stream, promptCacheKey
+}
+
+// normalizeOpenAIPassthroughOAuthBody 将透传 OAuth 请求体收敛为旧链路关键行为：
+// 1) store=false 2) stream=true
+func normalizeOpenAIPassthroughOAuthBody(body []byte) ([]byte, bool, error) {
+	if len(body) == 0 {
+		return body, false, nil
+	}
+
+	normalized := body
+	changed := false
+
+	if store := gjson.GetBytes(normalized, "store"); !store.Exists() || store.Type != gjson.False {
+		next, err := sjson.SetBytes(normalized, "store", false)
+		if err != nil {
+			return body, false, fmt.Errorf("normalize passthrough body store=false: %w", err)
+		}
+		normalized = next
+		changed = true
+	}
+
+	if stream := gjson.GetBytes(normalized, "stream"); !stream.Exists() || stream.Type != gjson.True {
+		next, err := sjson.SetBytes(normalized, "stream", true)
+		if err != nil {
+			return body, false, fmt.Errorf("normalize passthrough body stream=true: %w", err)
+		}
+		normalized = next
+		changed = true
+	}
+
+	return normalized, changed, nil
+}
+
+func detectOpenAIPassthroughInstructionsRejectReason(reqModel string, body []byte) string {
+	model := strings.ToLower(strings.TrimSpace(reqModel))
+	if !strings.Contains(model, "codex") {
+		return ""
+	}
+
+	instructions := gjson.GetBytes(body, "instructions")
+	if !instructions.Exists() {
+		return "instructions_missing"
+	}
+	if instructions.Type != gjson.String {
+		return "instructions_not_string"
+	}
+	if strings.TrimSpace(instructions.String()) == "" {
+		return "instructions_empty"
+	}
+	return ""
+}
+
+func extractOpenAIReasoningEffortFromBody(body []byte, requestedModel string) *string {
+	reasoningEffort := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
+	if reasoningEffort == "" {
+		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
+	}
+	if reasoningEffort != "" {
+		normalized := normalizeOpenAIReasoningEffort(reasoningEffort)
+		if normalized == "" {
+			return nil
+		}
+		return &normalized
+	}
+
+	value := deriveOpenAIReasoningEffortFromModel(requestedModel)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func getOpenAIRequestBodyMap(c *gin.Context, body []byte) (map[string]any, error) {
+	if c != nil {
+		if cached, ok := c.Get(OpenAIParsedRequestBodyKey); ok {
+			if reqBody, ok := cached.(map[string]any); ok && reqBody != nil {
+				return reqBody, nil
+			}
+		}
+	}
+
+	var reqBody map[string]any
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return nil, fmt.Errorf("parse request: %w", err)
+	}
+	return reqBody, nil
 }
 
 func extractOpenAIReasoningEffort(reqBody map[string]any, requestedModel string) *string {

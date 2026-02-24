@@ -41,9 +41,8 @@ const (
 )
 
 type opsErrorLogJob struct {
-	ops         *service.OpsService
-	entry       *service.OpsInsertErrorLogInput
-	requestBody []byte
+	ops   *service.OpsService
+	entry *service.OpsInsertErrorLogInput
 }
 
 var (
@@ -58,6 +57,7 @@ var (
 	opsErrorLogEnqueued  atomic.Int64
 	opsErrorLogDropped   atomic.Int64
 	opsErrorLogProcessed atomic.Int64
+	opsErrorLogSanitized atomic.Int64
 
 	opsErrorLogLastDropLogAt atomic.Int64
 
@@ -94,7 +94,7 @@ func startOpsErrorLogWorkers() {
 						}
 					}()
 					ctx, cancel := context.WithTimeout(context.Background(), opsErrorLogTimeout)
-					_ = job.ops.RecordError(ctx, job.entry, job.requestBody)
+					_ = job.ops.RecordError(ctx, job.entry, nil)
 					cancel()
 					opsErrorLogProcessed.Add(1)
 				}()
@@ -103,7 +103,7 @@ func startOpsErrorLogWorkers() {
 	}
 }
 
-func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLogInput, requestBody []byte) {
+func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLogInput) {
 	if ops == nil || entry == nil {
 		return
 	}
@@ -129,7 +129,7 @@ func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLo
 	}
 
 	select {
-	case opsErrorLogQueue <- opsErrorLogJob{ops: ops, entry: entry, requestBody: requestBody}:
+	case opsErrorLogQueue <- opsErrorLogJob{ops: ops, entry: entry}:
 		opsErrorLogQueueLen.Add(1)
 		opsErrorLogEnqueued.Add(1)
 	default:
@@ -205,6 +205,10 @@ func OpsErrorLogProcessedTotal() int64 {
 	return opsErrorLogProcessed.Load()
 }
 
+func OpsErrorLogSanitizedTotal() int64 {
+	return opsErrorLogSanitized.Load()
+}
+
 func maybeLogOpsErrorLogDrop() {
 	now := time.Now().Unix()
 
@@ -222,12 +226,13 @@ func maybeLogOpsErrorLogDrop() {
 	queueCap := OpsErrorLogQueueCapacity()
 
 	log.Printf(
-		"[OpsErrorLogger] queue is full; dropping logs (queued=%d cap=%d enqueued_total=%d dropped_total=%d processed_total=%d)",
+		"[OpsErrorLogger] queue is full; dropping logs (queued=%d cap=%d enqueued_total=%d dropped_total=%d processed_total=%d sanitized_total=%d)",
 		queued,
 		queueCap,
 		opsErrorLogEnqueued.Load(),
 		opsErrorLogDropped.Load(),
 		opsErrorLogProcessed.Load(),
+		opsErrorLogSanitized.Load(),
 	)
 }
 
@@ -255,18 +260,49 @@ func setOpsRequestContext(c *gin.Context, model string, stream bool, requestBody
 	if c == nil {
 		return
 	}
+	model = strings.TrimSpace(model)
 	c.Set(opsModelKey, model)
 	c.Set(opsStreamKey, stream)
 	if len(requestBody) > 0 {
 		c.Set(opsRequestBodyKey, requestBody)
 	}
+	if c.Request != nil && model != "" {
+		ctx := context.WithValue(c.Request.Context(), ctxkey.Model, model)
+		c.Request = c.Request.WithContext(ctx)
+	}
 }
 
-func setOpsSelectedAccount(c *gin.Context, accountID int64) {
+func attachOpsRequestBodyToEntry(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || entry == nil {
+		return
+	}
+	v, ok := c.Get(opsRequestBodyKey)
+	if !ok {
+		return
+	}
+	raw, ok := v.([]byte)
+	if !ok || len(raw) == 0 {
+		return
+	}
+	entry.RequestBodyJSON, entry.RequestBodyTruncated, entry.RequestBodyBytes = service.PrepareOpsRequestBodyForQueue(raw)
+	opsErrorLogSanitized.Add(1)
+}
+
+func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) {
 	if c == nil || accountID <= 0 {
 		return
 	}
 	c.Set(opsAccountIDKey, accountID)
+	if c.Request != nil {
+		ctx := context.WithValue(c.Request.Context(), ctxkey.AccountID, accountID)
+		if len(platform) > 0 {
+			p := strings.TrimSpace(platform[0])
+			if p != "" {
+				ctx = context.WithValue(ctx, ctxkey.Platform, p)
+			}
+		}
+		c.Request = c.Request.WithContext(ctx)
+	}
 }
 
 type opsCaptureWriter struct {
@@ -507,6 +543,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				RetryCount:  0,
 				CreatedAt:   time.Now(),
 			}
+			applyOpsLatencyFieldsFromContext(c, entry)
 
 			if apiKey != nil {
 				entry.APIKeyID = &apiKey.ID
@@ -528,14 +565,9 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				entry.ClientIP = &clientIP
 			}
 
-			var requestBody []byte
-			if v, ok := c.Get(opsRequestBodyKey); ok {
-				if b, ok := v.([]byte); ok && len(b) > 0 {
-					requestBody = b
-				}
-			}
 			// Store request headers/body only when an upstream error occurred to keep overhead minimal.
 			entry.RequestHeadersJSON = extractOpsRetryRequestHeaders(c)
+			attachOpsRequestBodyToEntry(c, entry)
 
 			// Skip logging if a passthrough rule with skip_monitoring=true matched.
 			if v, ok := c.Get(service.OpsSkipPassthroughKey); ok {
@@ -544,7 +576,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				}
 			}
 
-			enqueueOpsErrorLog(ops, entry, requestBody)
+			enqueueOpsErrorLog(ops, entry)
 			return
 		}
 
@@ -632,6 +664,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			RetryCount:  0,
 			CreatedAt:   time.Now(),
 		}
+		applyOpsLatencyFieldsFromContext(c, entry)
 
 		// Capture upstream error context set by gateway services (if present).
 		// This does NOT affect the client response; it enriches Ops troubleshooting data.
@@ -707,17 +740,12 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			entry.ClientIP = &clientIP
 		}
 
-		var requestBody []byte
-		if v, ok := c.Get(opsRequestBodyKey); ok {
-			if b, ok := v.([]byte); ok && len(b) > 0 {
-				requestBody = b
-			}
-		}
 		// Persist only a minimal, whitelisted set of request headers to improve retry fidelity.
 		// Do NOT store Authorization/Cookie/etc.
 		entry.RequestHeadersJSON = extractOpsRetryRequestHeaders(c)
+		attachOpsRequestBodyToEntry(c, entry)
 
-		enqueueOpsErrorLog(ops, entry, requestBody)
+		enqueueOpsErrorLog(ops, entry)
 	}
 }
 
@@ -758,6 +786,44 @@ func extractOpsRetryRequestHeaders(c *gin.Context) *string {
 	}
 	s := string(raw)
 	return &s
+}
+
+func applyOpsLatencyFieldsFromContext(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || entry == nil {
+		return
+	}
+	entry.AuthLatencyMs = getContextLatencyMs(c, service.OpsAuthLatencyMsKey)
+	entry.RoutingLatencyMs = getContextLatencyMs(c, service.OpsRoutingLatencyMsKey)
+	entry.UpstreamLatencyMs = getContextLatencyMs(c, service.OpsUpstreamLatencyMsKey)
+	entry.ResponseLatencyMs = getContextLatencyMs(c, service.OpsResponseLatencyMsKey)
+	entry.TimeToFirstTokenMs = getContextLatencyMs(c, service.OpsTimeToFirstTokenMsKey)
+}
+
+func getContextLatencyMs(c *gin.Context, key string) *int64 {
+	if c == nil || strings.TrimSpace(key) == "" {
+		return nil
+	}
+	v, ok := c.Get(key)
+	if !ok {
+		return nil
+	}
+	var ms int64
+	switch t := v.(type) {
+	case int:
+		ms = int64(t)
+	case int32:
+		ms = int64(t)
+	case int64:
+		ms = t
+	case float64:
+		ms = int64(t)
+	default:
+		return nil
+	}
+	if ms < 0 {
+		return nil
+	}
+	return &ms
 }
 
 type parsedOpsError struct {

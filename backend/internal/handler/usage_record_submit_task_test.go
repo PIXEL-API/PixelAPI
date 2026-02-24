@@ -1,0 +1,136 @@
+package handler
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/stretchr/testify/require"
+)
+
+func newUsageRecordTestPool(t *testing.T) *service.UsageRecordWorkerPool {
+	t.Helper()
+	pool := service.NewUsageRecordWorkerPoolWithOptions(service.UsageRecordWorkerPoolOptions{
+		WorkerCount:           1,
+		QueueSize:             8,
+		TaskTimeout:           time.Second,
+		OverflowPolicy:        "drop",
+		OverflowSamplePercent: 0,
+		AutoScaleEnabled:      false,
+	})
+	t.Cleanup(pool.Stop)
+	return pool
+}
+
+func TestGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
+	pool := newUsageRecordTestPool(t)
+	h := &GatewayHandler{usageRecordWorkerPool: pool}
+
+	done := make(chan struct{})
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		close(done)
+	})
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("task not executed")
+	}
+}
+
+func TestGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *testing.T) {
+	h := &GatewayHandler{}
+	var called atomic.Bool
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("expected deadline in fallback context")
+		}
+		called.Store(true)
+	})
+
+	require.True(t, called.Load())
+}
+
+func TestGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
+	h := &GatewayHandler{}
+	require.NotPanics(t, func() {
+		h.submitUsageRecordTask(nil)
+	})
+}
+
+func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
+	pool := newUsageRecordTestPool(t)
+	h := &OpenAIGatewayHandler{usageRecordWorkerPool: pool}
+
+	done := make(chan struct{})
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		close(done)
+	})
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("task not executed")
+	}
+}
+
+func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	var called atomic.Bool
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("expected deadline in fallback context")
+		}
+		called.Store(true)
+	})
+
+	require.True(t, called.Load())
+}
+
+func TestOpenAIGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	require.NotPanics(t, func() {
+		h.submitUsageRecordTask(nil)
+	})
+}
+
+func TestSoraGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
+	pool := newUsageRecordTestPool(t)
+	h := &SoraGatewayHandler{usageRecordWorkerPool: pool}
+
+	done := make(chan struct{})
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		close(done)
+	})
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("task not executed")
+	}
+}
+
+func TestSoraGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *testing.T) {
+	h := &SoraGatewayHandler{}
+	var called atomic.Bool
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("expected deadline in fallback context")
+		}
+		called.Store(true)
+	})
+
+	require.True(t, called.Load())
+}
+
+func TestSoraGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
+	h := &SoraGatewayHandler{}
+	require.NotPanics(t, func() {
+		h.submitUsageRecordTask(nil)
+	})
+}

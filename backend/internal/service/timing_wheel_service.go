@@ -2,10 +2,10 @@ package service
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/zeromicro/go-zero/core/collection"
 )
 
@@ -34,20 +34,22 @@ func NewTimingWheelService() (*TimingWheelService, error) {
 
 // Start starts the timing wheel
 func (s *TimingWheelService) Start() {
-	log.Println("[TimingWheel] Started (auto-start by go-zero)")
+	logger.LegacyPrintf("service.timing_wheel", "%s", "[TimingWheel] Started (auto-start by go-zero)")
 }
 
 // Stop stops the timing wheel
 func (s *TimingWheelService) Stop() {
 	s.stopOnce.Do(func() {
 		s.tw.Stop()
-		log.Println("[TimingWheel] Stopped")
+		logger.LegacyPrintf("service.timing_wheel", "%s", "[TimingWheel] Stopped")
 	})
 }
 
 // Schedule schedules a one-time task
 func (s *TimingWheelService) Schedule(name string, delay time.Duration, fn func()) {
-	_ = s.tw.SetTimer(name, fn, delay)
+	if err := s.tw.SetTimer(name, fn, delay); err != nil {
+		logger.LegacyPrintf("service.timing_wheel", "[TimingWheel] SetTimer failed for %q: %v", name, err)
+	}
 }
 
 // ScheduleRecurring schedules a recurring task
@@ -55,9 +57,13 @@ func (s *TimingWheelService) ScheduleRecurring(name string, interval time.Durati
 	var schedule func()
 	schedule = func() {
 		fn()
-		_ = s.tw.SetTimer(name, schedule, interval)
+		if err := s.tw.SetTimer(name, schedule, interval); err != nil {
+			logger.LegacyPrintf("service.timing_wheel", "[TimingWheel] recurring SetTimer failed for %q: %v", name, err)
+		}
 	}
-	_ = s.tw.SetTimer(name, schedule, interval)
+	if err := s.tw.SetTimer(name, schedule, interval); err != nil {
+		logger.LegacyPrintf("service.timing_wheel", "[TimingWheel] initial SetTimer failed for %q: %v", name, err)
+	}
 }
 
 // Cancel cancels a scheduled task

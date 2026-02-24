@@ -5,8 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 // ConcurrencyCache 定义并发控制的缓存接口
@@ -124,7 +125,7 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				if err := s.cache.ReleaseAccountSlot(bgCtx, accountID, requestID); err != nil {
-					log.Printf("Warning: failed to release account slot for %d (req=%s): %v", accountID, requestID, err)
+					logger.LegacyPrintf("service.concurrency", "Warning: failed to release account slot for %d (req=%s): %v", accountID, requestID, err)
 				}
 			},
 		}, nil
@@ -163,7 +164,7 @@ func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, 
 				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				if err := s.cache.ReleaseUserSlot(bgCtx, userID, requestID); err != nil {
-					log.Printf("Warning: failed to release user slot for %d (req=%s): %v", userID, requestID, err)
+					logger.LegacyPrintf("service.concurrency", "Warning: failed to release user slot for %d (req=%s): %v", userID, requestID, err)
 				}
 			},
 		}, nil
@@ -191,7 +192,7 @@ func (s *ConcurrencyService) IncrementWaitCount(ctx context.Context, userID int6
 	result, err := s.cache.IncrementWaitCount(ctx, userID, maxWait)
 	if err != nil {
 		// On error, allow the request to proceed (fail open)
-		log.Printf("Warning: increment wait count failed for user %d: %v", userID, err)
+		logger.LegacyPrintf("service.concurrency", "Warning: increment wait count failed for user %d: %v", userID, err)
 		return true, nil
 	}
 	return result, nil
@@ -209,7 +210,7 @@ func (s *ConcurrencyService) DecrementWaitCount(ctx context.Context, userID int6
 	defer cancel()
 
 	if err := s.cache.DecrementWaitCount(bgCtx, userID); err != nil {
-		log.Printf("Warning: decrement wait count failed for user %d: %v", userID, err)
+		logger.LegacyPrintf("service.concurrency", "Warning: decrement wait count failed for user %d: %v", userID, err)
 	}
 }
 
@@ -221,7 +222,7 @@ func (s *ConcurrencyService) IncrementAccountWaitCount(ctx context.Context, acco
 
 	result, err := s.cache.IncrementAccountWaitCount(ctx, accountID, maxWait)
 	if err != nil {
-		log.Printf("Warning: increment wait count failed for account %d: %v", accountID, err)
+		logger.LegacyPrintf("service.concurrency", "Warning: increment wait count failed for account %d: %v", accountID, err)
 		return true, nil
 	}
 	return result, nil
@@ -237,7 +238,7 @@ func (s *ConcurrencyService) DecrementAccountWaitCount(ctx context.Context, acco
 	defer cancel()
 
 	if err := s.cache.DecrementAccountWaitCount(bgCtx, accountID); err != nil {
-		log.Printf("Warning: decrement wait count failed for account %d: %v", accountID, err)
+		logger.LegacyPrintf("service.concurrency", "Warning: decrement wait count failed for account %d: %v", accountID, err)
 	}
 }
 
@@ -293,7 +294,7 @@ func (s *ConcurrencyService) StartSlotCleanupWorker(accountRepo AccountRepositor
 		accounts, err := accountRepo.ListSchedulable(listCtx)
 		cancel()
 		if err != nil {
-			log.Printf("Warning: list schedulable accounts failed: %v", err)
+			logger.LegacyPrintf("service.concurrency", "Warning: list schedulable accounts failed: %v", err)
 			return
 		}
 		for _, account := range accounts {
@@ -301,7 +302,7 @@ func (s *ConcurrencyService) StartSlotCleanupWorker(accountRepo AccountRepositor
 			err := s.cache.CleanupExpiredAccountSlots(accountCtx, account.ID)
 			accountCancel()
 			if err != nil {
-				log.Printf("Warning: cleanup expired slots failed for account %d: %v", account.ID, err)
+				logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired slots failed for account %d: %v", account.ID, err)
 			}
 		}
 	}

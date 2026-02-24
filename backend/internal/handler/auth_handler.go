@@ -2,6 +2,7 @@ package handler
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -112,12 +113,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Turnstile 验证（当提供了邮箱验证码时跳过，因为发送验证码时已验证过）
-	if req.VerifyCode == "" {
-		if err := h.authService.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, ip.GetClientIP(c)); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
+	// Turnstile 验证 — 始终执行，防止绕过
+	// TODO: 确认前端在提交邮箱验证码注册时也传递了 turnstile_token
+	if err := h.authService.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, ip.GetClientIP(c)); err != nil {
+		response.ErrorFrom(c, err)
+		return
 	}
 
 	_, user, err := h.authService.RegisterWithVerification(c.Request.Context(), req.Email, req.Password, req.VerifyCode, req.PromoCode, req.InvitationCode)
@@ -448,17 +448,12 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// Build frontend base URL from request
-	scheme := "https"
-	if c.Request.TLS == nil {
-		// Check X-Forwarded-Proto header (common in reverse proxy setups)
-		if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
-			scheme = proto
-		} else {
-			scheme = "http"
-		}
+	frontendBaseURL := strings.TrimSpace(h.cfg.Server.FrontendURL)
+	if frontendBaseURL == "" {
+		slog.Error("server.frontend_url not configured; cannot build password reset link")
+		response.InternalError(c, "Password reset is not configured")
+		return
 	}
-	frontendBaseURL := scheme + "://" + c.Request.Host
 
 	// Request password reset (async)
 	// Note: This returns success even if email doesn't exist (to prevent enumeration)

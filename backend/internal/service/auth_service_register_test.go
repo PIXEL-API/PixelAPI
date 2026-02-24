@@ -315,3 +315,69 @@ func TestAuthService_RefreshToken_ExpiredTokenNoPanic(t *testing.T) {
 		require.NotEmpty(t, newToken)
 	})
 }
+
+func TestAuthService_GetAccessTokenExpiresIn_FallbackToExpireHour(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 0
+
+	require.Equal(t, 24*3600, service.GetAccessTokenExpiresIn())
+}
+
+func TestAuthService_GetAccessTokenExpiresIn_MinutesHasPriority(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 90
+
+	require.Equal(t, 90*60, service.GetAccessTokenExpiresIn())
+}
+
+func TestAuthService_GenerateToken_UsesExpireHourWhenMinutesZero(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 0
+
+	user := &User{
+		ID:           1,
+		Email:        "test@test.com",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+
+	token, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	claims, err := service.ValidateToken(token)
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	require.NotNil(t, claims.IssuedAt)
+	require.NotNil(t, claims.ExpiresAt)
+
+	require.WithinDuration(t, claims.IssuedAt.Time.Add(24*time.Hour), claims.ExpiresAt.Time, 2*time.Second)
+}
+
+func TestAuthService_GenerateToken_UsesMinutesWhenConfigured(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 90
+
+	user := &User{
+		ID:           2,
+		Email:        "test2@test.com",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+
+	token, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	claims, err := service.ValidateToken(token)
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	require.NotNil(t, claims.IssuedAt)
+	require.NotNil(t, claims.ExpiresAt)
+
+	require.WithinDuration(t, claims.IssuedAt.Time.Add(90*time.Minute), claims.ExpiresAt.Time, 2*time.Second)
+}

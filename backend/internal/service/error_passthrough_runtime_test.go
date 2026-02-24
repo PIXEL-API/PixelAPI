@@ -76,7 +76,7 @@ func TestOpenAIHandleErrorResponse_NoRuleKeepsDefault(t *testing.T) {
 	}
 	account := &Account{ID: 12, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 
-	_, err := svc.handleErrorResponse(context.Background(), resp, c, account)
+	_, err := svc.handleErrorResponse(context.Background(), resp, c, account, nil)
 	require.Error(t, err)
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 
@@ -157,7 +157,7 @@ func TestOpenAIHandleErrorResponse_AppliesRuleFor422(t *testing.T) {
 	}
 	account := &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 
-	_, err := svc.handleErrorResponse(context.Background(), resp, c, account)
+	_, err := svc.handleErrorResponse(context.Background(), resp, c, account, nil)
 	require.Error(t, err)
 	assert.Equal(t, http.StatusTeapot, rec.Code)
 

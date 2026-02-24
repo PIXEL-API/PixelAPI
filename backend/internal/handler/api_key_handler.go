@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -130,13 +131,14 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	if req.Quota != nil {
 		svcReq.Quota = *req.Quota
 	}
-	key, err := h.apiKeyService.Create(c.Request.Context(), subject.UserID, svcReq)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
 
-	response.Success(c, dto.APIKeyFromService(key))
+	executeUserIdempotentJSON(c, "user.api_keys.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		key, err := h.apiKeyService.Create(ctx, subject.UserID, svcReq)
+		if err != nil {
+			return nil, err
+		}
+		return dto.APIKeyFromService(key), nil
+	})
 }
 
 // Update handles updating an API key

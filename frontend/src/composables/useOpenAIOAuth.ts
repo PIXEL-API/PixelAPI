@@ -19,12 +19,21 @@ export interface OpenAITokenInfo {
   [key: string]: unknown
 }
 
-export function useOpenAIOAuth() {
+export type OpenAIOAuthPlatform = 'openai' | 'sora'
+
+interface UseOpenAIOAuthOptions {
+  platform?: OpenAIOAuthPlatform
+}
+
+export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
   const appStore = useAppStore()
+  const oauthPlatform = options?.platform ?? 'openai'
+  const endpointPrefix = oauthPlatform === 'sora' ? '/admin/sora' : '/admin/openai'
 
   // State
   const authUrl = ref('')
   const sessionId = ref('')
+  const oauthState = ref('')
   const loading = ref(false)
   const error = ref('')
 
@@ -32,6 +41,7 @@ export function useOpenAIOAuth() {
   const resetState = () => {
     authUrl.value = ''
     sessionId.value = ''
+    oauthState.value = ''
     loading.value = false
     error.value = ''
   }
@@ -44,6 +54,7 @@ export function useOpenAIOAuth() {
     loading.value = true
     authUrl.value = ''
     sessionId.value = ''
+    oauthState.value = ''
     error.value = ''
 
     try {
@@ -56,11 +67,17 @@ export function useOpenAIOAuth() {
       }
 
       const response = await adminAPI.accounts.generateAuthUrl(
-        '/admin/openai/generate-auth-url',
+        `${endpointPrefix}/generate-auth-url`,
         payload
       )
       authUrl.value = response.auth_url
       sessionId.value = response.session_id
+      try {
+        const parsed = new URL(response.auth_url)
+        oauthState.value = parsed.searchParams.get('state') || ''
+      } catch {
+        oauthState.value = ''
+      }
       return true
     } catch (err: any) {
       error.value = err.response?.data?.detail || 'Failed to generate OpenAI auth URL'
@@ -75,10 +92,11 @@ export function useOpenAIOAuth() {
   const exchangeAuthCode = async (
     code: string,
     currentSessionId: string,
+    state: string,
     proxyId?: number | null
   ): Promise<OpenAITokenInfo | null> => {
-    if (!code.trim() || !currentSessionId) {
-      error.value = 'Missing auth code or session ID'
+    if (!code.trim() || !currentSessionId || !state.trim()) {
+      error.value = 'Missing auth code, session ID, or state'
       return null
     }
 
@@ -86,15 +104,16 @@ export function useOpenAIOAuth() {
     error.value = ''
 
     try {
-      const payload: { session_id: string; code: string; proxy_id?: number } = {
+      const payload: { session_id: string; code: string; state: string; proxy_id?: number } = {
         session_id: currentSessionId,
-        code: code.trim()
+        code: code.trim(),
+        state: state.trim()
       }
       if (proxyId) {
         payload.proxy_id = proxyId
       }
 
-      const tokenInfo = await adminAPI.accounts.exchangeCode('/admin/openai/exchange-code', payload)
+      const tokenInfo = await adminAPI.accounts.exchangeCode(`${endpointPrefix}/exchange-code`, payload)
       return tokenInfo as OpenAITokenInfo
     } catch (err: any) {
       error.value = err.response?.data?.detail || 'Failed to exchange OpenAI auth code'
@@ -120,10 +139,41 @@ export function useOpenAIOAuth() {
 
     try {
       // Use dedicated refresh-token endpoint
-      const tokenInfo = await adminAPI.accounts.refreshOpenAIToken(refreshToken.trim(), proxyId)
+      const tokenInfo = await adminAPI.accounts.refreshOpenAIToken(
+        refreshToken.trim(),
+        proxyId,
+        `${endpointPrefix}/refresh-token`
+      )
       return tokenInfo as OpenAITokenInfo
     } catch (err: any) {
       error.value = err.response?.data?.detail || 'Failed to validate refresh token'
+      appStore.showError(error.value)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  // Validate Sora session token and get access token
+  const validateSessionToken = async (
+    sessionToken: string,
+    proxyId?: number | null
+  ): Promise<OpenAITokenInfo | null> => {
+    if (!sessionToken.trim()) {
+      error.value = 'Missing session token'
+      return null
+    }
+    loading.value = true
+    error.value = ''
+    try {
+      const tokenInfo = await adminAPI.accounts.validateSoraSessionToken(
+        sessionToken.trim(),
+        proxyId,
+        `${endpointPrefix}/st2at`
+      )
+      return tokenInfo as OpenAITokenInfo
+    } catch (err: any) {
+      error.value = err.response?.data?.detail || 'Failed to validate session token'
       appStore.showError(error.value)
       return null
     } finally {
@@ -172,6 +222,7 @@ export function useOpenAIOAuth() {
     // State
     authUrl,
     sessionId,
+    oauthState,
     loading,
     error,
     // Methods
@@ -179,6 +230,7 @@ export function useOpenAIOAuth() {
     generateAuthUrl,
     exchangeAuthCode,
     validateRefreshToken,
+    validateSessionToken,
     buildCredentials,
     buildExtraInfo
   }
