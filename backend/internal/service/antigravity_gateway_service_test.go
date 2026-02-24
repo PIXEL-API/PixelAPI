@@ -134,6 +134,36 @@ func (s *httpUpstreamStub) DoWithTLS(_ *http.Request, _ string, _ int64, _ int, 
 	return s.resp, s.err
 }
 
+type antigravitySettingRepoStub struct{}
+
+func (s *antigravitySettingRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
+	panic("unexpected Get call")
+}
+
+func (s *antigravitySettingRepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	return "", ErrSettingNotFound
+}
+
+func (s *antigravitySettingRepoStub) Set(ctx context.Context, key, value string) error {
+	panic("unexpected Set call")
+}
+
+func (s *antigravitySettingRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	panic("unexpected GetMultiple call")
+}
+
+func (s *antigravitySettingRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
+	panic("unexpected SetMultiple call")
+}
+
+func (s *antigravitySettingRepoStub) GetAll(ctx context.Context) (map[string]string, error) {
+	panic("unexpected GetAll call")
+}
+
+func (s *antigravitySettingRepoStub) Delete(ctx context.Context, key string) error {
+	panic("unexpected Delete call")
+}
+
 func TestAntigravityGatewayService_Forward_PromptTooLong(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	writer := httptest.NewRecorder()
@@ -160,8 +190,9 @@ func TestAntigravityGatewayService_Forward_PromptTooLong(t *testing.T) {
 	}
 
 	svc := &AntigravityGatewayService{
-		tokenProvider: &AntigravityTokenProvider{},
-		httpUpstream:  &httpUpstreamStub{resp: resp},
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   &httpUpstreamStub{resp: resp},
 	}
 
 	account := &Account{
@@ -416,6 +447,113 @@ func TestAntigravityGatewayService_ForwardGemini_StickySessionForceCacheBilling(
 	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
 	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.True(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be true for sticky session switch")
+}
+
+// TestAntigravityGatewayService_Forward_BillsWithMappedModel
+// 验证：Antigravity Claude 转发返回的计费模型使用映射后的模型
+func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-5",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+		"max_tokens": 16,
+		"stream":     true,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request = req
+
+	upstreamBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"req-bill-1"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+	}
+
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   &httpUpstreamStub{resp: resp},
+	}
+
+	const mappedModel = "gemini-3-pro-high"
+	account := &Account{
+		ID:          5,
+		Name:        "acc-forward-billing",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-5": mappedModel,
+			},
+		},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, mappedModel, result.Model)
+}
+
+// TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel
+// 验证：Antigravity Gemini 转发返回的计费模型使用映射后的模型
+func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"contents": []map[string]any{
+			{"role": "user", "parts": []map[string]any{{"text": "hello"}}},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-flash:generateContent", bytes.NewReader(body))
+	c.Request = req
+
+	upstreamBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"req-bill-2"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+	}
+
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   &httpUpstreamStub{resp: resp},
+	}
+
+	const mappedModel = "gemini-3-pro-high"
+	account := &Account{
+		ID:          6,
+		Name:        "acc-gemini-billing",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"model_mapping": map[string]any{
+				"gemini-2.5-flash": mappedModel,
+			},
+		},
+	}
+
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-2.5-flash", "generateContent", true, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, mappedModel, result.Model)
 }
 
 // TestStreamUpstreamResponse_UsageAndFirstToken
