@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -130,20 +131,20 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 		return
 	}
 
-	proxy, err := h.adminService.CreateProxy(c.Request.Context(), &service.CreateProxyInput{
-		Name:     strings.TrimSpace(req.Name),
-		Protocol: strings.TrimSpace(req.Protocol),
-		Host:     strings.TrimSpace(req.Host),
-		Port:     req.Port,
-		Username: strings.TrimSpace(req.Username),
-		Password: strings.TrimSpace(req.Password),
+	executeAdminIdempotentJSON(c, "admin.proxies.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		proxy, err := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
+			Name:     strings.TrimSpace(req.Name),
+			Protocol: strings.TrimSpace(req.Protocol),
+			Host:     strings.TrimSpace(req.Host),
+			Port:     req.Port,
+			Username: strings.TrimSpace(req.Username),
+			Password: strings.TrimSpace(req.Password),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return dto.ProxyFromService(proxy), nil
 	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	response.Success(c, dto.ProxyFromService(proxy))
 }
 
 // Update handles updating a proxy
@@ -228,6 +229,24 @@ func (h *ProxyHandler) Test(c *gin.Context) {
 	}
 
 	result, err := h.adminService.TestProxy(c.Request.Context(), proxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
+// CheckQuality handles checking proxy quality across common AI targets.
+// POST /api/v1/admin/proxies/:id/quality-check
+func (h *ProxyHandler) CheckQuality(c *gin.Context) {
+	proxyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid proxy ID")
+		return
+	}
+
+	result, err := h.adminService.CheckProxyQuality(c.Request.Context(), proxyID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

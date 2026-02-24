@@ -8,6 +8,25 @@ import (
 	"github.com/spf13/viper"
 )
 
+func resetViperWithJWTSecret(t *testing.T) {
+	t.Helper()
+	viper.Reset()
+	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
+}
+
+func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
+	viper.Reset()
+	t.Setenv("JWT_SECRET", "")
+
+	cfg, err := LoadForBootstrap()
+	if err != nil {
+		t.Fatalf("LoadForBootstrap() error: %v", err)
+	}
+	if cfg.JWT.Secret != "" {
+		t.Fatalf("LoadForBootstrap() should keep empty jwt.secret during bootstrap")
+	}
+}
+
 func TestNormalizeRunMode(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -29,7 +48,7 @@ func TestNormalizeRunMode(t *testing.T) {
 }
 
 func TestLoadDefaultSchedulingConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -56,8 +75,44 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultIdempotencyConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.Idempotency.ObserveOnly {
+		t.Fatalf("Idempotency.ObserveOnly = false, want true")
+	}
+	if cfg.Idempotency.DefaultTTLSeconds != 86400 {
+		t.Fatalf("Idempotency.DefaultTTLSeconds = %d, want 86400", cfg.Idempotency.DefaultTTLSeconds)
+	}
+	if cfg.Idempotency.SystemOperationTTLSeconds != 3600 {
+		t.Fatalf("Idempotency.SystemOperationTTLSeconds = %d, want 3600", cfg.Idempotency.SystemOperationTTLSeconds)
+	}
+}
+
+func TestLoadIdempotencyConfigFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("IDEMPOTENCY_OBSERVE_ONLY", "false")
+	t.Setenv("IDEMPOTENCY_DEFAULT_TTL_SECONDS", "600")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Idempotency.ObserveOnly {
+		t.Fatalf("Idempotency.ObserveOnly = true, want false")
+	}
+	if cfg.Idempotency.DefaultTTLSeconds != 600 {
+		t.Fatalf("Idempotency.DefaultTTLSeconds = %d, want 600", cfg.Idempotency.DefaultTTLSeconds)
+	}
+}
+
 func TestLoadSchedulingConfigFromEnv(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING", "5")
 
 	cfg, err := Load()
@@ -71,7 +126,7 @@ func TestLoadSchedulingConfigFromEnv(t *testing.T) {
 }
 
 func TestLoadDefaultSecurityToggles(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -87,13 +142,69 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 	if !cfg.Security.URLAllowlist.AllowPrivateHosts {
 		t.Fatalf("URLAllowlist.AllowPrivateHosts = false, want true")
 	}
-	if cfg.Security.ResponseHeaders.Enabled {
-		t.Fatalf("ResponseHeaders.Enabled = true, want false")
+	if !cfg.Security.ResponseHeaders.Enabled {
+		t.Fatalf("ResponseHeaders.Enabled = false, want true")
+	}
+}
+
+func TestLoadDefaultServerMode(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Server.Mode != "release" {
+		t.Fatalf("Server.Mode = %q, want %q", cfg.Server.Mode, "release")
+	}
+}
+
+func TestLoadDefaultJWTAccessTokenExpireMinutes(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.JWT.ExpireHour != 24 {
+		t.Fatalf("JWT.ExpireHour = %d, want 24", cfg.JWT.ExpireHour)
+	}
+	if cfg.JWT.AccessTokenExpireMinutes != 0 {
+		t.Fatalf("JWT.AccessTokenExpireMinutes = %d, want 0", cfg.JWT.AccessTokenExpireMinutes)
+	}
+}
+
+func TestLoadJWTAccessTokenExpireMinutesFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "90")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.JWT.AccessTokenExpireMinutes != 90 {
+		t.Fatalf("JWT.AccessTokenExpireMinutes = %d, want 90", cfg.JWT.AccessTokenExpireMinutes)
+	}
+}
+
+func TestLoadDefaultDatabaseSSLMode(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Database.SSLMode != "prefer" {
+		t.Fatalf("Database.SSLMode = %q, want %q", cfg.Database.SSLMode, "prefer")
 	}
 }
 
 func TestValidateLinuxDoFrontendRedirectURL(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -118,7 +229,7 @@ func TestValidateLinuxDoFrontendRedirectURL(t *testing.T) {
 }
 
 func TestValidateLinuxDoPKCERequiredForPublicClient(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -143,7 +254,7 @@ func TestValidateLinuxDoPKCERequiredForPublicClient(t *testing.T) {
 }
 
 func TestLoadDefaultDashboardCacheConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -168,7 +279,7 @@ func TestLoadDefaultDashboardCacheConfig(t *testing.T) {
 }
 
 func TestValidateDashboardCacheConfigEnabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -188,7 +299,7 @@ func TestValidateDashboardCacheConfigEnabled(t *testing.T) {
 }
 
 func TestValidateDashboardCacheConfigDisabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -207,7 +318,7 @@ func TestValidateDashboardCacheConfigDisabled(t *testing.T) {
 }
 
 func TestLoadDefaultDashboardAggregationConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -244,7 +355,7 @@ func TestLoadDefaultDashboardAggregationConfig(t *testing.T) {
 }
 
 func TestValidateDashboardAggregationConfigDisabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -263,7 +374,7 @@ func TestValidateDashboardAggregationConfigDisabled(t *testing.T) {
 }
 
 func TestValidateDashboardAggregationBackfillMaxDays(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -282,7 +393,7 @@ func TestValidateDashboardAggregationBackfillMaxDays(t *testing.T) {
 }
 
 func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -307,7 +418,7 @@ func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
 }
 
 func TestValidateUsageCleanupConfigEnabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -326,7 +437,7 @@ func TestValidateUsageCleanupConfigEnabled(t *testing.T) {
 }
 
 func TestValidateUsageCleanupConfigDisabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -424,6 +535,40 @@ func TestValidateAbsoluteHTTPURL(t *testing.T) {
 	}
 }
 
+func TestValidateServerFrontendURL(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Server.FrontendURL = "https://example.com"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() frontend_url valid error: %v", err)
+	}
+
+	cfg.Server.FrontendURL = "https://example.com/path"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() frontend_url with path valid error: %v", err)
+	}
+
+	cfg.Server.FrontendURL = "https://example.com?utm=1"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() should reject server.frontend_url with query")
+	}
+
+	cfg.Server.FrontendURL = "https://user:pass@example.com"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() should reject server.frontend_url with userinfo")
+	}
+
+	cfg.Server.FrontendURL = "/relative"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() should reject relative server.frontend_url")
+	}
+}
+
 func TestValidateFrontendRedirectURL(t *testing.T) {
 	if err := ValidateFrontendRedirectURL("/auth/callback"); err != nil {
 		t.Fatalf("ValidateFrontendRedirectURL relative error: %v", err)
@@ -445,6 +590,7 @@ func TestValidateFrontendRedirectURL(t *testing.T) {
 func TestWarnIfInsecureURL(t *testing.T) {
 	warnIfInsecureURL("test", "http://example.com")
 	warnIfInsecureURL("test", "bad://url")
+	warnIfInsecureURL("test", "://invalid")
 }
 
 func TestGenerateJWTSecretDefaultLength(t *testing.T) {
@@ -458,7 +604,7 @@ func TestGenerateJWTSecretDefaultLength(t *testing.T) {
 }
 
 func TestValidateOpsCleanupScheduleRequired(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -476,7 +622,7 @@ func TestValidateOpsCleanupScheduleRequired(t *testing.T) {
 }
 
 func TestValidateConcurrencyPingInterval(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -493,14 +639,14 @@ func TestValidateConcurrencyPingInterval(t *testing.T) {
 }
 
 func TestProvideConfig(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 	if _, err := ProvideConfig(); err != nil {
 		t.Fatalf("ProvideConfig() error: %v", err)
 	}
 }
 
 func TestValidateConfigWithLinuxDoEnabled(t *testing.T) {
-	viper.Reset()
+	resetViperWithJWTSecret(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -544,6 +690,24 @@ func TestGenerateJWTSecretWithLength(t *testing.T) {
 	}
 }
 
+func TestDatabaseDSNWithTimezone_WithPassword(t *testing.T) {
+	d := &DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		User:     "u",
+		Password: "p",
+		DBName:   "db",
+		SSLMode:  "prefer",
+	}
+	got := d.DSNWithTimezone("UTC")
+	if !strings.Contains(got, "password=p") {
+		t.Fatalf("DSNWithTimezone should include password: %q", got)
+	}
+	if !strings.Contains(got, "TimeZone=UTC") {
+		t.Fatalf("DSNWithTimezone should include TimeZone=UTC: %q", got)
+	}
+}
+
 func TestValidateAbsoluteHTTPURLMissingHost(t *testing.T) {
 	if err := ValidateAbsoluteHTTPURL("https://"); err == nil {
 		t.Fatalf("ValidateAbsoluteHTTPURL should reject missing host")
@@ -566,10 +730,35 @@ func TestWarnIfInsecureURLHTTPS(t *testing.T) {
 	warnIfInsecureURL("secure", "https://example.com")
 }
 
+func TestValidateJWTSecret_UTF8Bytes(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	// 31 bytes (< 32) even though it's 31 characters.
+	cfg.JWT.Secret = strings.Repeat("a", 31)
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("Validate() should reject 31-byte secret")
+	}
+	if !strings.Contains(err.Error(), "at least 32 bytes") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	// 32 bytes OK.
+	cfg.JWT.Secret = strings.Repeat("a", 32)
+	err = cfg.Validate()
+	if err != nil {
+		t.Fatalf("Validate() should accept 32-byte secret: %v", err)
+	}
+}
+
 func TestValidateConfigErrors(t *testing.T) {
 	buildValid := func(t *testing.T) *Config {
 		t.Helper()
-		viper.Reset()
+		resetViperWithJWTSecret(t)
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load() error: %v", err)
@@ -583,6 +772,26 @@ func TestValidateConfigErrors(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name:    "jwt secret required",
+			mutate:  func(c *Config) { c.JWT.Secret = "" },
+			wantErr: "jwt.secret is required",
+		},
+		{
+			name:    "jwt secret min bytes",
+			mutate:  func(c *Config) { c.JWT.Secret = strings.Repeat("a", 31) },
+			wantErr: "jwt.secret must be at least 32 bytes",
+		},
+		{
+			name:    "subscription maintenance worker_count non-negative",
+			mutate:  func(c *Config) { c.SubscriptionMaintenance.WorkerCount = -1 },
+			wantErr: "subscription_maintenance.worker_count",
+		},
+		{
+			name:    "subscription maintenance queue_size non-negative",
+			mutate:  func(c *Config) { c.SubscriptionMaintenance.QueueSize = -1 },
+			wantErr: "subscription_maintenance.queue_size",
+		},
+		{
 			name:    "jwt expire hour positive",
 			mutate:  func(c *Config) { c.JWT.ExpireHour = 0 },
 			wantErr: "jwt.expire_hour must be positive",
@@ -591,6 +800,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "jwt expire hour max",
 			mutate:  func(c *Config) { c.JWT.ExpireHour = 200 },
 			wantErr: "jwt.expire_hour must be <= 168",
+		},
+		{
+			name:    "jwt access token expire minutes non-negative",
+			mutate:  func(c *Config) { c.JWT.AccessTokenExpireMinutes = -1 },
+			wantErr: "jwt.access_token_expire_minutes must be non-negative",
 		},
 		{
 			name:    "csp policy required",
@@ -800,6 +1014,84 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.max_line_size must be non-negative",
 		},
 		{
+			name:    "gateway usage record worker count",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.WorkerCount = 0 },
+			wantErr: "gateway.usage_record.worker_count",
+		},
+		{
+			name:    "gateway usage record queue size",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.QueueSize = 0 },
+			wantErr: "gateway.usage_record.queue_size",
+		},
+		{
+			name:    "gateway usage record timeout",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.TaskTimeoutSeconds = 0 },
+			wantErr: "gateway.usage_record.task_timeout_seconds",
+		},
+		{
+			name:    "gateway usage record overflow policy",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.OverflowPolicy = "invalid" },
+			wantErr: "gateway.usage_record.overflow_policy",
+		},
+		{
+			name:    "gateway usage record sample percent range",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.OverflowSamplePercent = 101 },
+			wantErr: "gateway.usage_record.overflow_sample_percent",
+		},
+		{
+			name: "gateway usage record sample percent required for sample policy",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.OverflowPolicy = UsageRecordOverflowPolicySample
+				c.Gateway.UsageRecord.OverflowSamplePercent = 0
+			},
+			wantErr: "gateway.usage_record.overflow_sample_percent must be positive",
+		},
+		{
+			name: "gateway usage record auto scale max gte min",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.AutoScaleMinWorkers = 256
+				c.Gateway.UsageRecord.AutoScaleMaxWorkers = 128
+			},
+			wantErr: "gateway.usage_record.auto_scale_max_workers",
+		},
+		{
+			name: "gateway usage record worker in auto scale range",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.AutoScaleMinWorkers = 200
+				c.Gateway.UsageRecord.AutoScaleMaxWorkers = 300
+				c.Gateway.UsageRecord.WorkerCount = 128
+			},
+			wantErr: "gateway.usage_record.worker_count must be between auto_scale_min_workers and auto_scale_max_workers",
+		},
+		{
+			name: "gateway usage record auto scale queue thresholds order",
+			mutate: func(c *Config) {
+				c.Gateway.UsageRecord.AutoScaleUpQueuePercent = 50
+				c.Gateway.UsageRecord.AutoScaleDownQueuePercent = 50
+			},
+			wantErr: "gateway.usage_record.auto_scale_down_queue_percent must be less",
+		},
+		{
+			name:    "gateway usage record auto scale up step",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.AutoScaleUpStep = 0 },
+			wantErr: "gateway.usage_record.auto_scale_up_step",
+		},
+		{
+			name:    "gateway usage record auto scale interval",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds = 0 },
+			wantErr: "gateway.usage_record.auto_scale_check_interval_seconds",
+		},
+		{
+			name:    "gateway user group rate cache ttl",
+			mutate:  func(c *Config) { c.Gateway.UserGroupRateCacheTTLSeconds = 0 },
+			wantErr: "gateway.user_group_rate_cache_ttl_seconds",
+		},
+		{
+			name:    "gateway models list cache ttl range",
+			mutate:  func(c *Config) { c.Gateway.ModelsListCacheTTLSeconds = 31 },
+			wantErr: "gateway.models_list_cache_ttl_seconds",
+		},
+		{
 			name:    "gateway scheduling sticky waiting",
 			mutate:  func(c *Config) { c.Gateway.Scheduling.StickySessionMaxWaiting = 0 },
 			wantErr: "gateway.scheduling.sticky_session_max_waiting",
@@ -821,6 +1113,37 @@ func TestValidateConfigErrors(t *testing.T) {
 				c.Gateway.Scheduling.OutboxLagRebuildSeconds = 5
 			},
 			wantErr: "gateway.scheduling.outbox_lag_rebuild_seconds",
+		},
+		{
+			name:    "log level invalid",
+			mutate:  func(c *Config) { c.Log.Level = "trace" },
+			wantErr: "log.level",
+		},
+		{
+			name:    "log format invalid",
+			mutate:  func(c *Config) { c.Log.Format = "plain" },
+			wantErr: "log.format",
+		},
+		{
+			name: "log output disabled",
+			mutate: func(c *Config) {
+				c.Log.Output.ToStdout = false
+				c.Log.Output.ToFile = false
+			},
+			wantErr: "log.output.to_stdout and log.output.to_file cannot both be false",
+		},
+		{
+			name:    "log rotation size",
+			mutate:  func(c *Config) { c.Log.Rotation.MaxSizeMB = 0 },
+			wantErr: "log.rotation.max_size_mb",
+		},
+		{
+			name: "log sampling enabled invalid",
+			mutate: func(c *Config) {
+				c.Log.Sampling.Enabled = true
+				c.Log.Sampling.Initial = 0
+			},
+			wantErr: "log.sampling.initial",
 		},
 		{
 			name:    "ops metrics collector ttl",
@@ -848,5 +1171,236 @@ func TestValidateConfigErrors(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidateConfig_AutoScaleDisabledIgnoreAutoScaleFields(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Gateway.UsageRecord.AutoScaleEnabled = false
+	cfg.Gateway.UsageRecord.WorkerCount = 64
+
+	// 自动扩缩容关闭时，这些字段应被忽略，不应导致校验失败。
+	cfg.Gateway.UsageRecord.AutoScaleMinWorkers = 0
+	cfg.Gateway.UsageRecord.AutoScaleMaxWorkers = 0
+	cfg.Gateway.UsageRecord.AutoScaleUpQueuePercent = 0
+	cfg.Gateway.UsageRecord.AutoScaleDownQueuePercent = 100
+	cfg.Gateway.UsageRecord.AutoScaleUpStep = 0
+	cfg.Gateway.UsageRecord.AutoScaleDownStep = 0
+	cfg.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds = 0
+	cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds = -1
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() should ignore auto scale fields when disabled: %v", err)
+	}
+}
+
+func TestValidateConfig_LogRequiredAndRotationBounds(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "log level required",
+			mutate: func(c *Config) {
+				c.Log.Level = ""
+			},
+			wantErr: "log.level is required",
+		},
+		{
+			name: "log format required",
+			mutate: func(c *Config) {
+				c.Log.Format = ""
+			},
+			wantErr: "log.format is required",
+		},
+		{
+			name: "log stacktrace required",
+			mutate: func(c *Config) {
+				c.Log.StacktraceLevel = ""
+			},
+			wantErr: "log.stacktrace_level is required",
+		},
+		{
+			name: "log max backups non-negative",
+			mutate: func(c *Config) {
+				c.Log.Rotation.MaxBackups = -1
+			},
+			wantErr: "log.rotation.max_backups must be non-negative",
+		},
+		{
+			name: "log max age non-negative",
+			mutate: func(c *Config) {
+				c.Log.Rotation.MaxAgeDays = -1
+			},
+			wantErr: "log.rotation.max_age_days must be non-negative",
+		},
+		{
+			name: "sampling thereafter non-negative when disabled",
+			mutate: func(c *Config) {
+				c.Log.Sampling.Enabled = false
+				c.Log.Sampling.Thereafter = -1
+			},
+			wantErr: "log.sampling.thereafter must be non-negative",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			tt.mutate(cfg)
+			err = cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSoraCurlCFFISidecarDefaults(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.Sora.Client.CurlCFFISidecar.Enabled {
+		t.Fatalf("Sora curl_cffi sidecar should be enabled by default")
+	}
+	if cfg.Sora.Client.CloudflareChallengeCooldownSeconds <= 0 {
+		t.Fatalf("Sora cloudflare challenge cooldown should be positive by default")
+	}
+	if cfg.Sora.Client.CurlCFFISidecar.BaseURL == "" {
+		t.Fatalf("Sora curl_cffi sidecar base_url should not be empty by default")
+	}
+	if cfg.Sora.Client.CurlCFFISidecar.Impersonate == "" {
+		t.Fatalf("Sora curl_cffi sidecar impersonate should not be empty by default")
+	}
+	if !cfg.Sora.Client.CurlCFFISidecar.SessionReuseEnabled {
+		t.Fatalf("Sora curl_cffi sidecar session reuse should be enabled by default")
+	}
+	if cfg.Sora.Client.CurlCFFISidecar.SessionTTLSeconds <= 0 {
+		t.Fatalf("Sora curl_cffi sidecar session ttl should be positive by default")
+	}
+}
+
+func TestValidateSoraCurlCFFISidecarRequired(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Sora.Client.CurlCFFISidecar.Enabled = false
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "sora.client.curl_cffi_sidecar.enabled must be true") {
+		t.Fatalf("Validate() error = %v, want sidecar enabled error", err)
+	}
+}
+
+func TestValidateSoraCurlCFFISidecarBaseURLRequired(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Sora.Client.CurlCFFISidecar.BaseURL = "   "
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "sora.client.curl_cffi_sidecar.base_url is required") {
+		t.Fatalf("Validate() error = %v, want sidecar base_url required error", err)
+	}
+}
+
+func TestValidateSoraCurlCFFISidecarSessionTTLNonNegative(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Sora.Client.CurlCFFISidecar.SessionTTLSeconds = -1
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "sora.client.curl_cffi_sidecar.session_ttl_seconds must be non-negative") {
+		t.Fatalf("Validate() error = %v, want sidecar session ttl error", err)
+	}
+}
+
+func TestValidateSoraCloudflareChallengeCooldownNonNegative(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	cfg.Sora.Client.CloudflareChallengeCooldownSeconds = -1
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "sora.client.cloudflare_challenge_cooldown_seconds must be non-negative") {
+		t.Fatalf("Validate() error = %v, want cloudflare cooldown error", err)
+	}
+}
+
+func TestLoad_DefaultGatewayUsageRecordConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Gateway.UsageRecord.WorkerCount != 128 {
+		t.Fatalf("worker_count = %d, want 128", cfg.Gateway.UsageRecord.WorkerCount)
+	}
+	if cfg.Gateway.UsageRecord.QueueSize != 16384 {
+		t.Fatalf("queue_size = %d, want 16384", cfg.Gateway.UsageRecord.QueueSize)
+	}
+	if cfg.Gateway.UsageRecord.TaskTimeoutSeconds != 5 {
+		t.Fatalf("task_timeout_seconds = %d, want 5", cfg.Gateway.UsageRecord.TaskTimeoutSeconds)
+	}
+	if cfg.Gateway.UsageRecord.OverflowPolicy != UsageRecordOverflowPolicySample {
+		t.Fatalf("overflow_policy = %s, want %s", cfg.Gateway.UsageRecord.OverflowPolicy, UsageRecordOverflowPolicySample)
+	}
+	if cfg.Gateway.UsageRecord.OverflowSamplePercent != 10 {
+		t.Fatalf("overflow_sample_percent = %d, want 10", cfg.Gateway.UsageRecord.OverflowSamplePercent)
+	}
+	if !cfg.Gateway.UsageRecord.AutoScaleEnabled {
+		t.Fatalf("auto_scale_enabled = false, want true")
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleMinWorkers != 128 {
+		t.Fatalf("auto_scale_min_workers = %d, want 128", cfg.Gateway.UsageRecord.AutoScaleMinWorkers)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleMaxWorkers != 512 {
+		t.Fatalf("auto_scale_max_workers = %d, want 512", cfg.Gateway.UsageRecord.AutoScaleMaxWorkers)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleUpQueuePercent != 70 {
+		t.Fatalf("auto_scale_up_queue_percent = %d, want 70", cfg.Gateway.UsageRecord.AutoScaleUpQueuePercent)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleDownQueuePercent != 15 {
+		t.Fatalf("auto_scale_down_queue_percent = %d, want 15", cfg.Gateway.UsageRecord.AutoScaleDownQueuePercent)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleUpStep != 32 {
+		t.Fatalf("auto_scale_up_step = %d, want 32", cfg.Gateway.UsageRecord.AutoScaleUpStep)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleDownStep != 16 {
+		t.Fatalf("auto_scale_down_step = %d, want 16", cfg.Gateway.UsageRecord.AutoScaleDownStep)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds != 3 {
+		t.Fatalf("auto_scale_check_interval_seconds = %d, want 3", cfg.Gateway.UsageRecord.AutoScaleCheckIntervalSeconds)
+	}
+	if cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds != 10 {
+		t.Fatalf("auto_scale_cooldown_seconds = %d, want 10", cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds)
 	}
 }

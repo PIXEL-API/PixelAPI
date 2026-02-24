@@ -175,22 +175,28 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 		return
 	}
 
-	dataPayload := req.Data
-	if err := validateDataHeader(dataPayload); err != nil {
+	if err := validateDataHeader(req.Data); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 
+	executeAdminIdempotentJSON(c, "admin.accounts.import_data", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		return h.importData(ctx, req)
+	})
+}
+
+func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {
 	skipDefaultGroupBind := true
 	if req.SkipDefaultGroupBind != nil {
 		skipDefaultGroupBind = *req.SkipDefaultGroupBind
 	}
 
+	dataPayload := req.Data
 	result := DataImportResult{}
-	existingProxies, err := h.listAllProxies(c.Request.Context())
+
+	existingProxies, err := h.listAllProxies(ctx)
 	if err != nil {
-		response.ErrorFrom(c, err)
-		return
+		return result, err
 	}
 
 	proxyKeyToID := make(map[string]int64, len(existingProxies))
@@ -221,8 +227,8 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 			proxyKeyToID[key] = existingID
 			result.ProxyReused++
 			if normalizedStatus != "" {
-				if proxy, err := h.adminService.GetProxy(c.Request.Context(), existingID); err == nil && proxy != nil && proxy.Status != normalizedStatus {
-					_, _ = h.adminService.UpdateProxy(c.Request.Context(), existingID, &service.UpdateProxyInput{
+				if proxy, getErr := h.adminService.GetProxy(ctx, existingID); getErr == nil && proxy != nil && proxy.Status != normalizedStatus {
+					_, _ = h.adminService.UpdateProxy(ctx, existingID, &service.UpdateProxyInput{
 						Status: normalizedStatus,
 					})
 				}
@@ -230,7 +236,7 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 			continue
 		}
 
-		created, err := h.adminService.CreateProxy(c.Request.Context(), &service.CreateProxyInput{
+		created, createErr := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
 			Name:     defaultProxyName(item.Name),
 			Protocol: item.Protocol,
 			Host:     item.Host,
@@ -238,13 +244,13 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 			Username: item.Username,
 			Password: item.Password,
 		})
-		if err != nil {
+		if createErr != nil {
 			result.ProxyFailed++
 			result.Errors = append(result.Errors, DataImportError{
 				Kind:     "proxy",
 				Name:     item.Name,
 				ProxyKey: key,
-				Message:  err.Error(),
+				Message:  createErr.Error(),
 			})
 			continue
 		}
@@ -252,7 +258,7 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 		result.ProxyCreated++
 
 		if normalizedStatus != "" && normalizedStatus != created.Status {
-			_, _ = h.adminService.UpdateProxy(c.Request.Context(), created.ID, &service.UpdateProxyInput{
+			_, _ = h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
 				Status: normalizedStatus,
 			})
 		}
@@ -303,7 +309,7 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 			SkipDefaultGroupBind: skipDefaultGroupBind,
 		}
 
-		if _, err := h.adminService.CreateAccount(c.Request.Context(), accountInput); err != nil {
+		if _, err := h.adminService.CreateAccount(ctx, accountInput); err != nil {
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{
 				Kind:    "account",
@@ -315,7 +321,7 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 		result.AccountCreated++
 	}
 
-	response.Success(c, result)
+	return result, nil
 }
 
 func (h *AccountHandler) listAllProxies(ctx context.Context) ([]service.Proxy, error) {

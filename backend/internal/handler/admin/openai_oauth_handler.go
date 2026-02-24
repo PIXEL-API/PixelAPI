@@ -2,6 +2,7 @@ package admin
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -14,6 +15,13 @@ import (
 type OpenAIOAuthHandler struct {
 	openaiOAuthService *service.OpenAIOAuthService
 	adminService       service.AdminService
+}
+
+func oauthPlatformFromPath(c *gin.Context) string {
+	if strings.Contains(c.FullPath(), "/admin/sora/") {
+		return service.PlatformSora
+	}
+	return service.PlatformOpenAI
 }
 
 // NewOpenAIOAuthHandler creates a new OpenAI OAuth handler
@@ -52,6 +60,7 @@ func (h *OpenAIOAuthHandler) GenerateAuthURL(c *gin.Context) {
 type OpenAIExchangeCodeRequest struct {
 	SessionID   string `json:"session_id" binding:"required"`
 	Code        string `json:"code" binding:"required"`
+	State       string `json:"state" binding:"required"`
 	RedirectURI string `json:"redirect_uri"`
 	ProxyID     *int64 `json:"proxy_id"`
 }
@@ -68,6 +77,7 @@ func (h *OpenAIOAuthHandler) ExchangeCode(c *gin.Context) {
 	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
 		SessionID:   req.SessionID,
 		Code:        req.Code,
+		State:       req.State,
 		RedirectURI: req.RedirectURI,
 		ProxyID:     req.ProxyID,
 	})
@@ -81,16 +91,27 @@ func (h *OpenAIOAuthHandler) ExchangeCode(c *gin.Context) {
 
 // OpenAIRefreshTokenRequest represents the request for refreshing OpenAI token
 type OpenAIRefreshTokenRequest struct {
-	RefreshToken string `json:"refresh_token" binding:"required"`
+	RefreshToken string `json:"refresh_token"`
+	RT           string `json:"rt"`
+	ClientID     string `json:"client_id"`
 	ProxyID      *int64 `json:"proxy_id"`
 }
 
 // RefreshToken refreshes an OpenAI OAuth token
 // POST /api/v1/admin/openai/refresh-token
+// POST /api/v1/admin/sora/rt2at
 func (h *OpenAIOAuthHandler) RefreshToken(c *gin.Context) {
 	var req OpenAIRefreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	refreshToken := strings.TrimSpace(req.RefreshToken)
+	if refreshToken == "" {
+		refreshToken = strings.TrimSpace(req.RT)
+	}
+	if refreshToken == "" {
+		response.BadRequest(c, "refresh_token is required")
 		return
 	}
 
@@ -102,7 +123,7 @@ func (h *OpenAIOAuthHandler) RefreshToken(c *gin.Context) {
 		}
 	}
 
-	tokenInfo, err := h.openaiOAuthService.RefreshToken(c.Request.Context(), req.RefreshToken, proxyURL)
+	tokenInfo, err := h.openaiOAuthService.RefreshTokenWithClientID(c.Request.Context(), refreshToken, proxyURL, strings.TrimSpace(req.ClientID))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -111,8 +132,39 @@ func (h *OpenAIOAuthHandler) RefreshToken(c *gin.Context) {
 	response.Success(c, tokenInfo)
 }
 
-// RefreshAccountToken refreshes token for a specific OpenAI account
+// ExchangeSoraSessionToken exchanges Sora session token to access token
+// POST /api/v1/admin/sora/st2at
+func (h *OpenAIOAuthHandler) ExchangeSoraSessionToken(c *gin.Context) {
+	var req struct {
+		SessionToken string `json:"session_token"`
+		ST           string `json:"st"`
+		ProxyID      *int64 `json:"proxy_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	sessionToken := strings.TrimSpace(req.SessionToken)
+	if sessionToken == "" {
+		sessionToken = strings.TrimSpace(req.ST)
+	}
+	if sessionToken == "" {
+		response.BadRequest(c, "session_token is required")
+		return
+	}
+
+	tokenInfo, err := h.openaiOAuthService.ExchangeSoraSessionToken(c.Request.Context(), sessionToken, req.ProxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, tokenInfo)
+}
+
+// RefreshAccountToken refreshes token for a specific OpenAI/Sora account
 // POST /api/v1/admin/openai/accounts/:id/refresh
+// POST /api/v1/admin/sora/accounts/:id/refresh
 func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -127,9 +179,9 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		return
 	}
 
-	// Ensure account is OpenAI platform
-	if !account.IsOpenAI() {
-		response.BadRequest(c, "Account is not an OpenAI account")
+	platform := oauthPlatformFromPath(c)
+	if account.Platform != platform {
+		response.BadRequest(c, "Account platform does not match OAuth endpoint")
 		return
 	}
 
@@ -167,12 +219,14 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	response.Success(c, dto.AccountFromService(updatedAccount))
 }
 
-// CreateAccountFromOAuth creates a new OpenAI OAuth account from token info
+// CreateAccountFromOAuth creates a new OpenAI/Sora OAuth account from token info
 // POST /api/v1/admin/openai/create-from-oauth
+// POST /api/v1/admin/sora/create-from-oauth
 func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 	var req struct {
 		SessionID   string  `json:"session_id" binding:"required"`
 		Code        string  `json:"code" binding:"required"`
+		State       string  `json:"state" binding:"required"`
 		RedirectURI string  `json:"redirect_uri"`
 		ProxyID     *int64  `json:"proxy_id"`
 		Name        string  `json:"name"`
@@ -189,6 +243,7 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
 		SessionID:   req.SessionID,
 		Code:        req.Code,
+		State:       req.State,
 		RedirectURI: req.RedirectURI,
 		ProxyID:     req.ProxyID,
 	})
@@ -200,19 +255,25 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 	// Build credentials from token info
 	credentials := h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 
+	platform := oauthPlatformFromPath(c)
+
 	// Use email as default name if not provided
 	name := req.Name
 	if name == "" && tokenInfo.Email != "" {
 		name = tokenInfo.Email
 	}
 	if name == "" {
-		name = "OpenAI OAuth Account"
+		if platform == service.PlatformSora {
+			name = "Sora OAuth Account"
+		} else {
+			name = "OpenAI OAuth Account"
+		}
 	}
 
 	// Create account
 	account, err := h.adminService.CreateAccount(c.Request.Context(), &service.CreateAccountInput{
 		Name:        name,
-		Platform:    "openai",
+		Platform:    platform,
 		Type:        "oauth",
 		Credentials: credentials,
 		ProxyID:     req.ProxyID,

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -55,6 +56,10 @@ INSERT INTO ops_error_logs (
   upstream_error_message,
   upstream_error_detail,
   upstream_errors,
+  auth_latency_ms,
+  routing_latency_ms,
+  upstream_latency_ms,
+  response_latency_ms,
   time_to_first_token_ms,
   request_body,
   request_body_truncated,
@@ -64,7 +69,7 @@ INSERT INTO ops_error_logs (
   retry_count,
   created_at
 ) VALUES (
-  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34
+  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
 ) RETURNING id`
 
 	var id int64
@@ -97,6 +102,10 @@ INSERT INTO ops_error_logs (
 		opsNullString(input.UpstreamErrorMessage),
 		opsNullString(input.UpstreamErrorDetail),
 		opsNullString(input.UpstreamErrorsJSON),
+		opsNullInt64(input.AuthLatencyMs),
+		opsNullInt64(input.RoutingLatencyMs),
+		opsNullInt64(input.UpstreamLatencyMs),
+		opsNullInt64(input.ResponseLatencyMs),
 		opsNullInt64(input.TimeToFirstTokenMs),
 		opsNullString(input.RequestBodyJSON),
 		input.RequestBodyTruncated,
@@ -930,6 +939,243 @@ WHERE id = $1`
 	return err
 }
 
+func (r *opsRepository) BatchInsertSystemLogs(ctx context.Context, inputs []*service.OpsInsertSystemLogInput) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("nil ops repository")
+	}
+	if len(inputs) == 0 {
+		return 0, nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	stmt, err := tx.PrepareContext(ctx, pq.CopyIn(
+		"ops_system_logs",
+		"created_at",
+		"level",
+		"component",
+		"message",
+		"request_id",
+		"client_request_id",
+		"user_id",
+		"account_id",
+		"platform",
+		"model",
+		"extra",
+	))
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+
+	var inserted int64
+	for _, input := range inputs {
+		if input == nil {
+			continue
+		}
+		createdAt := input.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		component := strings.TrimSpace(input.Component)
+		level := strings.ToLower(strings.TrimSpace(input.Level))
+		message := strings.TrimSpace(input.Message)
+		if level == "" || message == "" {
+			continue
+		}
+		if component == "" {
+			component = "app"
+		}
+		extra := strings.TrimSpace(input.ExtraJSON)
+		if extra == "" {
+			extra = "{}"
+		}
+		if _, err := stmt.ExecContext(
+			ctx,
+			createdAt.UTC(),
+			level,
+			component,
+			message,
+			opsNullString(input.RequestID),
+			opsNullString(input.ClientRequestID),
+			opsNullInt64(input.UserID),
+			opsNullInt64(input.AccountID),
+			opsNullString(input.Platform),
+			opsNullString(input.Model),
+			extra,
+		); err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return inserted, err
+		}
+		inserted++
+	}
+
+	if _, err := stmt.ExecContext(ctx); err != nil {
+		_ = stmt.Close()
+		_ = tx.Rollback()
+		return inserted, err
+	}
+	if err := stmt.Close(); err != nil {
+		_ = tx.Rollback()
+		return inserted, err
+	}
+	if err := tx.Commit(); err != nil {
+		return inserted, err
+	}
+	return inserted, nil
+}
+
+func (r *opsRepository) ListSystemLogs(ctx context.Context, filter *service.OpsSystemLogFilter) (*service.OpsSystemLogList, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("nil ops repository")
+	}
+	if filter == nil {
+		filter = &service.OpsSystemLogFilter{}
+	}
+
+	page := filter.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	where, args, _ := buildOpsSystemLogsWhere(filter)
+	countSQL := "SELECT COUNT(*) FROM ops_system_logs l " + where
+	var total int
+	if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, err
+	}
+
+	offset := (page - 1) * pageSize
+	argsWithLimit := append(args, pageSize, offset)
+	query := `
+SELECT
+  l.id,
+  l.created_at,
+  l.level,
+  COALESCE(l.component, ''),
+  COALESCE(l.message, ''),
+  COALESCE(l.request_id, ''),
+  COALESCE(l.client_request_id, ''),
+  l.user_id,
+  l.account_id,
+  COALESCE(l.platform, ''),
+  COALESCE(l.model, ''),
+  COALESCE(l.extra::text, '{}')
+FROM ops_system_logs l
+` + where + `
+ORDER BY l.created_at DESC, l.id DESC
+LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
+
+	rows, err := r.db.QueryContext(ctx, query, argsWithLimit...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	logs := make([]*service.OpsSystemLog, 0, pageSize)
+	for rows.Next() {
+		item := &service.OpsSystemLog{}
+		var userID sql.NullInt64
+		var accountID sql.NullInt64
+		var extraRaw string
+		if err := rows.Scan(
+			&item.ID,
+			&item.CreatedAt,
+			&item.Level,
+			&item.Component,
+			&item.Message,
+			&item.RequestID,
+			&item.ClientRequestID,
+			&userID,
+			&accountID,
+			&item.Platform,
+			&item.Model,
+			&extraRaw,
+		); err != nil {
+			return nil, err
+		}
+		if userID.Valid {
+			v := userID.Int64
+			item.UserID = &v
+		}
+		if accountID.Valid {
+			v := accountID.Int64
+			item.AccountID = &v
+		}
+		extraRaw = strings.TrimSpace(extraRaw)
+		if extraRaw != "" && extraRaw != "null" && extraRaw != "{}" {
+			extra := make(map[string]any)
+			if err := json.Unmarshal([]byte(extraRaw), &extra); err == nil {
+				item.Extra = extra
+			}
+		}
+		logs = append(logs, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &service.OpsSystemLogList{
+		Logs:     logs,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func (r *opsRepository) DeleteSystemLogs(ctx context.Context, filter *service.OpsSystemLogCleanupFilter) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("nil ops repository")
+	}
+	if filter == nil {
+		filter = &service.OpsSystemLogCleanupFilter{}
+	}
+
+	where, args, hasConstraint := buildOpsSystemLogsCleanupWhere(filter)
+	if !hasConstraint {
+		return 0, fmt.Errorf("cleanup requires at least one filter condition")
+	}
+
+	query := "DELETE FROM ops_system_logs l " + where
+	res, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (r *opsRepository) InsertSystemLogCleanupAudit(ctx context.Context, input *service.OpsSystemLogCleanupAudit) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("nil ops repository")
+	}
+	if input == nil {
+		return fmt.Errorf("nil input")
+	}
+	createdAt := input.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO ops_system_log_cleanup_audits (
+  created_at,
+  operator_id,
+  conditions,
+  deleted_rows
+) VALUES ($1,$2,$3,$4)
+`, createdAt.UTC(), input.OperatorID, input.Conditions, input.DeletedRows)
+	return err
+}
+
 func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	clauses := make([]string, 0, 12)
 	args := make([]any, 0, 12)
@@ -948,7 +1194,7 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	}
 	// Keep list endpoints scoped to client errors unless explicitly filtering upstream phase.
 	if phaseFilter != "upstream" {
-		clauses = append(clauses, "COALESCE(status_code, 0) >= 400")
+		clauses = append(clauses, "COALESCE(e.status_code, 0) >= 400")
 	}
 
 	if filter.StartTime != nil && !filter.StartTime.IsZero() {
@@ -962,33 +1208,33 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	}
 	if p := strings.TrimSpace(filter.Platform); p != "" {
 		args = append(args, p)
-		clauses = append(clauses, "platform = $"+itoa(len(args)))
+		clauses = append(clauses, "e.platform = $"+itoa(len(args)))
 	}
 	if filter.GroupID != nil && *filter.GroupID > 0 {
 		args = append(args, *filter.GroupID)
-		clauses = append(clauses, "group_id = $"+itoa(len(args)))
+		clauses = append(clauses, "e.group_id = $"+itoa(len(args)))
 	}
 	if filter.AccountID != nil && *filter.AccountID > 0 {
 		args = append(args, *filter.AccountID)
-		clauses = append(clauses, "account_id = $"+itoa(len(args)))
+		clauses = append(clauses, "e.account_id = $"+itoa(len(args)))
 	}
 	if phase := phaseFilter; phase != "" {
 		args = append(args, phase)
-		clauses = append(clauses, "error_phase = $"+itoa(len(args)))
+		clauses = append(clauses, "e.error_phase = $"+itoa(len(args)))
 	}
 	if filter != nil {
 		if owner := strings.TrimSpace(strings.ToLower(filter.Owner)); owner != "" {
 			args = append(args, owner)
-			clauses = append(clauses, "LOWER(COALESCE(error_owner,'')) = $"+itoa(len(args)))
+			clauses = append(clauses, "LOWER(COALESCE(e.error_owner,'')) = $"+itoa(len(args)))
 		}
 		if source := strings.TrimSpace(strings.ToLower(filter.Source)); source != "" {
 			args = append(args, source)
-			clauses = append(clauses, "LOWER(COALESCE(error_source,'')) = $"+itoa(len(args)))
+			clauses = append(clauses, "LOWER(COALESCE(e.error_source,'')) = $"+itoa(len(args)))
 		}
 	}
 	if resolvedFilter != nil {
 		args = append(args, *resolvedFilter)
-		clauses = append(clauses, "COALESCE(resolved,false) = $"+itoa(len(args)))
+		clauses = append(clauses, "COALESCE(e.resolved,false) = $"+itoa(len(args)))
 	}
 
 	// View filter: errors vs excluded vs all.
@@ -1000,49 +1246,138 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	}
 	switch view {
 	case "", "errors":
-		clauses = append(clauses, "COALESCE(is_business_limited,false) = false")
+		clauses = append(clauses, "COALESCE(e.is_business_limited,false) = false")
 	case "excluded":
-		clauses = append(clauses, "COALESCE(is_business_limited,false) = true")
+		clauses = append(clauses, "COALESCE(e.is_business_limited,false) = true")
 	case "all":
 		// no-op
 	default:
 		// treat unknown as default 'errors'
-		clauses = append(clauses, "COALESCE(is_business_limited,false) = false")
+		clauses = append(clauses, "COALESCE(e.is_business_limited,false) = false")
 	}
 	if len(filter.StatusCodes) > 0 {
 		args = append(args, pq.Array(filter.StatusCodes))
-		clauses = append(clauses, "COALESCE(upstream_status_code, status_code, 0) = ANY($"+itoa(len(args))+")")
+		clauses = append(clauses, "COALESCE(e.upstream_status_code, e.status_code, 0) = ANY($"+itoa(len(args))+")")
 	} else if filter.StatusCodesOther {
 		// "Other" means: status codes not in the common list.
 		known := []int{400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504, 529}
 		args = append(args, pq.Array(known))
-		clauses = append(clauses, "NOT (COALESCE(upstream_status_code, status_code, 0) = ANY($"+itoa(len(args))+"))")
+		clauses = append(clauses, "NOT (COALESCE(e.upstream_status_code, e.status_code, 0) = ANY($"+itoa(len(args))+"))")
 	}
 	// Exact correlation keys (preferred for request↔upstream linkage).
 	if rid := strings.TrimSpace(filter.RequestID); rid != "" {
 		args = append(args, rid)
-		clauses = append(clauses, "COALESCE(request_id,'') = $"+itoa(len(args)))
+		clauses = append(clauses, "COALESCE(e.request_id,'') = $"+itoa(len(args)))
 	}
 	if crid := strings.TrimSpace(filter.ClientRequestID); crid != "" {
 		args = append(args, crid)
-		clauses = append(clauses, "COALESCE(client_request_id,'') = $"+itoa(len(args)))
+		clauses = append(clauses, "COALESCE(e.client_request_id,'') = $"+itoa(len(args)))
 	}
 
 	if q := strings.TrimSpace(filter.Query); q != "" {
 		like := "%" + q + "%"
 		args = append(args, like)
 		n := itoa(len(args))
-		clauses = append(clauses, "(request_id ILIKE $"+n+" OR client_request_id ILIKE $"+n+" OR error_message ILIKE $"+n+")")
+		clauses = append(clauses, "(e.request_id ILIKE $"+n+" OR e.client_request_id ILIKE $"+n+" OR e.error_message ILIKE $"+n+")")
 	}
 
 	if userQuery := strings.TrimSpace(filter.UserQuery); userQuery != "" {
 		like := "%" + userQuery + "%"
 		args = append(args, like)
 		n := itoa(len(args))
-		clauses = append(clauses, "u.email ILIKE $"+n)
+		clauses = append(clauses, "EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id AND u.email ILIKE $"+n+")")
 	}
 
 	return "WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func buildOpsSystemLogsWhere(filter *service.OpsSystemLogFilter) (string, []any, bool) {
+	clauses := make([]string, 0, 10)
+	args := make([]any, 0, 10)
+	clauses = append(clauses, "1=1")
+	hasConstraint := false
+
+	if filter != nil && filter.StartTime != nil && !filter.StartTime.IsZero() {
+		args = append(args, filter.StartTime.UTC())
+		clauses = append(clauses, "l.created_at >= $"+itoa(len(args)))
+		hasConstraint = true
+	}
+	if filter != nil && filter.EndTime != nil && !filter.EndTime.IsZero() {
+		args = append(args, filter.EndTime.UTC())
+		clauses = append(clauses, "l.created_at < $"+itoa(len(args)))
+		hasConstraint = true
+	}
+	if filter != nil {
+		if v := strings.ToLower(strings.TrimSpace(filter.Level)); v != "" {
+			args = append(args, v)
+			clauses = append(clauses, "LOWER(COALESCE(l.level,'')) = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if v := strings.TrimSpace(filter.Component); v != "" {
+			args = append(args, v)
+			clauses = append(clauses, "COALESCE(l.component,'') = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if v := strings.TrimSpace(filter.RequestID); v != "" {
+			args = append(args, v)
+			clauses = append(clauses, "COALESCE(l.request_id,'') = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if v := strings.TrimSpace(filter.ClientRequestID); v != "" {
+			args = append(args, v)
+			clauses = append(clauses, "COALESCE(l.client_request_id,'') = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if filter.UserID != nil && *filter.UserID > 0 {
+			args = append(args, *filter.UserID)
+			clauses = append(clauses, "l.user_id = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if filter.AccountID != nil && *filter.AccountID > 0 {
+			args = append(args, *filter.AccountID)
+			clauses = append(clauses, "l.account_id = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if v := strings.TrimSpace(filter.Platform); v != "" {
+			args = append(args, v)
+			clauses = append(clauses, "COALESCE(l.platform,'') = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if v := strings.TrimSpace(filter.Model); v != "" {
+			args = append(args, v)
+			clauses = append(clauses, "COALESCE(l.model,'') = $"+itoa(len(args)))
+			hasConstraint = true
+		}
+		if v := strings.TrimSpace(filter.Query); v != "" {
+			like := "%" + v + "%"
+			args = append(args, like)
+			n := itoa(len(args))
+			clauses = append(clauses, "(l.message ILIKE $"+n+" OR COALESCE(l.request_id,'') ILIKE $"+n+" OR COALESCE(l.client_request_id,'') ILIKE $"+n+" OR COALESCE(l.extra::text,'') ILIKE $"+n+")")
+			hasConstraint = true
+		}
+	}
+
+	return "WHERE " + strings.Join(clauses, " AND "), args, hasConstraint
+}
+
+func buildOpsSystemLogsCleanupWhere(filter *service.OpsSystemLogCleanupFilter) (string, []any, bool) {
+	if filter == nil {
+		filter = &service.OpsSystemLogCleanupFilter{}
+	}
+	listFilter := &service.OpsSystemLogFilter{
+		StartTime:       filter.StartTime,
+		EndTime:         filter.EndTime,
+		Level:           filter.Level,
+		Component:       filter.Component,
+		RequestID:       filter.RequestID,
+		ClientRequestID: filter.ClientRequestID,
+		UserID:          filter.UserID,
+		AccountID:       filter.AccountID,
+		Platform:        filter.Platform,
+		Model:           filter.Model,
+		Query:           filter.Query,
+	}
+	return buildOpsSystemLogsWhere(listFilter)
 }
 
 // Helpers for nullable args

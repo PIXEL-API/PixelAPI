@@ -17,6 +17,8 @@ import (
 const (
 	// OAuth Client ID for OpenAI (Codex CLI official)
 	ClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+	// OAuth Client ID for Sora mobile flow (aligned with sora2api)
+	SoraClientID = "app_LlGpXReQgckcGGUo2JrYvtJK"
 
 	// OAuth endpoints
 	AuthorizeURL = "https://auth.openai.com/oauth/authorize"
@@ -47,6 +49,7 @@ type OAuthSession struct {
 type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*OAuthSession
+	stopOnce sync.Once
 	stopCh   chan struct{}
 }
 
@@ -92,7 +95,9 @@ func (s *SessionStore) Delete(sessionID string) {
 
 // Stop stops the cleanup goroutine
 func (s *SessionStore) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
 }
 
 // cleanup removes expired sessions periodically

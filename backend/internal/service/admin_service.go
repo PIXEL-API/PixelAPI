@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/util/soraerror"
 )
 
 // AdminService interface defines admin management operations
@@ -65,6 +69,7 @@ type AdminService interface {
 	GetProxyAccounts(ctx context.Context, proxyID int64) ([]ProxyAccountSummary, error)
 	CheckProxyExists(ctx context.Context, host string, port int, username, password string) (bool, error)
 	TestProxy(ctx context.Context, id int64) (*ProxyTestResult, error)
+	CheckProxyQuality(ctx context.Context, id int64) (*ProxyQualityCheckResult, error)
 
 	// Redeem code management
 	ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, search string) ([]RedeemCode, int64, error)
@@ -111,11 +116,16 @@ type CreateGroupInput struct {
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	ImagePrice1K    *float64
-	ImagePrice2K    *float64
-	ImagePrice4K    *float64
-	ClaudeCodeOnly  bool   // 仅允许 Claude Code 客户端
-	FallbackGroupID *int64 // 降级分组 ID
+	ImagePrice1K *float64
+	ImagePrice2K *float64
+	ImagePrice4K *float64
+	// Sora 按次计费配置
+	SoraImagePrice360          *float64
+	SoraImagePrice540          *float64
+	SoraVideoPricePerRequest   *float64
+	SoraVideoPricePerRequestHD *float64
+	ClaudeCodeOnly             bool   // 仅允许 Claude Code 客户端
+	FallbackGroupID            *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -140,11 +150,16 @@ type UpdateGroupInput struct {
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	ImagePrice1K    *float64
-	ImagePrice2K    *float64
-	ImagePrice4K    *float64
-	ClaudeCodeOnly  *bool  // 仅允许 Claude Code 客户端
-	FallbackGroupID *int64 // 降级分组 ID
+	ImagePrice1K *float64
+	ImagePrice2K *float64
+	ImagePrice4K *float64
+	// Sora 按次计费配置
+	SoraImagePrice360          *float64
+	SoraImagePrice540          *float64
+	SoraVideoPricePerRequest   *float64
+	SoraVideoPricePerRequestHD *float64
+	ClaudeCodeOnly             *bool  // 仅允许 Claude Code 客户端
+	FallbackGroupID            *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -278,6 +293,32 @@ type ProxyTestResult struct {
 	CountryCode string `json:"country_code,omitempty"`
 }
 
+type ProxyQualityCheckResult struct {
+	ProxyID        int64                   `json:"proxy_id"`
+	Score          int                     `json:"score"`
+	Grade          string                  `json:"grade"`
+	Summary        string                  `json:"summary"`
+	ExitIP         string                  `json:"exit_ip,omitempty"`
+	Country        string                  `json:"country,omitempty"`
+	CountryCode    string                  `json:"country_code,omitempty"`
+	BaseLatencyMs  int64                   `json:"base_latency_ms,omitempty"`
+	PassedCount    int                     `json:"passed_count"`
+	WarnCount      int                     `json:"warn_count"`
+	FailedCount    int                     `json:"failed_count"`
+	ChallengeCount int                     `json:"challenge_count"`
+	CheckedAt      int64                   `json:"checked_at"`
+	Items          []ProxyQualityCheckItem `json:"items"`
+}
+
+type ProxyQualityCheckItem struct {
+	Target     string `json:"target"`
+	Status     string `json:"status"` // pass/warn/fail/challenge
+	HTTPStatus int    `json:"http_status,omitempty"`
+	LatencyMs  int64  `json:"latency_ms,omitempty"`
+	Message    string `json:"message,omitempty"`
+	CFRay      string `json:"cf_ray,omitempty"`
+}
+
 // ProxyExitInfo represents proxy exit information from ip-api.com
 type ProxyExitInfo struct {
 	IP          string
@@ -292,11 +333,64 @@ type ProxyExitInfoProber interface {
 	ProbeProxy(ctx context.Context, proxyURL string) (*ProxyExitInfo, int64, error)
 }
 
+type proxyQualityTarget struct {
+	Target          string
+	URL             string
+	Method          string
+	AllowedStatuses map[int]struct{}
+}
+
+var proxyQualityTargets = []proxyQualityTarget{
+	{
+		Target: "openai",
+		URL:    "https://api.openai.com/v1/models",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized: {},
+		},
+	},
+	{
+		Target: "anthropic",
+		URL:    "https://api.anthropic.com/v1/messages",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized:     {},
+			http.StatusMethodNotAllowed: {},
+			http.StatusNotFound:         {},
+			http.StatusBadRequest:       {},
+		},
+	},
+	{
+		Target: "gemini",
+		URL:    "https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusOK: {},
+		},
+	},
+	{
+		Target: "sora",
+		URL:    "https://sora.chatgpt.com/backend/me",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized: {},
+		},
+	},
+}
+
+const (
+	proxyQualityRequestTimeout        = 15 * time.Second
+	proxyQualityResponseHeaderTimeout = 10 * time.Second
+	proxyQualityMaxBodyBytes          = int64(8 * 1024)
+	proxyQualityClientUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+)
+
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
 	userRepo             UserRepository
 	groupRepo            GroupRepository
 	accountRepo          AccountRepository
+	soraAccountRepo      SoraAccountRepository // Sora 账号扩展表仓储
 	proxyRepo            ProxyRepository
 	apiKeyRepo           APIKeyRepository
 	redeemCodeRepo       RedeemCodeRepository
@@ -312,6 +406,7 @@ func NewAdminService(
 	userRepo UserRepository,
 	groupRepo GroupRepository,
 	accountRepo AccountRepository,
+	soraAccountRepo SoraAccountRepository,
 	proxyRepo ProxyRepository,
 	apiKeyRepo APIKeyRepository,
 	redeemCodeRepo RedeemCodeRepository,
@@ -325,6 +420,7 @@ func NewAdminService(
 		userRepo:             userRepo,
 		groupRepo:            groupRepo,
 		accountRepo:          accountRepo,
+		soraAccountRepo:      soraAccountRepo,
 		proxyRepo:            proxyRepo,
 		apiKeyRepo:           apiKeyRepo,
 		redeemCodeRepo:       redeemCodeRepo,
@@ -348,7 +444,7 @@ func (s *adminServiceImpl) ListUsers(ctx context.Context, page, pageSize int, fi
 		for i := range users {
 			rates, err := s.userGroupRateRepo.GetByUserID(ctx, users[i].ID)
 			if err != nil {
-				log.Printf("failed to load user group rates: user_id=%d err=%v", users[i].ID, err)
+				logger.LegacyPrintf("service.admin", "failed to load user group rates: user_id=%d err=%v", users[i].ID, err)
 				continue
 			}
 			users[i].GroupRates = rates
@@ -366,7 +462,7 @@ func (s *adminServiceImpl) GetUser(ctx context.Context, id int64) (*User, error)
 	if s.userGroupRateRepo != nil {
 		rates, err := s.userGroupRateRepo.GetByUserID(ctx, id)
 		if err != nil {
-			log.Printf("failed to load user group rates: user_id=%d err=%v", id, err)
+			logger.LegacyPrintf("service.admin", "failed to load user group rates: user_id=%d err=%v", id, err)
 		} else {
 			user.GroupRates = rates
 		}
@@ -444,7 +540,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	// 同步用户专属分组倍率
 	if input.GroupRates != nil && s.userGroupRateRepo != nil {
 		if err := s.userGroupRateRepo.SyncUserGroupRates(ctx, user.ID, input.GroupRates); err != nil {
-			log.Printf("failed to sync user group rates: user_id=%d err=%v", user.ID, err)
+			logger.LegacyPrintf("service.admin", "failed to sync user group rates: user_id=%d err=%v", user.ID, err)
 		}
 	}
 
@@ -458,7 +554,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if concurrencyDiff != 0 {
 		code, err := GenerateRedeemCode()
 		if err != nil {
-			log.Printf("failed to generate adjustment redeem code: %v", err)
+			logger.LegacyPrintf("service.admin", "failed to generate adjustment redeem code: %v", err)
 			return user, nil
 		}
 		adjustmentRecord := &RedeemCode{
@@ -471,7 +567,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		now := time.Now()
 		adjustmentRecord.UsedAt = &now
 		if err := s.redeemCodeRepo.Create(ctx, adjustmentRecord); err != nil {
-			log.Printf("failed to create concurrency adjustment redeem code: %v", err)
+			logger.LegacyPrintf("service.admin", "failed to create concurrency adjustment redeem code: %v", err)
 		}
 	}
 
@@ -488,7 +584,7 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 		return errors.New("cannot delete admin user")
 	}
 	if err := s.userRepo.Delete(ctx, id); err != nil {
-		log.Printf("delete user failed: user_id=%d err=%v", id, err)
+		logger.LegacyPrintf("service.admin", "delete user failed: user_id=%d err=%v", id, err)
 		return err
 	}
 	if s.authCacheInvalidator != nil {
@@ -531,7 +627,7 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := s.billingCacheService.InvalidateUserBalance(cacheCtx, userID); err != nil {
-				log.Printf("invalidate user balance cache failed: user_id=%d err=%v", userID, err)
+				logger.LegacyPrintf("service.admin", "invalidate user balance cache failed: user_id=%d err=%v", userID, err)
 			}
 		}()
 	}
@@ -539,7 +635,7 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 	if balanceDiff != 0 {
 		code, err := GenerateRedeemCode()
 		if err != nil {
-			log.Printf("failed to generate adjustment redeem code: %v", err)
+			logger.LegacyPrintf("service.admin", "failed to generate adjustment redeem code: %v", err)
 			return user, nil
 		}
 
@@ -555,7 +651,7 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 		adjustmentRecord.UsedAt = &now
 
 		if err := s.redeemCodeRepo.Create(ctx, adjustmentRecord); err != nil {
-			log.Printf("failed to create balance adjustment redeem code: %v", err)
+			logger.LegacyPrintf("service.admin", "failed to create balance adjustment redeem code: %v", err)
 		}
 	}
 
@@ -639,6 +735,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
 	imagePrice2K := normalizePrice(input.ImagePrice2K)
 	imagePrice4K := normalizePrice(input.ImagePrice4K)
+	soraImagePrice360 := normalizePrice(input.SoraImagePrice360)
+	soraImagePrice540 := normalizePrice(input.SoraImagePrice540)
+	soraVideoPrice := normalizePrice(input.SoraVideoPricePerRequest)
+	soraVideoPriceHD := normalizePrice(input.SoraVideoPricePerRequestHD)
 
 	// 校验降级分组
 	if input.FallbackGroupID != nil {
@@ -709,6 +809,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		ImagePrice1K:                    imagePrice1K,
 		ImagePrice2K:                    imagePrice2K,
 		ImagePrice4K:                    imagePrice4K,
+		SoraImagePrice360:               soraImagePrice360,
+		SoraImagePrice540:               soraImagePrice540,
+		SoraVideoPricePerRequest:        soraVideoPrice,
+		SoraVideoPricePerRequestHD:      soraVideoPriceHD,
 		ClaudeCodeOnly:                  input.ClaudeCodeOnly,
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
@@ -865,6 +969,18 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.ImagePrice4K != nil {
 		group.ImagePrice4K = normalizePrice(input.ImagePrice4K)
 	}
+	if input.SoraImagePrice360 != nil {
+		group.SoraImagePrice360 = normalizePrice(input.SoraImagePrice360)
+	}
+	if input.SoraImagePrice540 != nil {
+		group.SoraImagePrice540 = normalizePrice(input.SoraImagePrice540)
+	}
+	if input.SoraVideoPricePerRequest != nil {
+		group.SoraVideoPricePerRequest = normalizePrice(input.SoraVideoPricePerRequest)
+	}
+	if input.SoraVideoPricePerRequestHD != nil {
+		group.SoraVideoPricePerRequestHD = normalizePrice(input.SoraVideoPricePerRequestHD)
+	}
 
 	// Claude Code 客户端限制
 	if input.ClaudeCodeOnly != nil {
@@ -993,7 +1109,7 @@ func (s *adminServiceImpl) DeleteGroup(ctx context.Context, id int64) error {
 			defer cancel()
 			for _, userID := range affectedUserIDs {
 				if err := s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID); err != nil {
-					log.Printf("invalidate subscription cache failed: user_id=%d group_id=%d err=%v", userID, groupID, err)
+					logger.LegacyPrintf("service.admin", "invalidate subscription cache failed: user_id=%d group_id=%d err=%v", userID, groupID, err)
 				}
 			}
 		}()
@@ -1103,6 +1219,18 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, err
 	}
 
+	// 如果是 Sora 平台账号，自动创建 sora_accounts 扩展表记录
+	if account.Platform == PlatformSora && s.soraAccountRepo != nil {
+		soraUpdates := map[string]any{
+			"access_token":  account.GetCredential("access_token"),
+			"refresh_token": account.GetCredential("refresh_token"),
+		}
+		if err := s.soraAccountRepo.Upsert(ctx, account.ID, soraUpdates); err != nil {
+			// 只记录警告日志，不阻塞账号创建
+			logger.LegacyPrintf("service.admin", "[AdminService] 创建 sora_accounts 记录失败: account_id=%d err=%v", account.ID, err)
+		}
+	}
+
 	// 绑定分组
 	if len(groupIDs) > 0 {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
@@ -1200,7 +1328,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）
-	return s.accountRepo.GetByID(ctx, id)
+	updated, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 // BulkUpdateAccounts updates multiple accounts in one request.
@@ -1216,16 +1348,21 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return result, nil
 	}
 
-	// Preload account platforms for mixed channel risk checks if group bindings are requested.
+	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
+
+	// 预加载账号平台信息（混合渠道检查或 Sora 同步需要）。
 	platformByID := map[int64]string{}
-	if input.GroupIDs != nil && !input.SkipMixedChannelCheck {
+	if needMixedChannelCheck {
 		accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
-			return nil, err
-		}
-		for _, account := range accounts {
-			if account != nil {
-				platformByID[account.ID] = account.Platform
+			if needMixedChannelCheck {
+				return nil, err
+			}
+		} else {
+			for _, account := range accounts {
+				if account != nil {
+					platformByID[account.ID] = account.Platform
+				}
 			}
 		}
 	}
@@ -1318,7 +1455,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
-	return s.accountRepo.Delete(ctx, id)
+	if err := s.accountRepo.Delete(ctx, id); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error) {
@@ -1351,7 +1491,11 @@ func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, 
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
 	}
-	return s.accountRepo.GetByID(ctx, id)
+	updated, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 // Proxy management implementations
@@ -1629,6 +1773,270 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 	}, nil
 }
 
+func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*ProxyQualityCheckResult, error) {
+	proxy, err := s.proxyRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ProxyQualityCheckResult{
+		ProxyID:   id,
+		Score:     100,
+		Grade:     "A",
+		CheckedAt: time.Now().Unix(),
+		Items:     make([]ProxyQualityCheckItem, 0, len(proxyQualityTargets)+1),
+	}
+
+	proxyURL := proxy.URL()
+	if s.proxyProber == nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:  "base_connectivity",
+			Status:  "fail",
+			Message: "代理探测服务未配置",
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
+		return result, nil
+	}
+
+	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxyURL)
+	if err != nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:    "base_connectivity",
+			Status:    "fail",
+			LatencyMs: latencyMs,
+			Message:   err.Error(),
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
+		return result, nil
+	}
+
+	result.ExitIP = exitInfo.IP
+	result.Country = exitInfo.Country
+	result.CountryCode = exitInfo.CountryCode
+	result.BaseLatencyMs = latencyMs
+	result.Items = append(result.Items, ProxyQualityCheckItem{
+		Target:    "base_connectivity",
+		Status:    "pass",
+		LatencyMs: latencyMs,
+		Message:   "代理出口连通正常",
+	})
+	result.PassedCount++
+
+	client, err := httpclient.GetClient(httpclient.Options{
+		ProxyURL:              proxyURL,
+		Timeout:               proxyQualityRequestTimeout,
+		ResponseHeaderTimeout: proxyQualityResponseHeaderTimeout,
+		ProxyStrict:           true,
+	})
+	if err != nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:  "http_client",
+			Status:  "fail",
+			Message: fmt.Sprintf("创建检测客户端失败: %v", err),
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, exitInfo)
+		return result, nil
+	}
+
+	for _, target := range proxyQualityTargets {
+		item := runProxyQualityTarget(ctx, client, target)
+		result.Items = append(result.Items, item)
+		switch item.Status {
+		case "pass":
+			result.PassedCount++
+		case "warn":
+			result.WarnCount++
+		case "challenge":
+			result.ChallengeCount++
+		default:
+			result.FailedCount++
+		}
+	}
+
+	finalizeProxyQualityResult(result)
+	s.saveProxyQualitySnapshot(ctx, id, result, exitInfo)
+	return result, nil
+}
+
+func runProxyQualityTarget(ctx context.Context, client *http.Client, target proxyQualityTarget) ProxyQualityCheckItem {
+	item := ProxyQualityCheckItem{
+		Target: target.Target,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, target.Method, target.URL, nil)
+	if err != nil {
+		item.Status = "fail"
+		item.Message = fmt.Sprintf("构建请求失败: %v", err)
+		return item
+	}
+	req.Header.Set("Accept", "application/json,text/html,*/*")
+	req.Header.Set("User-Agent", proxyQualityClientUserAgent)
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		item.Status = "fail"
+		item.LatencyMs = time.Since(start).Milliseconds()
+		item.Message = fmt.Sprintf("请求失败: %v", err)
+		return item
+	}
+	defer func() { _ = resp.Body.Close() }()
+	item.LatencyMs = time.Since(start).Milliseconds()
+	item.HTTPStatus = resp.StatusCode
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, proxyQualityMaxBodyBytes+1))
+	if readErr != nil {
+		item.Status = "fail"
+		item.Message = fmt.Sprintf("读取响应失败: %v", readErr)
+		return item
+	}
+	if int64(len(body)) > proxyQualityMaxBodyBytes {
+		body = body[:proxyQualityMaxBodyBytes]
+	}
+
+	if target.Target == "sora" && soraerror.IsCloudflareChallengeResponse(resp.StatusCode, resp.Header, body) {
+		item.Status = "challenge"
+		item.CFRay = soraerror.ExtractCloudflareRayID(resp.Header, body)
+		item.Message = "Sora 命中 Cloudflare challenge"
+		return item
+	}
+
+	if _, ok := target.AllowedStatuses[resp.StatusCode]; ok {
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			item.Status = "pass"
+			item.Message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		} else {
+			item.Status = "warn"
+			item.Message = fmt.Sprintf("HTTP %d（目标可达，但鉴权或方法受限）", resp.StatusCode)
+		}
+		return item
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		item.Status = "warn"
+		item.Message = "目标返回 429，可能存在频控"
+		return item
+	}
+
+	item.Status = "fail"
+	item.Message = fmt.Sprintf("非预期状态码: %d", resp.StatusCode)
+	return item
+}
+
+func finalizeProxyQualityResult(result *ProxyQualityCheckResult) {
+	if result == nil {
+		return
+	}
+	score := 100 - result.WarnCount*10 - result.FailedCount*22 - result.ChallengeCount*30
+	if score < 0 {
+		score = 0
+	}
+	result.Score = score
+	result.Grade = proxyQualityGrade(score)
+	result.Summary = fmt.Sprintf(
+		"通过 %d 项，告警 %d 项，失败 %d 项，挑战 %d 项",
+		result.PassedCount,
+		result.WarnCount,
+		result.FailedCount,
+		result.ChallengeCount,
+	)
+}
+
+func proxyQualityGrade(score int) string {
+	switch {
+	case score >= 90:
+		return "A"
+	case score >= 75:
+		return "B"
+	case score >= 60:
+		return "C"
+	case score >= 40:
+		return "D"
+	default:
+		return "F"
+	}
+}
+
+func proxyQualityOverallStatus(result *ProxyQualityCheckResult) string {
+	if result == nil {
+		return ""
+	}
+	if result.ChallengeCount > 0 {
+		return "challenge"
+	}
+	if result.FailedCount > 0 {
+		return "failed"
+	}
+	if result.WarnCount > 0 {
+		return "warn"
+	}
+	if result.PassedCount > 0 {
+		return "healthy"
+	}
+	return "failed"
+}
+
+func proxyQualityFirstCFRay(result *ProxyQualityCheckResult) string {
+	if result == nil {
+		return ""
+	}
+	for _, item := range result.Items {
+		if item.CFRay != "" {
+			return item.CFRay
+		}
+	}
+	return ""
+}
+
+func proxyQualityBaseConnectivityPass(result *ProxyQualityCheckResult) bool {
+	if result == nil {
+		return false
+	}
+	for _, item := range result.Items {
+		if item.Target == "base_connectivity" {
+			return item.Status == "pass"
+		}
+	}
+	return false
+}
+
+func (s *adminServiceImpl) saveProxyQualitySnapshot(ctx context.Context, proxyID int64, result *ProxyQualityCheckResult, exitInfo *ProxyExitInfo) {
+	if result == nil {
+		return
+	}
+	score := result.Score
+	checkedAt := result.CheckedAt
+	info := &ProxyLatencyInfo{
+		Success:          proxyQualityBaseConnectivityPass(result),
+		Message:          result.Summary,
+		QualityStatus:    proxyQualityOverallStatus(result),
+		QualityScore:     &score,
+		QualityGrade:     result.Grade,
+		QualitySummary:   result.Summary,
+		QualityCheckedAt: &checkedAt,
+		QualityCFRay:     proxyQualityFirstCFRay(result),
+		UpdatedAt:        time.Now(),
+	}
+	if result.BaseLatencyMs > 0 {
+		latency := result.BaseLatencyMs
+		info.LatencyMs = &latency
+	}
+	if exitInfo != nil {
+		info.IPAddress = exitInfo.IP
+		info.Country = exitInfo.Country
+		info.CountryCode = exitInfo.CountryCode
+		info.Region = exitInfo.Region
+		info.City = exitInfo.City
+	}
+	s.saveProxyLatency(ctx, proxyID, info)
+}
+
 func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) {
 	if s.proxyProber == nil || proxy == nil {
 		return
@@ -1718,7 +2126,7 @@ func (s *adminServiceImpl) attachProxyLatency(ctx context.Context, proxies []Pro
 
 	latencies, err := s.proxyLatencyCache.GetProxyLatencies(ctx, ids)
 	if err != nil {
-		log.Printf("Warning: load proxy latency cache failed: %v", err)
+		logger.LegacyPrintf("service.admin", "Warning: load proxy latency cache failed: %v", err)
 		return
 	}
 
@@ -1739,6 +2147,11 @@ func (s *adminServiceImpl) attachProxyLatency(ctx context.Context, proxies []Pro
 		proxies[i].CountryCode = info.CountryCode
 		proxies[i].Region = info.Region
 		proxies[i].City = info.City
+		proxies[i].QualityStatus = info.QualityStatus
+		proxies[i].QualityScore = info.QualityScore
+		proxies[i].QualityGrade = info.QualityGrade
+		proxies[i].QualitySummary = info.QualitySummary
+		proxies[i].QualityChecked = info.QualityCheckedAt
 	}
 }
 
@@ -1746,8 +2159,28 @@ func (s *adminServiceImpl) saveProxyLatency(ctx context.Context, proxyID int64, 
 	if s.proxyLatencyCache == nil || info == nil {
 		return
 	}
-	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, info); err != nil {
-		log.Printf("Warning: store proxy latency cache failed: %v", err)
+
+	merged := *info
+	if latencies, err := s.proxyLatencyCache.GetProxyLatencies(ctx, []int64{proxyID}); err == nil {
+		if existing := latencies[proxyID]; existing != nil {
+			if merged.QualityCheckedAt == nil &&
+				merged.QualityScore == nil &&
+				merged.QualityGrade == "" &&
+				merged.QualityStatus == "" &&
+				merged.QualitySummary == "" &&
+				merged.QualityCFRay == "" {
+				merged.QualityStatus = existing.QualityStatus
+				merged.QualityScore = existing.QualityScore
+				merged.QualityGrade = existing.QualityGrade
+				merged.QualitySummary = existing.QualitySummary
+				merged.QualityCheckedAt = existing.QualityCheckedAt
+				merged.QualityCFRay = existing.QualityCFRay
+			}
+		}
+	}
+
+	if err := s.proxyLatencyCache.SetProxyLatency(ctx, proxyID, &merged); err != nil {
+		logger.LegacyPrintf("service.admin", "Warning: store proxy latency cache failed: %v", err)
 	}
 }
 
