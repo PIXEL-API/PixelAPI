@@ -1370,6 +1370,10 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				ForceCacheBilling: switchErr.IsStickySession,
 			}
 		}
+		// 区分客户端取消和真正的上游失败，返回更准确的错误消息
+		if c.Request.Context().Err() != nil {
+			return nil, s.writeClaudeError(c, http.StatusBadGateway, "client_disconnected", "Client disconnected before upstream response")
+		}
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries")
 	}
 	resp := result.resp
@@ -2041,6 +2045,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 				StatusCode:        http.StatusServiceUnavailable,
 				ForceCacheBilling: switchErr.IsStickySession,
 			}
+		}
+		// 区分客户端取消和真正的上游失败，返回更准确的错误消息
+		if c.Request.Context().Err() != nil {
+			return nil, s.writeGoogleError(c, http.StatusBadGateway, "Client disconnected before upstream response")
 		}
 		return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream request failed after retries")
 	}
