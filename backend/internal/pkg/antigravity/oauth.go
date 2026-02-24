@@ -54,10 +54,17 @@ const (
 // defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置，默认 1.18.4
 var defaultUserAgentVersion = "1.18.4"
 
+// defaultClientSecret 可通过环境变量 ANTIGRAVITY_OAUTH_CLIENT_SECRET 配置
+var defaultClientSecret = "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"
+
 func init() {
 	// 从环境变量读取版本号，未设置则使用默认值
 	if version := os.Getenv("ANTIGRAVITY_USER_AGENT_VERSION"); version != "" {
 		defaultUserAgentVersion = version
+	}
+	// 从环境变量读取 client_secret，未设置则使用默认值
+	if secret := os.Getenv(AntigravityOAuthClientSecretEnv); secret != "" {
+		defaultClientSecret = secret
 	}
 }
 
@@ -67,13 +74,8 @@ func GetUserAgent() string {
 }
 
 func getClientSecret() (string, error) {
-	if v := strings.TrimSpace(ClientSecret); v != "" {
+	if v := strings.TrimSpace(defaultClientSecret); v != "" {
 		return v, nil
-	}
-	if v, ok := os.LookupEnv(AntigravityOAuthClientSecretEnv); ok {
-		if vv := strings.TrimSpace(v); vv != "" {
-			return vv, nil
-		}
 	}
 	return "", infraerrors.Newf(http.StatusBadRequest, "ANTIGRAVITY_OAUTH_CLIENT_SECRET_MISSING", "missing antigravity oauth client_secret; set %s", AntigravityOAuthClientSecretEnv)
 }
