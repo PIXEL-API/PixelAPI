@@ -267,3 +267,38 @@ func TestAccountGetMappedModel(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountGetModelMapping_AntigravityEnsuresGemini3FlashPassthrough(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gemini-3-pro-high": "gemini-3.1-pro-high",
+			},
+		},
+	}
+
+	mapping := account.GetModelMapping()
+	if mapping["gemini-3-flash"] != "gemini-3-flash" {
+		t.Fatalf("expected gemini-3-flash passthrough to be auto-filled, got: %q", mapping["gemini-3-flash"])
+	}
+}
+
+func TestAccountGetModelMapping_AntigravityRespectsWildcardOverride(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gemini-3*": "gemini-3.1-pro-high",
+			},
+		},
+	}
+
+	mapping := account.GetModelMapping()
+	if _, exists := mapping["gemini-3-flash"]; exists {
+		t.Fatalf("did not expect explicit gemini-3-flash passthrough when wildcard already exists")
+	}
+	if mapped := account.GetMappedModel("gemini-3-flash"); mapped != "gemini-3.1-pro-high" {
+		t.Fatalf("expected wildcard mapping to stay effective, got: %q", mapped)
+	}
+}
