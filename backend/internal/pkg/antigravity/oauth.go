@@ -64,7 +64,8 @@ func init() {
 // GetUserAgent 返回当前配置的 User-Agent
 func GetUserAgent() string {
 	return fmt.Sprintf("antigravity/%s windows/amd64", defaultUserAgentVersion)
-  
+}
+
 func getClientSecret() (string, error) {
 	if v := strings.TrimSpace(ClientSecret); v != "" {
 		return v, nil

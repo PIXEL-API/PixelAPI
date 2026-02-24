@@ -49,8 +49,8 @@ func TestNewAPIRequestWithURL_普通请求(t *testing.T) {
 	if auth := req.Header.Get("Authorization"); auth != "Bearer test-token" {
 		t.Errorf("Authorization 不匹配: got %s", auth)
 	}
-	if ua := req.Header.Get("User-Agent"); ua != UserAgent {
-		t.Errorf("User-Agent 不匹配: got %s, want %s", ua, UserAgent)
+	if ua := req.Header.Get("User-Agent"); ua != GetUserAgent() {
+		t.Errorf("User-Agent 不匹配: got %s, want %s", ua, GetUserAgent())
 	}
 }
 
@@ -1191,7 +1191,7 @@ func TestClient_LoadCodeAssist_Success_RealCall(t *testing.T) {
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Content-Type 不匹配: got %s", ct)
 		}
-		if ua := r.Header.Get("User-Agent"); ua != UserAgent {
+		if ua := r.Header.Get("User-Agent"); ua != GetUserAgent() {
 			t.Errorf("User-Agent 不匹配: got %s", ua)
 		}
 
@@ -1380,7 +1380,7 @@ func TestClient_FetchAvailableModels_Success_RealCall(t *testing.T) {
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Content-Type 不匹配: got %s", ct)
 		}
-		if ua := r.Header.Get("User-Agent"); ua != UserAgent {
+		if ua := r.Header.Get("User-Agent"); ua != GetUserAgent() {
 			t.Errorf("User-Agent 不匹配: got %s", ua)
 		}
 
