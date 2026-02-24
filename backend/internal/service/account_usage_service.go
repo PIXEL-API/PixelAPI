@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -217,12 +218,20 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64) (*U
 	}
 
 	if account.Platform == PlatformGemini {
-		return s.getGeminiUsage(ctx, account)
+		usage, err := s.getGeminiUsage(ctx, account)
+		if err == nil {
+			s.tryClearRecoverableAccountError(ctx, account)
+		}
+		return usage, err
 	}
 
 	// Antigravity 平台：使用 AntigravityQuotaFetcher 获取额度
 	if account.Platform == PlatformAntigravity {
-		return s.getAntigravityUsage(ctx, account)
+		usage, err := s.getAntigravityUsage(ctx, account)
+		if err == nil {
+			s.tryClearRecoverableAccountError(ctx, account)
+		}
+		return usage, err
 	}
 
 	// 只有oauth类型账号可以通过API获取usage（有profile scope）
@@ -256,6 +265,7 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64) (*U
 		// 4. 添加窗口统计（有独立缓存，1 分钟）
 		s.addWindowStats(ctx, account, usage)
 
+		s.tryClearRecoverableAccountError(ctx, account)
 		return usage, nil
 	}
 
@@ -484,6 +494,32 @@ func parseTime(s string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("unable to parse time: %s", s)
+}
+
+func (s *AccountUsageService) tryClearRecoverableAccountError(ctx context.Context, account *Account) {
+	if account == nil || account.Status != StatusError {
+		return
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(account.ErrorMessage))
+	if msg == "" {
+		return
+	}
+
+	if !strings.Contains(msg, "token refresh failed") &&
+		!strings.Contains(msg, "invalid_client") &&
+		!strings.Contains(msg, "missing_project_id") &&
+		!strings.Contains(msg, "unauthenticated") {
+		return
+	}
+
+	if err := s.accountRepo.ClearError(ctx, account.ID); err != nil {
+		log.Printf("[usage] failed to clear recoverable account error for account %d: %v", account.ID, err)
+		return
+	}
+
+	account.Status = StatusActive
+	account.ErrorMessage = ""
 }
 
 // buildUsageInfo 构建UsageInfo
