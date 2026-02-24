@@ -139,6 +139,3 @@ func TestIdempotencyRepo_StatusTransition_ToSucceeded(t *testing.T) {
 	require.Nil(t, got.LockedUntil)
 }
 
-func ptrTime(v time.Time) *time.Time {
-	return &v
-}
