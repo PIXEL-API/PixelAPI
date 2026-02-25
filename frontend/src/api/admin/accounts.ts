@@ -15,7 +15,9 @@ import type {
   AccountUsageStatsResponse,
   TempUnschedulableStatus,
   AdminDataPayload,
-  AdminDataImportResult
+  AdminDataImportResult,
+  CheckMixedChannelRequest,
+  CheckMixedChannelResponse
 } from '@/types'
 
 /**
@@ -130,6 +132,16 @@ export async function create(accountData: CreateAccountRequest): Promise<Account
  */
 export async function update(id: number, updates: UpdateAccountRequest): Promise<Account> {
   const { data } = await apiClient.put<Account>(`/admin/accounts/${id}`, updates)
+  return data
+}
+
+/**
+ * Check mixed-channel risk for account-group binding.
+ */
+export async function checkMixedChannelRisk(
+  payload: CheckMixedChannelRequest
+): Promise<CheckMixedChannelResponse> {
+  const { data } = await apiClient.post<CheckMixedChannelResponse>('/admin/accounts/check-mixed-channel', payload)
   return data
 }
 
@@ -535,6 +547,7 @@ export const accountsAPI = {
   getById,
   create,
   update,
+  checkMixedChannelRisk,
   delete: deleteAccount,
   toggleStatus,
   testAccount,

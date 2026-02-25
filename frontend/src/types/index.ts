@@ -581,6 +581,7 @@ export interface GeminiCredentials {
   token_type?: string
   scope?: string
   expires_at?: string
+  model_mapping?: Record<string, string>
 }
 
 export interface TempUnschedulableRule {
@@ -764,6 +765,26 @@ export interface UpdateAccountRequest {
   expires_at?: number | null
   auto_pause_on_expired?: boolean
   confirm_mixed_channel_risk?: boolean
+}
+
+export interface CheckMixedChannelRequest {
+  platform: AccountPlatform
+  group_ids: number[]
+  account_id?: number
+}
+
+export interface MixedChannelWarningDetails {
+  group_id: number
+  group_name: string
+  current_platform: string
+  other_platform: string
+}
+
+export interface CheckMixedChannelResponse {
+  has_risk: boolean
+  error?: string
+  message?: string
+  details?: MixedChannelWarningDetails
 }
 
 export interface CreateProxyRequest {
