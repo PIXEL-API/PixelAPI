@@ -181,7 +181,7 @@ func (s *SoraMediaStorage) downloadAndStore(ctx context.Context, mediaType, rawU
 			return relative, nil
 		}
 		if s.debug {
-			log.Printf("[SoraStorage] 下载失败(%d/%d): %s err=%v", attempt, retries, sanitizeSoraLogURL(rawURL), err)
+			log.Printf("[SoraStorage] 下载失败(%d/%d): %s err=%v", attempt, retries, sanitizeMediaLogURL(rawURL), err)
 		}
 		if attempt < retries {
 			time.Sleep(time.Duration(attempt*attempt) * time.Second)
@@ -252,7 +252,7 @@ func (s *SoraMediaStorage) downloadOnce(ctx context.Context, root, mediaType, ra
 
 	relative := path.Join("/", mediaType, datePath, filename)
 	if s.debug {
-		log.Printf("[SoraStorage] 已落地 %s -> %s", sanitizeSoraLogURL(rawURL), relative)
+		log.Printf("[SoraStorage] 已落地 %s -> %s", sanitizeMediaLogURL(rawURL), relative)
 	}
 	return relative, nil
 }
@@ -304,4 +304,20 @@ func removePartialDownload(root *os.Root, filePath string) {
 		return
 	}
 	_ = root.Remove(filePath)
+}
+
+// sanitizeMediaLogURL 脱敏 URL 用于日志记录（去除 query 参数中可能的 token 信息）
+func sanitizeMediaLogURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		if len(rawURL) > 80 {
+			return rawURL[:80] + "..."
+		}
+		return rawURL
+	}
+	safe := parsed.Scheme + "://" + parsed.Host + parsed.Path
+	if len(safe) > 120 {
+		return safe[:120] + "..."
+	}
+	return safe
 }

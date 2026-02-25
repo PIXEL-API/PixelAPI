@@ -316,7 +316,7 @@ func (s *SoraGatewayService) processSoraSSEData(data string, originalModel strin
 		}
 	}
 
-	updatedData, err := json.Marshal(payload)
+	updatedData, err := jsonMarshalRaw(payload)
 	if err != nil {
 		return "data: " + data, contentDelta, nil
 	}
@@ -484,7 +484,7 @@ func (s *SoraGatewayService) flushSoraRewriteBuffer(buffer string, originalModel
 	if originalModel != "" {
 		payload["model"] = originalModel
 	}
-	updatedData, err := json.Marshal(payload)
+	updatedData, err := jsonMarshalRaw(payload)
 	if err != nil {
 		return "", "", err
 	}
