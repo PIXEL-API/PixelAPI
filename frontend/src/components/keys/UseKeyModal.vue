@@ -534,8 +534,104 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     }
   }
   const openaiModels = {
+    'gpt-5-codex': {
+      name: 'GPT-5 Codex',
+      limit: {
+        context: 400000,
+        output: 128000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {}
+      }
+    },
+    'gpt-5.1-codex': {
+      name: 'GPT-5.1 Codex',
+      limit: {
+        context: 400000,
+        output: 128000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {}
+      }
+    },
+    'gpt-5.1-codex-max': {
+      name: 'GPT-5.1 Codex Max',
+      limit: {
+        context: 400000,
+        output: 128000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {}
+      }
+    },
+    'gpt-5.1-codex-mini': {
+      name: 'GPT-5.1 Codex Mini',
+      limit: {
+        context: 400000,
+        output: 128000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {}
+      }
+    },
+    'gpt-5.2': {
+      name: 'GPT-5.2',
+      limit: {
+        context: 400000,
+        output: 128000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {},
+        xhigh: {}
+      }
+    },
     'gpt-5.3-codex-spark': {
       name: 'GPT-5.3 Codex Spark',
+      limit: {
+        context: 128000,
+        output: 32000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {},
+        xhigh: {}
+      }
+    },
+    'gpt-5.3-codex': {
+      name: 'GPT-5.3 Codex',
+      limit: {
+        context: 400000,
+        output: 128000
+      },
       options: {
         store: false
       },
@@ -548,6 +644,10 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     },
     'gpt-5.2-codex': {
       name: 'GPT-5.2 Codex',
+      limit: {
+        context: 400000,
+        output: 128000
+      },
       options: {
         store: false
       },
@@ -556,6 +656,21 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
         medium: {},
         high: {},
         xhigh: {}
+      }
+    },
+    'codex-mini-latest': {
+      name: 'Codex Mini',
+      limit: {
+        context: 200000,
+        output: 100000
+      },
+      options: {
+        store: false
+      },
+      variants: {
+        low: {},
+        medium: {},
+        high: {}
       }
     }
   }
@@ -568,19 +683,148 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
   }
 
   const antigravityGeminiModels = {
-    'gemini-2.5-flash': { name: 'Gemini 2.5 Flash' },
-    'gemini-2.5-flash-lite': { name: 'Gemini 2.5 Flash Lite' },
-    'gemini-2.5-flash-thinking': { name: 'Gemini 2.5 Flash Thinking' },
-    'gemini-3-flash': { name: 'Gemini 3 Flash' },
-    'gemini-3-pro-low': { name: 'Gemini 3 Pro Low' },
-    'gemini-3-pro-high': { name: 'Gemini 3 Pro High' },
-    'gemini-3-pro-preview': { name: 'Gemini 3 Pro Preview' },
-    'gemini-3-pro-image': { name: 'Gemini 3 Pro Image' }
+    'gemini-2.5-flash': {
+      name: 'Gemini 2.5 Flash',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'disable'
+        }
+      }
+    },
+    'gemini-2.5-flash-lite': {
+      name: 'Gemini 2.5 Flash Lite',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    },
+    'gemini-2.5-flash-thinking': {
+      name: 'Gemini 2.5 Flash (Thinking)',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    },
+    'gemini-3-flash': {
+      name: 'Gemini 3 Flash',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    },
+    'gemini-3.1-pro-low': {
+      name: 'Gemini 3.1 Pro Low',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    },
+    'gemini-3.1-pro-high': {
+      name: 'Gemini 3.1 Pro High',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    },
+    'gemini-3-pro-image': {
+      name: 'Gemini 3 Pro (Image)',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image'],
+        output: ['image']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    }
   }
   const claudeModels = {
-    'claude-opus-4-5-thinking': { name: 'Claude Opus 4.5 Thinking' },
-    'claude-sonnet-4-5-thinking': { name: 'Claude Sonnet 4.5 Thinking' },
-    'claude-sonnet-4-5': { name: 'Claude Sonnet 4.5' }
+    'claude-opus-4-5-thinking': {
+      name: 'Claude Opus 4.5 Thinking',
+      limit: {
+        context: 200000,
+        output: 64000
+      }
+    },
+    'claude-sonnet-4-5-thinking': {
+      name: 'Claude Sonnet 4.5 Thinking',
+      limit: {
+        context: 200000,
+        output: 64000
+      }
+    },
+    'claude-sonnet-4-5': {
+      name: 'Claude Sonnet 4.5',
+      limit: {
+        context: 200000,
+        output: 64000
+      }
+    }
   }
 
   if (platform === 'gemini') {
