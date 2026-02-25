@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"mime"
 	"net"
 	"net/http"
@@ -669,7 +670,7 @@ func processSoraCharacterUsername(usernameHint string) string {
 	if usernameHint == "" {
 		usernameHint = "character"
 	}
-	return fmt.Sprintf("%s%d", usernameHint, soraRandInt(900)+100)
+	return fmt.Sprintf("%s%d", usernameHint, rand.Intn(900)+100)
 }
 
 func (s *SoraGatewayService) resolveWatermarkFreeURL(ctx context.Context, account *Account, generationID string, opts soraWatermarkOptions) (string, string, error) {
