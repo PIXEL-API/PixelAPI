@@ -4425,12 +4425,12 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// messages requests typically use only oauth + interleaved-thinking.
 			// Also drop claude-code beta if a downstream client added it.
 			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			drop := map[string]struct{}{claude.BetaClaudeCode: {}, claude.BetaContext1M: {}}
+			drop := droppedBetaSet(claude.BetaClaudeCode)
 			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
-			req.Header.Set("anthropic-beta", stripBetaToken(s.getBetaHeader(modelID, clientBetaHeader), claude.BetaContext1M))
+			req.Header.Set("anthropic-beta", stripBetaTokens(s.getBetaHeader(modelID, clientBetaHeader), claude.DroppedBetas))
 		}
 	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
 		// API-key：仅在请求显式使用 beta 特性且客户端未提供时，按需补齐（默认关闭）
@@ -4584,21 +4584,43 @@ func mergeAnthropicBetaDropping(required []string, incoming string, drop map[str
 	return strings.Join(out, ",")
 }
 
-// stripBetaToken removes a single beta token from a comma-separated header value.
-// It short-circuits when the token is not present to avoid unnecessary allocations.
-func stripBetaToken(header, token string) string {
-	if !strings.Contains(header, token) {
+// stripBetaTokens removes the given beta tokens from a comma-separated header value.
+func stripBetaTokens(header string, tokens []string) string {
+	if header == "" || len(tokens) == 0 {
 		return header
 	}
-	out := make([]string, 0, 8)
-	for _, p := range strings.Split(header, ",") {
+	drop := make(map[string]struct{}, len(tokens))
+	for _, t := range tokens {
+		drop[t] = struct{}{}
+	}
+	parts := strings.Split(header, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p == "" || p == token {
+		if p == "" {
+			continue
+		}
+		if _, ok := drop[p]; ok {
 			continue
 		}
 		out = append(out, p)
 	}
+	if len(out) == len(parts) {
+		return header // no change, avoid allocation
+	}
 	return strings.Join(out, ",")
+}
+
+// droppedBetaSet returns claude.DroppedBetas as a set, with optional extra tokens.
+func droppedBetaSet(extra ...string) map[string]struct{} {
+	m := make(map[string]struct{}, len(claude.DroppedBetas)+len(extra))
+	for _, t := range claude.DroppedBetas {
+		m[t] = struct{}{}
+	}
+	for _, t := range extra {
+		m[t] = struct{}{}
+	}
+	return m
 }
 
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
@@ -6385,7 +6407,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 			incomingBeta := req.Header.Get("anthropic-beta")
 			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
-			drop := map[string]struct{}{claude.BetaContext1M: {}}
+			drop := droppedBetaSet()
 			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
 		} else {
 			clientBetaHeader := req.Header.Get("anthropic-beta")
@@ -6396,7 +6418,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 				if !strings.Contains(beta, claude.BetaTokenCounting) {
 					beta = beta + "," + claude.BetaTokenCounting
 				}
-				req.Header.Set("anthropic-beta", stripBetaToken(beta, claude.BetaContext1M))
+				req.Header.Set("anthropic-beta", stripBetaTokens(beta, claude.DroppedBetas))
 			}
 		}
 	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
