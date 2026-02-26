@@ -1480,6 +1480,10 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		// 添加 Gemini 3 系列模型用于测试
 		geminiTestModels := []UnifiedModel{
 			{ID: "gemini-3-flash", Type: "model", DisplayName: "Gemini 3 Flash"},
+			{ID: "gemini-3-pro-low", Type: "model", DisplayName: "Gemini 3 Pro Low"},
+			{ID: "gemini-3-pro-high", Type: "model", DisplayName: "Gemini 3 Pro High"},
+			{ID: "gemini-3.1-pro-low", Type: "model", DisplayName: "Gemini 3.1 Pro Low"},
+			{ID: "gemini-3.1-pro-high", Type: "model", DisplayName: "Gemini 3.1 Pro High"},
 			{ID: "gemini-3-pro-preview", Type: "model", DisplayName: "Gemini 3 Pro Preview"},
 		}
 		models = append(models, geminiTestModels...)
