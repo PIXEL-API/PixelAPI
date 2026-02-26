@@ -675,11 +675,90 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     }
   }
   const geminiModels = {
-    'gemini-2.0-flash': { name: 'Gemini 2.0 Flash' },
-    'gemini-2.5-flash': { name: 'Gemini 2.5 Flash' },
-    'gemini-2.5-pro': { name: 'Gemini 2.5 Pro' },
-    'gemini-3-flash-preview': { name: 'Gemini 3 Flash Preview' },
-    'gemini-3-pro-preview': { name: 'Gemini 3 Pro Preview' }
+    'gemini-2.0-flash': {
+      name: 'Gemini 2.0 Flash',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      }
+    },
+    'gemini-2.5-flash': {
+      name: 'Gemini 2.5 Flash',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      }
+    },
+    'gemini-2.5-pro': {
+      name: 'Gemini 2.5 Pro',
+      limit: {
+        context: 2097152,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    },
+    'gemini-3-flash-preview': {
+      name: 'Gemini 3 Flash Preview',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      }
+    },
+    'gemini-3-pro-preview': {
+      name: 'Gemini 3 Pro Preview',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    },
+    'gemini-3.1-pro-preview': {
+      name: 'Gemini 3.1 Pro Preview',
+      limit: {
+        context: 1048576,
+        output: 65536
+      },
+      modalities: {
+        input: ['text', 'image', 'pdf'],
+        output: ['text']
+      },
+      options: {
+        thinking: {
+          budgetTokens: 24576,
+          type: 'enabled'
+        }
+      }
+    }
   }
 
   const antigravityGeminiModels = {
