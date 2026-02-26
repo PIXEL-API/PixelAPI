@@ -262,44 +262,44 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBo
 	require.Empty(t, rec.Header().Get("Set-Cookie"))
 }
 
-func TestGatewayService_AnthropicAPIKeyPassthrough_CountTokensFallbackOn404(t *testing.T) {
+func TestGatewayService_AnthropicAPIKeyPassthrough_CountTokens404PassthroughNotError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
-		name         string
-		statusCode   int
-		respBody     string
-		wantFallback bool
+		name            string
+		statusCode      int
+		respBody        string
+		wantPassthrough bool
 	}{
 		{
-			name:         "404 endpoint not found triggers fallback",
-			statusCode:   http.StatusNotFound,
-			respBody:     `{"error":{"message":"Not found: /v1/messages/count_tokens","type":"not_found_error"}}`,
-			wantFallback: true,
+			name:            "404 endpoint not found passes through as 404",
+			statusCode:      http.StatusNotFound,
+			respBody:        `{"error":{"message":"Not found: /v1/messages/count_tokens","type":"not_found_error"}}`,
+			wantPassthrough: true,
 		},
 		{
-			name:         "404 generic not found triggers fallback",
-			statusCode:   http.StatusNotFound,
-			respBody:     `{"error":{"message":"resource not found","type":"not_found_error"}}`,
-			wantFallback: true,
+			name:            "404 generic not found passes through as 404",
+			statusCode:      http.StatusNotFound,
+			respBody:        `{"error":{"message":"resource not found","type":"not_found_error"}}`,
+			wantPassthrough: true,
 		},
 		{
-			name:         "400 Invalid URL does not fallback",
-			statusCode:   http.StatusBadRequest,
-			respBody:     `{"error":{"message":"Invalid URL (POST /v1/messages/count_tokens)","type":"invalid_request_error"}}`,
-			wantFallback: false,
+			name:            "400 Invalid URL does not passthrough",
+			statusCode:      http.StatusBadRequest,
+			respBody:        `{"error":{"message":"Invalid URL (POST /v1/messages/count_tokens)","type":"invalid_request_error"}}`,
+			wantPassthrough: false,
 		},
 		{
-			name:         "400 model error does not fallback",
-			statusCode:   http.StatusBadRequest,
-			respBody:     `{"error":{"message":"model not found: claude-unknown","type":"invalid_request_error"}}`,
-			wantFallback: false,
+			name:            "400 model error does not passthrough",
+			statusCode:      http.StatusBadRequest,
+			respBody:        `{"error":{"message":"model not found: claude-unknown","type":"invalid_request_error"}}`,
+			wantPassthrough: false,
 		},
 		{
-			name:         "500 internal error does not fallback",
-			statusCode:   http.StatusInternalServerError,
-			respBody:     `{"error":{"message":"internal error","type":"api_error"}}`,
-			wantFallback: false,
+			name:            "500 internal error does not passthrough",
+			statusCode:      http.StatusInternalServerError,
+			respBody:        `{"error":{"message":"internal error","type":"api_error"}}`,
+			wantPassthrough: false,
 		},
 	}
 
@@ -345,10 +345,10 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CountTokensFallbackOn404(t *t
 
 			err := svc.ForwardCountTokens(context.Background(), c, account, parsed)
 
-			if tt.wantFallback {
+			if tt.wantPassthrough {
+				// 404 透传：返回 nil（不记录为错误），但 HTTP 状态码是 404
 				require.NoError(t, err)
-				require.Equal(t, http.StatusOK, rec.Code)
-				require.JSONEq(t, `{"input_tokens":0}`, rec.Body.String())
+				require.Equal(t, http.StatusNotFound, rec.Code)
 			} else {
 				require.Error(t, err)
 				require.Equal(t, tt.statusCode, rec.Code)
