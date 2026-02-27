@@ -209,6 +209,13 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		if idleTimeout := a.GetSessionIdleTimeoutMinutes(); idleTimeout > 0 {
 			out.SessionIdleTimeoutMin = &idleTimeout
 		}
+		if rpm := a.GetBaseRPM(); rpm > 0 {
+			out.BaseRPM = &rpm
+			strategy := a.GetRPMStrategy()
+			out.RPMStrategy = &strategy
+			buffer := a.GetRPMStickyBuffer()
+			out.RPMStickyBuffer = &buffer
+		}
 		// TLS指纹伪装开关
 		if a.IsTLSFingerprintEnabled() {
 			enabled := true
