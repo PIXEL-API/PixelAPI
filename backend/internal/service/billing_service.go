@@ -543,7 +543,10 @@ func (s *BillingService) getDefaultImagePrice(model string, imageSize string) fl
 		basePrice = 0.134
 	}
 
-	// 4K 尺寸翻倍
+	// 2K 尺寸 1.5 倍，4K 尺寸翻倍
+	if imageSize == "2K" {
+		return basePrice * 1.5
+	}
 	if imageSize == "4K" {
 		return basePrice * 2
 	}
