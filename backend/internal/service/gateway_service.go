@@ -2241,6 +2241,15 @@ func (s *GatewayService) isAccountSchedulableForRPM(ctx context.Context, account
 	return true
 }
 
+// IncrementAccountRPM increments the RPM counter for the given account.
+func (s *GatewayService) IncrementAccountRPM(ctx context.Context, accountID int64) error {
+	if s.rpmCache == nil {
+		return nil
+	}
+	_, err := s.rpmCache.IncrementRPM(ctx, accountID)
+	return err
+}
+
 // checkAndRegisterSession 检查并注册会话，用于会话数量限制
 // 仅适用于 Anthropic OAuth/SetupToken 账号
 // sessionID: 会话标识符（使用粘性会话的 hash）
