@@ -1252,14 +1252,43 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   return Object.keys(updates).length > 0 ? updates : null
 }
 
+const mixedChannelConfirmed = ref(false)
+
+const needsMixedChannelCheck = () =>
+  enableGroups.value &&
+  props.selectedPlatforms.length === 1 &&
+  (props.selectedPlatforms[0] === 'antigravity' || props.selectedPlatforms[0] === 'anthropic')
+
 const handleClose = () => {
   showMixedChannelWarning.value = false
   mixedChannelWarningMessage.value = ''
   pendingUpdatesForConfirm.value = null
+  mixedChannelConfirmed.value = false
   emit('close')
 }
 
-const handleSubmit = async (confirmMixedChannel = false) => {
+const checkMixedChannelRisk = async (): Promise<boolean> => {
+  if (!needsMixedChannelCheck()) return true
+  if (mixedChannelConfirmed.value) return true
+  if (groupIds.value.length === 0) return true
+
+  try {
+    const result = await adminAPI.accounts.checkMixedChannelRisk({
+      platform: props.selectedPlatforms[0],
+      group_ids: groupIds.value
+    })
+    if (!result.has_risk) return true
+
+    mixedChannelWarningMessage.value = result.message || t('admin.accounts.bulkEdit.failed')
+    showMixedChannelWarning.value = true
+    return false
+  } catch (error: any) {
+    appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
+    return false
+  }
+}
+
+const handleSubmit = async () => {
   if (props.accountIds.length === 0) {
     appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
     return
@@ -1283,16 +1312,24 @@ const handleSubmit = async (confirmMixedChannel = false) => {
     return
   }
 
-  let updates: Record<string, unknown>
-  if (confirmMixedChannel && pendingUpdatesForConfirm.value) {
-    updates = { ...pendingUpdatesForConfirm.value, confirm_mixed_channel_risk: true }
-  } else {
-    const built = buildUpdatePayload()
-    if (!built) {
-      appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
-      return
-    }
-    updates = built
+  const built = buildUpdatePayload()
+  if (!built) {
+    appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
+    return
+  }
+
+  const canContinue = await checkMixedChannelRisk()
+  if (!canContinue) {
+    pendingUpdatesForConfirm.value = built
+    return
+  }
+
+  await submitBulkUpdate(built)
+}
+
+const submitBulkUpdate = async (updates: Record<string, unknown>) => {
+  if (mixedChannelConfirmed.value && needsMixedChannelCheck()) {
+    updates = { ...updates, confirm_mixed_channel_risk: true }
   }
 
   submitting.value = true
@@ -1316,14 +1353,8 @@ const handleSubmit = async (confirmMixedChannel = false) => {
       handleClose()
     }
   } catch (error: any) {
-    if (error.response?.status === 409 && error.response?.data?.error === 'mixed_channel_warning') {
-      pendingUpdatesForConfirm.value = updates
-      mixedChannelWarningMessage.value = error.response.data.message
-      showMixedChannelWarning.value = true
-    } else {
-      appStore.showError(error.response?.data?.detail || t('admin.accounts.bulkEdit.failed'))
-      console.error('Error bulk updating accounts:', error)
-    }
+    appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
+    console.error('Error bulk updating accounts:', error)
   } finally {
     submitting.value = false
   }
@@ -1331,7 +1362,10 @@ const handleSubmit = async (confirmMixedChannel = false) => {
 
 const handleMixedChannelConfirm = async () => {
   showMixedChannelWarning.value = false
-  await handleSubmit(true)
+  mixedChannelConfirmed.value = true
+  if (pendingUpdatesForConfirm.value) {
+    await submitBulkUpdate(pendingUpdatesForConfirm.value)
+  }
 }
 
 const handleMixedChannelCancel = () => {
@@ -1376,6 +1410,7 @@ watch(
       showMixedChannelWarning.value = false
       mixedChannelWarningMessage.value = ''
       pendingUpdatesForConfirm.value = null
+      mixedChannelConfirmed.value = false
     }
   }
 )
