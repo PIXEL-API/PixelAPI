@@ -49,6 +49,14 @@ func (s *helperConcurrencyCacheStub) GetAccountConcurrency(ctx context.Context, 
 	return 0, nil
 }
 
+func (s *helperConcurrencyCacheStub) GetAccountConcurrencyBatch(ctx context.Context, accountIDs []int64) (map[int64]int, error) {
+	out := make(map[int64]int, len(accountIDs))
+	for _, accountID := range accountIDs {
+		out[accountID] = 0
+	}
+	return out, nil
+}
+
 func (s *helperConcurrencyCacheStub) IncrementAccountWaitCount(ctx context.Context, accountID int64, maxWait int) (bool, error) {
 	return true, nil
 }
@@ -133,7 +141,7 @@ func TestSetClaudeCodeClientContext_FastPathAndStrictPath(t *testing.T) {
 		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
 		c.Request.Header.Set("User-Agent", "curl/8.6.0")
 
-		SetClaudeCodeClientContext(c, validClaudeCodeBodyJSON())
+		SetClaudeCodeClientContext(c, validClaudeCodeBodyJSON(), nil)
 		require.False(t, service.IsClaudeCodeClient(c.Request.Context()))
 	})
 
@@ -141,7 +149,7 @@ func TestSetClaudeCodeClientContext_FastPathAndStrictPath(t *testing.T) {
 		c, _ := newHelperTestContext(http.MethodGet, "/v1/models")
 		c.Request.Header.Set("User-Agent", "claude-cli/1.0.1")
 
-		SetClaudeCodeClientContext(c, nil)
+		SetClaudeCodeClientContext(c, nil, nil)
 		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
 	})
 
@@ -152,7 +160,7 @@ func TestSetClaudeCodeClientContext_FastPathAndStrictPath(t *testing.T) {
 		c.Request.Header.Set("anthropic-beta", "message-batches-2024-09-24")
 		c.Request.Header.Set("anthropic-version", "2023-06-01")
 
-		SetClaudeCodeClientContext(c, validClaudeCodeBodyJSON())
+		SetClaudeCodeClientContext(c, validClaudeCodeBodyJSON(), nil)
 		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
 	})
 
@@ -160,8 +168,48 @@ func TestSetClaudeCodeClientContext_FastPathAndStrictPath(t *testing.T) {
 		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
 		c.Request.Header.Set("User-Agent", "claude-cli/1.0.1")
 		// 缺少严格校验所需 header + body 字段
-		SetClaudeCodeClientContext(c, []byte(`{"model":"x"}`))
+		SetClaudeCodeClientContext(c, []byte(`{"model":"x"}`), nil)
 		require.False(t, service.IsClaudeCodeClient(c.Request.Context()))
+	})
+}
+
+func TestSetClaudeCodeClientContext_ReuseParsedRequestAndContextCache(t *testing.T) {
+	t.Run("reuse parsed request without body unmarshal", func(t *testing.T) {
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+		c.Request.Header.Set("User-Agent", "claude-cli/1.0.1")
+		c.Request.Header.Set("X-App", "claude-code")
+		c.Request.Header.Set("anthropic-beta", "message-batches-2024-09-24")
+		c.Request.Header.Set("anthropic-version", "2023-06-01")
+
+		parsedReq := &service.ParsedRequest{
+			Model: "claude-3-5-sonnet-20241022",
+			System: []any{
+				map[string]any{"text": "You are Claude Code, Anthropic's official CLI for Claude."},
+			},
+			MetadataUserID: "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_abc-123",
+		}
+
+		// body 非法 JSON，如果函数复用 parsedReq 成功则仍应判定为 Claude Code。
+		SetClaudeCodeClientContext(c, []byte(`{invalid`), parsedReq)
+		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
+	})
+
+	t.Run("reuse context cache without body unmarshal", func(t *testing.T) {
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+		c.Request.Header.Set("User-Agent", "claude-cli/1.0.1")
+		c.Request.Header.Set("X-App", "claude-code")
+		c.Request.Header.Set("anthropic-beta", "message-batches-2024-09-24")
+		c.Request.Header.Set("anthropic-version", "2023-06-01")
+		c.Set(service.OpenAIParsedRequestBodyKey, map[string]any{
+			"model": "claude-3-5-sonnet-20241022",
+			"system": []any{
+				map[string]any{"text": "You are Claude Code, Anthropic's official CLI for Claude."},
+			},
+			"metadata": map[string]any{"user_id": "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_abc-123"},
+		})
+
+		SetClaudeCodeClientContext(c, []byte(`{invalid`), nil)
+		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
 	})
 }
 

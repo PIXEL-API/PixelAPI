@@ -158,6 +158,14 @@ func NewAPIKeyService(
 	return svc
 }
 
+func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
+	if apiKey == nil {
+		return
+	}
+	apiKey.CompiledIPWhitelist = ip.CompileIPRules(apiKey.IPWhitelist)
+	apiKey.CompiledIPBlacklist = ip.CompileIPRules(apiKey.IPBlacklist)
+}
+
 // GenerateKey 生成随机API Key
 func (s *APIKeyService) GenerateKey() (string, error) {
 	// 生成32字节随机数据
@@ -332,6 +340,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 	}
 
 	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	s.compileAPIKeyIPRules(apiKey)
 
 	return apiKey, nil
 }
@@ -363,6 +372,7 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
+	s.compileAPIKeyIPRules(apiKey)
 	return apiKey, nil
 }
 
@@ -375,6 +385,7 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
+			s.compileAPIKeyIPRules(apiKey)
 			return apiKey, nil
 		}
 	}
@@ -391,6 +402,7 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
+			s.compileAPIKeyIPRules(apiKey)
 			return apiKey, nil
 		}
 	} else {
@@ -402,6 +414,7 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
+			s.compileAPIKeyIPRules(apiKey)
 			return apiKey, nil
 		}
 	}
@@ -411,6 +424,7 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
 	apiKey.Key = key
+	s.compileAPIKeyIPRules(apiKey)
 	return apiKey, nil
 }
 
@@ -510,6 +524,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	s.compileAPIKeyIPRules(apiKey)
 
 	return apiKey, nil
 }

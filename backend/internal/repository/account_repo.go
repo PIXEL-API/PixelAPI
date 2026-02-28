@@ -50,11 +50,6 @@ type accountRepository struct {
 	schedulerCache service.SchedulerCache
 }
 
-type tempUnschedSnapshot struct {
-	until  *time.Time
-	reason string
-}
-
 // NewAccountRepository 创建账户仓储实例。
 // 这是对外暴露的构造函数，返回接口类型以便于依赖注入。
 func NewAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache service.SchedulerCache) service.AccountRepository {
@@ -189,11 +184,6 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		accountIDs = append(accountIDs, acc.ID)
 	}
 
-	tempUnschedMap, err := r.loadTempUnschedStates(ctx, accountIDs)
-	if err != nil {
-		return nil, err
-	}
-
 	groupsByAccount, groupIDsByAccount, accountGroupsByAccount, err := r.loadAccountGroups(ctx, accountIDs)
 	if err != nil {
 		return nil, err
@@ -219,10 +209,6 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		}
 		if ags, ok := accountGroupsByAccount[entAcc.ID]; ok {
 			out.AccountGroups = ags
-		}
-		if snap, ok := tempUnschedMap[entAcc.ID]; ok {
-			out.TempUnschedulableUntil = snap.until
-			out.TempUnschedulableReason = snap.reason
 		}
 		outByID[entAcc.ID] = out
 	}
@@ -608,6 +594,43 @@ func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, ac
 	}
 	if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
 		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot write failed: id=%d err=%v", accountID, err)
+	}
+}
+
+func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, accountIDs []int64) {
+	if r == nil || r.schedulerCache == nil || len(accountIDs) == 0 {
+		return
+	}
+
+	uniqueIDs := make([]int64, 0, len(accountIDs))
+	seen := make(map[int64]struct{}, len(accountIDs))
+	for _, id := range accountIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return
+	}
+
+	accounts, err := r.GetByIDs(ctx, uniqueIDs)
+	if err != nil {
+		logger.LegacyPrintf("repository.account", "[Scheduler] batch sync account snapshot read failed: count=%d err=%v", len(uniqueIDs), err)
+		return
+	}
+
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
+			logger.LegacyPrintf("repository.account", "[Scheduler] batch sync account snapshot write failed: id=%d err=%v", account.ID, err)
+		}
 	}
 }
 
@@ -1197,9 +1220,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			shouldSync = true
 		}
 		if shouldSync {
-			for _, id := range ids {
-				r.syncSchedulerAccountSnapshot(ctx, id)
-			}
+			r.syncSchedulerAccountSnapshots(ctx, ids)
 		}
 	}
 	return rows, nil
@@ -1291,10 +1312,6 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	if err != nil {
 		return nil, err
 	}
-	tempUnschedMap, err := r.loadTempUnschedStates(ctx, accountIDs)
-	if err != nil {
-		return nil, err
-	}
 	groupsByAccount, groupIDsByAccount, accountGroupsByAccount, err := r.loadAccountGroups(ctx, accountIDs)
 	if err != nil {
 		return nil, err
@@ -1320,10 +1337,6 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		if ags, ok := accountGroupsByAccount[acc.ID]; ok {
 			out.AccountGroups = ags
 		}
-		if snap, ok := tempUnschedMap[acc.ID]; ok {
-			out.TempUnschedulableUntil = snap.until
-			out.TempUnschedulableReason = snap.reason
-		}
 		outAccounts = append(outAccounts, *out)
 	}
 
@@ -1346,48 +1359,6 @@ func notExpiredPredicate(now time.Time) dbpredicate.Account {
 		dbaccount.ExpiresAtGT(now),
 		dbaccount.AutoPauseOnExpiredEQ(false),
 	)
-}
-
-func (r *accountRepository) loadTempUnschedStates(ctx context.Context, accountIDs []int64) (map[int64]tempUnschedSnapshot, error) {
-	out := make(map[int64]tempUnschedSnapshot)
-	if len(accountIDs) == 0 {
-		return out, nil
-	}
-
-	rows, err := r.sql.QueryContext(ctx, `
-		SELECT id, temp_unschedulable_until, temp_unschedulable_reason
-		FROM accounts
-		WHERE id = ANY($1)
-	`, pq.Array(accountIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var id int64
-		var until sql.NullTime
-		var reason sql.NullString
-		if err := rows.Scan(&id, &until, &reason); err != nil {
-			return nil, err
-		}
-		var untilPtr *time.Time
-		if until.Valid {
-			tmp := until.Time
-			untilPtr = &tmp
-		}
-		if reason.Valid {
-			out[id] = tempUnschedSnapshot{until: untilPtr, reason: reason.String}
-		} else {
-			out[id] = tempUnschedSnapshot{until: untilPtr, reason: ""}
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return out, nil
 }
 
 func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (map[int64]*service.Proxy, error) {
@@ -1500,31 +1471,33 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 	rateMultiplier := m.RateMultiplier
 
 	return &service.Account{
-		ID:                  m.ID,
-		Name:                m.Name,
-		Notes:               m.Notes,
-		Platform:            m.Platform,
-		Type:                m.Type,
-		Credentials:         copyJSONMap(m.Credentials),
-		Extra:               copyJSONMap(m.Extra),
-		ProxyID:             m.ProxyID,
-		Concurrency:         m.Concurrency,
-		Priority:            m.Priority,
-		RateMultiplier:      &rateMultiplier,
-		Status:              m.Status,
-		ErrorMessage:        derefString(m.ErrorMessage),
-		LastUsedAt:          m.LastUsedAt,
-		ExpiresAt:           m.ExpiresAt,
-		AutoPauseOnExpired:  m.AutoPauseOnExpired,
-		CreatedAt:           m.CreatedAt,
-		UpdatedAt:           m.UpdatedAt,
-		Schedulable:         m.Schedulable,
-		RateLimitedAt:       m.RateLimitedAt,
-		RateLimitResetAt:    m.RateLimitResetAt,
-		OverloadUntil:       m.OverloadUntil,
-		SessionWindowStart:  m.SessionWindowStart,
-		SessionWindowEnd:    m.SessionWindowEnd,
-		SessionWindowStatus: derefString(m.SessionWindowStatus),
+		ID:                      m.ID,
+		Name:                    m.Name,
+		Notes:                   m.Notes,
+		Platform:                m.Platform,
+		Type:                    m.Type,
+		Credentials:             copyJSONMap(m.Credentials),
+		Extra:                   copyJSONMap(m.Extra),
+		ProxyID:                 m.ProxyID,
+		Concurrency:             m.Concurrency,
+		Priority:                m.Priority,
+		RateMultiplier:          &rateMultiplier,
+		Status:                  m.Status,
+		ErrorMessage:            derefString(m.ErrorMessage),
+		LastUsedAt:              m.LastUsedAt,
+		ExpiresAt:               m.ExpiresAt,
+		AutoPauseOnExpired:      m.AutoPauseOnExpired,
+		CreatedAt:               m.CreatedAt,
+		UpdatedAt:               m.UpdatedAt,
+		Schedulable:             m.Schedulable,
+		RateLimitedAt:           m.RateLimitedAt,
+		RateLimitResetAt:        m.RateLimitResetAt,
+		OverloadUntil:           m.OverloadUntil,
+		TempUnschedulableUntil:  m.TempUnschedulableUntil,
+		TempUnschedulableReason: derefString(m.TempUnschedulableReason),
+		SessionWindowStart:      m.SessionWindowStart,
+		SessionWindowEnd:        m.SessionWindowEnd,
+		SessionWindowStatus:     derefString(m.SessionWindowStatus),
 	}
 }
 

@@ -16,6 +16,7 @@ func TestInferStdLogLevel(t *testing.T) {
 		{msg: "Warning: queue full", want: LevelWarn},
 		{msg: "Forward request failed: timeout", want: LevelError},
 		{msg: "[ERROR] upstream unavailable", want: LevelError},
+		{msg: "[OpenAI WS Mode] reconnect_retry account_id=22 retry=1 max_retries=5", want: LevelInfo},
 		{msg: "service started", want: LevelInfo},
 		{msg: "debug: cache miss", want: LevelDebug},
 	}

@@ -1,11 +1,95 @@
 package service
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 const (
 	BillingTypeBalance      int8 = 0 // 钱包余额
 	BillingTypeSubscription int8 = 1 // 订阅套餐
 )
+
+type RequestType int16
+
+const (
+	RequestTypeUnknown RequestType = 0
+	RequestTypeSync    RequestType = 1
+	RequestTypeStream  RequestType = 2
+	RequestTypeWSV2    RequestType = 3
+)
+
+func (t RequestType) IsValid() bool {
+	switch t {
+	case RequestTypeUnknown, RequestTypeSync, RequestTypeStream, RequestTypeWSV2:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t RequestType) Normalize() RequestType {
+	if t.IsValid() {
+		return t
+	}
+	return RequestTypeUnknown
+}
+
+func (t RequestType) String() string {
+	switch t.Normalize() {
+	case RequestTypeSync:
+		return "sync"
+	case RequestTypeStream:
+		return "stream"
+	case RequestTypeWSV2:
+		return "ws_v2"
+	default:
+		return "unknown"
+	}
+}
+
+func RequestTypeFromInt16(v int16) RequestType {
+	return RequestType(v).Normalize()
+}
+
+func ParseUsageRequestType(value string) (RequestType, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "unknown":
+		return RequestTypeUnknown, nil
+	case "sync":
+		return RequestTypeSync, nil
+	case "stream":
+		return RequestTypeStream, nil
+	case "ws_v2":
+		return RequestTypeWSV2, nil
+	default:
+		return RequestTypeUnknown, fmt.Errorf("invalid request_type, allowed values: unknown, sync, stream, ws_v2")
+	}
+}
+
+func RequestTypeFromLegacy(stream bool, openAIWSMode bool) RequestType {
+	if openAIWSMode {
+		return RequestTypeWSV2
+	}
+	if stream {
+		return RequestTypeStream
+	}
+	return RequestTypeSync
+}
+
+func ApplyLegacyRequestFields(requestType RequestType, fallbackStream bool, fallbackOpenAIWSMode bool) (stream bool, openAIWSMode bool) {
+	switch requestType.Normalize() {
+	case RequestTypeSync:
+		return false, false
+	case RequestTypeStream:
+		return true, false
+	case RequestTypeWSV2:
+		return true, true
+	default:
+		return fallbackStream, fallbackOpenAIWSMode
+	}
+}
 
 type UsageLog struct {
 	ID        int64
@@ -40,7 +124,9 @@ type UsageLog struct {
 	AccountRateMultiplier *float64
 
 	BillingType  int8
+	RequestType  RequestType
 	Stream       bool
+	OpenAIWSMode bool
 	DurationMs   *int
 	FirstTokenMs *int
 	UserAgent    *string
@@ -65,4 +151,23 @@ type UsageLog struct {
 
 func (u *UsageLog) TotalTokens() int {
 	return u.InputTokens + u.OutputTokens + u.CacheCreationTokens + u.CacheReadTokens
+}
+
+func (u *UsageLog) EffectiveRequestType() RequestType {
+	if u == nil {
+		return RequestTypeUnknown
+	}
+	if normalized := u.RequestType.Normalize(); normalized != RequestTypeUnknown {
+		return normalized
+	}
+	return RequestTypeFromLegacy(u.Stream, u.OpenAIWSMode)
+}
+
+func (u *UsageLog) SyncRequestTypeAndLegacyFields() {
+	if u == nil {
+		return
+	}
+	requestType := u.EffectiveRequestType()
+	u.RequestType = requestType
+	u.Stream, u.OpenAIWSMode = ApplyLegacyRequestFields(requestType, u.Stream, u.OpenAIWSMode)
 }

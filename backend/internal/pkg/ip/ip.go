@@ -67,6 +67,14 @@ func normalizeIP(ip string) string {
 // privateNets 预编译私有 IP CIDR 块，避免每次调用 isPrivateIP 时重复解析
 var privateNets []*net.IPNet
 
+// CompiledIPRules 表示预编译的 IP 匹配规则。
+// PatternCount 记录原始规则数量，用于保留“规则存在但全无效”时的行为语义。
+type CompiledIPRules struct {
+	CIDRs        []*net.IPNet
+	IPs          []net.IP
+	PatternCount int
+}
+
 func init() {
 	for _, cidr := range []string{
 		"10.0.0.0/8",
@@ -82,6 +90,53 @@ func init() {
 		}
 		privateNets = append(privateNets, block)
 	}
+}
+
+// CompileIPRules 将 IP/CIDR 字符串规则预编译为可复用结构。
+// 非法规则会被忽略，但 PatternCount 会保留原始规则条数。
+func CompileIPRules(patterns []string) *CompiledIPRules {
+	compiled := &CompiledIPRules{
+		CIDRs:        make([]*net.IPNet, 0, len(patterns)),
+		IPs:          make([]net.IP, 0, len(patterns)),
+		PatternCount: len(patterns),
+	}
+	for _, pattern := range patterns {
+		normalized := strings.TrimSpace(pattern)
+		if normalized == "" {
+			continue
+		}
+		if strings.Contains(normalized, "/") {
+			_, cidr, err := net.ParseCIDR(normalized)
+			if err != nil || cidr == nil {
+				continue
+			}
+			compiled.CIDRs = append(compiled.CIDRs, cidr)
+			continue
+		}
+		parsedIP := net.ParseIP(normalized)
+		if parsedIP == nil {
+			continue
+		}
+		compiled.IPs = append(compiled.IPs, parsedIP)
+	}
+	return compiled
+}
+
+func matchesCompiledRules(parsedIP net.IP, rules *CompiledIPRules) bool {
+	if parsedIP == nil || rules == nil {
+		return false
+	}
+	for _, cidr := range rules.CIDRs {
+		if cidr.Contains(parsedIP) {
+			return true
+		}
+	}
+	for _, ruleIP := range rules.IPs {
+		if parsedIP.Equal(ruleIP) {
+			return true
+		}
+	}
+	return false
 }
 
 // isPrivateIP 检查 IP 是否为私有地址。
@@ -142,19 +197,32 @@ func MatchesAnyPattern(clientIP string, patterns []string) bool {
 // 2. 如果白名单不为空，IP 必须在白名单中
 // 3. 如果白名单为空，允许访问（除非被黑名单拒绝）
 func CheckIPRestriction(clientIP string, whitelist, blacklist []string) (bool, string) {
+	return CheckIPRestrictionWithCompiledRules(
+		clientIP,
+		CompileIPRules(whitelist),
+		CompileIPRules(blacklist),
+	)
+}
+
+// CheckIPRestrictionWithCompiledRules 使用预编译规则检查 IP 是否允许访问。
+func CheckIPRestrictionWithCompiledRules(clientIP string, whitelist, blacklist *CompiledIPRules) (bool, string) {
 	// 规范化 IP
 	clientIP = normalizeIP(clientIP)
 	if clientIP == "" {
 		return false, "access denied"
 	}
+	parsedIP := net.ParseIP(clientIP)
+	if parsedIP == nil {
+		return false, "access denied"
+	}
 
 	// 1. 检查黑名单
-	if len(blacklist) > 0 && MatchesAnyPattern(clientIP, blacklist) {
+	if blacklist != nil && blacklist.PatternCount > 0 && matchesCompiledRules(parsedIP, blacklist) {
 		return false, "access denied"
 	}
 
 	// 2. 检查白名单（如果设置了白名单，IP 必须在其中）
-	if len(whitelist) > 0 && !MatchesAnyPattern(clientIP, whitelist) {
+	if whitelist != nil && whitelist.PatternCount > 0 && !matchesCompiledRules(parsedIP, whitelist) {
 		return false, "access denied"
 	}
 

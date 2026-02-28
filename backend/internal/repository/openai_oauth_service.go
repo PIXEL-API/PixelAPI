@@ -22,16 +22,20 @@ type openaiOAuthService struct {
 	tokenURL string
 }
 
-func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL string) (*openai.TokenResponse, error) {
+func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
 	client := createOpenAIReqClient(proxyURL)
 
 	if redirectURI == "" {
 		redirectURI = openai.DefaultRedirectURI
 	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = openai.ClientID
+	}
 
 	formData := url.Values{}
 	formData.Set("grant_type", "authorization_code")
-	formData.Set("client_id", openai.ClientID)
+	formData.Set("client_id", clientID)
 	formData.Set("code", code)
 	formData.Set("redirect_uri", redirectURI)
 	formData.Set("code_verifier", codeVerifier)
@@ -61,36 +65,12 @@ func (s *openaiOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 }
 
 func (s *openaiOAuthService) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
-	if strings.TrimSpace(clientID) != "" {
-		return s.refreshTokenWithClientID(ctx, refreshToken, proxyURL, strings.TrimSpace(clientID))
+	// 调用方应始终传入正确的 client_id；为兼容旧数据，未指定时默认使用 OpenAI ClientID
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = openai.ClientID
 	}
-
-	clientIDs := []string{
-		openai.ClientID,
-		openai.SoraClientID,
-	}
-	seen := make(map[string]struct{}, len(clientIDs))
-	var lastErr error
-	for _, clientID := range clientIDs {
-		clientID = strings.TrimSpace(clientID)
-		if clientID == "" {
-			continue
-		}
-		if _, ok := seen[clientID]; ok {
-			continue
-		}
-		seen[clientID] = struct{}{}
-
-		tokenResp, err := s.refreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
-		if err == nil {
-			return tokenResp, nil
-		}
-		lastErr = err
-	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "token refresh failed")
+	return s.refreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
 }
 
 func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL, clientID string) (*openai.TokenResponse, error) {

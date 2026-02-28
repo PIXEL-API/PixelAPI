@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -42,14 +43,18 @@ type LogEvent struct {
 
 var (
 	mu            sync.RWMutex
-	global        *zap.Logger
-	sugar         *zap.SugaredLogger
+	global        atomic.Pointer[zap.Logger]
+	sugar         atomic.Pointer[zap.SugaredLogger]
 	atomicLevel   zap.AtomicLevel
 	initOptions   InitOptions
-	currentSink   Sink
+	currentSink   atomic.Value // sinkState
 	stdLogUndo    func()
 	bootstrapOnce sync.Once
 )
+
+type sinkState struct {
+	sink Sink
+}
 
 func InitBootstrap() {
 	bootstrapOnce.Do(func() {
@@ -72,9 +77,9 @@ func initLocked(options InitOptions) error {
 		return err
 	}
 
-	prev := global
-	global = zl
-	sugar = zl.Sugar()
+	prev := global.Load()
+	global.Store(zl)
+	sugar.Store(zl.Sugar())
 	atomicLevel = al
 	initOptions = normalized
 
@@ -115,24 +120,32 @@ func SetLevel(level string) error {
 func CurrentLevel() string {
 	mu.RLock()
 	defer mu.RUnlock()
-	if global == nil {
+	if global.Load() == nil {
 		return "info"
 	}
 	return atomicLevel.Level().String()
 }
 
 func SetSink(sink Sink) {
-	mu.Lock()
-	defer mu.Unlock()
-	currentSink = sink
+	currentSink.Store(sinkState{sink: sink})
+}
+
+func loadSink() Sink {
+	v := currentSink.Load()
+	if v == nil {
+		return nil
+	}
+	state, ok := v.(sinkState)
+	if !ok {
+		return nil
+	}
+	return state.sink
 }
 
 // WriteSinkEvent 直接写入日志 sink，不经过全局日志级别门控。
 // 用于需要“可观测性入库”与“业务输出级别”解耦的场景（例如 ops 系统日志索引）。
 func WriteSinkEvent(level, component, message string, fields map[string]any) {
-	mu.RLock()
-	sink := currentSink
-	mu.RUnlock()
+	sink := loadSink()
 	if sink == nil {
 		return
 	}
@@ -168,19 +181,15 @@ func WriteSinkEvent(level, component, message string, fields map[string]any) {
 }
 
 func L() *zap.Logger {
-	mu.RLock()
-	defer mu.RUnlock()
-	if global != nil {
-		return global
+	if l := global.Load(); l != nil {
+		return l
 	}
 	return zap.NewNop()
 }
 
 func S() *zap.SugaredLogger {
-	mu.RLock()
-	defer mu.RUnlock()
-	if sugar != nil {
-		return sugar
+	if s := sugar.Load(); s != nil {
+		return s
 	}
 	return zap.NewNop().Sugar()
 }
@@ -190,9 +199,7 @@ func With(fields ...zap.Field) *zap.Logger {
 }
 
 func Sync() {
-	mu.RLock()
-	l := global
-	mu.RUnlock()
+	l := global.Load()
 	if l != nil {
 		_ = l.Sync()
 	}
@@ -210,7 +217,11 @@ func bridgeStdLogLocked() {
 
 	log.SetFlags(0)
 	log.SetPrefix("")
-	log.SetOutput(newStdLogBridge(global.Named("stdlog")))
+	base := global.Load()
+	if base == nil {
+		base = zap.NewNop()
+	}
+	log.SetOutput(newStdLogBridge(base.Named("stdlog")))
 
 	stdLogUndo = func() {
 		log.SetOutput(prevWriter)
@@ -220,7 +231,11 @@ func bridgeStdLogLocked() {
 }
 
 func bridgeSlogLocked() {
-	slog.SetDefault(slog.New(newSlogZapHandler(global.Named("slog"))))
+	base := global.Load()
+	if base == nil {
+		base = zap.NewNop()
+	}
+	slog.SetDefault(slog.New(newSlogZapHandler(base.Named("slog"))))
 }
 
 func buildLogger(options InitOptions) (*zap.Logger, zap.AtomicLevel, error) {
@@ -363,9 +378,7 @@ func (s *sinkCore) Check(entry zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore
 func (s *sinkCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
 	// Only handle sink forwarding — the inner cores write via their own
 	// Write methods (added to CheckedEntry by s.core.Check above).
-	mu.RLock()
-	sink := currentSink
-	mu.RUnlock()
+	sink := loadSink()
 	if sink == nil {
 		return nil
 	}
@@ -454,7 +467,7 @@ func inferStdLogLevel(msg string) Level {
 	if strings.Contains(lower, " failed") || strings.Contains(lower, "error") || strings.Contains(lower, "panic") || strings.Contains(lower, "fatal") {
 		return LevelError
 	}
-	if strings.Contains(lower, "warning") || strings.Contains(lower, "warn") || strings.Contains(lower, " retry") || strings.Contains(lower, " queue full") || strings.Contains(lower, "fallback") {
+	if strings.Contains(lower, "warning") || strings.Contains(lower, "warn") || strings.Contains(lower, " queue full") || strings.Contains(lower, "fallback") {
 		return LevelWarn
 	}
 	return LevelInfo
@@ -467,9 +480,7 @@ func LegacyPrintf(component, format string, args ...any) {
 		return
 	}
 
-	mu.RLock()
-	initialized := global != nil
-	mu.RUnlock()
+	initialized := global.Load() != nil
 	if !initialized {
 		// 在日志系统未初始化前，回退到标准库 log，避免测试/工具链丢日志。
 		log.Print(msg)

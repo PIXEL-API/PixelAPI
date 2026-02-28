@@ -352,6 +352,81 @@ func (s *GroupRepoSuite) TestListWithFilters_Search() {
 	})
 }
 
+func (s *GroupRepoSuite) TestUpdateSortOrders_BatchCaseWhen() {
+	g1 := &service.Group{
+		Name:             "sort-g1",
+		Platform:         service.PlatformAnthropic,
+		RateMultiplier:   1.0,
+		IsExclusive:      false,
+		Status:           service.StatusActive,
+		SubscriptionType: service.SubscriptionTypeStandard,
+	}
+	g2 := &service.Group{
+		Name:             "sort-g2",
+		Platform:         service.PlatformAnthropic,
+		RateMultiplier:   1.0,
+		IsExclusive:      false,
+		Status:           service.StatusActive,
+		SubscriptionType: service.SubscriptionTypeStandard,
+	}
+	g3 := &service.Group{
+		Name:             "sort-g3",
+		Platform:         service.PlatformAnthropic,
+		RateMultiplier:   1.0,
+		IsExclusive:      false,
+		Status:           service.StatusActive,
+		SubscriptionType: service.SubscriptionTypeStandard,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, g1))
+	s.Require().NoError(s.repo.Create(s.ctx, g2))
+	s.Require().NoError(s.repo.Create(s.ctx, g3))
+
+	err := s.repo.UpdateSortOrders(s.ctx, []service.GroupSortOrderUpdate{
+		{ID: g1.ID, SortOrder: 30},
+		{ID: g2.ID, SortOrder: 10},
+		{ID: g3.ID, SortOrder: 20},
+		{ID: g2.ID, SortOrder: 15}, // 重复 ID 应以最后一次为准
+	})
+	s.Require().NoError(err)
+
+	got1, err := s.repo.GetByID(s.ctx, g1.ID)
+	s.Require().NoError(err)
+	got2, err := s.repo.GetByID(s.ctx, g2.ID)
+	s.Require().NoError(err)
+	got3, err := s.repo.GetByID(s.ctx, g3.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(30, got1.SortOrder)
+	s.Require().Equal(15, got2.SortOrder)
+	s.Require().Equal(20, got3.SortOrder)
+}
+
+func (s *GroupRepoSuite) TestUpdateSortOrders_MissingGroupNoPartialUpdate() {
+	g1 := &service.Group{
+		Name:             "sort-no-partial",
+		Platform:         service.PlatformAnthropic,
+		RateMultiplier:   1.0,
+		IsExclusive:      false,
+		Status:           service.StatusActive,
+		SubscriptionType: service.SubscriptionTypeStandard,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, g1))
+
+	before, err := s.repo.GetByID(s.ctx, g1.ID)
+	s.Require().NoError(err)
+	beforeSort := before.SortOrder
+
+	err = s.repo.UpdateSortOrders(s.ctx, []service.GroupSortOrderUpdate{
+		{ID: g1.ID, SortOrder: 99},
+		{ID: 99999999, SortOrder: 1},
+	})
+	s.Require().Error(err)
+	s.Require().ErrorIs(err, service.ErrGroupNotFound)
+
+	after, err := s.repo.GetByID(s.ctx, g1.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(beforeSort, after.SortOrder)
+}
+
 func (s *GroupRepoSuite) TestListWithFilters_AccountCount() {
 	g1 := &service.Group{
 		Name:             "g1",

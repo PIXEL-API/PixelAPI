@@ -166,13 +166,9 @@
           <template #cell-stream="{ row }">
             <span
               class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
-              :class="
-                row.stream
-                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-                  : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
-              "
+              :class="getRequestTypeBadgeClass(row)"
             >
-              {{ row.stream ? t('usage.stream') : t('usage.sync') }}
+              {{ getRequestTypeLabel(row) }}
             </span>
           </template>
 
@@ -473,12 +469,13 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-  import Select from '@/components/common/Select.vue'
-  import DateRangePicker from '@/components/common/DateRangePicker.vue'
-  import Icon from '@/components/icons/Icon.vue'
-  import type { UsageLog, ApiKey, UsageQueryParams, UsageStatsResponse } from '@/types'
-  import type { Column } from '@/components/common/types'
-  import { formatDateTime, formatReasoningEffort } from '@/utils/format'
+import Select from '@/components/common/Select.vue'
+import DateRangePicker from '@/components/common/DateRangePicker.vue'
+import Icon from '@/components/icons/Icon.vue'
+import type { UsageLog, ApiKey, UsageQueryParams, UsageStatsResponse } from '@/types'
+import type { Column } from '@/components/common/types'
+import { formatDateTime, formatReasoningEffort } from '@/utils/format'
+import { resolveUsageRequestType } from '@/utils/usageRequestType'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -575,6 +572,30 @@ const formatDuration = (ms: number): string => {
 
 const formatUserAgent = (ua: string): string => {
   return ua
+}
+
+const getRequestTypeLabel = (log: UsageLog): string => {
+  const requestType = resolveUsageRequestType(log)
+  if (requestType === 'ws_v2') return t('usage.ws')
+  if (requestType === 'stream') return t('usage.stream')
+  if (requestType === 'sync') return t('usage.sync')
+  return t('usage.unknown')
+}
+
+const getRequestTypeBadgeClass = (log: UsageLog): string => {
+  const requestType = resolveUsageRequestType(log)
+  if (requestType === 'ws_v2') return 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200'
+  if (requestType === 'stream') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+  if (requestType === 'sync') return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+  return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'
+}
+
+const getRequestTypeExportText = (log: UsageLog): string => {
+  const requestType = resolveUsageRequestType(log)
+  if (requestType === 'ws_v2') return 'WS'
+  if (requestType === 'stream') return 'Stream'
+  if (requestType === 'sync') return 'Sync'
+  return 'Unknown'
 }
 
 const formatTokens = (value: number): string => {
@@ -768,7 +789,7 @@ const exportToCSV = async () => {
         log.api_key?.name || '',
         log.model,
         formatReasoningEffort(log.reasoning_effort),
-        log.stream ? 'Stream' : 'Sync',
+        getRequestTypeExportText(log),
         log.input_tokens,
         log.output_tokens,
         log.cache_read_tokens,

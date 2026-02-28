@@ -73,3 +73,16 @@ func TestBillingCacheServiceQueueHighLoad(t *testing.T) {
 		return atomic.LoadInt64(&cache.subscriptionUpdates) > 0
 	}, 2*time.Second, 10*time.Millisecond)
 }
+
+func TestBillingCacheServiceEnqueueAfterStopReturnsFalse(t *testing.T) {
+	cache := &billingCacheWorkerStub{}
+	svc := NewBillingCacheService(cache, nil, nil, &config.Config{})
+	svc.Stop()
+
+	enqueued := svc.enqueueCacheWrite(cacheWriteTask{
+		kind:   cacheWriteDeductBalance,
+		userID: 1,
+		amount: 1,
+	})
+	require.False(t, enqueued)
+}

@@ -270,6 +270,7 @@ export default {
     redeemCodes: '兑换码',
     ops: '运维监控',
     promoCodes: '优惠码',
+    dataManagement: '数据管理',
     settings: '系统设置',
     myAccount: '我的账户',
     lightMode: '浅色模式',
@@ -280,7 +281,8 @@ export default {
     github: 'GitHub',
     mySubscriptions: '我的订阅',
     buySubscription: '购买订阅',
-    docs: '文档'
+    docs: '文档',
+    sora: 'Sora 创作'
   },
 
   // Auth
@@ -618,8 +620,10 @@ export default {
     firstToken: '首 Token',
     duration: '耗时',
     time: '时间',
+    ws: 'WS',
     stream: '流式',
     sync: '同步',
+    unknown: '未知',
     in: '输入',
     out: '输出',
     cacheRead: '读取',
@@ -862,6 +866,181 @@ export default {
       failedToLoad: '加载仪表盘数据失败'
     },
 
+    dataManagement: {
+      title: '数据管理',
+      description: '统一管理数据管理代理状态、对象存储配置和备份任务',
+      agent: {
+        title: '数据管理代理状态',
+        description: '系统会自动探测固定 Unix Socket，仅在可连通时启用数据管理功能。',
+        enabled: '数据管理代理已就绪，可继续进行数据管理操作。',
+        disabled: '数据管理代理不可用，当前仅可查看诊断信息。',
+        socketPath: 'Socket 路径',
+        version: '版本',
+        status: '状态',
+        uptime: '运行时长',
+        reasonLabel: '不可用原因',
+        reason: {
+          DATA_MANAGEMENT_AGENT_SOCKET_MISSING: '未检测到数据管理 Socket 文件',
+          DATA_MANAGEMENT_AGENT_UNAVAILABLE: '数据管理代理不可连通',
+          BACKUP_AGENT_SOCKET_MISSING: '未检测到备份 Socket 文件',
+          BACKUP_AGENT_UNAVAILABLE: '备份代理不可连通',
+          UNKNOWN: '未知原因'
+        }
+      },
+      sections: {
+        config: {
+          title: '备份配置',
+          description: '配置备份源、保留策略与 S3 存储参数。'
+        },
+        s3: {
+          title: 'S3 对象存储',
+          description: '配置并测试备份产物上传到标准 S3 对象存储。'
+        },
+        backup: {
+          title: '备份操作',
+          description: '触发 PostgreSQL、Redis 与全量备份任务。'
+        },
+        history: {
+          title: '备份历史',
+          description: '查看备份任务执行状态、错误与产物信息。'
+        }
+      },
+      form: {
+        sourceMode: '源模式',
+        backupRoot: '备份根目录',
+        activePostgresProfile: '当前激活 PostgreSQL 配置',
+        activeRedisProfile: '当前激活 Redis 配置',
+        activeS3Profile: '当前激活 S3 账号',
+        retentionDays: '保留天数',
+        keepLast: '至少保留最近任务数',
+        uploadToS3: '上传到 S3',
+        useActivePostgresProfile: '使用当前激活 PostgreSQL 配置',
+        useActiveRedisProfile: '使用当前激活 Redis 配置',
+        useActiveS3Profile: '使用当前激活账号',
+        idempotencyKey: '幂等键（可选）',
+        secretConfigured: '已配置，留空不变',
+        source: {
+          profileID: '配置 ID（唯一）',
+          profileName: '配置名称',
+          setActive: '创建后立即设为激活配置'
+        },
+        postgres: {
+          title: 'PostgreSQL',
+          host: '主机',
+          port: '端口',
+          user: '用户名',
+          password: '密码',
+          database: '数据库',
+          sslMode: 'SSL 模式',
+          containerName: '容器名（docker_exec 模式）'
+        },
+        redis: {
+          title: 'Redis',
+          addr: '地址（host:port）',
+          username: '用户名',
+          password: '密码',
+          db: '数据库编号',
+          containerName: '容器名（docker_exec 模式）'
+        },
+        s3: {
+          enabled: '启用 S3 上传',
+          profileID: '账号 ID（唯一）',
+          profileName: '账号名称',
+          endpoint: 'Endpoint（可选）',
+          region: 'Region',
+          bucket: 'Bucket',
+          accessKeyID: 'Access Key ID',
+          secretAccessKey: 'Secret Access Key',
+          prefix: '对象前缀',
+          forcePathStyle: '强制 path-style',
+          useSSL: '使用 SSL',
+          setActive: '创建后立即设为激活账号'
+        }
+      },
+      sourceProfiles: {
+        createTitle: '创建数据源配置',
+        editTitle: '编辑数据源配置',
+        empty: '暂无配置，请先创建',
+        deleteConfirm: '确定删除配置 {profileID} 吗？',
+        columns: {
+          profile: '配置',
+          active: '激活状态',
+          connection: '连接信息',
+          database: '数据库',
+          updatedAt: '更新时间',
+          actions: '操作'
+        }
+      },
+      s3Profiles: {
+        createTitle: '创建 S3 账号',
+        editTitle: '编辑 S3 账号',
+        empty: '暂无 S3 账号，请先创建',
+        editHint: '点击“编辑”将在右侧抽屉中修改账号信息。',
+        deleteConfirm: '确定删除 S3 账号 {profileID} 吗？',
+        columns: {
+          profile: '账号',
+          active: '激活状态',
+          storage: '存储配置',
+          updatedAt: '更新时间',
+          actions: '操作'
+        }
+      },
+      history: {
+        total: '共 {count} 条',
+        empty: '暂无备份任务',
+        columns: {
+          jobID: '任务 ID',
+          type: '类型',
+          status: '状态',
+          triggeredBy: '触发人',
+          pgProfile: 'PostgreSQL 配置',
+          redisProfile: 'Redis 配置',
+          s3Profile: 'S3 账号',
+          finishedAt: '完成时间',
+          artifact: '产物',
+          error: '错误'
+        },
+        status: {
+          queued: '排队中',
+          running: '执行中',
+          succeeded: '成功',
+          failed: '失败',
+          partial_succeeded: '部分成功'
+        }
+      },
+      actions: {
+        refresh: '刷新状态',
+        disabledHint: '请先启动 datamanagementd 并确认 Socket 可连通。',
+        reloadConfig: '加载配置',
+        reloadSourceProfiles: '刷新数据源配置',
+        reloadProfiles: '刷新账号列表',
+        newSourceProfile: '新建数据源配置',
+        saveConfig: '保存配置',
+        configSaved: '配置保存成功',
+        testS3: '测试 S3 连接',
+        s3TestOK: 'S3 连接测试成功',
+        s3TestFailed: 'S3 连接测试失败',
+        newProfile: '新建账号',
+        saveProfile: '保存账号',
+        activateProfile: '设为激活',
+        profileIDRequired: '请输入账号 ID',
+        profileNameRequired: '请输入账号名称',
+        profileSelectRequired: '请先选择要编辑的账号',
+        profileCreated: 'S3 账号创建成功',
+        profileSaved: 'S3 账号保存成功',
+        profileActivated: 'S3 账号已切换为激活',
+        profileDeleted: 'S3 账号删除成功',
+        sourceProfileCreated: '数据源配置创建成功',
+        sourceProfileSaved: '数据源配置保存成功',
+        sourceProfileActivated: '数据源配置已切换为激活',
+        sourceProfileDeleted: '数据源配置删除成功',
+        createBackup: '创建备份任务',
+        jobCreated: '备份任务已创建：{jobID}（{status}）',
+        refreshJobs: '刷新任务',
+        loadMore: '加载更多'
+      }
+    },
+
     // Users Management
     users: {
       title: '用户管理',
@@ -978,6 +1157,8 @@ export default {
       failedToAdjust: '调整失败',
       emailRequired: '请输入邮箱',
       concurrencyMin: '并发数不能小于1',
+      soraStorageQuota: 'Sora 存储配额',
+      soraStorageQuotaHint: '单位 GB，0 表示使用分组或系统默认配额',
       amountRequired: '请输入有效金额',
       insufficientBalance: '余额不足',
       setAllowedGroups: '设置允许分组',
@@ -1228,7 +1409,9 @@ export default {
         image360: '图片 360px ($)',
         image540: '图片 540px ($)',
         video: '视频（标准）($)',
-        videoHd: '视频（Pro-HD）($)'
+        videoHd: '视频（Pro-HD）($)',
+        storageQuota: '存储配额',
+        storageQuotaHint: '单位 GB，设置该分组用户的 Sora 存储配额上限，0 表示使用系统默认'
       },
       claudeCode: {
         title: 'Claude Code 客户端限制',
@@ -1512,6 +1695,10 @@ export default {
         codeAssist: 'Code Assist',
         antigravityOauth: 'Antigravity OAuth',
         antigravityApikey: '通过 Base URL + API Key 连接',
+        soraApiKey: 'API Key / 上游透传',
+        soraApiKeyHint: '连接另一个 Sub2API 或兼容 API',
+        soraBaseUrlRequired: 'Sora apikey 账号必须设置上游地址（Base URL）',
+        soraBaseUrlInvalidScheme: 'Base URL 必须以 http:// 或 https:// 开头',
         upstream: '对接上游',
         upstreamDesc: '通过 Base URL + API Key 连接上游',
         api_key: 'API Key',
@@ -1692,6 +1879,22 @@ export default {
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',
+        responsesWebsocketsV2: 'Responses WebSocket v2',
+        responsesWebsocketsV2Desc:
+          '默认关闭。开启后可启用 responses_websockets_v2 协议能力（受网关全局开关与账号类型开关约束）。',
+        wsMode: 'WS mode',
+        wsModeDesc: '仅对当前 OpenAI 账号类型生效。',
+        wsModeOff: '关闭（off）',
+        wsModeShared: '共享（shared）',
+        wsModeDedicated: '独享（dedicated）',
+        wsModeConcurrencyHint: '启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。',
+        oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
+        oauthResponsesWebsocketsV2Desc:
+          '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
+        apiKeyResponsesWebsocketsV2: 'API Key WebSocket Mode',
+        apiKeyResponsesWebsocketsV2Desc:
+          '仅对 OpenAI API Key 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
+        responsesWebsocketsV2PassthroughHint: '当前已开启自动透传：仅影响 HTTP 透传链路，不影响 WS mode。',
         codexCLIOnly: '仅允许 Codex 官方客户端',
         codexCLIOnlyDesc: '仅对 OpenAI OAuth 生效。开启后仅允许 Codex 官方客户端家族访问；关闭后完全绕过并保持原逻辑。',
         modelRestrictionDisabledByPassthrough: '已开启自动透传：模型白名单/映射不会生效。',
@@ -1891,6 +2094,15 @@ export default {
           sessionTokenAuth: '手动输入 ST',
           sessionTokenDesc: '输入您已有的 Sora Session Token，支持批量输入（每行一个），系统将自动验证并创建账号。',
           sessionTokenPlaceholder: '粘贴您的 Sora Session Token...\n支持多个，每行一个',
+          sessionTokenRawLabel: '原始字符串',
+          sessionTokenRawPlaceholder: '粘贴 /api/auth/session 原始数据或 Session Token...',
+          sessionTokenRawHint: '支持粘贴完整 JSON，系统会自动解析 ST 和 AT。',
+          openSessionUrl: '打开获取链接',
+          copySessionUrl: '复制链接',
+          sessionUrlHint: '该链接通常可获取 AT。若返回中无 sessionToken，请从浏览器 Cookie 复制 __Secure-next-auth.session-token 作为 ST。',
+          parsedSessionTokensLabel: '解析出的 ST',
+          parsedSessionTokensEmpty: '未解析到 ST，请检查输入内容',
+          parsedAccessTokensLabel: '解析出的 AT',
           validating: '验证中...',
           validateAndCreate: '验证并创建账号',
           pleaseEnterRefreshToken: '请输入 Refresh Token',
@@ -2134,6 +2346,7 @@ export default {
       selectTestModel: '选择测试模型',
       testModel: '测试模型',
       testPrompt: '提示词："hi"',
+      soraUpstreamBaseUrlHint: '上游 Sora 服务地址（另一个 Sub2API 实例或兼容 API）',
       soraTestHint: 'Sora 测试将执行连通性与能力检测（/backend/me、订阅信息、Sora2 邀请码与剩余额度）。',
       soraTestTarget: '检测目标：Sora 账号能力',
       soraTestMode: '模式：连通性 + 能力探测',
@@ -3510,14 +3723,20 @@ export default {
       },
       purchase: {
         title: '购买订阅页面',
-        description: '在侧边栏展示“购买订阅”入口，并在页面内通过 iframe 打开指定链接',
+        description: '在侧边栏展示”购买订阅”入口，并在页面内通过 iframe 打开指定链接',
         enabled: '显示购买订阅入口',
         enabledHint: '仅在标准模式（非简单模式）下展示',
         url: '购买页面 URL',
         urlPlaceholder: 'https://example.com/purchase',
         urlHint: '必须是完整的 http(s) 链接',
         iframeWarning:
-          '⚠️ iframe 提示：部分网站会通过 X-Frame-Options 或 CSP（frame-ancestors）禁止被 iframe 嵌入，出现空白时可引导用户使用“新窗口打开”。'
+          '⚠️ iframe 提示：部分网站会通过 X-Frame-Options 或 CSP（frame-ancestors）禁止被 iframe 嵌入，出现空白时可引导用户使用”新窗口打开”。'
+      },
+      soraClient: {
+        title: 'Sora 客户端',
+        description: '控制是否在侧边栏展示 Sora 客户端入口',
+        enabled: '启用 Sora 客户端',
+        enabledHint: '开启后，侧边栏将显示 Sora 入口，用户可访问 Sora 功能'
       },
       smtp: {
         title: 'SMTP 设置',
@@ -3588,6 +3807,60 @@ export default {
         keyWarning: '此密钥仅显示一次，请立即复制保存。',
         securityWarning: '警告：此密钥拥有完整的管理员权限，请妥善保管。',
         usage: '使用方法：在请求头中添加 x-api-key: <your-admin-api-key>'
+      },
+      soraS3: {
+        title: 'Sora S3 存储配置',
+        description: '以多配置列表方式管理 Sora S3 端点，并可切换生效配置',
+        newProfile: '新建配置',
+        reloadProfiles: '刷新列表',
+        empty: '暂无 Sora S3 配置，请先创建',
+        createTitle: '新建 Sora S3 配置',
+        editTitle: '编辑 Sora S3 配置',
+        profileID: '配置 ID',
+        profileName: '配置名称',
+        setActive: '创建后设为生效',
+        saveProfile: '保存配置',
+        activateProfile: '设为生效',
+        profileCreated: 'Sora S3 配置创建成功',
+        profileSaved: 'Sora S3 配置保存成功',
+        profileDeleted: 'Sora S3 配置删除成功',
+        profileActivated: 'Sora S3 生效配置已切换',
+        profileIDRequired: '请填写配置 ID',
+        profileNameRequired: '请填写配置名称',
+        profileSelectRequired: '请先选择配置',
+        endpointRequired: '启用时必须填写 S3 端点',
+        bucketRequired: '启用时必须填写存储桶',
+        accessKeyRequired: '启用时必须填写 Access Key ID',
+        deleteConfirm: '确定删除 Sora S3 配置 {profileID} 吗？',
+        columns: {
+          profile: '配置',
+          active: '生效状态',
+          endpoint: '端点',
+          bucket: '存储桶',
+          quota: '默认配额',
+          updatedAt: '更新时间',
+          actions: '操作'
+        },
+        enabled: '启用 S3 存储',
+        enabledHint: '启用后，Sora 生成的媒体文件将自动上传到 S3 存储',
+        endpoint: 'S3 端点',
+        region: '区域',
+        bucket: '存储桶',
+        prefix: '对象前缀',
+        accessKeyId: 'Access Key ID',
+        secretAccessKey: 'Secret Access Key',
+        secretConfigured: '(已配置，留空保持不变)',
+        cdnUrl: 'CDN URL',
+        cdnUrlHint: '可选，配置后使用 CDN URL 访问文件，否则使用预签名 URL',
+        forcePathStyle: '强制路径风格（Path Style）',
+        defaultQuota: '默认存储配额',
+        defaultQuotaHint: '未在用户或分组级别指定配额时的默认值，0 表示无限制',
+        testConnection: '测试连接',
+        testing: '测试中...',
+        testSuccess: 'S3 连接测试成功',
+        testFailed: 'S3 连接测试失败',
+        saved: 'Sora S3 设置保存成功',
+        saveFailed: '保存 Sora S3 设置失败'
       },
       streamTimeout: {
         title: '流超时处理',
@@ -3972,5 +4245,93 @@ export default {
           '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">点击确认创建您的 API 密钥。</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ 重要：</b><ul style="margin: 8px 0 0 16px;"><li>创建后请立即复制密钥（sk-xxx）</li><li>密钥只显示一次，丢失需重新生成</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>🚀 如何使用：</b><br/>将密钥配置到支持 OpenAI 接口的任何客户端（如 ChatBox、OpenCat 等），即可开始使用！</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 点击"创建"按钮</p></div>'
       }
     }
+  },
+
+  // Sora 创作
+  sora: {
+    title: 'Sora 创作',
+    description: '使用 Sora AI 生成视频与图片',
+    notEnabled: '功能未开放',
+    notEnabledDesc: '管理员尚未启用 Sora 创作功能，请联系管理员开通。',
+    tabGenerate: '生成',
+    tabLibrary: '作品库',
+    noActiveGenerations: '暂无生成任务',
+    startGenerating: '在下方输入提示词，开始创作',
+    storage: '存储',
+    promptPlaceholder: '描述你想创作的内容...',
+    generate: '生成',
+    generating: '生成中...',
+    selectModel: '选择模型',
+    statusPending: '等待中',
+    statusGenerating: '生成中',
+    statusCompleted: '已完成',
+    statusFailed: '失败',
+    statusCancelled: '已取消',
+    cancel: '取消',
+    delete: '删除',
+    save: '保存到云端',
+    saved: '已保存',
+    retry: '重试',
+    download: '下载',
+    justNow: '刚刚',
+    minutesAgo: '{n} 分钟前',
+    hoursAgo: '{n} 小时前',
+    noSavedWorks: '暂无保存的作品',
+    saveWorksHint: '生成完成后，将作品保存到作品库',
+    filterAll: '全部',
+    filterVideo: '视频',
+    filterImage: '图片',
+    confirmDelete: '确定删除此作品？',
+    loading: '加载中...',
+    loadMore: '加载更多',
+    noStorageWarningTitle: '未配置存储',
+    noStorageWarningDesc: '生成的内容仅通过上游临时链接提供，约 15 分钟后过期。建议管理员配置 S3 存储。',
+    mediaTypeVideo: '视频',
+    mediaTypeImage: '图片',
+    notificationCompleted: '生成完成',
+    notificationFailed: '生成失败',
+    notificationCompletedBody: '您的 {model} 任务已完成',
+    notificationFailedBody: '您的 {model} 任务失败了',
+    upstreamExpiresSoon: '即将过期',
+    upstreamExpired: '链接已过期',
+    upstreamCountdown: '剩余 {time}',
+    previewTitle: '作品预览',
+    closePreview: '关闭',
+    beforeUnloadWarning: '您有未保存的生成内容，确定要离开吗？',
+    downloadTitle: '下载生成内容',
+    downloadExpirationWarning: '此链接约 15 分钟后过期，请尽快下载保存。',
+    downloadNow: '立即下载',
+    referenceImage: '参考图',
+    removeImage: '移除',
+    imageTooLarge: '图片大小不能超过 20MB',
+    // Sora 暗色主题新增
+    welcomeTitle: '将你的想象力变成视频',
+    welcomeSubtitle: '输入一段描述，Sora 将为你创作逼真的视频或图片。尝试以下示例开始创作。',
+    queueTasks: '个任务',
+    queueWaiting: '队列中等待',
+    waiting: '等待中',
+    waited: '已等待',
+    errorCategory: '内容策略限制',
+    savedToCloud: '已保存到云端',
+    downloadLocal: '本地下载',
+    canDownload: '可下载',
+    regenrate: '重新生成',
+    creatorPlaceholder: '描述你想要生成的视频或图片...',
+    videoModels: '视频模型',
+    imageModels: '图片模型',
+    noStorageConfigured: '存储未配置',
+    selectCredential: '选择凭证',
+    apiKeys: 'API 密钥',
+    subscriptions: '订阅',
+    subscription: '订阅',
+    noCredentialHint: '请先创建 API Key 或联系管理员分配订阅',
+    uploadReference: '上传参考图片',
+    generatingCount: '正在生成 {current}/{max}',
+    noStorageToastMessage: '管理员未开通云存储，生成完成后请使用"本地下载"保存文件，否则将会丢失。',
+    galleryCount: '共 {count} 个作品',
+    galleryEmptyTitle: '还没有任何作品',
+    galleryEmptyDesc: '你的创作成果将会展示在这里。前往生成页，开始你的第一次创作吧。',
+    startCreating: '开始创作',
+    yesterday: '昨天'
   }
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/require"
 )
 
 func resetViperWithJWTSecret(t *testing.T) {
@@ -72,6 +73,103 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	}
 	if cfg.Gateway.Scheduling.SlotCleanupInterval != 30*time.Second {
 		t.Fatalf("SlotCleanupInterval = %v, want 30s", cfg.Gateway.Scheduling.SlotCleanupInterval)
+	}
+}
+
+func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.Gateway.OpenAIWS.Enabled {
+		t.Fatalf("Gateway.OpenAIWS.Enabled = false, want true")
+	}
+	if !cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 {
+		t.Fatalf("Gateway.OpenAIWS.ResponsesWebsocketsV2 = false, want true")
+	}
+	if cfg.Gateway.OpenAIWS.ResponsesWebsockets {
+		t.Fatalf("Gateway.OpenAIWS.ResponsesWebsockets = true, want false")
+	}
+	if !cfg.Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled {
+		t.Fatalf("Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled = false, want true")
+	}
+	if cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor != 1.0 {
+		t.Fatalf("Gateway.OpenAIWS.OAuthMaxConnsFactor = %v, want 1.0", cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor)
+	}
+	if cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor != 1.0 {
+		t.Fatalf("Gateway.OpenAIWS.APIKeyMaxConnsFactor = %v, want 1.0", cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor)
+	}
+	if cfg.Gateway.OpenAIWS.StickySessionTTLSeconds != 3600 {
+		t.Fatalf("Gateway.OpenAIWS.StickySessionTTLSeconds = %d, want 3600", cfg.Gateway.OpenAIWS.StickySessionTTLSeconds)
+	}
+	if !cfg.Gateway.OpenAIWS.SessionHashReadOldFallback {
+		t.Fatalf("Gateway.OpenAIWS.SessionHashReadOldFallback = false, want true")
+	}
+	if !cfg.Gateway.OpenAIWS.SessionHashDualWriteOld {
+		t.Fatalf("Gateway.OpenAIWS.SessionHashDualWriteOld = false, want true")
+	}
+	if !cfg.Gateway.OpenAIWS.MetadataBridgeEnabled {
+		t.Fatalf("Gateway.OpenAIWS.MetadataBridgeEnabled = false, want true")
+	}
+	if cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds != 3600 {
+		t.Fatalf("Gateway.OpenAIWS.StickyResponseIDTTLSeconds = %d, want 3600", cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds)
+	}
+	if cfg.Gateway.OpenAIWS.FallbackCooldownSeconds != 30 {
+		t.Fatalf("Gateway.OpenAIWS.FallbackCooldownSeconds = %d, want 30", cfg.Gateway.OpenAIWS.FallbackCooldownSeconds)
+	}
+	if cfg.Gateway.OpenAIWS.EventFlushBatchSize != 1 {
+		t.Fatalf("Gateway.OpenAIWS.EventFlushBatchSize = %d, want 1", cfg.Gateway.OpenAIWS.EventFlushBatchSize)
+	}
+	if cfg.Gateway.OpenAIWS.EventFlushIntervalMS != 10 {
+		t.Fatalf("Gateway.OpenAIWS.EventFlushIntervalMS = %d, want 10", cfg.Gateway.OpenAIWS.EventFlushIntervalMS)
+	}
+	if cfg.Gateway.OpenAIWS.PrewarmCooldownMS != 300 {
+		t.Fatalf("Gateway.OpenAIWS.PrewarmCooldownMS = %d, want 300", cfg.Gateway.OpenAIWS.PrewarmCooldownMS)
+	}
+	if cfg.Gateway.OpenAIWS.RetryBackoffInitialMS != 120 {
+		t.Fatalf("Gateway.OpenAIWS.RetryBackoffInitialMS = %d, want 120", cfg.Gateway.OpenAIWS.RetryBackoffInitialMS)
+	}
+	if cfg.Gateway.OpenAIWS.RetryBackoffMaxMS != 2000 {
+		t.Fatalf("Gateway.OpenAIWS.RetryBackoffMaxMS = %d, want 2000", cfg.Gateway.OpenAIWS.RetryBackoffMaxMS)
+	}
+	if cfg.Gateway.OpenAIWS.RetryJitterRatio != 0.2 {
+		t.Fatalf("Gateway.OpenAIWS.RetryJitterRatio = %v, want 0.2", cfg.Gateway.OpenAIWS.RetryJitterRatio)
+	}
+	if cfg.Gateway.OpenAIWS.RetryTotalBudgetMS != 5000 {
+		t.Fatalf("Gateway.OpenAIWS.RetryTotalBudgetMS = %d, want 5000", cfg.Gateway.OpenAIWS.RetryTotalBudgetMS)
+	}
+	if cfg.Gateway.OpenAIWS.PayloadLogSampleRate != 0.2 {
+		t.Fatalf("Gateway.OpenAIWS.PayloadLogSampleRate = %v, want 0.2", cfg.Gateway.OpenAIWS.PayloadLogSampleRate)
+	}
+	if !cfg.Gateway.OpenAIWS.StoreDisabledForceNewConn {
+		t.Fatalf("Gateway.OpenAIWS.StoreDisabledForceNewConn = false, want true")
+	}
+	if cfg.Gateway.OpenAIWS.StoreDisabledConnMode != "strict" {
+		t.Fatalf("Gateway.OpenAIWS.StoreDisabledConnMode = %q, want %q", cfg.Gateway.OpenAIWS.StoreDisabledConnMode, "strict")
+	}
+	if cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
+		t.Fatalf("Gateway.OpenAIWS.ModeRouterV2Enabled = true, want false")
+	}
+	if cfg.Gateway.OpenAIWS.IngressModeDefault != "shared" {
+		t.Fatalf("Gateway.OpenAIWS.IngressModeDefault = %q, want %q", cfg.Gateway.OpenAIWS.IngressModeDefault, "shared")
+	}
+}
+
+func TestLoadOpenAIWSStickyTTLCompatibility(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_WS_STICKY_RESPONSE_ID_TTL_SECONDS", "0")
+	t.Setenv("GATEWAY_OPENAI_WS_STICKY_PREVIOUS_RESPONSE_TTL_SECONDS", "7200")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds != 7200 {
+		t.Fatalf("StickyResponseIDTTLSeconds = %d, want 7200", cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds)
 	}
 }
 
@@ -994,6 +1092,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.stream_keepalive_interval",
 		},
 		{
+			name:    "gateway openai ws oauth max conns factor",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.OAuthMaxConnsFactor = 0 },
+			wantErr: "gateway.openai_ws.oauth_max_conns_factor",
+		},
+		{
+			name:    "gateway openai ws apikey max conns factor",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.APIKeyMaxConnsFactor = 0 },
+			wantErr: "gateway.openai_ws.apikey_max_conns_factor",
+		},
+		{
 			name:    "gateway stream data interval range",
 			mutate:  func(c *Config) { c.Gateway.StreamDataIntervalTimeout = 5 },
 			wantErr: "gateway.stream_data_interval_timeout",
@@ -1170,6 +1278,165 @@ func TestValidateConfigErrors(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
 			}
+		})
+	}
+}
+
+func TestValidateConfig_OpenAIWSRules(t *testing.T) {
+	buildValid := func(t *testing.T) *Config {
+		t.Helper()
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		return cfg
+	}
+
+	t.Run("sticky response id ttl 兼容旧键回填", func(t *testing.T) {
+		cfg := buildValid(t)
+		cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 0
+		cfg.Gateway.OpenAIWS.StickyPreviousResponseTTLSeconds = 7200
+
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, 7200, cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds)
+	})
+
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name:    "max_conns_per_account 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MaxConnsPerAccount = 0 },
+			wantErr: "gateway.openai_ws.max_conns_per_account",
+		},
+		{
+			name:    "min_idle_per_account 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MinIdlePerAccount = -1 },
+			wantErr: "gateway.openai_ws.min_idle_per_account",
+		},
+		{
+			name:    "max_idle_per_account 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MaxIdlePerAccount = -1 },
+			wantErr: "gateway.openai_ws.max_idle_per_account",
+		},
+		{
+			name: "min_idle_per_account 不能大于 max_idle_per_account",
+			mutate: func(c *Config) {
+				c.Gateway.OpenAIWS.MinIdlePerAccount = 3
+				c.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+			},
+			wantErr: "gateway.openai_ws.min_idle_per_account must be <= max_idle_per_account",
+		},
+		{
+			name: "max_idle_per_account 不能大于 max_conns_per_account",
+			mutate: func(c *Config) {
+				c.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+				c.Gateway.OpenAIWS.MinIdlePerAccount = 1
+				c.Gateway.OpenAIWS.MaxIdlePerAccount = 3
+			},
+			wantErr: "gateway.openai_ws.max_idle_per_account must be <= max_conns_per_account",
+		},
+		{
+			name:    "dial_timeout_seconds 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.DialTimeoutSeconds = 0 },
+			wantErr: "gateway.openai_ws.dial_timeout_seconds",
+		},
+		{
+			name:    "read_timeout_seconds 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.ReadTimeoutSeconds = 0 },
+			wantErr: "gateway.openai_ws.read_timeout_seconds",
+		},
+		{
+			name:    "write_timeout_seconds 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.WriteTimeoutSeconds = 0 },
+			wantErr: "gateway.openai_ws.write_timeout_seconds",
+		},
+		{
+			name:    "pool_target_utilization 必须在 (0,1]",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.PoolTargetUtilization = 0 },
+			wantErr: "gateway.openai_ws.pool_target_utilization",
+		},
+		{
+			name:    "queue_limit_per_conn 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.QueueLimitPerConn = 0 },
+			wantErr: "gateway.openai_ws.queue_limit_per_conn",
+		},
+		{
+			name:    "fallback_cooldown_seconds 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.FallbackCooldownSeconds = -1 },
+			wantErr: "gateway.openai_ws.fallback_cooldown_seconds",
+		},
+		{
+			name:    "store_disabled_conn_mode 必须为 strict|adaptive|off",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.StoreDisabledConnMode = "invalid" },
+			wantErr: "gateway.openai_ws.store_disabled_conn_mode",
+		},
+		{
+			name:    "ingress_mode_default 必须为 off|shared|dedicated",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.IngressModeDefault = "invalid" },
+			wantErr: "gateway.openai_ws.ingress_mode_default",
+		},
+		{
+			name:    "payload_log_sample_rate 必须在 [0,1] 范围内",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.PayloadLogSampleRate = 1.2 },
+			wantErr: "gateway.openai_ws.payload_log_sample_rate",
+		},
+		{
+			name:    "retry_total_budget_ms 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.RetryTotalBudgetMS = -1 },
+			wantErr: "gateway.openai_ws.retry_total_budget_ms",
+		},
+		{
+			name:    "lb_top_k 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.LBTopK = 0 },
+			wantErr: "gateway.openai_ws.lb_top_k",
+		},
+		{
+			name:    "sticky_session_ttl_seconds 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.StickySessionTTLSeconds = 0 },
+			wantErr: "gateway.openai_ws.sticky_session_ttl_seconds",
+		},
+		{
+			name: "sticky_response_id_ttl_seconds 必须为正数",
+			mutate: func(c *Config) {
+				c.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 0
+				c.Gateway.OpenAIWS.StickyPreviousResponseTTLSeconds = 0
+			},
+			wantErr: "gateway.openai_ws.sticky_response_id_ttl_seconds",
+		},
+		{
+			name:    "sticky_previous_response_ttl_seconds 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.StickyPreviousResponseTTLSeconds = -1 },
+			wantErr: "gateway.openai_ws.sticky_previous_response_ttl_seconds",
+		},
+		{
+			name:    "scheduler_score_weights 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = -0.1 },
+			wantErr: "gateway.openai_ws.scheduler_score_weights.* must be non-negative",
+		},
+		{
+			name: "scheduler_score_weights 不能全为 0",
+			mutate: func(c *Config) {
+				c.Gateway.OpenAIWS.SchedulerScoreWeights.Priority = 0
+				c.Gateway.OpenAIWS.SchedulerScoreWeights.Load = 0
+				c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 0
+				c.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate = 0
+				c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT = 0
+			},
+			wantErr: "gateway.openai_ws.scheduler_score_weights must not all be zero",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := buildValid(t)
+			tc.mutate(cfg)
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }

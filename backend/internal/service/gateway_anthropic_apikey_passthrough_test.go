@@ -279,10 +279,10 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CountTokens404PassthroughNotE
 			wantPassthrough: true,
 		},
 		{
-			name:            "404 generic not found passes through as 404",
+			name:            "404 generic not found does not passthrough",
 			statusCode:      http.StatusNotFound,
 			respBody:        `{"error":{"message":"resource not found","type":"not_found_error"}}`,
-			wantPassthrough: true,
+			wantPassthrough: false,
 		},
 		{
 			name:            "400 Invalid URL does not passthrough",

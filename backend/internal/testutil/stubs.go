@@ -66,6 +66,13 @@ func (c StubConcurrencyCache) GetUsersLoadBatch(_ context.Context, users []servi
 	}
 	return result, nil
 }
+func (c StubConcurrencyCache) GetAccountConcurrencyBatch(_ context.Context, accountIDs []int64) (map[int64]int, error) {
+	result := make(map[int64]int, len(accountIDs))
+	for _, id := range accountIDs {
+		result[id] = 0
+	}
+	return result, nil
+}
 func (c StubConcurrencyCache) CleanupExpiredAccountSlots(_ context.Context, _ int64) error {
 	return nil
 }
