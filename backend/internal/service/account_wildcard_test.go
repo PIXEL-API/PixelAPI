@@ -314,3 +314,72 @@ func TestAccountGetModelMapping_AntigravityRespectsWildcardOverride(t *testing.T
 		t.Fatalf("expected wildcard mapping to stay effective, got: %q", mapped)
 	}
 }
+
+func TestAccountGetModelMapping_CacheInvalidatesOnCredentialsReplace(t *testing.T) {
+	account := &Account{
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-3-5-sonnet": "upstream-a",
+			},
+		},
+	}
+
+	first := account.GetModelMapping()
+	if first["claude-3-5-sonnet"] != "upstream-a" {
+		t.Fatalf("unexpected first mapping: %v", first)
+	}
+
+	account.Credentials = map[string]any{
+		"model_mapping": map[string]any{
+			"claude-3-5-sonnet": "upstream-b",
+		},
+	}
+	second := account.GetModelMapping()
+	if second["claude-3-5-sonnet"] != "upstream-b" {
+		t.Fatalf("expected cache invalidated after credentials replace, got: %v", second)
+	}
+}
+
+func TestAccountGetModelMapping_CacheInvalidatesOnMappingLenChange(t *testing.T) {
+	rawMapping := map[string]any{
+		"claude-sonnet": "sonnet-a",
+	}
+	account := &Account{
+		Credentials: map[string]any{
+			"model_mapping": rawMapping,
+		},
+	}
+
+	first := account.GetModelMapping()
+	if len(first) != 1 {
+		t.Fatalf("unexpected first mapping length: %d", len(first))
+	}
+
+	rawMapping["claude-opus"] = "opus-b"
+	second := account.GetModelMapping()
+	if second["claude-opus"] != "opus-b" {
+		t.Fatalf("expected cache invalidated after mapping len change, got: %v", second)
+	}
+}
+
+func TestAccountGetModelMapping_CacheInvalidatesOnInPlaceValueChange(t *testing.T) {
+	rawMapping := map[string]any{
+		"claude-sonnet": "sonnet-a",
+	}
+	account := &Account{
+		Credentials: map[string]any{
+			"model_mapping": rawMapping,
+		},
+	}
+
+	first := account.GetModelMapping()
+	if first["claude-sonnet"] != "sonnet-a" {
+		t.Fatalf("unexpected first mapping: %v", first)
+	}
+
+	rawMapping["claude-sonnet"] = "sonnet-b"
+	second := account.GetModelMapping()
+	if second["claude-sonnet"] != "sonnet-b" {
+		t.Fatalf("expected cache invalidated after in-place value change, got: %v", second)
+	}
+}

@@ -121,10 +121,10 @@
           </div>
         </div>
 
-        <!-- Stream Type Filter -->
+        <!-- Request Type Filter -->
         <div class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('usage.type') }}</label>
-          <Select v-model="filters.stream" :options="streamTypeOptions" @change="emitChange" />
+          <Select v-model="filters.request_type" :options="requestTypeOptions" @change="emitChange" />
         </div>
 
         <!-- Billing Type Filter -->
@@ -233,10 +233,11 @@ let accountSearchTimeout: ReturnType<typeof setTimeout> | null = null
 const modelOptions = ref<SelectOption[]>([{ value: null, label: t('admin.usage.allModels') }])
 const groupOptions = ref<SelectOption[]>([{ value: null, label: t('admin.usage.allGroups') }])
 
-const streamTypeOptions = ref<SelectOption[]>([
+const requestTypeOptions = ref<SelectOption[]>([
   { value: null, label: t('admin.usage.allTypes') },
-  { value: true, label: t('usage.stream') },
-  { value: false, label: t('usage.sync') }
+  { value: 'ws_v2', label: t('usage.ws') },
+  { value: 'stream', label: t('usage.stream') },
+  { value: 'sync', label: t('usage.sync') }
 ])
 
 const billingTypeOptions = ref<SelectOption[]>([

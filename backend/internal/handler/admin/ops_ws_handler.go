@@ -62,7 +62,8 @@ const (
 )
 
 var wsConnCount atomic.Int32
-var wsConnCountByIP sync.Map // map[string]*atomic.Int32
+var wsConnCountByIPMu sync.Mutex
+var wsConnCountByIP = make(map[string]int32)
 
 const qpsWSIdleStopDelay = 30 * time.Second
 
@@ -389,42 +390,31 @@ func tryAcquireOpsWSIPSlot(clientIP string, limit int32) bool {
 	if strings.TrimSpace(clientIP) == "" || limit <= 0 {
 		return true
 	}
-
-	v, _ := wsConnCountByIP.LoadOrStore(clientIP, &atomic.Int32{})
-	counter, ok := v.(*atomic.Int32)
-	if !ok {
+	wsConnCountByIPMu.Lock()
+	defer wsConnCountByIPMu.Unlock()
+	current := wsConnCountByIP[clientIP]
+	if current >= limit {
 		return false
 	}
-
-	for {
-		current := counter.Load()
-		if current >= limit {
-			return false
-		}
-		if counter.CompareAndSwap(current, current+1) {
-			return true
-		}
-	}
+	wsConnCountByIP[clientIP] = current + 1
+	return true
 }
 
 func releaseOpsWSIPSlot(clientIP string) {
 	if strings.TrimSpace(clientIP) == "" {
 		return
 	}
-
-	v, ok := wsConnCountByIP.Load(clientIP)
+	wsConnCountByIPMu.Lock()
+	defer wsConnCountByIPMu.Unlock()
+	current, ok := wsConnCountByIP[clientIP]
 	if !ok {
 		return
 	}
-	counter, ok := v.(*atomic.Int32)
-	if !ok {
+	if current <= 1 {
+		delete(wsConnCountByIP, clientIP)
 		return
 	}
-	next := counter.Add(-1)
-	if next <= 0 {
-		// Best-effort cleanup; safe even if a new slot was acquired concurrently.
-		wsConnCountByIP.Delete(clientIP)
-	}
+	wsConnCountByIP[clientIP] = current - 1
 }
 
 func handleQPSWebSocket(parentCtx context.Context, conn *websocket.Conn) {

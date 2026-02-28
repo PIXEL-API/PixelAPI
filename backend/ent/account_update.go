@@ -376,6 +376,46 @@ func (_u *AccountUpdate) ClearOverloadUntil() *AccountUpdate {
 	return _u
 }
 
+// SetTempUnschedulableUntil sets the "temp_unschedulable_until" field.
+func (_u *AccountUpdate) SetTempUnschedulableUntil(v time.Time) *AccountUpdate {
+	_u.mutation.SetTempUnschedulableUntil(v)
+	return _u
+}
+
+// SetNillableTempUnschedulableUntil sets the "temp_unschedulable_until" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableTempUnschedulableUntil(v *time.Time) *AccountUpdate {
+	if v != nil {
+		_u.SetTempUnschedulableUntil(*v)
+	}
+	return _u
+}
+
+// ClearTempUnschedulableUntil clears the value of the "temp_unschedulable_until" field.
+func (_u *AccountUpdate) ClearTempUnschedulableUntil() *AccountUpdate {
+	_u.mutation.ClearTempUnschedulableUntil()
+	return _u
+}
+
+// SetTempUnschedulableReason sets the "temp_unschedulable_reason" field.
+func (_u *AccountUpdate) SetTempUnschedulableReason(v string) *AccountUpdate {
+	_u.mutation.SetTempUnschedulableReason(v)
+	return _u
+}
+
+// SetNillableTempUnschedulableReason sets the "temp_unschedulable_reason" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableTempUnschedulableReason(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetTempUnschedulableReason(*v)
+	}
+	return _u
+}
+
+// ClearTempUnschedulableReason clears the value of the "temp_unschedulable_reason" field.
+func (_u *AccountUpdate) ClearTempUnschedulableReason() *AccountUpdate {
+	_u.mutation.ClearTempUnschedulableReason()
+	return _u
+}
+
 // SetSessionWindowStart sets the "session_window_start" field.
 func (_u *AccountUpdate) SetSessionWindowStart(v time.Time) *AccountUpdate {
 	_u.mutation.SetSessionWindowStart(v)
@@ -700,6 +740,18 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.OverloadUntilCleared() {
 		_spec.ClearField(account.FieldOverloadUntil, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TempUnschedulableUntil(); ok {
+		_spec.SetField(account.FieldTempUnschedulableUntil, field.TypeTime, value)
+	}
+	if _u.mutation.TempUnschedulableUntilCleared() {
+		_spec.ClearField(account.FieldTempUnschedulableUntil, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TempUnschedulableReason(); ok {
+		_spec.SetField(account.FieldTempUnschedulableReason, field.TypeString, value)
+	}
+	if _u.mutation.TempUnschedulableReasonCleared() {
+		_spec.ClearField(account.FieldTempUnschedulableReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.SessionWindowStart(); ok {
 		_spec.SetField(account.FieldSessionWindowStart, field.TypeTime, value)
@@ -1215,6 +1267,46 @@ func (_u *AccountUpdateOne) ClearOverloadUntil() *AccountUpdateOne {
 	return _u
 }
 
+// SetTempUnschedulableUntil sets the "temp_unschedulable_until" field.
+func (_u *AccountUpdateOne) SetTempUnschedulableUntil(v time.Time) *AccountUpdateOne {
+	_u.mutation.SetTempUnschedulableUntil(v)
+	return _u
+}
+
+// SetNillableTempUnschedulableUntil sets the "temp_unschedulable_until" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableTempUnschedulableUntil(v *time.Time) *AccountUpdateOne {
+	if v != nil {
+		_u.SetTempUnschedulableUntil(*v)
+	}
+	return _u
+}
+
+// ClearTempUnschedulableUntil clears the value of the "temp_unschedulable_until" field.
+func (_u *AccountUpdateOne) ClearTempUnschedulableUntil() *AccountUpdateOne {
+	_u.mutation.ClearTempUnschedulableUntil()
+	return _u
+}
+
+// SetTempUnschedulableReason sets the "temp_unschedulable_reason" field.
+func (_u *AccountUpdateOne) SetTempUnschedulableReason(v string) *AccountUpdateOne {
+	_u.mutation.SetTempUnschedulableReason(v)
+	return _u
+}
+
+// SetNillableTempUnschedulableReason sets the "temp_unschedulable_reason" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableTempUnschedulableReason(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetTempUnschedulableReason(*v)
+	}
+	return _u
+}
+
+// ClearTempUnschedulableReason clears the value of the "temp_unschedulable_reason" field.
+func (_u *AccountUpdateOne) ClearTempUnschedulableReason() *AccountUpdateOne {
+	_u.mutation.ClearTempUnschedulableReason()
+	return _u
+}
+
 // SetSessionWindowStart sets the "session_window_start" field.
 func (_u *AccountUpdateOne) SetSessionWindowStart(v time.Time) *AccountUpdateOne {
 	_u.mutation.SetSessionWindowStart(v)
@@ -1569,6 +1661,18 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if _u.mutation.OverloadUntilCleared() {
 		_spec.ClearField(account.FieldOverloadUntil, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TempUnschedulableUntil(); ok {
+		_spec.SetField(account.FieldTempUnschedulableUntil, field.TypeTime, value)
+	}
+	if _u.mutation.TempUnschedulableUntilCleared() {
+		_spec.ClearField(account.FieldTempUnschedulableUntil, field.TypeTime)
+	}
+	if value, ok := _u.mutation.TempUnschedulableReason(); ok {
+		_spec.SetField(account.FieldTempUnschedulableReason, field.TypeString, value)
+	}
+	if _u.mutation.TempUnschedulableReasonCleared() {
+		_spec.ClearField(account.FieldTempUnschedulableReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.SessionWindowStart(); ok {
 		_spec.SetField(account.FieldSessionWindowStart, field.TypeTime, value)

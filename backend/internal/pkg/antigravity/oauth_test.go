@@ -612,14 +612,14 @@ func TestBuildAuthorizationURL_参数验证(t *testing.T) {
 
 	expectedParams := map[string]string{
 		"client_id":              ClientID,
-		"redirect_uri":          RedirectURI,
-		"response_type":         "code",
-		"scope":                 Scopes,
-		"state":                 state,
-		"code_challenge":        codeChallenge,
-		"code_challenge_method": "S256",
-		"access_type":           "offline",
-		"prompt":                "consent",
+		"redirect_uri":           RedirectURI,
+		"response_type":          "code",
+		"scope":                  Scopes,
+		"state":                  state,
+		"code_challenge":         codeChallenge,
+		"code_challenge_method":  "S256",
+		"access_type":            "offline",
+		"prompt":                 "consent",
 		"include_granted_scopes": "true",
 	}
 
@@ -684,7 +684,7 @@ func TestConstants_值正确(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getClientSecret 应返回默认值，但报错: %v", err)
 	}
-	if secret != "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" {
+	if secret != "GOCSPX-your-client-secret" {
 		t.Errorf("默认 client_secret 不匹配: got %s", secret)
 	}
 	if RedirectURI != "http://localhost:8085/callback" {

@@ -227,6 +227,43 @@ func (c *concurrencyCache) GetAccountConcurrency(ctx context.Context, accountID 
 	return result, nil
 }
 
+func (c *concurrencyCache) GetAccountConcurrencyBatch(ctx context.Context, accountIDs []int64) (map[int64]int, error) {
+	if len(accountIDs) == 0 {
+		return map[int64]int{}, nil
+	}
+
+	now, err := c.rdb.Time(ctx).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis TIME: %w", err)
+	}
+	cutoffTime := now.Unix() - int64(c.slotTTLSeconds)
+
+	pipe := c.rdb.Pipeline()
+	type accountCmd struct {
+		accountID int64
+		zcardCmd  *redis.IntCmd
+	}
+	cmds := make([]accountCmd, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		slotKey := accountSlotKeyPrefix + strconv.FormatInt(accountID, 10)
+		pipe.ZRemRangeByScore(ctx, slotKey, "-inf", strconv.FormatInt(cutoffTime, 10))
+		cmds = append(cmds, accountCmd{
+			accountID: accountID,
+			zcardCmd:  pipe.ZCard(ctx, slotKey),
+		})
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("pipeline exec: %w", err)
+	}
+
+	result := make(map[int64]int, len(accountIDs))
+	for _, cmd := range cmds {
+		result[cmd.accountID] = int(cmd.zcardCmd.Val())
+	}
+	return result, nil
+}
+
 // User slot operations
 
 func (c *concurrencyCache) AcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {

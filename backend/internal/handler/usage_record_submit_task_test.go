@@ -61,6 +61,22 @@ func TestGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
 	})
 }
 
+func TestGatewayHandlerSubmitUsageRecordTask_WithoutPool_TaskPanicRecovered(t *testing.T) {
+	h := &GatewayHandler{}
+	var called atomic.Bool
+
+	require.NotPanics(t, func() {
+		h.submitUsageRecordTask(func(ctx context.Context) {
+			panic("usage task panic")
+		})
+	})
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		called.Store(true)
+	})
+	require.True(t, called.Load(), "panic 后后续任务应仍可执行")
+}
+
 func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
 	pool := newUsageRecordTestPool(t)
 	h := &OpenAIGatewayHandler{usageRecordWorkerPool: pool}
@@ -98,6 +114,22 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
 	})
 }
 
+func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPool_TaskPanicRecovered(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	var called atomic.Bool
+
+	require.NotPanics(t, func() {
+		h.submitUsageRecordTask(func(ctx context.Context) {
+			panic("usage task panic")
+		})
+	})
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		called.Store(true)
+	})
+	require.True(t, called.Load(), "panic 后后续任务应仍可执行")
+}
+
 func TestSoraGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
 	pool := newUsageRecordTestPool(t)
 	h := &SoraGatewayHandler{usageRecordWorkerPool: pool}
@@ -133,4 +165,20 @@ func TestSoraGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
 	require.NotPanics(t, func() {
 		h.submitUsageRecordTask(nil)
 	})
+}
+
+func TestSoraGatewayHandlerSubmitUsageRecordTask_WithoutPool_TaskPanicRecovered(t *testing.T) {
+	h := &SoraGatewayHandler{}
+	var called atomic.Bool
+
+	require.NotPanics(t, func() {
+		h.submitUsageRecordTask(func(ctx context.Context) {
+			panic("usage task panic")
+		})
+	})
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		called.Store(true)
+	})
+	require.True(t, called.Load(), "panic 后后续任务应仍可执行")
 }

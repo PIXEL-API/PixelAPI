@@ -688,7 +688,7 @@ const isMixedPlatform = computed(() => props.selectedPlatforms.length > 1)
 
 const platformModelPrefix: Record<string, string[]> = {
   anthropic: ['claude-'],
-  antigravity: ['claude-'],
+  antigravity: ['claude-', 'gemini-', 'gpt-oss-', 'tab_'],
   openai: ['gpt-'],
   gemini: ['gemini-'],
   sora: []
@@ -766,6 +766,8 @@ const allModels = [
   { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
   { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  { value: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image' },
+  { value: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image (Legacy)' },
   { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
   { value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' }
 ]
@@ -843,6 +845,18 @@ const presetMappings = [
     from: 'claude-opus-4-5-20251101',
     to: 'claude-sonnet-4-5-20250929',
     color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400'
+  },
+  {
+    label: 'Gemini 3.1 Image',
+    from: 'gemini-3.1-flash-image',
+    to: 'gemini-3.1-flash-image',
+    color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400'
+  },
+  {
+    label: 'G3 Image→3.1',
+    from: 'gemini-3-pro-image',
+    to: 'gemini-3.1-flash-image',
+    color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400'
   },
   {
     label: 'GPT-5.3 Codex',

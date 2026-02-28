@@ -298,5 +298,6 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			SupportedModelScopes:            snapshot.Group.SupportedModelScopes,
 		}
 	}
+	s.compileAPIKeyIPRules(apiKey)
 	return apiKey
 }

@@ -136,3 +136,67 @@ func TestDroppedBetaSet(t *testing.T) {
 	require.Contains(t, extended, claude.BetaClaudeCode)
 	require.Len(t, extended, len(claude.DroppedBetas)+1)
 }
+
+func TestBuildBetaTokenSet(t *testing.T) {
+	got := buildBetaTokenSet([]string{"foo", "", "bar", "foo"})
+	require.Len(t, got, 2)
+	require.Contains(t, got, "foo")
+	require.Contains(t, got, "bar")
+	require.NotContains(t, got, "")
+
+	empty := buildBetaTokenSet(nil)
+	require.Empty(t, empty)
+}
+
+func TestStripBetaTokensWithSet_EmptyDropSet(t *testing.T) {
+	header := "oauth-2025-04-20,interleaved-thinking-2025-05-14"
+	got := stripBetaTokensWithSet(header, map[string]struct{}{})
+	require.Equal(t, header, got)
+}
+
+func TestIsCountTokensUnsupported404(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		want       bool
+	}{
+		{
+			name:       "exact endpoint not found",
+			statusCode: 404,
+			body:       `{"error":{"message":"Not found: /v1/messages/count_tokens","type":"not_found_error"}}`,
+			want:       true,
+		},
+		{
+			name:       "contains count_tokens and not found",
+			statusCode: 404,
+			body:       `{"error":{"message":"count_tokens route not found","type":"not_found_error"}}`,
+			want:       true,
+		},
+		{
+			name:       "generic 404",
+			statusCode: 404,
+			body:       `{"error":{"message":"resource not found","type":"not_found_error"}}`,
+			want:       false,
+		},
+		{
+			name:       "404 with empty error message",
+			statusCode: 404,
+			body:       `{"error":{"message":"","type":"not_found_error"}}`,
+			want:       false,
+		},
+		{
+			name:       "non-404 status",
+			statusCode: 400,
+			body:       `{"error":{"message":"Not found: /v1/messages/count_tokens","type":"invalid_request_error"}}`,
+			want:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isCountTokensUnsupported404(tt.statusCode, []byte(tt.body))
+			require.Equal(t, tt.want, got)
+		})
+	}
+}

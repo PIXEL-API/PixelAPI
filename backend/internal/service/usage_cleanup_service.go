@@ -68,6 +68,9 @@ func describeUsageCleanupFilters(filters UsageCleanupFilters) string {
 	if filters.Model != nil {
 		parts = append(parts, "model="+strings.TrimSpace(*filters.Model))
 	}
+	if filters.RequestType != nil {
+		parts = append(parts, "request_type="+RequestTypeFromInt16(*filters.RequestType).String())
+	}
 	if filters.Stream != nil {
 		parts = append(parts, fmt.Sprintf("stream=%t", *filters.Stream))
 	}
@@ -366,6 +369,16 @@ func sanitizeUsageCleanupFilters(filters *UsageCleanupFilters) {
 			filters.Model = nil
 		} else {
 			filters.Model = &model
+		}
+	}
+	if filters.RequestType != nil {
+		requestType := RequestType(*filters.RequestType)
+		if !requestType.IsValid() {
+			filters.RequestType = nil
+		} else {
+			value := int16(requestType.Normalize())
+			filters.RequestType = &value
+			filters.Stream = nil
 		}
 	}
 	if filters.BillingType != nil && *filters.BillingType < 0 {
