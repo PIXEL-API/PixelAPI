@@ -263,6 +263,9 @@ func TestNormalizeOpsErrorType(t *testing.T) {
 		{"empty type with balance code", "", "INSUFFICIENT_BALANCE", "billing_error"},
 		{"empty type with subscription code", "", "SUBSCRIPTION_NOT_FOUND", "subscription_error"},
 		{"empty type no code", "", "", "api_error"},
+
+		// Known type overrides conflicting code-based mapping.
+		{"known type overrides conflicting code", "rate_limit_error", "INSUFFICIENT_BALANCE", "rate_limit_error"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
