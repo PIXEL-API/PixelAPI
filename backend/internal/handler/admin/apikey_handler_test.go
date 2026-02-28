@@ -79,14 +79,17 @@ func TestAdminAPIKeyHandler_UpdateGroup_BindGroup(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 
-	var apiKey struct {
-		ID      int64  `json:"id"`
-		GroupID *int64 `json:"group_id"`
+	var data struct {
+		APIKey struct {
+			ID      int64  `json:"id"`
+			GroupID *int64 `json:"group_id"`
+		} `json:"api_key"`
+		AutoGrantedGroupAccess bool `json:"auto_granted_group_access"`
 	}
-	require.NoError(t, json.Unmarshal(resp.Data, &apiKey))
-	require.Equal(t, int64(10), apiKey.ID)
-	require.NotNil(t, apiKey.GroupID)
-	require.Equal(t, int64(2), *apiKey.GroupID)
+	require.NoError(t, json.Unmarshal(resp.Data, &data))
+	require.Equal(t, int64(10), data.APIKey.ID)
+	require.NotNil(t, data.APIKey.GroupID)
+	require.Equal(t, int64(2), *data.APIKey.GroupID)
 }
 
 func TestAdminAPIKeyHandler_UpdateGroup_Unbind(t *testing.T) {
@@ -105,11 +108,13 @@ func TestAdminAPIKeyHandler_UpdateGroup_Unbind(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			GroupID *int64 `json:"group_id"`
+			APIKey struct {
+				GroupID *int64 `json:"group_id"`
+			} `json:"api_key"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Nil(t, resp.Data.GroupID)
+	require.Nil(t, resp.Data.APIKey.GroupID)
 }
 
 func TestAdminAPIKeyHandler_UpdateGroup_ServiceError(t *testing.T) {
@@ -142,12 +147,14 @@ func TestAdminAPIKeyHandler_UpdateGroup_EmptyBody_NoChange(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data struct {
-			ID int64 `json:"id"`
+			APIKey struct {
+				ID int64 `json:"id"`
+			} `json:"api_key"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, int64(10), resp.Data.ID)
+	require.Equal(t, int64(10), resp.Data.APIKey.ID)
 }
 
 // M2: service returns GROUP_NOT_ACTIVE → handler maps to 400
@@ -190,6 +197,6 @@ type failingUpdateGroupService struct {
 	err error
 }
 
-func (f *failingUpdateGroupService) AdminUpdateAPIKeyGroupID(_ context.Context, _ int64, _ *int64) (*service.APIKey, error) {
+func (f *failingUpdateGroupService) AdminUpdateAPIKeyGroupID(_ context.Context, _ int64, _ *int64) (*service.AdminUpdateAPIKeyGroupIDResult, error) {
 	return nil, f.err
 }
