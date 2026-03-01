@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
@@ -16,6 +17,9 @@ type ClaudeCodeValidator struct{}
 var (
 	// User-Agent 匹配: claude-cli/x.x.x (仅支持官方 CLI，大小写不敏感)
 	claudeCodeUAPattern = regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+`)
+
+	// 带捕获组的版本提取正则
+	claudeCodeUAVersionPattern = regexp.MustCompile(`(?i)^claude-cli/(\d+\.\d+\.\d+)`)
 
 	// metadata.user_id 格式: user_{64位hex}_account__session_{uuid}
 	userIDPattern = regexp.MustCompile(`^user_[a-fA-F0-9]{64}_account__session_[\w-]+$`)
@@ -269,4 +273,56 @@ func IsClaudeCodeClient(ctx context.Context) bool {
 // SetClaudeCodeClient 将 Claude Code 客户端标识设置到 context 中
 func SetClaudeCodeClient(ctx context.Context, isClaudeCode bool) context.Context {
 	return context.WithValue(ctx, ctxkey.IsClaudeCodeClient, isClaudeCode)
+}
+
+// ExtractVersion 从 User-Agent 中提取 Claude Code 版本号
+// 返回 "2.1.22" 形式的版本号，如果不匹配返回空字符串
+func (v *ClaudeCodeValidator) ExtractVersion(ua string) string {
+	matches := claudeCodeUAVersionPattern.FindStringSubmatch(ua)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
+}
+
+// SetClaudeCodeVersion 将 Claude Code 版本号设置到 context 中
+func SetClaudeCodeVersion(ctx context.Context, version string) context.Context {
+	return context.WithValue(ctx, ctxkey.ClaudeCodeVersion, version)
+}
+
+// GetClaudeCodeVersion 从 context 中获取 Claude Code 版本号
+func GetClaudeCodeVersion(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxkey.ClaudeCodeVersion).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// CompareVersions 比较两个 semver 版本号
+// 返回: -1 (a < b), 0 (a == b), 1 (a > b)
+func CompareVersions(a, b string) int {
+	aParts := parseSemver(a)
+	bParts := parseSemver(b)
+	for i := 0; i < 3; i++ {
+		if aParts[i] < bParts[i] {
+			return -1
+		}
+		if aParts[i] > bParts[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// parseSemver 解析 semver 版本号为 [major, minor, patch]
+func parseSemver(v string) [3]int {
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.Split(v, ".")
+	result := [3]int{0, 0, 0}
+	for i := 0; i < len(parts) && i < 3; i++ {
+		if parsed, err := strconv.Atoi(parts[i]); err == nil {
+			result[i] = parsed
+		}
+	}
+	return result
 }
