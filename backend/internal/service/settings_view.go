@@ -43,6 +43,7 @@ type SystemSettings struct {
 
 	DefaultConcurrency int
 	DefaultBalance     float64
+	DefaultSubscriptions []DefaultSubscriptionSetting
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
@@ -63,6 +64,11 @@ type SystemSettings struct {
 
 	// Claude Code version check
 	MinClaudeCodeVersion string
+}
+
+type DefaultSubscriptionSetting struct {
+	GroupID      int64 `json:"group_id"`
+	ValidityDays int   `json:"validity_days"`
 }
 
 type PublicSettings struct {
