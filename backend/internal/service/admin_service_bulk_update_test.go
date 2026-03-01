@@ -139,34 +139,34 @@ func TestAdminService_BulkUpdateAccounts_NilGroupRepoReturnsError(t *testing.T) 
 	require.Contains(t, err.Error(), "group repository not configured")
 }
 
-func TestAdminService_BulkUpdateAccounts_MixedChannelCheckUsesUpdatedSnapshot(t *testing.T) {
+// TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingConflict verifies
+// that the global pre-check detects a conflict with existing group members and returns an
+// error before any DB write is performed.
+func TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingConflict(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
 		getByIDsAccounts: []*Account{
-			{ID: 1, Platform: PlatformAnthropic},
-			{ID: 2, Platform: PlatformAntigravity},
+			{ID: 1, Platform: PlatformAntigravity},
 		},
+		// Group 10 already contains an Anthropic account.
 		listByGroupData: map[int64][]Account{
-			10: {},
+			10: {{ID: 99, Platform: PlatformAnthropic}},
 		},
 	}
 	svc := &adminServiceImpl{
 		accountRepo: repo,
-		groupRepo:   &groupRepoStubForAdmin{getByID: &Group{ID: 10, Name: "目标分组"}},
+		groupRepo:   &groupRepoStubForAdmin{getByID: &Group{ID: 10, Name: "target-group"}},
 	}
 
 	groupIDs := []int64{10}
 	input := &BulkUpdateAccountsInput{
-		AccountIDs: []int64{1, 2},
+		AccountIDs: []int64{1},
 		GroupIDs:   &groupIDs,
 	}
 
 	result, err := svc.BulkUpdateAccounts(context.Background(), input)
-	require.NoError(t, err)
-	require.Equal(t, 1, result.Success)
-	require.Equal(t, 1, result.Failed)
-	require.ElementsMatch(t, []int64{1}, result.SuccessIDs)
-	require.ElementsMatch(t, []int64{2}, result.FailedIDs)
-	require.Len(t, result.Results, 2)
-	require.Contains(t, result.Results[1].Error, "mixed channel")
-	require.Equal(t, []int64{1}, repo.bindGroupsCalls)
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mixed channel")
+	// No BindGroups should have been called since the check runs before any write.
+	require.Empty(t, repo.bindGroupsCalls)
 }
