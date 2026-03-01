@@ -891,7 +891,7 @@ func (s *SettingService) GetMinClaudeCodeVersion(ctx context.Context) string {
 		}
 	}
 	// singleflight: 同一时刻只有一个 goroutine 查询 DB，其余复用结果
-	result, _, _ := minVersionSF.Do("min_version", func() (interface{}, error) {
+	result, _, _ := minVersionSF.Do("min_version", func() (any, error) {
 		// 二次检查，避免排队的 goroutine 重复查询
 		if cached, ok := minVersionCache.Load().(*cachedMinVersion); ok {
 			if time.Now().UnixNano() < cached.expiresAt {
@@ -917,7 +917,10 @@ func (s *SettingService) GetMinClaudeCodeVersion(ctx context.Context) string {
 		})
 		return value, nil
 	})
-	return result.(string)
+	if s, ok := result.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // SetStreamTimeoutSettings 设置流超时处理配置
