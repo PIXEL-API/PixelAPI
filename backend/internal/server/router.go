@@ -1,7 +1,13 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"log"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
@@ -13,6 +19,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
+
+// extractOrigin returns the scheme+host origin from rawURL, or "" on error.
+// Only http and https schemes are accepted; other values (e.g. "//host/path") return "".
+func extractOrigin(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+const paymentOriginFetchTimeout = 5 * time.Second
 
 // SetupRouter 配置路由器中间件和路由
 func SetupRouter(
@@ -28,11 +53,65 @@ func SetupRouter(
 	cfg *config.Config,
 	redisClient *redis.Client,
 ) *gin.Engine {
+	// 缓存 iframe 页面的 origin 列表，用于动态注入 CSP frame-src
+	// 包含 purchase_subscription_url 和所有 custom_menu_items 的 origin（去重）
+	var cachedFrameOrigins atomic.Pointer[[]string]
+	emptyOrigins := []string{}
+	cachedFrameOrigins.Store(&emptyOrigins)
+
+	refreshFrameOrigins := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), paymentOriginFetchTimeout)
+		defer cancel()
+		settings, err := settingService.GetPublicSettings(ctx)
+		if err != nil {
+			// 获取失败时保留已有缓存，避免 frame-src 被意外清空
+			return
+		}
+
+		seen := make(map[string]struct{})
+		var origins []string
+
+		// purchase subscription URL
+		if settings.PurchaseSubscriptionEnabled {
+			if origin := extractOrigin(settings.PurchaseSubscriptionURL); origin != "" {
+				if _, ok := seen[origin]; !ok {
+					seen[origin] = struct{}{}
+					origins = append(origins, origin)
+				}
+			}
+		}
+
+		// custom menu items
+		if raw := strings.TrimSpace(settings.CustomMenuItems); raw != "" && raw != "[]" {
+			var items []struct {
+				URL string `json:"url"`
+			}
+			if err := json.Unmarshal([]byte(raw), &items); err == nil {
+				for _, item := range items {
+					if origin := extractOrigin(item.URL); origin != "" {
+						if _, ok := seen[origin]; !ok {
+							seen[origin] = struct{}{}
+							origins = append(origins, origin)
+						}
+					}
+				}
+			}
+		}
+
+		cachedFrameOrigins.Store(&origins)
+	}
+	refreshFrameOrigins() // 启动时初始化
+
 	// 应用中间件
 	r.Use(middleware2.RequestLogger())
 	r.Use(middleware2.Logger())
 	r.Use(middleware2.CORS(cfg.CORS))
-	r.Use(middleware2.SecurityHeaders(cfg.Security.CSP))
+	r.Use(middleware2.SecurityHeaders(cfg.Security.CSP, func() []string {
+		if p := cachedFrameOrigins.Load(); p != nil {
+			return *p
+		}
+		return nil
+	}))
 
 	// Serve embedded frontend with settings injection if available
 	if web.HasEmbeddedFrontend() {
@@ -40,11 +119,17 @@ func SetupRouter(
 		if err != nil {
 			log.Printf("Warning: Failed to create frontend server with settings injection: %v, using legacy mode", err)
 			r.Use(web.ServeEmbeddedFrontend())
+			settingService.SetOnUpdateCallback(refreshFrameOrigins)
 		} else {
-			// Register cache invalidation callback
-			settingService.SetOnUpdateCallback(frontendServer.InvalidateCache)
+			// Register combined callback: invalidate HTML cache + refresh frame origins
+			settingService.SetOnUpdateCallback(func() {
+				frontendServer.InvalidateCache()
+				refreshFrameOrigins()
+			})
 			r.Use(frontendServer.Middleware())
 		}
+	} else {
+		settingService.SetOnUpdateCallback(refreshFrameOrigins)
 	}
 
 	// 注册路由

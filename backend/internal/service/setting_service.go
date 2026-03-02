@@ -124,6 +124,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyPurchaseSubscriptionEnabled,
 		SettingKeyPurchaseSubscriptionURL,
 		SettingKeySoraClientEnabled,
+		SettingKeyCustomMenuItems,
 		SettingKeyLinuxDoConnectEnabled,
 	}
 
@@ -163,6 +164,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		PurchaseSubscriptionEnabled: settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
 		PurchaseSubscriptionURL:     strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		SoraClientEnabled:           settings[SettingKeySoraClientEnabled] == "true",
+		CustomMenuItems:             settings[SettingKeyCustomMenuItems],
 		LinuxDoOAuthEnabled:         linuxDoEnabled,
 	}, nil
 }
@@ -293,6 +295,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyPurchaseSubscriptionEnabled] = strconv.FormatBool(settings.PurchaseSubscriptionEnabled)
 	updates[SettingKeyPurchaseSubscriptionURL] = strings.TrimSpace(settings.PurchaseSubscriptionURL)
 	updates[SettingKeySoraClientEnabled] = strconv.FormatBool(settings.SoraClientEnabled)
+	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
@@ -509,6 +512,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyPurchaseSubscriptionEnabled: "false",
 		SettingKeyPurchaseSubscriptionURL:     "",
 		SettingKeySoraClientEnabled:           "false",
+		SettingKeyCustomMenuItems:             "[]",
 		SettingKeyDefaultConcurrency:          strconv.Itoa(s.cfg.Default.UserConcurrency),
 		SettingKeyDefaultBalance:              strconv.FormatFloat(s.cfg.Default.UserBalance, 'f', 8, 64),
 		SettingKeyDefaultSubscriptions:        "[]",
@@ -567,6 +571,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		PurchaseSubscriptionEnabled:  settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
 		PurchaseSubscriptionURL:      strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		SoraClientEnabled:            settings[SettingKeySoraClientEnabled] == "true",
+		CustomMenuItems:              settings[SettingKeyCustomMenuItems],
 	}
 
 	// 解析整数类型

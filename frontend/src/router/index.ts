@@ -203,6 +203,17 @@ const routes: RouteRecordRaw[] = [
       descriptionKey: 'sora.description'
     }
   },
+  {
+    path: '/custom/:id',
+    name: 'CustomPage',
+    component: () => import('@/views/user/CustomPageView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Custom Page',
+      titleKey: 'customPage.title',
+    }
+  },
 
   // ==================== Admin Routes ====================
   {
