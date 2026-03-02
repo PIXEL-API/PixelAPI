@@ -56,15 +56,15 @@ type JWTClaims struct {
 
 // AuthService 认证服务
 type AuthService struct {
-	userRepo          UserRepository
-	redeemRepo        RedeemCodeRepository
-	refreshTokenCache RefreshTokenCache
-	cfg               *config.Config
-	settingService    *SettingService
-	emailService      *EmailService
-	turnstileService  *TurnstileService
-	emailQueueService *EmailQueueService
-	promoService      *PromoService
+	userRepo           UserRepository
+	redeemRepo         RedeemCodeRepository
+	refreshTokenCache  RefreshTokenCache
+	cfg                *config.Config
+	settingService     *SettingService
+	emailService       *EmailService
+	turnstileService   *TurnstileService
+	emailQueueService  *EmailQueueService
+	promoService       *PromoService
 	defaultSubAssigner DefaultSubscriptionAssigner
 }
 
@@ -86,15 +86,15 @@ func NewAuthService(
 	defaultSubAssigner DefaultSubscriptionAssigner,
 ) *AuthService {
 	return &AuthService{
-		userRepo:          userRepo,
-		redeemRepo:        redeemRepo,
-		refreshTokenCache: refreshTokenCache,
-		cfg:               cfg,
-		settingService:    settingService,
-		emailService:      emailService,
-		turnstileService:  turnstileService,
-		emailQueueService: emailQueueService,
-		promoService:      promoService,
+		userRepo:           userRepo,
+		redeemRepo:         redeemRepo,
+		refreshTokenCache:  refreshTokenCache,
+		cfg:                cfg,
+		settingService:     settingService,
+		emailService:       emailService,
+		turnstileService:   turnstileService,
+		emailQueueService:  emailQueueService,
+		promoService:       promoService,
 		defaultSubAssigner: defaultSubAssigner,
 	}
 }
