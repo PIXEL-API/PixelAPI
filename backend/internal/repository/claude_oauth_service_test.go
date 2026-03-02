@@ -91,7 +91,7 @@ func (s *ClaudeOAuthServiceSuite) TestGetOrganizationUUID() {
 			require.True(s.T(), ok, "type assertion failed")
 			s.client = client
 			s.client.baseURL = "http://in-process"
-			s.client.clientFactory = func(string) *req.Client { return newTestReqClient(rt) }
+			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
 			got, err := s.client.GetOrganizationUUID(context.Background(), "sess", "")
 
@@ -169,7 +169,7 @@ func (s *ClaudeOAuthServiceSuite) TestGetAuthorizationCode() {
 			require.True(s.T(), ok, "type assertion failed")
 			s.client = client
 			s.client.baseURL = "http://in-process"
-			s.client.clientFactory = func(string) *req.Client { return newTestReqClient(rt) }
+			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
 			code, err := s.client.GetAuthorizationCode(context.Background(), "sess", "org-1", oauth.ScopeInference, "cc", "st", "")
 
@@ -276,7 +276,7 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			require.True(s.T(), ok, "type assertion failed")
 			s.client = client
 			s.client.tokenURL = "http://in-process/token"
-			s.client.clientFactory = func(string) *req.Client { return newTestReqClient(rt) }
+			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
 			resp, err := s.client.ExchangeCodeForToken(context.Background(), tt.code, "ver", "", "", tt.isSetupToken)
 
@@ -372,7 +372,7 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			require.True(s.T(), ok, "type assertion failed")
 			s.client = client
 			s.client.tokenURL = "http://in-process/token"
-			s.client.clientFactory = func(string) *req.Client { return newTestReqClient(rt) }
+			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
 			resp, err := s.client.RefreshToken(context.Background(), "rt", "")
 

@@ -1045,7 +1045,7 @@ func fetchProjectIDFromResourceManager(ctx context.Context, accessToken, proxyUR
 		ValidateResolvedIP: true,
 	})
 	if err != nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		return "", fmt.Errorf("create http client failed: %w", err)
 	}
 
 	resp, err := client.Do(req)

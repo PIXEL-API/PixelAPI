@@ -83,7 +83,7 @@ func (s *claudeUsageService) FetchUsageWithOptions(ctx context.Context, opts *se
 			AllowPrivateHosts:  s.allowPrivateHosts,
 		})
 		if err != nil {
-			client = &http.Client{Timeout: 30 * time.Second}
+			return nil, fmt.Errorf("create http client failed: %w", err)
 		}
 
 		resp, err = client.Do(req)
