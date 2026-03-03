@@ -605,8 +605,10 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 		var err error
 		if groupID > 0 {
 			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, groupID, platforms)
-		} else {
+		} else if s.isRunModeSimple() {
 			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
+		} else {
+			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
 		}
 		if err != nil {
 			return nil, err
@@ -624,7 +626,10 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 	if groupID > 0 {
 		return s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, bucket.Platform)
 	}
-	return s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+	if s.isRunModeSimple() {
+		return s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+	}
+	return s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, bucket.Platform)
 }
 
 func (s *SchedulerSnapshotService) bucketFor(groupID *int64, platform string, mode string) SchedulerBucket {
