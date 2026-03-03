@@ -1445,6 +1445,18 @@ func billingErrorDetails(err error) (status int, code, message string) {
 		}
 		return http.StatusServiceUnavailable, "billing_service_error", msg
 	}
+	if errors.Is(err, service.ErrAPIKeyRateLimit5hExceeded) {
+		msg := pkgerrors.Message(err)
+		return http.StatusTooManyRequests, "rate_limit_exceeded", msg
+	}
+	if errors.Is(err, service.ErrAPIKeyRateLimit1dExceeded) {
+		msg := pkgerrors.Message(err)
+		return http.StatusTooManyRequests, "rate_limit_exceeded", msg
+	}
+	if errors.Is(err, service.ErrAPIKeyRateLimit7dExceeded) {
+		msg := pkgerrors.Message(err)
+		return http.StatusTooManyRequests, "rate_limit_exceeded", msg
+	}
 	msg := pkgerrors.Message(err)
 	if msg == "" {
 		logger.L().With(

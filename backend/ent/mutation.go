@@ -91,6 +91,21 @@ type APIKeyMutation struct {
 	quota_used         *float64
 	addquota_used      *float64
 	expires_at         *time.Time
+	rate_limit_5h      *float64
+	addrate_limit_5h   *float64
+	rate_limit_1d      *float64
+	addrate_limit_1d   *float64
+	rate_limit_7d      *float64
+	addrate_limit_7d   *float64
+	usage_5h           *float64
+	addusage_5h        *float64
+	usage_1d           *float64
+	addusage_1d        *float64
+	usage_7d           *float64
+	addusage_7d        *float64
+	window_5h_start    *time.Time
+	window_1d_start    *time.Time
+	window_7d_start    *time.Time
 	clearedFields      map[string]struct{}
 	user               *int64
 	cleareduser        bool
@@ -856,6 +871,489 @@ func (m *APIKeyMutation) ResetExpiresAt() {
 	delete(m.clearedFields, apikey.FieldExpiresAt)
 }
 
+// SetRateLimit5h sets the "rate_limit_5h" field.
+func (m *APIKeyMutation) SetRateLimit5h(f float64) {
+	m.rate_limit_5h = &f
+	m.addrate_limit_5h = nil
+}
+
+// RateLimit5h returns the value of the "rate_limit_5h" field in the mutation.
+func (m *APIKeyMutation) RateLimit5h() (r float64, exists bool) {
+	v := m.rate_limit_5h
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRateLimit5h returns the old "rate_limit_5h" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldRateLimit5h(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRateLimit5h is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRateLimit5h requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRateLimit5h: %w", err)
+	}
+	return oldValue.RateLimit5h, nil
+}
+
+// AddRateLimit5h adds f to the "rate_limit_5h" field.
+func (m *APIKeyMutation) AddRateLimit5h(f float64) {
+	if m.addrate_limit_5h != nil {
+		*m.addrate_limit_5h += f
+	} else {
+		m.addrate_limit_5h = &f
+	}
+}
+
+// AddedRateLimit5h returns the value that was added to the "rate_limit_5h" field in this mutation.
+func (m *APIKeyMutation) AddedRateLimit5h() (r float64, exists bool) {
+	v := m.addrate_limit_5h
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetRateLimit5h resets all changes to the "rate_limit_5h" field.
+func (m *APIKeyMutation) ResetRateLimit5h() {
+	m.rate_limit_5h = nil
+	m.addrate_limit_5h = nil
+}
+
+// SetRateLimit1d sets the "rate_limit_1d" field.
+func (m *APIKeyMutation) SetRateLimit1d(f float64) {
+	m.rate_limit_1d = &f
+	m.addrate_limit_1d = nil
+}
+
+// RateLimit1d returns the value of the "rate_limit_1d" field in the mutation.
+func (m *APIKeyMutation) RateLimit1d() (r float64, exists bool) {
+	v := m.rate_limit_1d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRateLimit1d returns the old "rate_limit_1d" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldRateLimit1d(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRateLimit1d is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRateLimit1d requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRateLimit1d: %w", err)
+	}
+	return oldValue.RateLimit1d, nil
+}
+
+// AddRateLimit1d adds f to the "rate_limit_1d" field.
+func (m *APIKeyMutation) AddRateLimit1d(f float64) {
+	if m.addrate_limit_1d != nil {
+		*m.addrate_limit_1d += f
+	} else {
+		m.addrate_limit_1d = &f
+	}
+}
+
+// AddedRateLimit1d returns the value that was added to the "rate_limit_1d" field in this mutation.
+func (m *APIKeyMutation) AddedRateLimit1d() (r float64, exists bool) {
+	v := m.addrate_limit_1d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetRateLimit1d resets all changes to the "rate_limit_1d" field.
+func (m *APIKeyMutation) ResetRateLimit1d() {
+	m.rate_limit_1d = nil
+	m.addrate_limit_1d = nil
+}
+
+// SetRateLimit7d sets the "rate_limit_7d" field.
+func (m *APIKeyMutation) SetRateLimit7d(f float64) {
+	m.rate_limit_7d = &f
+	m.addrate_limit_7d = nil
+}
+
+// RateLimit7d returns the value of the "rate_limit_7d" field in the mutation.
+func (m *APIKeyMutation) RateLimit7d() (r float64, exists bool) {
+	v := m.rate_limit_7d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRateLimit7d returns the old "rate_limit_7d" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldRateLimit7d(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRateLimit7d is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRateLimit7d requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRateLimit7d: %w", err)
+	}
+	return oldValue.RateLimit7d, nil
+}
+
+// AddRateLimit7d adds f to the "rate_limit_7d" field.
+func (m *APIKeyMutation) AddRateLimit7d(f float64) {
+	if m.addrate_limit_7d != nil {
+		*m.addrate_limit_7d += f
+	} else {
+		m.addrate_limit_7d = &f
+	}
+}
+
+// AddedRateLimit7d returns the value that was added to the "rate_limit_7d" field in this mutation.
+func (m *APIKeyMutation) AddedRateLimit7d() (r float64, exists bool) {
+	v := m.addrate_limit_7d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetRateLimit7d resets all changes to the "rate_limit_7d" field.
+func (m *APIKeyMutation) ResetRateLimit7d() {
+	m.rate_limit_7d = nil
+	m.addrate_limit_7d = nil
+}
+
+// SetUsage5h sets the "usage_5h" field.
+func (m *APIKeyMutation) SetUsage5h(f float64) {
+	m.usage_5h = &f
+	m.addusage_5h = nil
+}
+
+// Usage5h returns the value of the "usage_5h" field in the mutation.
+func (m *APIKeyMutation) Usage5h() (r float64, exists bool) {
+	v := m.usage_5h
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUsage5h returns the old "usage_5h" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldUsage5h(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUsage5h is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUsage5h requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUsage5h: %w", err)
+	}
+	return oldValue.Usage5h, nil
+}
+
+// AddUsage5h adds f to the "usage_5h" field.
+func (m *APIKeyMutation) AddUsage5h(f float64) {
+	if m.addusage_5h != nil {
+		*m.addusage_5h += f
+	} else {
+		m.addusage_5h = &f
+	}
+}
+
+// AddedUsage5h returns the value that was added to the "usage_5h" field in this mutation.
+func (m *APIKeyMutation) AddedUsage5h() (r float64, exists bool) {
+	v := m.addusage_5h
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUsage5h resets all changes to the "usage_5h" field.
+func (m *APIKeyMutation) ResetUsage5h() {
+	m.usage_5h = nil
+	m.addusage_5h = nil
+}
+
+// SetUsage1d sets the "usage_1d" field.
+func (m *APIKeyMutation) SetUsage1d(f float64) {
+	m.usage_1d = &f
+	m.addusage_1d = nil
+}
+
+// Usage1d returns the value of the "usage_1d" field in the mutation.
+func (m *APIKeyMutation) Usage1d() (r float64, exists bool) {
+	v := m.usage_1d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUsage1d returns the old "usage_1d" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldUsage1d(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUsage1d is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUsage1d requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUsage1d: %w", err)
+	}
+	return oldValue.Usage1d, nil
+}
+
+// AddUsage1d adds f to the "usage_1d" field.
+func (m *APIKeyMutation) AddUsage1d(f float64) {
+	if m.addusage_1d != nil {
+		*m.addusage_1d += f
+	} else {
+		m.addusage_1d = &f
+	}
+}
+
+// AddedUsage1d returns the value that was added to the "usage_1d" field in this mutation.
+func (m *APIKeyMutation) AddedUsage1d() (r float64, exists bool) {
+	v := m.addusage_1d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUsage1d resets all changes to the "usage_1d" field.
+func (m *APIKeyMutation) ResetUsage1d() {
+	m.usage_1d = nil
+	m.addusage_1d = nil
+}
+
+// SetUsage7d sets the "usage_7d" field.
+func (m *APIKeyMutation) SetUsage7d(f float64) {
+	m.usage_7d = &f
+	m.addusage_7d = nil
+}
+
+// Usage7d returns the value of the "usage_7d" field in the mutation.
+func (m *APIKeyMutation) Usage7d() (r float64, exists bool) {
+	v := m.usage_7d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUsage7d returns the old "usage_7d" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldUsage7d(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUsage7d is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUsage7d requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUsage7d: %w", err)
+	}
+	return oldValue.Usage7d, nil
+}
+
+// AddUsage7d adds f to the "usage_7d" field.
+func (m *APIKeyMutation) AddUsage7d(f float64) {
+	if m.addusage_7d != nil {
+		*m.addusage_7d += f
+	} else {
+		m.addusage_7d = &f
+	}
+}
+
+// AddedUsage7d returns the value that was added to the "usage_7d" field in this mutation.
+func (m *APIKeyMutation) AddedUsage7d() (r float64, exists bool) {
+	v := m.addusage_7d
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUsage7d resets all changes to the "usage_7d" field.
+func (m *APIKeyMutation) ResetUsage7d() {
+	m.usage_7d = nil
+	m.addusage_7d = nil
+}
+
+// SetWindow5hStart sets the "window_5h_start" field.
+func (m *APIKeyMutation) SetWindow5hStart(t time.Time) {
+	m.window_5h_start = &t
+}
+
+// Window5hStart returns the value of the "window_5h_start" field in the mutation.
+func (m *APIKeyMutation) Window5hStart() (r time.Time, exists bool) {
+	v := m.window_5h_start
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWindow5hStart returns the old "window_5h_start" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldWindow5hStart(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWindow5hStart is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWindow5hStart requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWindow5hStart: %w", err)
+	}
+	return oldValue.Window5hStart, nil
+}
+
+// ClearWindow5hStart clears the value of the "window_5h_start" field.
+func (m *APIKeyMutation) ClearWindow5hStart() {
+	m.window_5h_start = nil
+	m.clearedFields[apikey.FieldWindow5hStart] = struct{}{}
+}
+
+// Window5hStartCleared returns if the "window_5h_start" field was cleared in this mutation.
+func (m *APIKeyMutation) Window5hStartCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldWindow5hStart]
+	return ok
+}
+
+// ResetWindow5hStart resets all changes to the "window_5h_start" field.
+func (m *APIKeyMutation) ResetWindow5hStart() {
+	m.window_5h_start = nil
+	delete(m.clearedFields, apikey.FieldWindow5hStart)
+}
+
+// SetWindow1dStart sets the "window_1d_start" field.
+func (m *APIKeyMutation) SetWindow1dStart(t time.Time) {
+	m.window_1d_start = &t
+}
+
+// Window1dStart returns the value of the "window_1d_start" field in the mutation.
+func (m *APIKeyMutation) Window1dStart() (r time.Time, exists bool) {
+	v := m.window_1d_start
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWindow1dStart returns the old "window_1d_start" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldWindow1dStart(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWindow1dStart is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWindow1dStart requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWindow1dStart: %w", err)
+	}
+	return oldValue.Window1dStart, nil
+}
+
+// ClearWindow1dStart clears the value of the "window_1d_start" field.
+func (m *APIKeyMutation) ClearWindow1dStart() {
+	m.window_1d_start = nil
+	m.clearedFields[apikey.FieldWindow1dStart] = struct{}{}
+}
+
+// Window1dStartCleared returns if the "window_1d_start" field was cleared in this mutation.
+func (m *APIKeyMutation) Window1dStartCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldWindow1dStart]
+	return ok
+}
+
+// ResetWindow1dStart resets all changes to the "window_1d_start" field.
+func (m *APIKeyMutation) ResetWindow1dStart() {
+	m.window_1d_start = nil
+	delete(m.clearedFields, apikey.FieldWindow1dStart)
+}
+
+// SetWindow7dStart sets the "window_7d_start" field.
+func (m *APIKeyMutation) SetWindow7dStart(t time.Time) {
+	m.window_7d_start = &t
+}
+
+// Window7dStart returns the value of the "window_7d_start" field in the mutation.
+func (m *APIKeyMutation) Window7dStart() (r time.Time, exists bool) {
+	v := m.window_7d_start
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWindow7dStart returns the old "window_7d_start" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldWindow7dStart(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWindow7dStart is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWindow7dStart requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWindow7dStart: %w", err)
+	}
+	return oldValue.Window7dStart, nil
+}
+
+// ClearWindow7dStart clears the value of the "window_7d_start" field.
+func (m *APIKeyMutation) ClearWindow7dStart() {
+	m.window_7d_start = nil
+	m.clearedFields[apikey.FieldWindow7dStart] = struct{}{}
+}
+
+// Window7dStartCleared returns if the "window_7d_start" field was cleared in this mutation.
+func (m *APIKeyMutation) Window7dStartCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldWindow7dStart]
+	return ok
+}
+
+// ResetWindow7dStart resets all changes to the "window_7d_start" field.
+func (m *APIKeyMutation) ResetWindow7dStart() {
+	m.window_7d_start = nil
+	delete(m.clearedFields, apikey.FieldWindow7dStart)
+}
+
 // ClearUser clears the "user" edge to the User entity.
 func (m *APIKeyMutation) ClearUser() {
 	m.cleareduser = true
@@ -998,7 +1496,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 23)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1041,6 +1539,33 @@ func (m *APIKeyMutation) Fields() []string {
 	if m.expires_at != nil {
 		fields = append(fields, apikey.FieldExpiresAt)
 	}
+	if m.rate_limit_5h != nil {
+		fields = append(fields, apikey.FieldRateLimit5h)
+	}
+	if m.rate_limit_1d != nil {
+		fields = append(fields, apikey.FieldRateLimit1d)
+	}
+	if m.rate_limit_7d != nil {
+		fields = append(fields, apikey.FieldRateLimit7d)
+	}
+	if m.usage_5h != nil {
+		fields = append(fields, apikey.FieldUsage5h)
+	}
+	if m.usage_1d != nil {
+		fields = append(fields, apikey.FieldUsage1d)
+	}
+	if m.usage_7d != nil {
+		fields = append(fields, apikey.FieldUsage7d)
+	}
+	if m.window_5h_start != nil {
+		fields = append(fields, apikey.FieldWindow5hStart)
+	}
+	if m.window_1d_start != nil {
+		fields = append(fields, apikey.FieldWindow1dStart)
+	}
+	if m.window_7d_start != nil {
+		fields = append(fields, apikey.FieldWindow7dStart)
+	}
 	return fields
 }
 
@@ -1077,6 +1602,24 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.QuotaUsed()
 	case apikey.FieldExpiresAt:
 		return m.ExpiresAt()
+	case apikey.FieldRateLimit5h:
+		return m.RateLimit5h()
+	case apikey.FieldRateLimit1d:
+		return m.RateLimit1d()
+	case apikey.FieldRateLimit7d:
+		return m.RateLimit7d()
+	case apikey.FieldUsage5h:
+		return m.Usage5h()
+	case apikey.FieldUsage1d:
+		return m.Usage1d()
+	case apikey.FieldUsage7d:
+		return m.Usage7d()
+	case apikey.FieldWindow5hStart:
+		return m.Window5hStart()
+	case apikey.FieldWindow1dStart:
+		return m.Window1dStart()
+	case apikey.FieldWindow7dStart:
+		return m.Window7dStart()
 	}
 	return nil, false
 }
@@ -1114,6 +1657,24 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldQuotaUsed(ctx)
 	case apikey.FieldExpiresAt:
 		return m.OldExpiresAt(ctx)
+	case apikey.FieldRateLimit5h:
+		return m.OldRateLimit5h(ctx)
+	case apikey.FieldRateLimit1d:
+		return m.OldRateLimit1d(ctx)
+	case apikey.FieldRateLimit7d:
+		return m.OldRateLimit7d(ctx)
+	case apikey.FieldUsage5h:
+		return m.OldUsage5h(ctx)
+	case apikey.FieldUsage1d:
+		return m.OldUsage1d(ctx)
+	case apikey.FieldUsage7d:
+		return m.OldUsage7d(ctx)
+	case apikey.FieldWindow5hStart:
+		return m.OldWindow5hStart(ctx)
+	case apikey.FieldWindow1dStart:
+		return m.OldWindow1dStart(ctx)
+	case apikey.FieldWindow7dStart:
+		return m.OldWindow7dStart(ctx)
 	}
 	return nil, fmt.Errorf("unknown APIKey field %s", name)
 }
@@ -1221,6 +1782,69 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetExpiresAt(v)
 		return nil
+	case apikey.FieldRateLimit5h:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRateLimit5h(v)
+		return nil
+	case apikey.FieldRateLimit1d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRateLimit1d(v)
+		return nil
+	case apikey.FieldRateLimit7d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRateLimit7d(v)
+		return nil
+	case apikey.FieldUsage5h:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUsage5h(v)
+		return nil
+	case apikey.FieldUsage1d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUsage1d(v)
+		return nil
+	case apikey.FieldUsage7d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUsage7d(v)
+		return nil
+	case apikey.FieldWindow5hStart:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWindow5hStart(v)
+		return nil
+	case apikey.FieldWindow1dStart:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWindow1dStart(v)
+		return nil
+	case apikey.FieldWindow7dStart:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWindow7dStart(v)
+		return nil
 	}
 	return fmt.Errorf("unknown APIKey field %s", name)
 }
@@ -1235,6 +1859,24 @@ func (m *APIKeyMutation) AddedFields() []string {
 	if m.addquota_used != nil {
 		fields = append(fields, apikey.FieldQuotaUsed)
 	}
+	if m.addrate_limit_5h != nil {
+		fields = append(fields, apikey.FieldRateLimit5h)
+	}
+	if m.addrate_limit_1d != nil {
+		fields = append(fields, apikey.FieldRateLimit1d)
+	}
+	if m.addrate_limit_7d != nil {
+		fields = append(fields, apikey.FieldRateLimit7d)
+	}
+	if m.addusage_5h != nil {
+		fields = append(fields, apikey.FieldUsage5h)
+	}
+	if m.addusage_1d != nil {
+		fields = append(fields, apikey.FieldUsage1d)
+	}
+	if m.addusage_7d != nil {
+		fields = append(fields, apikey.FieldUsage7d)
+	}
 	return fields
 }
 
@@ -1247,6 +1889,18 @@ func (m *APIKeyMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedQuota()
 	case apikey.FieldQuotaUsed:
 		return m.AddedQuotaUsed()
+	case apikey.FieldRateLimit5h:
+		return m.AddedRateLimit5h()
+	case apikey.FieldRateLimit1d:
+		return m.AddedRateLimit1d()
+	case apikey.FieldRateLimit7d:
+		return m.AddedRateLimit7d()
+	case apikey.FieldUsage5h:
+		return m.AddedUsage5h()
+	case apikey.FieldUsage1d:
+		return m.AddedUsage1d()
+	case apikey.FieldUsage7d:
+		return m.AddedUsage7d()
 	}
 	return nil, false
 }
@@ -1269,6 +1923,48 @@ func (m *APIKeyMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddQuotaUsed(v)
+		return nil
+	case apikey.FieldRateLimit5h:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddRateLimit5h(v)
+		return nil
+	case apikey.FieldRateLimit1d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddRateLimit1d(v)
+		return nil
+	case apikey.FieldRateLimit7d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddRateLimit7d(v)
+		return nil
+	case apikey.FieldUsage5h:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUsage5h(v)
+		return nil
+	case apikey.FieldUsage1d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUsage1d(v)
+		return nil
+	case apikey.FieldUsage7d:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUsage7d(v)
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey numeric field %s", name)
@@ -1295,6 +1991,15 @@ func (m *APIKeyMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(apikey.FieldExpiresAt) {
 		fields = append(fields, apikey.FieldExpiresAt)
+	}
+	if m.FieldCleared(apikey.FieldWindow5hStart) {
+		fields = append(fields, apikey.FieldWindow5hStart)
+	}
+	if m.FieldCleared(apikey.FieldWindow1dStart) {
+		fields = append(fields, apikey.FieldWindow1dStart)
+	}
+	if m.FieldCleared(apikey.FieldWindow7dStart) {
+		fields = append(fields, apikey.FieldWindow7dStart)
 	}
 	return fields
 }
@@ -1327,6 +2032,15 @@ func (m *APIKeyMutation) ClearField(name string) error {
 		return nil
 	case apikey.FieldExpiresAt:
 		m.ClearExpiresAt()
+		return nil
+	case apikey.FieldWindow5hStart:
+		m.ClearWindow5hStart()
+		return nil
+	case apikey.FieldWindow1dStart:
+		m.ClearWindow1dStart()
+		return nil
+	case apikey.FieldWindow7dStart:
+		m.ClearWindow7dStart()
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey nullable field %s", name)
@@ -1377,6 +2091,33 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldExpiresAt:
 		m.ResetExpiresAt()
+		return nil
+	case apikey.FieldRateLimit5h:
+		m.ResetRateLimit5h()
+		return nil
+	case apikey.FieldRateLimit1d:
+		m.ResetRateLimit1d()
+		return nil
+	case apikey.FieldRateLimit7d:
+		m.ResetRateLimit7d()
+		return nil
+	case apikey.FieldUsage5h:
+		m.ResetUsage5h()
+		return nil
+	case apikey.FieldUsage1d:
+		m.ResetUsage1d()
+		return nil
+	case apikey.FieldUsage7d:
+		m.ResetUsage7d()
+		return nil
+	case apikey.FieldWindow5hStart:
+		m.ResetWindow5hStart()
+		return nil
+	case apikey.FieldWindow1dStart:
+		m.ResetWindow1dStart()
+		return nil
+	case apikey.FieldWindow7dStart:
+		m.ResetWindow7dStart()
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey field %s", name)
