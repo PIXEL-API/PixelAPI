@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -124,6 +125,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyPurchaseSubscriptionEnabled,
 		SettingKeyPurchaseSubscriptionURL,
 		SettingKeySoraClientEnabled,
+		SettingKeyCustomMenuItems,
 		SettingKeyLinuxDoConnectEnabled,
 	}
 
@@ -163,6 +165,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		PurchaseSubscriptionEnabled: settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
 		PurchaseSubscriptionURL:     strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		SoraClientEnabled:           settings[SettingKeySoraClientEnabled] == "true",
+		CustomMenuItems:             settings[SettingKeyCustomMenuItems],
 		LinuxDoOAuthEnabled:         linuxDoEnabled,
 	}, nil
 }
@@ -193,27 +196,28 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 
 	// Return a struct that matches the frontend's expected format
 	return &struct {
-		RegistrationEnabled         bool   `json:"registration_enabled"`
-		EmailVerifyEnabled          bool   `json:"email_verify_enabled"`
-		PromoCodeEnabled            bool   `json:"promo_code_enabled"`
-		PasswordResetEnabled        bool   `json:"password_reset_enabled"`
-		InvitationCodeEnabled       bool   `json:"invitation_code_enabled"`
-		TotpEnabled                 bool   `json:"totp_enabled"`
-		TurnstileEnabled            bool   `json:"turnstile_enabled"`
-		TurnstileSiteKey            string `json:"turnstile_site_key,omitempty"`
-		SiteName                    string `json:"site_name"`
-		SiteLogo                    string `json:"site_logo,omitempty"`
-		SiteSubtitle                string `json:"site_subtitle,omitempty"`
-		APIBaseURL                  string `json:"api_base_url,omitempty"`
-		ContactInfo                 string `json:"contact_info,omitempty"`
-		DocURL                      string `json:"doc_url,omitempty"`
-		HomeContent                 string `json:"home_content,omitempty"`
-		HideCcsImportButton         bool   `json:"hide_ccs_import_button"`
-		PurchaseSubscriptionEnabled bool   `json:"purchase_subscription_enabled"`
-		PurchaseSubscriptionURL     string `json:"purchase_subscription_url,omitempty"`
-		SoraClientEnabled           bool   `json:"sora_client_enabled"`
-		LinuxDoOAuthEnabled         bool   `json:"linuxdo_oauth_enabled"`
-		Version                     string `json:"version,omitempty"`
+		RegistrationEnabled         bool            `json:"registration_enabled"`
+		EmailVerifyEnabled          bool            `json:"email_verify_enabled"`
+		PromoCodeEnabled            bool            `json:"promo_code_enabled"`
+		PasswordResetEnabled        bool            `json:"password_reset_enabled"`
+		InvitationCodeEnabled       bool            `json:"invitation_code_enabled"`
+		TotpEnabled                 bool            `json:"totp_enabled"`
+		TurnstileEnabled            bool            `json:"turnstile_enabled"`
+		TurnstileSiteKey            string          `json:"turnstile_site_key,omitempty"`
+		SiteName                    string          `json:"site_name"`
+		SiteLogo                    string          `json:"site_logo,omitempty"`
+		SiteSubtitle                string          `json:"site_subtitle,omitempty"`
+		APIBaseURL                  string          `json:"api_base_url,omitempty"`
+		ContactInfo                 string          `json:"contact_info,omitempty"`
+		DocURL                      string          `json:"doc_url,omitempty"`
+		HomeContent                 string          `json:"home_content,omitempty"`
+		HideCcsImportButton         bool            `json:"hide_ccs_import_button"`
+		PurchaseSubscriptionEnabled bool            `json:"purchase_subscription_enabled"`
+		PurchaseSubscriptionURL     string          `json:"purchase_subscription_url,omitempty"`
+		SoraClientEnabled           bool            `json:"sora_client_enabled"`
+		CustomMenuItems             json.RawMessage `json:"custom_menu_items"`
+		LinuxDoOAuthEnabled         bool            `json:"linuxdo_oauth_enabled"`
+		Version                     string          `json:"version,omitempty"`
 	}{
 		RegistrationEnabled:         settings.RegistrationEnabled,
 		EmailVerifyEnabled:          settings.EmailVerifyEnabled,
@@ -234,9 +238,117 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		PurchaseSubscriptionEnabled: settings.PurchaseSubscriptionEnabled,
 		PurchaseSubscriptionURL:     settings.PurchaseSubscriptionURL,
 		SoraClientEnabled:           settings.SoraClientEnabled,
+		CustomMenuItems:             filterUserVisibleMenuItems(settings.CustomMenuItems),
 		LinuxDoOAuthEnabled:         settings.LinuxDoOAuthEnabled,
 		Version:                     s.version,
 	}, nil
+}
+
+// filterUserVisibleMenuItems filters out admin-only menu items from a raw JSON
+// array string, returning only items with visibility != "admin".
+func filterUserVisibleMenuItems(raw string) json.RawMessage {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return json.RawMessage("[]")
+	}
+	var items []struct {
+		Visibility string `json:"visibility"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return json.RawMessage("[]")
+	}
+
+	// Parse full items to preserve all fields
+	var fullItems []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fullItems); err != nil {
+		return json.RawMessage("[]")
+	}
+
+	var filtered []json.RawMessage
+	for i, item := range items {
+		if item.Visibility != "admin" {
+			filtered = append(filtered, fullItems[i])
+		}
+	}
+	if len(filtered) == 0 {
+		return json.RawMessage("[]")
+	}
+	result, err := json.Marshal(filtered)
+	if err != nil {
+		return json.RawMessage("[]")
+	}
+	return result
+}
+
+// GetFrameSrcOrigins returns deduplicated http(s) origins from purchase_subscription_url
+// and all custom_menu_items URLs. Used by the router layer for CSP frame-src injection.
+func (s *SettingService) GetFrameSrcOrigins(ctx context.Context) ([]string, error) {
+	settings, err := s.GetPublicSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{})
+	var origins []string
+
+	addOrigin := func(rawURL string) {
+		if origin := extractOriginFromURL(rawURL); origin != "" {
+			if _, ok := seen[origin]; !ok {
+				seen[origin] = struct{}{}
+				origins = append(origins, origin)
+			}
+		}
+	}
+
+	// purchase subscription URL
+	if settings.PurchaseSubscriptionEnabled {
+		addOrigin(settings.PurchaseSubscriptionURL)
+	}
+
+	// all custom menu items (including admin-only, since CSP must allow all iframes)
+	for _, item := range parseCustomMenuItemURLs(settings.CustomMenuItems) {
+		addOrigin(item)
+	}
+
+	return origins, nil
+}
+
+// extractOriginFromURL returns the scheme+host origin from rawURL.
+// Only http and https schemes are accepted.
+func extractOriginFromURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// parseCustomMenuItemURLs extracts URLs from a raw JSON array of custom menu items.
+func parseCustomMenuItemURLs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var items []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil
+	}
+	urls := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.URL != "" {
+			urls = append(urls, item.URL)
+		}
+	}
+	return urls
 }
 
 // UpdateSettings 更新系统设置
@@ -293,6 +405,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyPurchaseSubscriptionEnabled] = strconv.FormatBool(settings.PurchaseSubscriptionEnabled)
 	updates[SettingKeyPurchaseSubscriptionURL] = strings.TrimSpace(settings.PurchaseSubscriptionURL)
 	updates[SettingKeySoraClientEnabled] = strconv.FormatBool(settings.SoraClientEnabled)
+	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
@@ -509,6 +622,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyPurchaseSubscriptionEnabled: "false",
 		SettingKeyPurchaseSubscriptionURL:     "",
 		SettingKeySoraClientEnabled:           "false",
+		SettingKeyCustomMenuItems:             "[]",
 		SettingKeyDefaultConcurrency:          strconv.Itoa(s.cfg.Default.UserConcurrency),
 		SettingKeyDefaultBalance:              strconv.FormatFloat(s.cfg.Default.UserBalance, 'f', 8, 64),
 		SettingKeyDefaultSubscriptions:        "[]",
@@ -567,6 +681,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		PurchaseSubscriptionEnabled:  settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
 		PurchaseSubscriptionURL:      strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		SoraClientEnabled:            settings[SettingKeySoraClientEnabled] == "true",
+		CustomMenuItems:              settings[SettingKeyCustomMenuItems],
 	}
 
 	// 解析整数类型
