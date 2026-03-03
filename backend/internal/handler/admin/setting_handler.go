@@ -123,6 +123,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpsQueryModeDefault:                  settings.OpsQueryModeDefault,
 		OpsMetricsIntervalSeconds:            settings.OpsMetricsIntervalSeconds,
 		MinClaudeCodeVersion:                 settings.MinClaudeCodeVersion,
+		AllowUngroupedKeyScheduling:          settings.AllowUngroupedKeyScheduling,
 	})
 }
 
@@ -193,6 +194,9 @@ type UpdateSettingsRequest struct {
 	OpsMetricsIntervalSeconds    *int    `json:"ops_metrics_interval_seconds"`
 
 	MinClaudeCodeVersion string `json:"min_claude_code_version"`
+
+	// 分组隔离
+	AllowUngroupedKeyScheduling bool `json:"allow_ungrouped_key_scheduling"`
 }
 
 // UpdateSettings 更新系统设置
@@ -465,6 +469,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableIdentityPatch:         req.EnableIdentityPatch,
 		IdentityPatchPrompt:         req.IdentityPatchPrompt,
 		MinClaudeCodeVersion:        req.MinClaudeCodeVersion,
+		AllowUngroupedKeyScheduling: req.AllowUngroupedKeyScheduling,
 		OpsMonitoringEnabled: func() bool {
 			if req.OpsMonitoringEnabled != nil {
 				return *req.OpsMonitoringEnabled
@@ -561,6 +566,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpsQueryModeDefault:                  updatedSettings.OpsQueryModeDefault,
 		OpsMetricsIntervalSeconds:            updatedSettings.OpsMetricsIntervalSeconds,
 		MinClaudeCodeVersion:                 updatedSettings.MinClaudeCodeVersion,
+		AllowUngroupedKeyScheduling:          updatedSettings.AllowUngroupedKeyScheduling,
 	})
 }
 
@@ -708,6 +714,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.MinClaudeCodeVersion != after.MinClaudeCodeVersion {
 		changed = append(changed, "min_claude_code_version")
+	}
+	if before.AllowUngroupedKeyScheduling != after.AllowUngroupedKeyScheduling {
+		changed = append(changed, "allow_ungrouped_key_scheduling")
 	}
 	if before.PurchaseSubscriptionEnabled != after.PurchaseSubscriptionEnabled {
 		changed = append(changed, "purchase_subscription_enabled")
