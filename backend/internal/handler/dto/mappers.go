@@ -216,6 +216,10 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 			buffer := a.GetRPMStickyBuffer()
 			out.RPMStickyBuffer = &buffer
 		}
+		// 用户消息队列模式
+		if mode := a.GetUserMsgQueueMode(); mode != "" {
+			out.UserMsgQueueMode = &mode
+		}
 		// TLS指纹伪装开关
 		if a.IsTLSFingerprintEnabled() {
 			enabled := true
