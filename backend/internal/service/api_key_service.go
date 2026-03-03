@@ -818,6 +818,11 @@ func (s *APIKeyService) UpdateQuotaUsed(ctx context.Context, apiKeyID int64, cos
 	return nil
 }
 
+// GetRateLimitData returns rate limit usage and window state for an API key.
+func (s *APIKeyService) GetRateLimitData(ctx context.Context, id int64) (*APIKeyRateLimitData, error) {
+	return s.apiKeyRepo.GetRateLimitData(ctx, id)
+}
+
 // UpdateRateLimitUsage atomically increments rate limit usage counters in the DB.
 func (s *APIKeyService) UpdateRateLimitUsage(ctx context.Context, apiKeyID int64, cost float64) error {
 	if cost <= 0 {
