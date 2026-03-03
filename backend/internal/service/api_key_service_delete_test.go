@@ -134,6 +134,18 @@ func (s *apiKeyRepoStub) UpdateLastUsed(ctx context.Context, id int64, usedAt ti
 	return nil
 }
 
+func (s *apiKeyRepoStub) IncrementRateLimitUsage(ctx context.Context, id int64, cost float64) error {
+	panic("unexpected IncrementRateLimitUsage call")
+}
+
+func (s *apiKeyRepoStub) ResetRateLimitWindows(ctx context.Context, id int64) error {
+	panic("unexpected ResetRateLimitWindows call")
+}
+
+func (s *apiKeyRepoStub) GetRateLimitData(ctx context.Context, id int64) (*APIKeyRateLimitData, error) {
+	panic("unexpected GetRateLimitData call")
+}
+
 // apiKeyCacheStub 是 APIKeyCache 接口的测试桩实现。
 // 用于验证删除操作时缓存清理逻辑是否被正确调用。
 //

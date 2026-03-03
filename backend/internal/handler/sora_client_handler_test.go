@@ -1032,6 +1032,15 @@ func (r *stubAPIKeyRepoForHandler) IncrementQuotaUsed(_ context.Context, _ int64
 func (r *stubAPIKeyRepoForHandler) UpdateLastUsed(context.Context, int64, time.Time) error {
 	return nil
 }
+func (r *stubAPIKeyRepoForHandler) IncrementRateLimitUsage(context.Context, int64, float64) error {
+	return nil
+}
+func (r *stubAPIKeyRepoForHandler) ResetRateLimitWindows(context.Context, int64) error {
+	return nil
+}
+func (r *stubAPIKeyRepoForHandler) GetRateLimitData(context.Context, int64) (*service.APIKeyRateLimitData, error) {
+	return nil, nil
+}
 
 // newTestAPIKeyService 创建测试用的 APIKeyService
 func newTestAPIKeyService(repo *stubAPIKeyRepoForHandler) *service.APIKeyService {
