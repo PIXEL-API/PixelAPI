@@ -89,6 +89,49 @@ func TestCheckErrorPolicy(t *testing.T) {
 			expected:   ErrorPolicyTempUnscheduled,
 		},
 		{
+			name: "temp_unschedulable_401_first_hit_returns_temp_unscheduled",
+			account: &Account{
+				ID:       14,
+				Type:     AccountTypeOAuth,
+				Platform: PlatformAntigravity,
+				Credentials: map[string]any{
+					"temp_unschedulable_enabled": true,
+					"temp_unschedulable_rules": []any{
+						map[string]any{
+							"error_code":       float64(401),
+							"keywords":         []any{"unauthorized"},
+							"duration_minutes": float64(10),
+						},
+					},
+				},
+			},
+			statusCode: 401,
+			body:       []byte(`unauthorized`),
+			expected:   ErrorPolicyTempUnscheduled,
+		},
+		{
+			name: "temp_unschedulable_401_second_hit_upgrades_to_none",
+			account: &Account{
+				ID:                      15,
+				Type:                    AccountTypeOAuth,
+				Platform:                PlatformAntigravity,
+				TempUnschedulableReason: `{"status_code":401,"until_unix":1735689600}`,
+				Credentials: map[string]any{
+					"temp_unschedulable_enabled": true,
+					"temp_unschedulable_rules": []any{
+						map[string]any{
+							"error_code":       float64(401),
+							"keywords":         []any{"unauthorized"},
+							"duration_minutes": float64(10),
+						},
+					},
+				},
+			},
+			statusCode: 401,
+			body:       []byte(`unauthorized`),
+			expected:   ErrorPolicyNone,
+		},
+		{
 			name: "temp_unschedulable_body_miss_returns_none",
 			account: &Account{
 				ID:       5,
