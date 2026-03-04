@@ -70,6 +70,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
@@ -78,6 +79,7 @@ const { t } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const adminSettingsStore = useAdminSettingsStore()
 
 const loading = ref(false)
 const pageTheme = ref<'light' | 'dark'>('light')
@@ -86,12 +88,16 @@ let themeObserver: MutationObserver | null = null
 const menuItemId = computed(() => route.params.id as string)
 
 const menuItem = computed(() => {
-  const items = appStore.cachedPublicSettings?.custom_menu_items ?? []
-  const found = items.find((item) => item.id === menuItemId.value) ?? null
-  if (found && found.visibility === 'admin' && !authStore.isAdmin) {
-    return null
+  const id = menuItemId.value
+  // Try public settings first (contains user-visible items)
+  const publicItems = appStore.cachedPublicSettings?.custom_menu_items ?? []
+  const found = publicItems.find((item) => item.id === id) ?? null
+  if (found) return found
+  // For admin users, also check admin settings (contains admin-only items)
+  if (authStore.isAdmin) {
+    return adminSettingsStore.customMenuItems.find((item) => item.id === id) ?? null
   }
-  return found
+  return null
 })
 
 const embeddedUrl = computed(() => {
