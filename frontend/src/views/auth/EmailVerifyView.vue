@@ -7,7 +7,7 @@
           {{ t('auth.verifyYourEmail') }}
         </h2>
         <p class="mt-2 text-sm text-gray-500 dark:text-dark-400">
-          We'll send a verification code to
+          {{ t('auth.sendCodeDesc') }}
           <span class="font-medium text-gray-700 dark:text-gray-300">{{ email }}</span>
         </p>
       </div>
@@ -64,7 +64,7 @@
               <Icon name="checkCircle" size="md" class="text-green-500" />
             </div>
             <p class="text-sm text-green-700 dark:text-green-400">
-              Verification code sent! Please check your inbox.
+              {{ t('auth.codeSentSuccess') }}
             </p>
           </div>
         </div>
@@ -123,7 +123,7 @@
             ></path>
           </svg>
           <Icon v-else name="checkCircle" size="md" class="mr-2" />
-          {{ isLoading ? 'Verifying...' : 'Verify & Create Account' }}
+          {{ isLoading ? t('auth.verifying') : t('auth.verifyAndCreate') }}
         </button>
 
         <!-- Resend Code -->
@@ -134,7 +134,7 @@
             disabled
             class="cursor-not-allowed text-sm text-gray-400 dark:text-dark-500"
           >
-            Resend code in {{ countdown }}s
+            {{ t('auth.resendCountdown', { countdown }) }}
           </button>
           <button
             v-else
@@ -162,7 +162,7 @@
         class="flex items-center gap-2 text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-gray-300"
       >
         <Icon name="arrowLeft" size="sm" />
-        Back to registration
+        {{ t('auth.backToRegistration') }}
       </button>
     </template>
   </AuthLayout>
@@ -300,12 +300,12 @@ function onTurnstileVerify(token: string): void {
 
 function onTurnstileExpire(): void {
   resendTurnstileToken.value = ''
-  errors.value.turnstile = 'Verification expired, please try again'
+  errors.value.turnstile = t('auth.turnstileExpired')
 }
 
 function onTurnstileError(): void {
   resendTurnstileToken.value = ''
-  errors.value.turnstile = 'Verification failed, please try again'
+  errors.value.turnstile = t('auth.turnstileFailed')
 }
 
 // ==================== Send Code ====================
@@ -336,7 +336,7 @@ async function sendCode(): Promise<void> {
     resendTurnstileToken.value = ''
   } catch (error: unknown) {
     errorMessage.value = buildAuthErrorMessage(error, {
-      fallback: 'Failed to send verification code. Please try again.'
+      fallback: t('auth.sendCodeFailed')
     })
 
     appStore.showError(errorMessage.value)
@@ -356,7 +356,7 @@ async function handleResendCode(): Promise<void> {
 
   // If turnstile is enabled but no token yet, wait
   if (turnstileEnabled.value && !resendTurnstileToken.value) {
-    errors.value.turnstile = 'Please complete the verification'
+    errors.value.turnstile = t('auth.completeVerification')
     return
   }
 
@@ -367,12 +367,12 @@ function validateForm(): boolean {
   errors.value.code = ''
 
   if (!verifyCode.value.trim()) {
-    errors.value.code = 'Verification code is required'
+    errors.value.code = t('auth.codeRequired')
     return false
   }
 
   if (!/^\d{6}$/.test(verifyCode.value.trim())) {
-    errors.value.code = 'Please enter a valid 6-digit code'
+    errors.value.code = t('auth.invalidCode')
     return false
   }
 
@@ -409,13 +409,13 @@ async function handleVerify(): Promise<void> {
     sessionStorage.removeItem('register_data')
 
     // Show success toast
-    appStore.showSuccess('Account created successfully! Welcome to ' + siteName.value + '.')
+    appStore.showSuccess(t('auth.accountCreatedSuccess', { siteName: siteName.value }))
 
     // Redirect to dashboard
     await router.push('/dashboard')
   } catch (error: unknown) {
     errorMessage.value = buildAuthErrorMessage(error, {
-      fallback: 'Verification failed. Please try again.'
+      fallback: t('auth.verifyFailed')
     })
 
     appStore.showError(errorMessage.value)
