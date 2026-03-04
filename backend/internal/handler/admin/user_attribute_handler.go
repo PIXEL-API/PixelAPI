@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -66,6 +68,8 @@ type BatchUserAttributesResponse struct {
 	// Map of userID -> map of attributeID -> value
 	Attributes map[int64]map[int64]string `json:"attributes"`
 }
+
+var userAttributesBatchCache = newSnapshotCache(30 * time.Second)
 
 // AttributeDefinitionResponse represents attribute definition response
 type AttributeDefinitionResponse struct {
@@ -327,16 +331,32 @@ func (h *UserAttributeHandler) GetBatchUserAttributes(c *gin.Context) {
 		return
 	}
 
-	if len(req.UserIDs) == 0 {
+	userIDs := normalizeInt64IDList(req.UserIDs)
+	if len(userIDs) == 0 {
 		response.Success(c, BatchUserAttributesResponse{Attributes: map[int64]map[int64]string{}})
 		return
 	}
 
-	attrs, err := h.attrService.GetBatchUserAttributes(c.Request.Context(), req.UserIDs)
+	keyRaw, _ := json.Marshal(struct {
+		UserIDs []int64 `json:"user_ids"`
+	}{
+		UserIDs: userIDs,
+	})
+	cacheKey := string(keyRaw)
+	if cached, ok := userAttributesBatchCache.Get(cacheKey); ok {
+		c.Header("X-Snapshot-Cache", "hit")
+		response.Success(c, cached.Payload)
+		return
+	}
+
+	attrs, err := h.attrService.GetBatchUserAttributes(c.Request.Context(), userIDs)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 
-	response.Success(c, BatchUserAttributesResponse{Attributes: attrs})
+	payload := BatchUserAttributesResponse{Attributes: attrs}
+	userAttributesBatchCache.Set(cacheKey, payload)
+	c.Header("X-Snapshot-Cache", "miss")
+	response.Success(c, payload)
 }

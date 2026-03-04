@@ -22,7 +22,14 @@ func (s *OpsService) GetErrorTrend(ctx context.Context, filter *OpsDashboardFilt
 	if filter.StartTime.After(filter.EndTime) {
 		return nil, infraerrors.BadRequest("OPS_TIME_RANGE_INVALID", "start_time must be <= end_time")
 	}
-	return s.opsRepo.GetErrorTrend(ctx, filter, bucketSeconds)
+	filter.QueryMode = s.resolveOpsQueryMode(ctx, filter.QueryMode)
+
+	result, err := s.opsRepo.GetErrorTrend(ctx, filter, bucketSeconds)
+	if err != nil && shouldFallbackOpsPreagg(filter, err) {
+		rawFilter := cloneOpsFilterWithMode(filter, OpsQueryModeRaw)
+		return s.opsRepo.GetErrorTrend(ctx, rawFilter, bucketSeconds)
+	}
+	return result, err
 }
 
 func (s *OpsService) GetErrorDistribution(ctx context.Context, filter *OpsDashboardFilter) (*OpsErrorDistributionResponse, error) {
@@ -41,5 +48,12 @@ func (s *OpsService) GetErrorDistribution(ctx context.Context, filter *OpsDashbo
 	if filter.StartTime.After(filter.EndTime) {
 		return nil, infraerrors.BadRequest("OPS_TIME_RANGE_INVALID", "start_time must be <= end_time")
 	}
-	return s.opsRepo.GetErrorDistribution(ctx, filter)
+	filter.QueryMode = s.resolveOpsQueryMode(ctx, filter.QueryMode)
+
+	result, err := s.opsRepo.GetErrorDistribution(ctx, filter)
+	if err != nil && shouldFallbackOpsPreagg(filter, err) {
+		rawFilter := cloneOpsFilterWithMode(filter, OpsQueryModeRaw)
+		return s.opsRepo.GetErrorDistribution(ctx, rawFilter)
+	}
+	return result, err
 }

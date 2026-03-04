@@ -120,6 +120,31 @@ export interface GroupStatsResponse {
   end_date: string
 }
 
+export interface DashboardSnapshotV2Params extends TrendParams {
+  include_stats?: boolean
+  include_trend?: boolean
+  include_model_stats?: boolean
+  include_group_stats?: boolean
+  include_users_trend?: boolean
+  users_trend_limit?: number
+}
+
+export interface DashboardSnapshotV2Stats extends DashboardStats {
+  uptime: number
+}
+
+export interface DashboardSnapshotV2Response {
+  generated_at: string
+  start_date: string
+  end_date: string
+  granularity: string
+  stats?: DashboardSnapshotV2Stats
+  trend?: TrendDataPoint[]
+  models?: ModelStat[]
+  groups?: GroupStat[]
+  users_trend?: UserUsageTrendPoint[]
+}
+
 /**
  * Get group usage statistics
  * @param params - Query parameters for filtering
@@ -127,6 +152,16 @@ export interface GroupStatsResponse {
  */
 export async function getGroupStats(params?: GroupStatsParams): Promise<GroupStatsResponse> {
   const { data } = await apiClient.get<GroupStatsResponse>('/admin/dashboard/groups', { params })
+  return data
+}
+
+/**
+ * Get dashboard snapshot v2 (aggregated response for heavy admin pages).
+ */
+export async function getSnapshotV2(params?: DashboardSnapshotV2Params): Promise<DashboardSnapshotV2Response> {
+  const { data } = await apiClient.get<DashboardSnapshotV2Response>('/admin/dashboard/snapshot-v2', {
+    params
+  })
   return data
 }
 
@@ -233,6 +268,7 @@ export const dashboardAPI = {
   getUsageTrend,
   getModelStats,
   getGroupStats,
+  getSnapshotV2,
   getApiKeyUsageTrend,
   getUserUsageTrend,
   getBatchUsersUsage,
