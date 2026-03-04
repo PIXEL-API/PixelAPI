@@ -52,9 +52,25 @@ func (b *billingCacheWorkerStub) InvalidateSubscriptionCache(ctx context.Context
 	return nil
 }
 
+func (b *billingCacheWorkerStub) GetAPIKeyRateLimit(ctx context.Context, keyID int64) (*APIKeyRateLimitCacheData, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (b *billingCacheWorkerStub) SetAPIKeyRateLimit(ctx context.Context, keyID int64, data *APIKeyRateLimitCacheData) error {
+	return nil
+}
+
+func (b *billingCacheWorkerStub) UpdateAPIKeyRateLimitUsage(ctx context.Context, keyID int64, cost float64) error {
+	return nil
+}
+
+func (b *billingCacheWorkerStub) InvalidateAPIKeyRateLimit(ctx context.Context, keyID int64) error {
+	return nil
+}
+
 func TestBillingCacheServiceQueueHighLoad(t *testing.T) {
 	cache := &billingCacheWorkerStub{}
-	svc := NewBillingCacheService(cache, nil, nil, &config.Config{})
+	svc := NewBillingCacheService(cache, nil, nil, nil, &config.Config{})
 	t.Cleanup(svc.Stop)
 
 	start := time.Now()
@@ -72,4 +88,17 @@ func TestBillingCacheServiceQueueHighLoad(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return atomic.LoadInt64(&cache.subscriptionUpdates) > 0
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestBillingCacheServiceEnqueueAfterStopReturnsFalse(t *testing.T) {
+	cache := &billingCacheWorkerStub{}
+	svc := NewBillingCacheService(cache, nil, nil, nil, &config.Config{})
+	svc.Stop()
+
+	enqueued := svc.enqueueCacheWrite(cacheWriteTask{
+		kind:   cacheWriteDeductBalance,
+		userID: 1,
+		amount: 1,
+	})
+	require.False(t, enqueued)
 }

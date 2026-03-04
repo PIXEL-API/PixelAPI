@@ -95,6 +95,11 @@ func Status(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldStatus, v))
 }
 
+// LastUsedAt applies equality check predicate on the "last_used_at" field. It's identical to LastUsedAtEQ.
+func LastUsedAt(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldLastUsedAt, v))
+}
+
 // Quota applies equality check predicate on the "quota" field. It's identical to QuotaEQ.
 func Quota(v float64) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldQuota, v))
@@ -108,6 +113,51 @@ func QuotaUsed(v float64) predicate.APIKey {
 // ExpiresAt applies equality check predicate on the "expires_at" field. It's identical to ExpiresAtEQ.
 func ExpiresAt(v time.Time) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldExpiresAt, v))
+}
+
+// RateLimit5h applies equality check predicate on the "rate_limit_5h" field. It's identical to RateLimit5hEQ.
+func RateLimit5h(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRateLimit5h, v))
+}
+
+// RateLimit1d applies equality check predicate on the "rate_limit_1d" field. It's identical to RateLimit1dEQ.
+func RateLimit1d(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRateLimit1d, v))
+}
+
+// RateLimit7d applies equality check predicate on the "rate_limit_7d" field. It's identical to RateLimit7dEQ.
+func RateLimit7d(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRateLimit7d, v))
+}
+
+// Usage5h applies equality check predicate on the "usage_5h" field. It's identical to Usage5hEQ.
+func Usage5h(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldUsage5h, v))
+}
+
+// Usage1d applies equality check predicate on the "usage_1d" field. It's identical to Usage1dEQ.
+func Usage1d(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldUsage1d, v))
+}
+
+// Usage7d applies equality check predicate on the "usage_7d" field. It's identical to Usage7dEQ.
+func Usage7d(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldUsage7d, v))
+}
+
+// Window5hStart applies equality check predicate on the "window_5h_start" field. It's identical to Window5hStartEQ.
+func Window5hStart(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldWindow5hStart, v))
+}
+
+// Window1dStart applies equality check predicate on the "window_1d_start" field. It's identical to Window1dStartEQ.
+func Window1dStart(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldWindow1dStart, v))
+}
+
+// Window7dStart applies equality check predicate on the "window_7d_start" field. It's identical to Window7dStartEQ.
+func Window7dStart(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldWindow7dStart, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
@@ -485,6 +535,56 @@ func StatusContainsFold(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldContainsFold(FieldStatus, v))
 }
 
+// LastUsedAtEQ applies the EQ predicate on the "last_used_at" field.
+func LastUsedAtEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldLastUsedAt, v))
+}
+
+// LastUsedAtNEQ applies the NEQ predicate on the "last_used_at" field.
+func LastUsedAtNEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldLastUsedAt, v))
+}
+
+// LastUsedAtIn applies the In predicate on the "last_used_at" field.
+func LastUsedAtIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldLastUsedAt, vs...))
+}
+
+// LastUsedAtNotIn applies the NotIn predicate on the "last_used_at" field.
+func LastUsedAtNotIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldLastUsedAt, vs...))
+}
+
+// LastUsedAtGT applies the GT predicate on the "last_used_at" field.
+func LastUsedAtGT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldLastUsedAt, v))
+}
+
+// LastUsedAtGTE applies the GTE predicate on the "last_used_at" field.
+func LastUsedAtGTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldLastUsedAt, v))
+}
+
+// LastUsedAtLT applies the LT predicate on the "last_used_at" field.
+func LastUsedAtLT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldLastUsedAt, v))
+}
+
+// LastUsedAtLTE applies the LTE predicate on the "last_used_at" field.
+func LastUsedAtLTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldLastUsedAt, v))
+}
+
+// LastUsedAtIsNil applies the IsNil predicate on the "last_used_at" field.
+func LastUsedAtIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldLastUsedAt))
+}
+
+// LastUsedAtNotNil applies the NotNil predicate on the "last_used_at" field.
+func LastUsedAtNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldLastUsedAt))
+}
+
 // IPWhitelistIsNil applies the IsNil predicate on the "ip_whitelist" field.
 func IPWhitelistIsNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldIsNull(FieldIPWhitelist))
@@ -633,6 +733,396 @@ func ExpiresAtIsNil() predicate.APIKey {
 // ExpiresAtNotNil applies the NotNil predicate on the "expires_at" field.
 func ExpiresAtNotNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldNotNull(FieldExpiresAt))
+}
+
+// RateLimit5hEQ applies the EQ predicate on the "rate_limit_5h" field.
+func RateLimit5hEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRateLimit5h, v))
+}
+
+// RateLimit5hNEQ applies the NEQ predicate on the "rate_limit_5h" field.
+func RateLimit5hNEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldRateLimit5h, v))
+}
+
+// RateLimit5hIn applies the In predicate on the "rate_limit_5h" field.
+func RateLimit5hIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldRateLimit5h, vs...))
+}
+
+// RateLimit5hNotIn applies the NotIn predicate on the "rate_limit_5h" field.
+func RateLimit5hNotIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldRateLimit5h, vs...))
+}
+
+// RateLimit5hGT applies the GT predicate on the "rate_limit_5h" field.
+func RateLimit5hGT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldRateLimit5h, v))
+}
+
+// RateLimit5hGTE applies the GTE predicate on the "rate_limit_5h" field.
+func RateLimit5hGTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldRateLimit5h, v))
+}
+
+// RateLimit5hLT applies the LT predicate on the "rate_limit_5h" field.
+func RateLimit5hLT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldRateLimit5h, v))
+}
+
+// RateLimit5hLTE applies the LTE predicate on the "rate_limit_5h" field.
+func RateLimit5hLTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldRateLimit5h, v))
+}
+
+// RateLimit1dEQ applies the EQ predicate on the "rate_limit_1d" field.
+func RateLimit1dEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRateLimit1d, v))
+}
+
+// RateLimit1dNEQ applies the NEQ predicate on the "rate_limit_1d" field.
+func RateLimit1dNEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldRateLimit1d, v))
+}
+
+// RateLimit1dIn applies the In predicate on the "rate_limit_1d" field.
+func RateLimit1dIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldRateLimit1d, vs...))
+}
+
+// RateLimit1dNotIn applies the NotIn predicate on the "rate_limit_1d" field.
+func RateLimit1dNotIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldRateLimit1d, vs...))
+}
+
+// RateLimit1dGT applies the GT predicate on the "rate_limit_1d" field.
+func RateLimit1dGT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldRateLimit1d, v))
+}
+
+// RateLimit1dGTE applies the GTE predicate on the "rate_limit_1d" field.
+func RateLimit1dGTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldRateLimit1d, v))
+}
+
+// RateLimit1dLT applies the LT predicate on the "rate_limit_1d" field.
+func RateLimit1dLT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldRateLimit1d, v))
+}
+
+// RateLimit1dLTE applies the LTE predicate on the "rate_limit_1d" field.
+func RateLimit1dLTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldRateLimit1d, v))
+}
+
+// RateLimit7dEQ applies the EQ predicate on the "rate_limit_7d" field.
+func RateLimit7dEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRateLimit7d, v))
+}
+
+// RateLimit7dNEQ applies the NEQ predicate on the "rate_limit_7d" field.
+func RateLimit7dNEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldRateLimit7d, v))
+}
+
+// RateLimit7dIn applies the In predicate on the "rate_limit_7d" field.
+func RateLimit7dIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldRateLimit7d, vs...))
+}
+
+// RateLimit7dNotIn applies the NotIn predicate on the "rate_limit_7d" field.
+func RateLimit7dNotIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldRateLimit7d, vs...))
+}
+
+// RateLimit7dGT applies the GT predicate on the "rate_limit_7d" field.
+func RateLimit7dGT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldRateLimit7d, v))
+}
+
+// RateLimit7dGTE applies the GTE predicate on the "rate_limit_7d" field.
+func RateLimit7dGTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldRateLimit7d, v))
+}
+
+// RateLimit7dLT applies the LT predicate on the "rate_limit_7d" field.
+func RateLimit7dLT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldRateLimit7d, v))
+}
+
+// RateLimit7dLTE applies the LTE predicate on the "rate_limit_7d" field.
+func RateLimit7dLTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldRateLimit7d, v))
+}
+
+// Usage5hEQ applies the EQ predicate on the "usage_5h" field.
+func Usage5hEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldUsage5h, v))
+}
+
+// Usage5hNEQ applies the NEQ predicate on the "usage_5h" field.
+func Usage5hNEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldUsage5h, v))
+}
+
+// Usage5hIn applies the In predicate on the "usage_5h" field.
+func Usage5hIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldUsage5h, vs...))
+}
+
+// Usage5hNotIn applies the NotIn predicate on the "usage_5h" field.
+func Usage5hNotIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldUsage5h, vs...))
+}
+
+// Usage5hGT applies the GT predicate on the "usage_5h" field.
+func Usage5hGT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldUsage5h, v))
+}
+
+// Usage5hGTE applies the GTE predicate on the "usage_5h" field.
+func Usage5hGTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldUsage5h, v))
+}
+
+// Usage5hLT applies the LT predicate on the "usage_5h" field.
+func Usage5hLT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldUsage5h, v))
+}
+
+// Usage5hLTE applies the LTE predicate on the "usage_5h" field.
+func Usage5hLTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldUsage5h, v))
+}
+
+// Usage1dEQ applies the EQ predicate on the "usage_1d" field.
+func Usage1dEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldUsage1d, v))
+}
+
+// Usage1dNEQ applies the NEQ predicate on the "usage_1d" field.
+func Usage1dNEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldUsage1d, v))
+}
+
+// Usage1dIn applies the In predicate on the "usage_1d" field.
+func Usage1dIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldUsage1d, vs...))
+}
+
+// Usage1dNotIn applies the NotIn predicate on the "usage_1d" field.
+func Usage1dNotIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldUsage1d, vs...))
+}
+
+// Usage1dGT applies the GT predicate on the "usage_1d" field.
+func Usage1dGT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldUsage1d, v))
+}
+
+// Usage1dGTE applies the GTE predicate on the "usage_1d" field.
+func Usage1dGTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldUsage1d, v))
+}
+
+// Usage1dLT applies the LT predicate on the "usage_1d" field.
+func Usage1dLT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldUsage1d, v))
+}
+
+// Usage1dLTE applies the LTE predicate on the "usage_1d" field.
+func Usage1dLTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldUsage1d, v))
+}
+
+// Usage7dEQ applies the EQ predicate on the "usage_7d" field.
+func Usage7dEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldUsage7d, v))
+}
+
+// Usage7dNEQ applies the NEQ predicate on the "usage_7d" field.
+func Usage7dNEQ(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldUsage7d, v))
+}
+
+// Usage7dIn applies the In predicate on the "usage_7d" field.
+func Usage7dIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldUsage7d, vs...))
+}
+
+// Usage7dNotIn applies the NotIn predicate on the "usage_7d" field.
+func Usage7dNotIn(vs ...float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldUsage7d, vs...))
+}
+
+// Usage7dGT applies the GT predicate on the "usage_7d" field.
+func Usage7dGT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldUsage7d, v))
+}
+
+// Usage7dGTE applies the GTE predicate on the "usage_7d" field.
+func Usage7dGTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldUsage7d, v))
+}
+
+// Usage7dLT applies the LT predicate on the "usage_7d" field.
+func Usage7dLT(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldUsage7d, v))
+}
+
+// Usage7dLTE applies the LTE predicate on the "usage_7d" field.
+func Usage7dLTE(v float64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldUsage7d, v))
+}
+
+// Window5hStartEQ applies the EQ predicate on the "window_5h_start" field.
+func Window5hStartEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldWindow5hStart, v))
+}
+
+// Window5hStartNEQ applies the NEQ predicate on the "window_5h_start" field.
+func Window5hStartNEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldWindow5hStart, v))
+}
+
+// Window5hStartIn applies the In predicate on the "window_5h_start" field.
+func Window5hStartIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldWindow5hStart, vs...))
+}
+
+// Window5hStartNotIn applies the NotIn predicate on the "window_5h_start" field.
+func Window5hStartNotIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldWindow5hStart, vs...))
+}
+
+// Window5hStartGT applies the GT predicate on the "window_5h_start" field.
+func Window5hStartGT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldWindow5hStart, v))
+}
+
+// Window5hStartGTE applies the GTE predicate on the "window_5h_start" field.
+func Window5hStartGTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldWindow5hStart, v))
+}
+
+// Window5hStartLT applies the LT predicate on the "window_5h_start" field.
+func Window5hStartLT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldWindow5hStart, v))
+}
+
+// Window5hStartLTE applies the LTE predicate on the "window_5h_start" field.
+func Window5hStartLTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldWindow5hStart, v))
+}
+
+// Window5hStartIsNil applies the IsNil predicate on the "window_5h_start" field.
+func Window5hStartIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldWindow5hStart))
+}
+
+// Window5hStartNotNil applies the NotNil predicate on the "window_5h_start" field.
+func Window5hStartNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldWindow5hStart))
+}
+
+// Window1dStartEQ applies the EQ predicate on the "window_1d_start" field.
+func Window1dStartEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldWindow1dStart, v))
+}
+
+// Window1dStartNEQ applies the NEQ predicate on the "window_1d_start" field.
+func Window1dStartNEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldWindow1dStart, v))
+}
+
+// Window1dStartIn applies the In predicate on the "window_1d_start" field.
+func Window1dStartIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldWindow1dStart, vs...))
+}
+
+// Window1dStartNotIn applies the NotIn predicate on the "window_1d_start" field.
+func Window1dStartNotIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldWindow1dStart, vs...))
+}
+
+// Window1dStartGT applies the GT predicate on the "window_1d_start" field.
+func Window1dStartGT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldWindow1dStart, v))
+}
+
+// Window1dStartGTE applies the GTE predicate on the "window_1d_start" field.
+func Window1dStartGTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldWindow1dStart, v))
+}
+
+// Window1dStartLT applies the LT predicate on the "window_1d_start" field.
+func Window1dStartLT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldWindow1dStart, v))
+}
+
+// Window1dStartLTE applies the LTE predicate on the "window_1d_start" field.
+func Window1dStartLTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldWindow1dStart, v))
+}
+
+// Window1dStartIsNil applies the IsNil predicate on the "window_1d_start" field.
+func Window1dStartIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldWindow1dStart))
+}
+
+// Window1dStartNotNil applies the NotNil predicate on the "window_1d_start" field.
+func Window1dStartNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldWindow1dStart))
+}
+
+// Window7dStartEQ applies the EQ predicate on the "window_7d_start" field.
+func Window7dStartEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldWindow7dStart, v))
+}
+
+// Window7dStartNEQ applies the NEQ predicate on the "window_7d_start" field.
+func Window7dStartNEQ(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldWindow7dStart, v))
+}
+
+// Window7dStartIn applies the In predicate on the "window_7d_start" field.
+func Window7dStartIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldWindow7dStart, vs...))
+}
+
+// Window7dStartNotIn applies the NotIn predicate on the "window_7d_start" field.
+func Window7dStartNotIn(vs ...time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldWindow7dStart, vs...))
+}
+
+// Window7dStartGT applies the GT predicate on the "window_7d_start" field.
+func Window7dStartGT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldWindow7dStart, v))
+}
+
+// Window7dStartGTE applies the GTE predicate on the "window_7d_start" field.
+func Window7dStartGTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldWindow7dStart, v))
+}
+
+// Window7dStartLT applies the LT predicate on the "window_7d_start" field.
+func Window7dStartLT(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldWindow7dStart, v))
+}
+
+// Window7dStartLTE applies the LTE predicate on the "window_7d_start" field.
+func Window7dStartLTE(v time.Time) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldWindow7dStart, v))
+}
+
+// Window7dStartIsNil applies the IsNil predicate on the "window_7d_start" field.
+func Window7dStartIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldWindow7dStart))
+}
+
+// Window7dStartNotNil applies the NotNil predicate on the "window_7d_start" field.
+func Window7dStartNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldWindow7dStart))
 }
 
 // HasUser applies the HasEdge predicate on the "user" edge.

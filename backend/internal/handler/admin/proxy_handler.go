@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -63,9 +64,9 @@ func (h *ProxyHandler) List(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.ProxyWithAccountCount, 0, len(proxies))
+	out := make([]dto.AdminProxyWithAccountCount, 0, len(proxies))
 	for i := range proxies {
-		out = append(out, *dto.ProxyWithAccountCountFromService(&proxies[i]))
+		out = append(out, *dto.ProxyWithAccountCountFromServiceAdmin(&proxies[i]))
 	}
 	response.Paginated(c, out, total, page, pageSize)
 }
@@ -82,9 +83,9 @@ func (h *ProxyHandler) GetAll(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
-		out := make([]dto.ProxyWithAccountCount, 0, len(proxies))
+		out := make([]dto.AdminProxyWithAccountCount, 0, len(proxies))
 		for i := range proxies {
-			out = append(out, *dto.ProxyWithAccountCountFromService(&proxies[i]))
+			out = append(out, *dto.ProxyWithAccountCountFromServiceAdmin(&proxies[i]))
 		}
 		response.Success(c, out)
 		return
@@ -96,9 +97,9 @@ func (h *ProxyHandler) GetAll(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.Proxy, 0, len(proxies))
+	out := make([]dto.AdminProxy, 0, len(proxies))
 	for i := range proxies {
-		out = append(out, *dto.ProxyFromService(&proxies[i]))
+		out = append(out, *dto.ProxyFromServiceAdmin(&proxies[i]))
 	}
 	response.Success(c, out)
 }
@@ -118,7 +119,7 @@ func (h *ProxyHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.ProxyFromService(proxy))
+	response.Success(c, dto.ProxyFromServiceAdmin(proxy))
 }
 
 // Create handles creating a new proxy
@@ -130,20 +131,20 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 		return
 	}
 
-	proxy, err := h.adminService.CreateProxy(c.Request.Context(), &service.CreateProxyInput{
-		Name:     strings.TrimSpace(req.Name),
-		Protocol: strings.TrimSpace(req.Protocol),
-		Host:     strings.TrimSpace(req.Host),
-		Port:     req.Port,
-		Username: strings.TrimSpace(req.Username),
-		Password: strings.TrimSpace(req.Password),
+	executeAdminIdempotentJSON(c, "admin.proxies.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		proxy, err := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
+			Name:     strings.TrimSpace(req.Name),
+			Protocol: strings.TrimSpace(req.Protocol),
+			Host:     strings.TrimSpace(req.Host),
+			Port:     req.Port,
+			Username: strings.TrimSpace(req.Username),
+			Password: strings.TrimSpace(req.Password),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return dto.ProxyFromServiceAdmin(proxy), nil
 	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	response.Success(c, dto.ProxyFromService(proxy))
 }
 
 // Update handles updating a proxy
@@ -175,7 +176,7 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.ProxyFromService(proxy))
+	response.Success(c, dto.ProxyFromServiceAdmin(proxy))
 }
 
 // Delete handles deleting a proxy
@@ -228,6 +229,24 @@ func (h *ProxyHandler) Test(c *gin.Context) {
 	}
 
 	result, err := h.adminService.TestProxy(c.Request.Context(), proxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
+// CheckQuality handles checking proxy quality across common AI targets.
+// POST /api/v1/admin/proxies/:id/quality-check
+func (h *ProxyHandler) CheckQuality(c *gin.Context) {
+	proxyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid proxy ID")
+		return
+	}
+
+	result, err := h.adminService.CheckProxyQuality(c.Request.Context(), proxyID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

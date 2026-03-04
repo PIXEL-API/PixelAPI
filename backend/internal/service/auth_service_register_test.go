@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,6 +55,21 @@ func (s *settingRepoStub) Delete(ctx context.Context, key string) error {
 type emailCacheStub struct {
 	data *VerificationCodeData
 	err  error
+}
+
+type defaultSubscriptionAssignerStub struct {
+	calls []AssignSubscriptionInput
+	err   error
+}
+
+func (s *defaultSubscriptionAssignerStub) AssignOrExtendSubscription(_ context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error) {
+	if input != nil {
+		s.calls = append(s.calls, *input)
+	}
+	if s.err != nil {
+		return nil, false, s.err
+	}
+	return &UserSubscription{UserID: input.UserID, GroupID: input.GroupID}, false, nil
 }
 
 func (s *emailCacheStub) GetVerificationCode(ctx context.Context, email string) (*VerificationCodeData, error) {
@@ -123,6 +139,7 @@ func newAuthService(repo *userRepoStub, settings map[string]string, emailCache E
 		nil,
 		nil,
 		nil, // promoService
+		nil, // defaultSubAssigner
 	)
 }
 
@@ -213,6 +230,51 @@ func TestAuthService_Register_ReservedEmail(t *testing.T) {
 
 	_, _, err := service.Register(context.Background(), "linuxdo-123@linuxdo-connect.invalid", "password")
 	require.ErrorIs(t, err, ErrEmailReserved)
+}
+
+func TestAuthService_Register_EmailSuffixNotAllowed(t *testing.T) {
+	repo := &userRepoStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com","@company.com"]`,
+	}, nil)
+
+	_, _, err := service.Register(context.Background(), "user@other.com", "password")
+	require.ErrorIs(t, err, ErrEmailSuffixNotAllowed)
+	appErr := infraerrors.FromError(err)
+	require.Contains(t, appErr.Message, "@example.com")
+	require.Contains(t, appErr.Message, "@company.com")
+	require.Equal(t, "EMAIL_SUFFIX_NOT_ALLOWED", appErr.Reason)
+	require.Equal(t, "2", appErr.Metadata["allowed_suffix_count"])
+	require.Equal(t, "@example.com,@company.com", appErr.Metadata["allowed_suffixes"])
+}
+
+func TestAuthService_Register_EmailSuffixAllowed(t *testing.T) {
+	repo := &userRepoStub{nextID: 8}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `["example.com"]`,
+	}, nil)
+
+	_, user, err := service.Register(context.Background(), "user@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, int64(8), user.ID)
+}
+
+func TestAuthService_SendVerifyCode_EmailSuffixNotAllowed(t *testing.T) {
+	repo := &userRepoStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixWhitelist: `["@example.com","@company.com"]`,
+	}, nil)
+
+	err := service.SendVerifyCode(context.Background(), "user@other.com")
+	require.ErrorIs(t, err, ErrEmailSuffixNotAllowed)
+	appErr := infraerrors.FromError(err)
+	require.Contains(t, appErr.Message, "@example.com")
+	require.Contains(t, appErr.Message, "@company.com")
+	require.Equal(t, "2", appErr.Metadata["allowed_suffix_count"])
 }
 
 func TestAuthService_Register_CreateError(t *testing.T) {
@@ -314,4 +376,90 @@ func TestAuthService_RefreshToken_ExpiredTokenNoPanic(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, newToken)
 	})
+}
+
+func TestAuthService_GetAccessTokenExpiresIn_FallbackToExpireHour(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 0
+
+	require.Equal(t, 24*3600, service.GetAccessTokenExpiresIn())
+}
+
+func TestAuthService_GetAccessTokenExpiresIn_MinutesHasPriority(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 90
+
+	require.Equal(t, 90*60, service.GetAccessTokenExpiresIn())
+}
+
+func TestAuthService_GenerateToken_UsesExpireHourWhenMinutesZero(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 0
+
+	user := &User{
+		ID:           1,
+		Email:        "test@test.com",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+
+	token, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	claims, err := service.ValidateToken(token)
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	require.NotNil(t, claims.IssuedAt)
+	require.NotNil(t, claims.ExpiresAt)
+
+	require.WithinDuration(t, claims.IssuedAt.Time.Add(24*time.Hour), claims.ExpiresAt.Time, 2*time.Second)
+}
+
+func TestAuthService_GenerateToken_UsesMinutesWhenConfigured(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	service.cfg.JWT.ExpireHour = 24
+	service.cfg.JWT.AccessTokenExpireMinutes = 90
+
+	user := &User{
+		ID:           2,
+		Email:        "test2@test.com",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+
+	token, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	claims, err := service.ValidateToken(token)
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	require.NotNil(t, claims.IssuedAt)
+	require.NotNil(t, claims.ExpiresAt)
+
+	require.WithinDuration(t, claims.IssuedAt.Time.Add(90*time.Minute), claims.ExpiresAt.Time, 2*time.Second)
+}
+
+func TestAuthService_Register_AssignsDefaultSubscriptions(t *testing.T) {
+	repo := &userRepoStub{nextID: 42}
+	assigner := &defaultSubscriptionAssignerStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:  "true",
+		SettingKeyDefaultSubscriptions: `[{"group_id":11,"validity_days":30},{"group_id":12,"validity_days":7}]`,
+	}, nil)
+	service.defaultSubAssigner = assigner
+
+	_, user, err := service.Register(context.Background(), "default-sub@test.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Len(t, assigner.calls, 2)
+	require.Equal(t, int64(42), assigner.calls[0].UserID)
+	require.Equal(t, int64(11), assigner.calls[0].GroupID)
+	require.Equal(t, 30, assigner.calls[0].ValidityDays)
+	require.Equal(t, int64(12), assigner.calls[1].GroupID)
+	require.Equal(t, 7, assigner.calls[1].ValidityDays)
 }

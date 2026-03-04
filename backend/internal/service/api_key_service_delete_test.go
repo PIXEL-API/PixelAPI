@@ -24,10 +24,13 @@ import (
 //   - deleteErr: 模拟 Delete 返回的错误
 //   - deletedIDs: 记录被调用删除的 API Key ID，用于断言验证
 type apiKeyRepoStub struct {
-	apiKey     *APIKey // GetKeyAndOwnerID 的返回值
-	getByIDErr error   // GetKeyAndOwnerID 的错误返回值
-	deleteErr  error   // Delete 的错误返回值
-	deletedIDs []int64 // 记录已删除的 API Key ID 列表
+	apiKey         *APIKey // GetKeyAndOwnerID 的返回值
+	getByIDErr     error   // GetKeyAndOwnerID 的错误返回值
+	deleteErr      error   // Delete 的错误返回值
+	deletedIDs     []int64 // 记录已删除的 API Key ID 列表
+	updateLastUsed func(ctx context.Context, id int64, usedAt time.Time) error
+	touchedIDs     []int64
+	touchedUsedAts []time.Time
 }
 
 // 以下方法在本测试中不应被调用，使用 panic 确保测试失败时能快速定位问题
@@ -78,7 +81,7 @@ func (s *apiKeyRepoStub) Delete(ctx context.Context, id int64) error {
 
 // 以下是接口要求实现但本测试不关心的方法
 
-func (s *apiKeyRepoStub) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams) ([]APIKey, *pagination.PaginationResult, error) {
+func (s *apiKeyRepoStub) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
 	panic("unexpected ListByUserID call")
 }
 
@@ -120,6 +123,27 @@ func (s *apiKeyRepoStub) ListKeysByGroupID(ctx context.Context, groupID int64) (
 
 func (s *apiKeyRepoStub) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) (float64, error) {
 	panic("unexpected IncrementQuotaUsed call")
+}
+
+func (s *apiKeyRepoStub) UpdateLastUsed(ctx context.Context, id int64, usedAt time.Time) error {
+	s.touchedIDs = append(s.touchedIDs, id)
+	s.touchedUsedAts = append(s.touchedUsedAts, usedAt)
+	if s.updateLastUsed != nil {
+		return s.updateLastUsed(ctx, id, usedAt)
+	}
+	return nil
+}
+
+func (s *apiKeyRepoStub) IncrementRateLimitUsage(ctx context.Context, id int64, cost float64) error {
+	panic("unexpected IncrementRateLimitUsage call")
+}
+
+func (s *apiKeyRepoStub) ResetRateLimitWindows(ctx context.Context, id int64) error {
+	panic("unexpected ResetRateLimitWindows call")
+}
+
+func (s *apiKeyRepoStub) GetRateLimitData(ctx context.Context, id int64) (*APIKeyRateLimitData, error) {
+	panic("unexpected GetRateLimitData call")
 }
 
 // apiKeyCacheStub 是 APIKeyCache 接口的测试桩实现。
@@ -214,12 +238,15 @@ func TestApiKeyService_Delete_Success(t *testing.T) {
 	}
 	cache := &apiKeyCacheStub{}
 	svc := &APIKeyService{apiKeyRepo: repo, cache: cache}
+	svc.lastUsedTouchL1.Store(int64(42), time.Now())
 
 	err := svc.Delete(context.Background(), 42, 7) // API Key ID=42, 调用者 userID=7
 	require.NoError(t, err)
 	require.Equal(t, []int64{42}, repo.deletedIDs)  // 验证正确的 API Key 被删除
 	require.Equal(t, []int64{7}, cache.invalidated) // 验证所有者的缓存被清除
 	require.Equal(t, []string{svc.authCacheKey("k")}, cache.deleteAuthKeys)
+	_, exists := svc.lastUsedTouchL1.Load(int64(42))
+	require.False(t, exists, "delete should clear touch debounce cache")
 }
 
 // TestApiKeyService_Delete_NotFound 测试删除不存在的 API Key 时返回正确的错误。

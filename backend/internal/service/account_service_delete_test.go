@@ -54,6 +54,10 @@ func (s *accountRepoStub) GetByCRSAccountID(ctx context.Context, crsAccountID st
 	panic("unexpected GetByCRSAccountID call")
 }
 
+func (s *accountRepoStub) FindByExtraField(ctx context.Context, key string, value any) ([]Account, error) {
+	panic("unexpected FindByExtraField call")
+}
+
 func (s *accountRepoStub) ListCRSAccountIDs(ctx context.Context) (map[string]int64, error) {
 	panic("unexpected ListCRSAccountIDs call")
 }
@@ -141,6 +145,14 @@ func (s *accountRepoStub) ListSchedulableByPlatforms(ctx context.Context, platfo
 
 func (s *accountRepoStub) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error) {
 	panic("unexpected ListSchedulableByGroupIDAndPlatforms call")
+}
+
+func (s *accountRepoStub) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	panic("unexpected ListSchedulableUngroupedByPlatform call")
+}
+
+func (s *accountRepoStub) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error) {
+	panic("unexpected ListSchedulableUngroupedByPlatforms call")
 }
 
 func (s *accountRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {

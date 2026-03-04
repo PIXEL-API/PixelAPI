@@ -15,7 +15,9 @@ import type {
   AccountUsageStatsResponse,
   TempUnschedulableStatus,
   AdminDataPayload,
-  AdminDataImportResult
+  AdminDataImportResult,
+  CheckMixedChannelRequest,
+  CheckMixedChannelResponse
 } from '@/types'
 
 /**
@@ -34,6 +36,7 @@ export async function list(
     status?: string
     group?: string
     search?: string
+    lite?: string
   },
   options?: {
     signal?: AbortSignal
@@ -48,6 +51,59 @@ export async function list(
     signal: options?.signal
   })
   return data
+}
+
+export interface AccountListWithEtagResult {
+  notModified: boolean
+  etag: string | null
+  data: PaginatedResponse<Account> | null
+}
+
+export async function listWithEtag(
+  page: number = 1,
+  pageSize: number = 20,
+  filters?: {
+    platform?: string
+    type?: string
+    status?: string
+    search?: string
+    lite?: string
+  },
+  options?: {
+    signal?: AbortSignal
+    etag?: string | null
+  }
+): Promise<AccountListWithEtagResult> {
+  const headers: Record<string, string> = {}
+  if (options?.etag) {
+    headers['If-None-Match'] = options.etag
+  }
+
+  const response = await apiClient.get<PaginatedResponse<Account>>('/admin/accounts', {
+    params: {
+      page,
+      page_size: pageSize,
+      ...filters
+    },
+    headers,
+    signal: options?.signal,
+    validateStatus: (status) => (status >= 200 && status < 300) || status === 304
+  })
+
+  const etagHeader = typeof response.headers?.etag === 'string' ? response.headers.etag : null
+  if (response.status === 304) {
+    return {
+      notModified: true,
+      etag: etagHeader,
+      data: null
+    }
+  }
+
+  return {
+    notModified: false,
+    etag: etagHeader,
+    data: response.data
+  }
 }
 
 /**
@@ -78,6 +134,16 @@ export async function create(accountData: CreateAccountRequest): Promise<Account
  */
 export async function update(id: number, updates: UpdateAccountRequest): Promise<Account> {
   const { data } = await apiClient.put<Account>(`/admin/accounts/${id}`, updates)
+  return data
+}
+
+/**
+ * Check mixed-channel risk for account-group binding.
+ */
+export async function checkMixedChannelRisk(
+  payload: CheckMixedChannelRequest
+): Promise<CheckMixedChannelResponse> {
+  const { data } = await apiClient.post<CheckMixedChannelResponse>('/admin/accounts/check-mixed-channel', payload)
   return data
 }
 
@@ -165,10 +231,10 @@ export async function getUsage(id: number): Promise<AccountUsageInfo> {
 /**
  * Clear account rate limit status
  * @param id - Account ID
- * @returns Success confirmation
+ * @returns Updated account
  */
-export async function clearRateLimit(id: number): Promise<{ message: string }> {
-  const { data } = await apiClient.post<{ message: string }>(
+export async function clearRateLimit(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(
     `/admin/accounts/${id}/clear-rate-limit`
   )
   return data
@@ -220,7 +286,7 @@ export async function generateAuthUrl(
  */
 export async function exchangeCode(
   endpoint: string,
-  exchangeData: { session_id: string; code: string; proxy_id?: number }
+  exchangeData: { session_id: string; code: string; state?: string; proxy_id?: number }
 ): Promise<Record<string, unknown>> {
   const { data } = await apiClient.post<Record<string, unknown>>(endpoint, exchangeData)
   return data
@@ -302,6 +368,22 @@ export async function bulkUpdate(
  */
 export async function getTodayStats(id: number): Promise<WindowStats> {
   const { data } = await apiClient.get<WindowStats>(`/admin/accounts/${id}/today-stats`)
+  return data
+}
+
+export interface BatchTodayStatsResponse {
+  stats: Record<string, WindowStats>
+}
+
+/**
+ * 批量获取多个账号的今日统计
+ * @param accountIds - 账号 ID 列表
+ * @returns 以账号 ID（字符串）为键的统计映射
+ */
+export async function getBatchTodayStats(accountIds: number[]): Promise<BatchTodayStatsResponse> {
+  const { data } = await apiClient.post<BatchTodayStatsResponse>('/admin/accounts/today-stats/batch', {
+    account_ids: accountIds
+  })
   return data
 }
 
@@ -442,7 +524,8 @@ export async function getAntigravityDefaultModelMapping(): Promise<Record<string
  */
 export async function refreshOpenAIToken(
   refreshToken: string,
-  proxyId?: number | null
+  proxyId?: number | null,
+  endpoint: string = '/admin/openai/refresh-token'
 ): Promise<Record<string, unknown>> {
   const payload: { refresh_token: string; proxy_id?: number } = {
     refresh_token: refreshToken
@@ -450,15 +533,39 @@ export async function refreshOpenAIToken(
   if (proxyId) {
     payload.proxy_id = proxyId
   }
-  const { data } = await apiClient.post<Record<string, unknown>>('/admin/openai/refresh-token', payload)
+  const { data } = await apiClient.post<Record<string, unknown>>(endpoint, payload)
+  return data
+}
+
+/**
+ * Validate Sora session token and exchange to access token
+ * @param sessionToken - Sora session token
+ * @param proxyId - Optional proxy ID
+ * @param endpoint - API endpoint path
+ * @returns Token information including access_token
+ */
+export async function validateSoraSessionToken(
+  sessionToken: string,
+  proxyId?: number | null,
+  endpoint: string = '/admin/sora/st2at'
+): Promise<Record<string, unknown>> {
+  const payload: { session_token: string; proxy_id?: number } = {
+    session_token: sessionToken
+  }
+  if (proxyId) {
+    payload.proxy_id = proxyId
+  }
+  const { data } = await apiClient.post<Record<string, unknown>>(endpoint, payload)
   return data
 }
 
 export const accountsAPI = {
   list,
+  listWithEtag,
   getById,
   create,
   update,
+  checkMixedChannelRisk,
   delete: deleteAccount,
   toggleStatus,
   testAccount,
@@ -467,6 +574,7 @@ export const accountsAPI = {
   clearError,
   getUsage,
   getTodayStats,
+  getBatchTodayStats,
   clearRateLimit,
   getTempUnschedulableStatus,
   resetTempUnschedulable,
@@ -475,6 +583,7 @@ export const accountsAPI = {
   generateAuthUrl,
   exchangeCode,
   refreshOpenAIToken,
+  validateSoraSessionToken,
   batchCreate,
   batchUpdateCredentials,
   bulkUpdate,

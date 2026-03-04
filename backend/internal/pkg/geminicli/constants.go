@@ -41,6 +41,9 @@ const (
 	GeminiCLIOAuthClientID     = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
 	GeminiCLIOAuthClientSecret = "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"
 
+	// GeminiCLIOAuthClientSecretEnv is the environment variable name for the built-in client secret.
+	GeminiCLIOAuthClientSecretEnv = "GEMINI_CLI_OAUTH_CLIENT_SECRET"
+
 	SessionTTL = 30 * time.Minute
 
 	// GeminiCLIUserAgent mimics Gemini CLI to maximize compatibility with internal endpoints.

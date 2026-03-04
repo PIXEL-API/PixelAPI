@@ -93,6 +93,10 @@ func (s *userRepoStub) RemoveGroupFromAllowedGroups(ctx context.Context, groupID
 	panic("unexpected RemoveGroupFromAllowedGroups call")
 }
 
+func (s *userRepoStub) AddGroupToAllowedGroups(ctx context.Context, userID int64, groupID int64) error {
+	panic("unexpected AddGroupToAllowedGroups call")
+}
+
 func (s *userRepoStub) UpdateTotpSecret(ctx context.Context, userID int64, encryptedSecret *string) error {
 	panic("unexpected UpdateTotpSecret call")
 }
@@ -342,6 +346,19 @@ func (s *billingCacheStub) UpdateSubscriptionUsage(ctx context.Context, userID, 
 func (s *billingCacheStub) InvalidateSubscriptionCache(ctx context.Context, userID, groupID int64) error {
 	s.invalidations <- subscriptionInvalidateCall{userID: userID, groupID: groupID}
 	return nil
+}
+
+func (s *billingCacheStub) GetAPIKeyRateLimit(ctx context.Context, keyID int64) (*APIKeyRateLimitCacheData, error) {
+	panic("unexpected GetAPIKeyRateLimit call")
+}
+func (s *billingCacheStub) SetAPIKeyRateLimit(ctx context.Context, keyID int64, data *APIKeyRateLimitCacheData) error {
+	panic("unexpected SetAPIKeyRateLimit call")
+}
+func (s *billingCacheStub) UpdateAPIKeyRateLimitUsage(ctx context.Context, keyID int64, cost float64) error {
+	panic("unexpected UpdateAPIKeyRateLimitUsage call")
+}
+func (s *billingCacheStub) InvalidateAPIKeyRateLimit(ctx context.Context, keyID int64) error {
+	panic("unexpected InvalidateAPIKeyRateLimit call")
 }
 
 func waitForInvalidations(t *testing.T, ch <-chan subscriptionInvalidateCall, expected int) []subscriptionInvalidateCall {

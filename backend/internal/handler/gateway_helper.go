@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,21 +18,89 @@ import (
 // claudeCodeValidator is a singleton validator for Claude Code client detection
 var claudeCodeValidator = service.NewClaudeCodeValidator()
 
+const claudeCodeParsedRequestContextKey = "claude_code_parsed_request"
+
 // SetClaudeCodeClientContext 检查请求是否来自 Claude Code 客户端，并设置到 context 中
 // 返回更新后的 context
-func SetClaudeCodeClientContext(c *gin.Context, body []byte) {
-	// 解析请求体为 map
-	var bodyMap map[string]any
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &bodyMap)
+func SetClaudeCodeClientContext(c *gin.Context, body []byte, parsedReq *service.ParsedRequest) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	if parsedReq != nil {
+		c.Set(claudeCodeParsedRequestContextKey, parsedReq)
 	}
 
-	// 验证是否为 Claude Code 客户端
-	isClaudeCode := claudeCodeValidator.Validate(c.Request, bodyMap)
+	ua := c.GetHeader("User-Agent")
+	// Fast path：非 Claude CLI UA 直接判定 false，避免热路径二次 JSON 反序列化。
+	if !claudeCodeValidator.ValidateUserAgent(ua) {
+		ctx := service.SetClaudeCodeClient(c.Request.Context(), false)
+		c.Request = c.Request.WithContext(ctx)
+		return
+	}
+
+	isClaudeCode := false
+	if !strings.Contains(c.Request.URL.Path, "messages") {
+		// 与 Validate 行为一致：非 messages 路径 UA 命中即可视为 Claude Code 客户端。
+		isClaudeCode = true
+	} else {
+		// 仅在确认为 Claude CLI 且 messages 路径时再做 body 解析。
+		bodyMap := claudeCodeBodyMapFromParsedRequest(parsedReq)
+		if bodyMap == nil {
+			bodyMap = claudeCodeBodyMapFromContextCache(c)
+		}
+		if bodyMap == nil && len(body) > 0 {
+			_ = json.Unmarshal(body, &bodyMap)
+		}
+		isClaudeCode = claudeCodeValidator.Validate(c.Request, bodyMap)
+	}
 
 	// 更新 request context
 	ctx := service.SetClaudeCodeClient(c.Request.Context(), isClaudeCode)
+
+	// 仅在确认为 Claude Code 客户端时提取版本号写入 context
+	if isClaudeCode {
+		if version := claudeCodeValidator.ExtractVersion(ua); version != "" {
+			ctx = service.SetClaudeCodeVersion(ctx, version)
+		}
+	}
+
 	c.Request = c.Request.WithContext(ctx)
+}
+
+func claudeCodeBodyMapFromParsedRequest(parsedReq *service.ParsedRequest) map[string]any {
+	if parsedReq == nil {
+		return nil
+	}
+	bodyMap := map[string]any{
+		"model": parsedReq.Model,
+	}
+	if parsedReq.System != nil || parsedReq.HasSystem {
+		bodyMap["system"] = parsedReq.System
+	}
+	if parsedReq.MetadataUserID != "" {
+		bodyMap["metadata"] = map[string]any{"user_id": parsedReq.MetadataUserID}
+	}
+	return bodyMap
+}
+
+func claudeCodeBodyMapFromContextCache(c *gin.Context) map[string]any {
+	if c == nil {
+		return nil
+	}
+	if cached, ok := c.Get(service.OpenAIParsedRequestBodyKey); ok {
+		if bodyMap, ok := cached.(map[string]any); ok {
+			return bodyMap
+		}
+	}
+	if cached, ok := c.Get(claudeCodeParsedRequestContextKey); ok {
+		switch v := cached.(type) {
+		case *service.ParsedRequest:
+			return claudeCodeBodyMapFromParsedRequest(v)
+		case service.ParsedRequest:
+			return claudeCodeBodyMapFromParsedRequest(&v)
+		}
+	}
+	return nil
 }
 
 // 并发槽位等待相关常量
@@ -104,31 +173,24 @@ func NewConcurrencyHelper(concurrencyService *service.ConcurrencyService, pingFo
 
 // wrapReleaseOnDone ensures release runs at most once and still triggers on context cancellation.
 // 用于避免客户端断开或上游超时导致的并发槽位泄漏。
-// 修复：添加 quit channel 确保 goroutine 及时退出，避免泄露
+// 优化：基于 context.AfterFunc 注册回调，避免每请求额外守护 goroutine。
 func wrapReleaseOnDone(ctx context.Context, releaseFunc func()) func() {
 	if releaseFunc == nil {
 		return nil
 	}
 	var once sync.Once
-	quit := make(chan struct{})
+	var stop func() bool
 
 	release := func() {
 		once.Do(func() {
+			if stop != nil {
+				_ = stop()
+			}
 			releaseFunc()
-			close(quit) // 通知监听 goroutine 退出
 		})
 	}
 
-	go func() {
-		select {
-		case <-ctx.Done():
-			// Context 取消时释放资源
-			release()
-		case <-quit:
-			// 正常释放已完成，goroutine 退出
-			return
-		}
-	}()
+	stop = context.AfterFunc(ctx, release)
 
 	return release
 }
@@ -153,6 +215,32 @@ func (h *ConcurrencyHelper) DecrementAccountWaitCount(ctx context.Context, accou
 	h.concurrencyService.DecrementAccountWaitCount(ctx, accountID)
 }
 
+// TryAcquireUserSlot 尝试立即获取用户并发槽位。
+// 返回值: (releaseFunc, acquired, error)
+func (h *ConcurrencyHelper) TryAcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int) (func(), bool, error) {
+	result, err := h.concurrencyService.AcquireUserSlot(ctx, userID, maxConcurrency)
+	if err != nil {
+		return nil, false, err
+	}
+	if !result.Acquired {
+		return nil, false, nil
+	}
+	return result.ReleaseFunc, true, nil
+}
+
+// TryAcquireAccountSlot 尝试立即获取账号并发槽位。
+// 返回值: (releaseFunc, acquired, error)
+func (h *ConcurrencyHelper) TryAcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int) (func(), bool, error) {
+	result, err := h.concurrencyService.AcquireAccountSlot(ctx, accountID, maxConcurrency)
+	if err != nil {
+		return nil, false, err
+	}
+	if !result.Acquired {
+		return nil, false, nil
+	}
+	return result.ReleaseFunc, true, nil
+}
+
 // AcquireUserSlotWithWait acquires a user concurrency slot, waiting if necessary.
 // For streaming requests, sends ping events during the wait.
 // streamStarted is updated if streaming response has begun.
@@ -160,13 +248,13 @@ func (h *ConcurrencyHelper) AcquireUserSlotWithWait(c *gin.Context, userID int64
 	ctx := c.Request.Context()
 
 	// Try to acquire immediately
-	result, err := h.concurrencyService.AcquireUserSlot(ctx, userID, maxConcurrency)
+	releaseFunc, acquired, err := h.TryAcquireUserSlot(ctx, userID, maxConcurrency)
 	if err != nil {
 		return nil, err
 	}
 
-	if result.Acquired {
-		return result.ReleaseFunc, nil
+	if acquired {
+		return releaseFunc, nil
 	}
 
 	// Need to wait - handle streaming ping if needed
@@ -180,13 +268,13 @@ func (h *ConcurrencyHelper) AcquireAccountSlotWithWait(c *gin.Context, accountID
 	ctx := c.Request.Context()
 
 	// Try to acquire immediately
-	result, err := h.concurrencyService.AcquireAccountSlot(ctx, accountID, maxConcurrency)
+	releaseFunc, acquired, err := h.TryAcquireAccountSlot(ctx, accountID, maxConcurrency)
 	if err != nil {
 		return nil, err
 	}
 
-	if result.Acquired {
-		return result.ReleaseFunc, nil
+	if acquired {
+		return releaseFunc, nil
 	}
 
 	// Need to wait - handle streaming ping if needed
@@ -196,27 +284,29 @@ func (h *ConcurrencyHelper) AcquireAccountSlotWithWait(c *gin.Context, accountID
 // waitForSlotWithPing waits for a concurrency slot, sending ping events for streaming requests.
 // streamStarted pointer is updated when streaming begins (for proper error handling by caller).
 func (h *ConcurrencyHelper) waitForSlotWithPing(c *gin.Context, slotType string, id int64, maxConcurrency int, isStream bool, streamStarted *bool) (func(), error) {
-	return h.waitForSlotWithPingTimeout(c, slotType, id, maxConcurrency, maxConcurrencyWait, isStream, streamStarted)
+	return h.waitForSlotWithPingTimeout(c, slotType, id, maxConcurrency, maxConcurrencyWait, isStream, streamStarted, false)
 }
 
 // waitForSlotWithPingTimeout waits for a concurrency slot with a custom timeout.
-func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType string, id int64, maxConcurrency int, timeout time.Duration, isStream bool, streamStarted *bool) (func(), error) {
+func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType string, id int64, maxConcurrency int, timeout time.Duration, isStream bool, streamStarted *bool, tryImmediate bool) (func(), error) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 
-	// Try immediate acquire first (avoid unnecessary wait)
-	var result *service.AcquireResult
-	var err error
-	if slotType == "user" {
-		result, err = h.concurrencyService.AcquireUserSlot(ctx, id, maxConcurrency)
-	} else {
-		result, err = h.concurrencyService.AcquireAccountSlot(ctx, id, maxConcurrency)
+	acquireSlot := func() (*service.AcquireResult, error) {
+		if slotType == "user" {
+			return h.concurrencyService.AcquireUserSlot(ctx, id, maxConcurrency)
+		}
+		return h.concurrencyService.AcquireAccountSlot(ctx, id, maxConcurrency)
 	}
-	if err != nil {
-		return nil, err
-	}
-	if result.Acquired {
-		return result.ReleaseFunc, nil
+
+	if tryImmediate {
+		result, err := acquireSlot()
+		if err != nil {
+			return nil, err
+		}
+		if result.Acquired {
+			return result.ReleaseFunc, nil
+		}
 	}
 
 	// Determine if ping is needed (streaming + ping format defined)
@@ -242,7 +332,6 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 	backoff := initialBackoff
 	timer := time.NewTimer(backoff)
 	defer timer.Stop()
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	for {
 		select {
@@ -268,15 +357,7 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 
 		case <-timer.C:
 			// Try to acquire slot
-			var result *service.AcquireResult
-			var err error
-
-			if slotType == "user" {
-				result, err = h.concurrencyService.AcquireUserSlot(ctx, id, maxConcurrency)
-			} else {
-				result, err = h.concurrencyService.AcquireAccountSlot(ctx, id, maxConcurrency)
-			}
-
+			result, err := acquireSlot()
 			if err != nil {
 				return nil, err
 			}
@@ -284,7 +365,7 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 			if result.Acquired {
 				return result.ReleaseFunc, nil
 			}
-			backoff = nextBackoff(backoff, rng)
+			backoff = nextBackoff(backoff)
 			timer.Reset(backoff)
 		}
 	}
@@ -292,26 +373,22 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 
 // AcquireAccountSlotWithWaitTimeout acquires an account slot with a custom timeout (keeps SSE ping).
 func (h *ConcurrencyHelper) AcquireAccountSlotWithWaitTimeout(c *gin.Context, accountID int64, maxConcurrency int, timeout time.Duration, isStream bool, streamStarted *bool) (func(), error) {
-	return h.waitForSlotWithPingTimeout(c, "account", accountID, maxConcurrency, timeout, isStream, streamStarted)
+	return h.waitForSlotWithPingTimeout(c, "account", accountID, maxConcurrency, timeout, isStream, streamStarted, true)
 }
 
 // nextBackoff 计算下一次退避时间
 // 性能优化：使用指数退避 + 随机抖动，避免惊群效应
 // current: 当前退避时间
-// rng: 随机数生成器（可为 nil，此时不添加抖动）
 // 返回值：下一次退避时间（100ms ~ 2s 之间）
-func nextBackoff(current time.Duration, rng *rand.Rand) time.Duration {
+func nextBackoff(current time.Duration) time.Duration {
 	// 指数退避：当前时间 * 1.5
 	next := time.Duration(float64(current) * backoffMultiplier)
 	if next > maxBackoff {
 		next = maxBackoff
 	}
-	if rng == nil {
-		return next
-	}
 	// 添加 ±20% 的随机抖动（jitter 范围 0.8 ~ 1.2）
 	// 抖动可以分散多个请求的重试时间点，避免同时冲击 Redis
-	jitter := 0.8 + rng.Float64()*0.4
+	jitter := 0.8 + rand.Float64()*0.4
 	jittered := time.Duration(float64(next) * jitter)
 	if jittered < initialBackoff {
 		return initialBackoff

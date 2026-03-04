@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 var (
@@ -103,7 +104,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	if s.cache != nil {
 		cached, hit, err := s.cache.GetSnapshot(ctx, bucket)
 		if err != nil {
-			log.Printf("[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
 		} else if hit {
 			return derefAccounts(cached), useMixed, nil
 		}
@@ -123,7 +124,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 
 	if s.cache != nil {
 		if err := s.cache.SetSnapshot(fallbackCtx, bucket, accounts); err != nil {
-			log.Printf("[Scheduler] cache write failed: bucket=%s err=%v", bucket.String(), err)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache write failed: bucket=%s err=%v", bucket.String(), err)
 		}
 	}
 
@@ -137,7 +138,7 @@ func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int
 	if s.cache != nil {
 		account, err := s.cache.GetAccount(ctx, accountID)
 		if err != nil {
-			log.Printf("[Scheduler] account cache read failed: id=%d err=%v", accountID, err)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] account cache read failed: id=%d err=%v", accountID, err)
 		} else if account != nil {
 			return account, nil
 		}
@@ -167,17 +168,17 @@ func (s *SchedulerSnapshotService) runInitialRebuild() {
 	defer cancel()
 	buckets, err := s.cache.ListBuckets(ctx)
 	if err != nil {
-		log.Printf("[Scheduler] list buckets failed: %v", err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] list buckets failed: %v", err)
 	}
 	if len(buckets) == 0 {
 		buckets, err = s.defaultBuckets(ctx)
 		if err != nil {
-			log.Printf("[Scheduler] default buckets failed: %v", err)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] default buckets failed: %v", err)
 			return
 		}
 	}
 	if err := s.rebuildBuckets(ctx, buckets, "startup"); err != nil {
-		log.Printf("[Scheduler] rebuild startup failed: %v", err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild startup failed: %v", err)
 	}
 }
 
@@ -204,7 +205,7 @@ func (s *SchedulerSnapshotService) runFullRebuildWorker(interval time.Duration) 
 		select {
 		case <-ticker.C:
 			if err := s.triggerFullRebuild("interval"); err != nil {
-				log.Printf("[Scheduler] full rebuild failed: %v", err)
+				logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] full rebuild failed: %v", err)
 			}
 		case <-s.stopCh:
 			return
@@ -221,13 +222,13 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 
 	watermark, err := s.cache.GetOutboxWatermark(ctx)
 	if err != nil {
-		log.Printf("[Scheduler] outbox watermark read failed: %v", err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox watermark read failed: %v", err)
 		return
 	}
 
 	events, err := s.outboxRepo.ListAfter(ctx, watermark, 200)
 	if err != nil {
-		log.Printf("[Scheduler] outbox poll failed: %v", err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox poll failed: %v", err)
 		return
 	}
 	if len(events) == 0 {
@@ -240,14 +241,14 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 		err := s.handleOutboxEvent(eventCtx, event)
 		cancel()
 		if err != nil {
-			log.Printf("[Scheduler] outbox handle failed: id=%d type=%s err=%v", event.ID, event.EventType, err)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox handle failed: id=%d type=%s err=%v", event.ID, event.EventType, err)
 			return
 		}
 	}
 
 	lastID := events[len(events)-1].ID
 	if err := s.cache.SetOutboxWatermark(ctx, lastID); err != nil {
-		log.Printf("[Scheduler] outbox watermark write failed: %v", err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox watermark write failed: %v", err)
 	} else {
 		watermarkForCheck = lastID
 	}
@@ -304,13 +305,78 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 	if payload == nil {
 		return nil
 	}
-	ids := parseInt64Slice(payload["account_ids"])
-	for _, id := range ids {
-		if err := s.handleAccountEvent(ctx, &id, payload); err != nil {
-			return err
+	if s.accountRepo == nil {
+		return nil
+	}
+
+	rawIDs := parseInt64Slice(payload["account_ids"])
+	if len(rawIDs) == 0 {
+		return nil
+	}
+
+	ids := make([]int64, 0, len(rawIDs))
+	seen := make(map[int64]struct{}, len(rawIDs))
+	for _, id := range rawIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	preloadGroupIDs := parseInt64Slice(payload["group_ids"])
+	accounts, err := s.accountRepo.GetByIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+
+	found := make(map[int64]struct{}, len(accounts))
+	rebuildGroupSet := make(map[int64]struct{}, len(preloadGroupIDs))
+	for _, gid := range preloadGroupIDs {
+		if gid > 0 {
+			rebuildGroupSet[gid] = struct{}{}
 		}
 	}
-	return nil
+
+	for _, account := range accounts {
+		if account == nil || account.ID <= 0 {
+			continue
+		}
+		found[account.ID] = struct{}{}
+		if s.cache != nil {
+			if err := s.cache.SetAccount(ctx, account); err != nil {
+				return err
+			}
+		}
+		for _, gid := range account.GroupIDs {
+			if gid > 0 {
+				rebuildGroupSet[gid] = struct{}{}
+			}
+		}
+	}
+
+	if s.cache != nil {
+		for _, id := range ids {
+			if _, ok := found[id]; ok {
+				continue
+			}
+			if err := s.cache.DeleteAccount(ctx, id); err != nil {
+				return err
+			}
+		}
+	}
+
+	rebuildGroupIDs := make([]int64, 0, len(rebuildGroupSet))
+	for gid := range rebuildGroupSet {
+		rebuildGroupIDs = append(rebuildGroupIDs, gid)
+	}
+	return s.rebuildByGroupIDs(ctx, rebuildGroupIDs, "account_bulk_change")
 }
 
 func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accountID *int64, payload map[string]any) error {
@@ -444,14 +510,14 @@ func (s *SchedulerSnapshotService) rebuildBucket(ctx context.Context, bucket Sch
 
 	accounts, err := s.loadAccountsFromDB(rebuildCtx, bucket, bucket.Mode == SchedulerModeMixed)
 	if err != nil {
-		log.Printf("[Scheduler] rebuild failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
 		return err
 	}
 	if err := s.cache.SetSnapshot(rebuildCtx, bucket, accounts); err != nil {
-		log.Printf("[Scheduler] rebuild cache failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild cache failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
 		return err
 	}
-	log.Printf("[Scheduler] rebuild ok: bucket=%s reason=%s size=%d", bucket.String(), reason, len(accounts))
+	slog.Debug("[Scheduler] rebuild ok", "bucket", bucket.String(), "reason", reason, "size", len(accounts))
 	return nil
 }
 
@@ -464,13 +530,13 @@ func (s *SchedulerSnapshotService) triggerFullRebuild(reason string) error {
 
 	buckets, err := s.cache.ListBuckets(ctx)
 	if err != nil {
-		log.Printf("[Scheduler] list buckets failed: %v", err)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] list buckets failed: %v", err)
 		return err
 	}
 	if len(buckets) == 0 {
 		buckets, err = s.defaultBuckets(ctx)
 		if err != nil {
-			log.Printf("[Scheduler] default buckets failed: %v", err)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] default buckets failed: %v", err)
 			return err
 		}
 	}
@@ -484,7 +550,7 @@ func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, oldest Sc
 
 	lag := time.Since(oldest.CreatedAt)
 	if lagSeconds := int(lag.Seconds()); lagSeconds >= s.cfg.Gateway.Scheduling.OutboxLagWarnSeconds && s.cfg.Gateway.Scheduling.OutboxLagWarnSeconds > 0 {
-		log.Printf("[Scheduler] outbox lag warning: %ds", lagSeconds)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox lag warning: %ds", lagSeconds)
 	}
 
 	if s.cfg.Gateway.Scheduling.OutboxLagRebuildSeconds > 0 && int(lag.Seconds()) >= s.cfg.Gateway.Scheduling.OutboxLagRebuildSeconds {
@@ -494,12 +560,12 @@ func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, oldest Sc
 		s.lagMu.Unlock()
 
 		if failures >= s.cfg.Gateway.Scheduling.OutboxLagRebuildFailures {
-			log.Printf("[Scheduler] outbox lag rebuild triggered: lag=%s failures=%d", lag, failures)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox lag rebuild triggered: lag=%s failures=%d", lag, failures)
 			s.lagMu.Lock()
 			s.lagFailures = 0
 			s.lagMu.Unlock()
 			if err := s.triggerFullRebuild("outbox_lag"); err != nil {
-				log.Printf("[Scheduler] outbox lag rebuild failed: %v", err)
+				logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox lag rebuild failed: %v", err)
 			}
 		}
 	} else {
@@ -517,9 +583,9 @@ func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, oldest Sc
 		return
 	}
 	if maxID-watermark >= int64(threshold) {
-		log.Printf("[Scheduler] outbox backlog rebuild triggered: backlog=%d", maxID-watermark)
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox backlog rebuild triggered: backlog=%d", maxID-watermark)
 		if err := s.triggerFullRebuild("outbox_backlog"); err != nil {
-			log.Printf("[Scheduler] outbox backlog rebuild failed: %v", err)
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox backlog rebuild failed: %v", err)
 		}
 	}
 }
@@ -539,8 +605,10 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 		var err error
 		if groupID > 0 {
 			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, groupID, platforms)
-		} else {
+		} else if s.isRunModeSimple() {
 			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
+		} else {
+			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
 		}
 		if err != nil {
 			return nil, err
@@ -558,7 +626,10 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 	if groupID > 0 {
 		return s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, bucket.Platform)
 	}
-	return s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+	if s.isRunModeSimple() {
+		return s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+	}
+	return s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, bucket.Platform)
 }
 
 func (s *SchedulerSnapshotService) bucketFor(groupID *int64, platform string, mode string) SchedulerBucket {

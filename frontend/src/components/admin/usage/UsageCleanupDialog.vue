@@ -125,6 +125,7 @@ import Pagination from '@/components/common/Pagination.vue'
 import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import { adminUsageAPI } from '@/api/admin/usage'
 import type { AdminUsageQueryParams, UsageCleanupTask, CreateUsageCleanupTaskRequest } from '@/api/admin/usage'
+import { requestTypeToLegacyStream } from '@/utils/usageRequestType'
 
 interface Props {
   show: boolean
@@ -310,7 +311,13 @@ const buildPayload = (): CreateUsageCleanupTaskRequest | null => {
   if (localFilters.value.model) {
     payload.model = localFilters.value.model
   }
-  if (localFilters.value.stream !== null && localFilters.value.stream !== undefined) {
+  if (localFilters.value.request_type) {
+    payload.request_type = localFilters.value.request_type
+    const legacyStream = requestTypeToLegacyStream(localFilters.value.request_type)
+    if (legacyStream !== null && legacyStream !== undefined) {
+      payload.stream = legacyStream
+    }
+  } else if (localFilters.value.stream !== null && localFilters.value.stream !== undefined) {
     payload.stream = localFilters.value.stream
   }
   if (localFilters.value.billing_type !== null && localFilters.value.billing_type !== undefined) {
