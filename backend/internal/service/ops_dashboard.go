@@ -31,6 +31,10 @@ func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashbo
 	filter.QueryMode = s.resolveOpsQueryMode(ctx, filter.QueryMode)
 
 	overview, err := s.opsRepo.GetDashboardOverview(ctx, filter)
+	if err != nil && shouldFallbackOpsPreagg(filter, err) {
+		rawFilter := cloneOpsFilterWithMode(filter, OpsQueryModeRaw)
+		overview, err = s.opsRepo.GetDashboardOverview(ctx, rawFilter)
+	}
 	if err != nil {
 		if errors.Is(err, ErrOpsPreaggregatedNotPopulated) {
 			return nil, infraerrors.Conflict("OPS_PREAGG_NOT_READY", "Pre-aggregated ops metrics are not populated yet")
