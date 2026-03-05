@@ -47,9 +47,6 @@ func (h *ScheduledTestHandler) ListByAccount(c *gin.Context) {
 		response.InternalError(c, err.Error())
 		return
 	}
-	if plans == nil {
-		plans = []*service.ScheduledTestPlan{}
-	}
 	c.JSON(http.StatusOK, plans)
 }
 
@@ -153,9 +150,6 @@ func (h *ScheduledTestHandler) ListResults(c *gin.Context) {
 	if err != nil {
 		response.InternalError(c, err.Error())
 		return
-	}
-	if results == nil {
-		results = []*service.ScheduledTestResult{}
 	}
 	c.JSON(http.StatusOK, results)
 }
