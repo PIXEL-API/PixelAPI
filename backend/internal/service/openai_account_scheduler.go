@@ -590,7 +590,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		filtered = append(filtered, account)
 		loadReq = append(loadReq, AccountWithConcurrency{
 			ID:             account.ID,
-			MaxConcurrency: account.Concurrency,
+			MaxConcurrency: account.EffectiveLoadFactor(),
 		})
 	}
 	if len(filtered) == 0 {

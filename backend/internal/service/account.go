@@ -28,6 +28,7 @@ type Account struct {
 	// RateMultiplier 账号计费倍率（>=0，允许 0 表示该账号计费为 0）。
 	// 使用指针用于兼容旧版本调度缓存（Redis）中缺字段的情况：nil 表示按 1.0 处理。
 	RateMultiplier     *float64
+	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
 	Status             string
 	ErrorMessage       string
 	LastUsedAt         *time.Time
@@ -86,6 +87,19 @@ func (a *Account) BillingRateMultiplier() float64 {
 		return 1.0
 	}
 	return *a.RateMultiplier
+}
+
+func (a *Account) EffectiveLoadFactor() int {
+	if a == nil {
+		return 1
+	}
+	if a.LoadFactor != nil && *a.LoadFactor > 0 {
+		return *a.LoadFactor
+	}
+	if a.Concurrency > 0 {
+		return a.Concurrency
+	}
+	return 1
 }
 
 func (a *Account) IsSchedulable() bool {

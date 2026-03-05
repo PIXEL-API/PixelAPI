@@ -84,6 +84,9 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	if account.RateMultiplier != nil {
 		builder.SetRateMultiplier(*account.RateMultiplier)
 	}
+	if account.LoadFactor != nil {
+		builder.SetLoadFactor(*account.LoadFactor)
+	}
 
 	if account.ProxyID != nil {
 		builder.SetProxyID(*account.ProxyID)
@@ -317,6 +320,11 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 
 	if account.RateMultiplier != nil {
 		builder.SetRateMultiplier(*account.RateMultiplier)
+	}
+	if account.LoadFactor != nil {
+		builder.SetLoadFactor(*account.LoadFactor)
+	} else {
+		builder.ClearLoadFactor()
 	}
 
 	if account.ProxyID != nil {
@@ -1223,6 +1231,15 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.RateMultiplier)
 		idx++
 	}
+	if updates.LoadFactor != nil {
+		if *updates.LoadFactor <= 0 {
+			setClauses = append(setClauses, "load_factor = NULL")
+		} else {
+			setClauses = append(setClauses, "load_factor = $"+itoa(idx))
+			args = append(args, *updates.LoadFactor)
+			idx++
+		}
+	}
 	if updates.Status != nil {
 		setClauses = append(setClauses, "status = $"+itoa(idx))
 		args = append(args, *updates.Status)
@@ -1545,6 +1562,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Concurrency:             m.Concurrency,
 		Priority:                m.Priority,
 		RateMultiplier:          &rateMultiplier,
+		LoadFactor:              m.LoadFactor,
 		Status:                  m.Status,
 		ErrorMessage:            derefString(m.ErrorMessage),
 		LastUsedAt:              m.LastUsedAt,
