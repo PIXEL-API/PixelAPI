@@ -63,7 +63,8 @@ const chartColors = computed(() => ({
   grid: isDarkMode.value ? '#374151' : '#e5e7eb',
   input: '#3b82f6',
   output: '#10b981',
-  cache: '#f59e0b'
+  cacheCreation: '#f59e0b',
+  cacheRead: '#06b6d4'
 }))
 
 const chartData = computed(() => {
@@ -89,10 +90,18 @@ const chartData = computed(() => {
         tension: 0.3
       },
       {
-        label: 'Cache',
-        data: props.trendData.map((d) => d.cache_tokens),
-        borderColor: chartColors.value.cache,
-        backgroundColor: `${chartColors.value.cache}20`,
+        label: 'Cache Creation',
+        data: props.trendData.map((d) => d.cache_creation_tokens),
+        borderColor: chartColors.value.cacheCreation,
+        backgroundColor: `${chartColors.value.cacheCreation}20`,
+        fill: true,
+        tension: 0.3
+      },
+      {
+        label: 'Cache Read',
+        data: props.trendData.map((d) => d.cache_read_tokens),
+        borderColor: chartColors.value.cacheRead,
+        backgroundColor: `${chartColors.value.cacheRead}20`,
         fill: true,
         tension: 0.3
       }
