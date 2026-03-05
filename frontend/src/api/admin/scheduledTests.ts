@@ -20,7 +20,7 @@ export async function listByAccount(accountId: number): Promise<ScheduledTestPla
   const { data } = await apiClient.get<ScheduledTestPlan[]>(
     `/admin/accounts/${accountId}/scheduled-test-plans`
   )
-  return data
+  return data ?? []
 }
 
 /**
@@ -71,7 +71,7 @@ export async function listResults(planId: number, limit?: number): Promise<Sched
       params: limit ? { limit } : undefined
     }
   )
-  return data
+  return data ?? []
 }
 
 export const scheduledTestsAPI = {
