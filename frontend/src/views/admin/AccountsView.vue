@@ -546,18 +546,27 @@ const {
   handlePageSizeChange: baseHandlePageSizeChange
 } = useTableLoader<Account, any>({
   fetchFn: adminAPI.accounts.list,
-  initialParams: { platform: '', type: '', status: '', group: '', search: '', lite: '1' }
+  initialParams: { platform: '', type: '', status: '', group: '', search: '' }
 })
 
 const resetAutoRefreshCache = () => {
   autoRefreshETag.value = null
 }
 
+const isFirstLoad = ref(true)
+
 const load = async () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
+  if (isFirstLoad.value) {
+    ;(params as any).lite = '1'
+  }
   await baseLoad()
+  if (isFirstLoad.value) {
+    isFirstLoad.value = false
+    delete (params as any).lite
+  }
   await refreshTodayStatsBatch()
 }
 
@@ -689,7 +698,7 @@ const refreshAccountsIncrementally = async () => {
         type?: string
         status?: string
         search?: string
-        lite?: string
+
       },
       { etag: autoRefreshETag.value }
     )
