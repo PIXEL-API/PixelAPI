@@ -10,18 +10,13 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const (
-	scheduledTestLeaderLockKey     = "scheduled_test:runner:leader"
-	scheduledTestLeaderLockTTL     = 2 * time.Minute
-	scheduledTestDefaultMaxWorkers = 10
-)
+const scheduledTestDefaultMaxWorkers = 10
 
 // ScheduledTestRunnerService periodically scans due test plans and executes them.
 type ScheduledTestRunnerService struct {
 	planRepo       ScheduledTestPlanRepository
 	scheduledSvc   *ScheduledTestService
 	accountTestSvc *AccountTestService
-	locker         LeaderLocker
 	cfg            *config.Config
 
 	cron      *cron.Cron
@@ -34,14 +29,12 @@ func NewScheduledTestRunnerService(
 	planRepo ScheduledTestPlanRepository,
 	scheduledSvc *ScheduledTestService,
 	accountTestSvc *AccountTestService,
-	locker LeaderLocker,
 	cfg *config.Config,
 ) *ScheduledTestRunnerService {
 	return &ScheduledTestRunnerService{
 		planRepo:       planRepo,
 		scheduledSvc:   scheduledSvc,
 		accountTestSvc: accountTestSvc,
-		locker:         locker,
 		cfg:            cfg,
 	}
 }
@@ -95,17 +88,6 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Skip leader election in simple mode.
-	if s.cfg == nil || s.cfg.RunMode != config.RunModeSimple {
-		release, ok := s.locker.TryAcquire(ctx, scheduledTestLeaderLockKey, scheduledTestLeaderLockTTL)
-		if !ok {
-			return
-		}
-		if release != nil {
-			defer release()
-		}
-	}
-
 	now := time.Now()
 	plans, err := s.planRepo.ListDue(ctx, now)
 	if err != nil {
@@ -118,8 +100,7 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 
 	logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] found %d due plans", len(plans))
 
-	maxWorkers := scheduledTestDefaultMaxWorkers
-	sem := make(chan struct{}, maxWorkers)
+	sem := make(chan struct{}, scheduledTestDefaultMaxWorkers)
 	var wg sync.WaitGroup
 
 	for _, plan := range plans {
@@ -146,7 +127,6 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d SaveResult error: %v", plan.ID, err)
 	}
 
-	// Compute next run
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d computeNextRun error: %v", plan.ID, err)
