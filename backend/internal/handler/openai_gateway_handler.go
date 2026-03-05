@@ -358,7 +358,7 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 	}
 
 	var (
-		ctx    context.Context = context.Background()
+		ctx    = context.Background()
 		path   string
 		status int
 	)
