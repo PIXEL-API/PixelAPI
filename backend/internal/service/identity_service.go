@@ -19,8 +19,10 @@ import (
 
 // 预编译正则表达式（避免每次调用重新编译）
 var (
-	// 匹配 user_id 格式: user_{64位hex}_account__session_{uuid}
-	userIDRegex = regexp.MustCompile(`^user_[a-f0-9]{64}_account__session_([a-f0-9-]{36})$`)
+	// 匹配 user_id 格式:
+	//   旧格式: user_{64位hex}_account__session_{uuid}        (account 后无 UUID)
+	//   新格式: user_{64位hex}_account_{uuid}_session_{uuid}  (account 后有 UUID)
+	userIDRegex = regexp.MustCompile(`^user_[a-f0-9]{64}_account_([a-f0-9-]*)_session_([a-f0-9-]{36})$`)
 	// 匹配 User-Agent 版本号: xxx/x.y.z
 	userAgentVersionRegex = regexp.MustCompile(`/(\d+)\.(\d+)\.(\d+)`)
 )
@@ -239,13 +241,16 @@ func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUI
 		return body, nil
 	}
 
-	// 匹配格式: user_{64位hex}_account__session_{uuid}
+	// 匹配格式:
+	//   旧格式: user_{64位hex}_account__session_{uuid}
+	//   新格式: user_{64位hex}_account_{uuid}_session_{uuid}
 	matches := userIDRegex.FindStringSubmatch(userID)
 	if matches == nil {
 		return body, nil
 	}
 
-	sessionTail := matches[1] // 原始session UUID
+	// matches[1] = account UUID (可能为空), matches[2] = session UUID
+	sessionTail := matches[2] // 原始session UUID
 
 	// 生成新的session hash: SHA256(accountID::sessionTail) -> UUID格式
 	seed := fmt.Sprintf("%d::%s", accountID, sessionTail)
