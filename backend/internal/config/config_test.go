@@ -153,8 +153,8 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
 		t.Fatalf("Gateway.OpenAIWS.ModeRouterV2Enabled = true, want false")
 	}
-	if cfg.Gateway.OpenAIWS.IngressModeDefault != "shared" {
-		t.Fatalf("Gateway.OpenAIWS.IngressModeDefault = %q, want %q", cfg.Gateway.OpenAIWS.IngressModeDefault, "shared")
+	if cfg.Gateway.OpenAIWS.IngressModeDefault != "ctx_pool" {
+		t.Fatalf("Gateway.OpenAIWS.IngressModeDefault = %q, want %q", cfg.Gateway.OpenAIWS.IngressModeDefault, "ctx_pool")
 	}
 }
 
@@ -1373,7 +1373,7 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			wantErr: "gateway.openai_ws.store_disabled_conn_mode",
 		},
 		{
-			name:    "ingress_mode_default 必须为 off|shared|dedicated",
+			name:    "ingress_mode_default 必须为 off|ctx_pool|passthrough",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.IngressModeDefault = "invalid" },
 			wantErr: "gateway.openai_ws.ingress_mode_default",
 		},
