@@ -2,14 +2,11 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"github.com/robfig/cron/v3"
 )
 
@@ -19,28 +16,17 @@ const (
 	scheduledTestDefaultMaxWorkers = 10
 )
 
-var scheduledTestReleaseScript = redis.NewScript(`
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-  return redis.call("DEL", KEYS[1])
-end
-return 0
-`)
-
 // ScheduledTestRunnerService periodically scans due test plans and executes them.
 type ScheduledTestRunnerService struct {
 	planRepo       ScheduledTestPlanRepository
 	scheduledSvc   *ScheduledTestService
 	accountTestSvc *AccountTestService
-	db             *sql.DB
-	redisClient    *redis.Client
+	locker         LeaderLocker
 	cfg            *config.Config
 
-	instanceID string
-	cron       *cron.Cron
-	startOnce  sync.Once
-	stopOnce   sync.Once
-
-	warnNoRedisOnce sync.Once
+	cron      *cron.Cron
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
 // NewScheduledTestRunnerService creates a new runner.
@@ -48,18 +34,15 @@ func NewScheduledTestRunnerService(
 	planRepo ScheduledTestPlanRepository,
 	scheduledSvc *ScheduledTestService,
 	accountTestSvc *AccountTestService,
-	db *sql.DB,
-	redisClient *redis.Client,
+	locker LeaderLocker,
 	cfg *config.Config,
 ) *ScheduledTestRunnerService {
 	return &ScheduledTestRunnerService{
 		planRepo:       planRepo,
 		scheduledSvc:   scheduledSvc,
 		accountTestSvc: accountTestSvc,
-		db:             db,
-		redisClient:    redisClient,
+		locker:         locker,
 		cfg:            cfg,
-		instanceID:     uuid.NewString(),
 	}
 }
 
@@ -112,12 +95,15 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	release, ok := s.tryAcquireLeaderLock(ctx)
-	if !ok {
-		return
-	}
-	if release != nil {
-		defer release()
+	// Skip leader election in simple mode.
+	if s.cfg == nil || s.cfg.RunMode != config.RunModeSimple {
+		release, ok := s.locker.TryAcquire(ctx, scheduledTestLeaderLockKey, scheduledTestLeaderLockTTL)
+		if !ok {
+			return
+		}
+		if release != nil {
+			defer release()
+		}
 	}
 
 	now := time.Now()
@@ -170,38 +156,4 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}
-}
-
-func (s *ScheduledTestRunnerService) tryAcquireLeaderLock(ctx context.Context) (func(), bool) {
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		return nil, true
-	}
-
-	key := scheduledTestLeaderLockKey
-	ttl := scheduledTestLeaderLockTTL
-
-	if s.redisClient != nil {
-		ok, err := s.redisClient.SetNX(ctx, key, s.instanceID, ttl).Result()
-		if err == nil {
-			if !ok {
-				return nil, false
-			}
-			return func() {
-				_, _ = scheduledTestReleaseScript.Run(ctx, s.redisClient, []string{key}, s.instanceID).Result()
-			}, true
-		}
-		s.warnNoRedisOnce.Do(func() {
-			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] Redis SetNX failed; falling back to DB advisory lock: %v", err)
-		})
-	} else {
-		s.warnNoRedisOnce.Do(func() {
-			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] Redis not configured; using DB advisory lock")
-		})
-	}
-
-	release, ok := tryAcquireDBAdvisoryLock(ctx, s.db, hashAdvisoryLockID(key))
-	if !ok {
-		return nil, false
-	}
-	return release, true
 }
