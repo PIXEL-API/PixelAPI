@@ -28,6 +28,7 @@ type Account struct {
 	// RateMultiplier 账号计费倍率（>=0，允许 0 表示该账号计费为 0）。
 	// 使用指针用于兼容旧版本调度缓存（Redis）中缺字段的情况：nil 表示按 1.0 处理。
 	RateMultiplier     *float64
+	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
 	Status             string
 	ErrorMessage       string
 	LastUsedAt         *time.Time
@@ -86,6 +87,19 @@ func (a *Account) BillingRateMultiplier() float64 {
 		return 1.0
 	}
 	return *a.RateMultiplier
+}
+
+func (a *Account) EffectiveLoadFactor() int {
+	if a == nil {
+		return 1
+	}
+	if a.LoadFactor != nil && *a.LoadFactor > 0 {
+		return *a.LoadFactor
+	}
+	if a.Concurrency > 0 {
+		return a.Concurrency
+	}
+	return 1
 }
 
 func (a *Account) IsSchedulable() bool {
@@ -1115,6 +1129,38 @@ func (a *Account) GetCacheTTLOverrideTarget() string {
 		}
 	}
 	return "5m"
+}
+
+// GetQuotaLimit 获取 API Key 账号的配额限制（美元）
+// 返回 0 表示未启用
+func (a *Account) GetQuotaLimit() float64 {
+	if a.Extra == nil {
+		return 0
+	}
+	if v, ok := a.Extra["quota_limit"]; ok {
+		return parseExtraFloat64(v)
+	}
+	return 0
+}
+
+// GetQuotaUsed 获取 API Key 账号的已用配额（美元）
+func (a *Account) GetQuotaUsed() float64 {
+	if a.Extra == nil {
+		return 0
+	}
+	if v, ok := a.Extra["quota_used"]; ok {
+		return parseExtraFloat64(v)
+	}
+	return 0
+}
+
+// IsQuotaExceeded 检查 API Key 账号配额是否已超限
+func (a *Account) IsQuotaExceeded() bool {
+	limit := a.GetQuotaLimit()
+	if limit <= 0 {
+		return false
+	}
+	return a.GetQuotaUsed() >= limit
 }
 
 // GetWindowCostLimit 获取 5h 窗口费用阈值（美元）

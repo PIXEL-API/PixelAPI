@@ -216,6 +216,14 @@ func (r *stubAccountRepo) BulkUpdate(ctx context.Context, ids []int64, updates s
 	return 0, nil
 }
 
+func (r *stubAccountRepo) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) error {
+	return nil
+}
+
+func (r *stubAccountRepo) ResetQuotaUsed(ctx context.Context, id int64) error {
+	return nil
+}
+
 func (r *stubAccountRepo) listSchedulable() []service.Account {
 	var result []service.Account
 	for _, acc := range r.accounts {

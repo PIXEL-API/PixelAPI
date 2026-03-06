@@ -64,8 +64,12 @@ func (s *OpsService) getAccountsLoadMapBestEffort(ctx context.Context, accounts 
 		if acc.ID <= 0 {
 			continue
 		}
-		if prev, ok := unique[acc.ID]; !ok || acc.Concurrency > prev {
-			unique[acc.ID] = acc.Concurrency
+		c := acc.Concurrency
+		if c <= 0 {
+			c = 1
+		}
+		if prev, ok := unique[acc.ID]; !ok || c > prev {
+			unique[acc.ID] = c
 		}
 	}
 
