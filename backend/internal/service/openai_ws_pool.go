@@ -126,6 +126,13 @@ func (l *openAIWSConnLease) HandshakeHeader(name string) string {
 	return l.conn.handshakeHeader(name)
 }
 
+func (l *openAIWSConnLease) HandshakeHeaders() http.Header {
+	if l == nil || l.conn == nil {
+		return nil
+	}
+	return cloneHeader(l.conn.handshakeHeaders)
+}
+
 func (l *openAIWSConnLease) IsPrewarmed() bool {
 	if l == nil || l.conn == nil {
 		return false
