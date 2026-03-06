@@ -83,14 +83,7 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 		path := c.Request.URL.Path
 
 		// Skip API routes
-		if strings.HasPrefix(path, "/api/") ||
-			strings.HasPrefix(path, "/v1/") ||
-			strings.HasPrefix(path, "/v1beta/") ||
-			strings.HasPrefix(path, "/sora/") ||
-			strings.HasPrefix(path, "/antigravity/") ||
-			strings.HasPrefix(path, "/setup/") ||
-			path == "/health" ||
-			path == "/responses" {
+		if shouldBypassEmbeddedFrontend(path) {
 			c.Next()
 			return
 		}
@@ -207,14 +200,7 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		if strings.HasPrefix(path, "/api/") ||
-			strings.HasPrefix(path, "/v1/") ||
-			strings.HasPrefix(path, "/v1beta/") ||
-			strings.HasPrefix(path, "/sora/") ||
-			strings.HasPrefix(path, "/antigravity/") ||
-			strings.HasPrefix(path, "/setup/") ||
-			path == "/health" ||
-			path == "/responses" {
+		if shouldBypassEmbeddedFrontend(path) {
 			c.Next()
 			return
 		}
@@ -233,6 +219,19 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 
 		serveIndexHTML(c, distFS)
 	}
+}
+
+func shouldBypassEmbeddedFrontend(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	return strings.HasPrefix(trimmed, "/api/") ||
+		strings.HasPrefix(trimmed, "/v1/") ||
+		strings.HasPrefix(trimmed, "/v1beta/") ||
+		strings.HasPrefix(trimmed, "/sora/") ||
+		strings.HasPrefix(trimmed, "/antigravity/") ||
+		strings.HasPrefix(trimmed, "/setup/") ||
+		trimmed == "/health" ||
+		trimmed == "/responses" ||
+		strings.HasPrefix(trimmed, "/responses/")
 }
 
 func serveIndexHTML(c *gin.Context, fsys fs.FS) {
