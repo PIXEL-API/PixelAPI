@@ -670,8 +670,14 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 	if streamStarted {
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
-			errorEvent := "event: error\ndata: " + `{"type":"error","error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(message) + `}}` + "\n\n"
-			fmt.Fprint(c.Writer, errorEvent) //nolint:errcheck
+			errPayload, _ := json.Marshal(gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    errType,
+					"message": message,
+				},
+			})
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errPayload) //nolint:errcheck
 			flusher.Flush()
 		}
 		return
