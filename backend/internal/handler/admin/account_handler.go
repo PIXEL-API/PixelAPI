@@ -1328,6 +1328,29 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// ResetQuota handles resetting account quota usage
+// POST /api/v1/admin/accounts/:id/reset-quota
+func (h *AccountHandler) ResetQuota(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	if err := h.adminService.ResetAccountQuota(c.Request.Context(), accountID); err != nil {
+		response.InternalError(c, "Failed to reset account quota: "+err.Error())
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
 // GetTempUnschedulable handles getting temporary unschedulable status
 // GET /api/v1/admin/accounts/:id/temp-unschedulable
 func (h *AccountHandler) GetTempUnschedulable(c *gin.Context) {

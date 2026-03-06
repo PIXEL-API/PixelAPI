@@ -241,6 +241,18 @@ export async function clearRateLimit(id: number): Promise<Account> {
 }
 
 /**
+ * Reset account quota usage
+ * @param id - Account ID
+ * @returns Updated account
+ */
+export async function resetAccountQuota(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(
+    `/admin/accounts/${id}/reset-quota`
+  )
+  return data
+}
+
+/**
  * Get temporary unschedulable status
  * @param id - Account ID
  * @returns Status with detail state if active
@@ -576,6 +588,7 @@ export const accountsAPI = {
   getTodayStats,
   getBatchTodayStats,
   clearRateLimit,
+  resetAccountQuota,
   getTempUnschedulableStatus,
   resetTempUnschedulable,
   setSchedulable,
