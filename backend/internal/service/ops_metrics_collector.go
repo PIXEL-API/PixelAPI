@@ -389,13 +389,9 @@ func (c *OpsMetricsCollector) collectConcurrencyQueueDepth(parentCtx context.Con
 		if acc.ID <= 0 {
 			continue
 		}
-		maxConc := acc.Concurrency
-		if maxConc < 0 {
-			maxConc = 0
-		}
 		batch = append(batch, AccountWithConcurrency{
 			ID:             acc.ID,
-			MaxConcurrency: maxConc,
+			MaxConcurrency: acc.Concurrency,
 		})
 	}
 	if len(batch) == 0 {
