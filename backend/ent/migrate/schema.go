@@ -251,6 +251,7 @@ var (
 		{Name: "title", Type: field.TypeString, Size: 200},
 		{Name: "content", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "draft"},
+		{Name: "notify_mode", Type: field.TypeString, Size: 20, Default: "silent"},
 		{Name: "targeting", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "starts_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "ends_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
@@ -273,17 +274,17 @@ var (
 			{
 				Name:    "announcement_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{AnnouncementsColumns[9]},
+				Columns: []*schema.Column{AnnouncementsColumns[10]},
 			},
 			{
 				Name:    "announcement_starts_at",
 				Unique:  false,
-				Columns: []*schema.Column{AnnouncementsColumns[5]},
+				Columns: []*schema.Column{AnnouncementsColumns[6]},
 			},
 			{
 				Name:    "announcement_ends_at",
 				Unique:  false,
-				Columns: []*schema.Column{AnnouncementsColumns[6]},
+				Columns: []*schema.Column{AnnouncementsColumns[7]},
 			},
 		},
 	}

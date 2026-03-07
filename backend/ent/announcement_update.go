@@ -72,6 +72,20 @@ func (_u *AnnouncementUpdate) SetNillableStatus(v *string) *AnnouncementUpdate {
 	return _u
 }
 
+// SetNotifyMode sets the "notify_mode" field.
+func (_u *AnnouncementUpdate) SetNotifyMode(v string) *AnnouncementUpdate {
+	_u.mutation.SetNotifyMode(v)
+	return _u
+}
+
+// SetNillableNotifyMode sets the "notify_mode" field if the given value is not nil.
+func (_u *AnnouncementUpdate) SetNillableNotifyMode(v *string) *AnnouncementUpdate {
+	if v != nil {
+		_u.SetNotifyMode(*v)
+	}
+	return _u
+}
+
 // SetTargeting sets the "targeting" field.
 func (_u *AnnouncementUpdate) SetTargeting(v domain.AnnouncementTargeting) *AnnouncementUpdate {
 	_u.mutation.SetTargeting(v)
@@ -286,6 +300,11 @@ func (_u *AnnouncementUpdate) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Announcement.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.NotifyMode(); ok {
+		if err := announcement.NotifyModeValidator(v); err != nil {
+			return &ValidationError{Name: "notify_mode", err: fmt.Errorf(`ent: validator failed for field "Announcement.notify_mode": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -309,6 +328,9 @@ func (_u *AnnouncementUpdate) sqlSave(ctx context.Context) (_node int, err error
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(announcement.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.NotifyMode(); ok {
+		_spec.SetField(announcement.FieldNotifyMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Targeting(); ok {
 		_spec.SetField(announcement.FieldTargeting, field.TypeJSON, value)
@@ -452,6 +474,20 @@ func (_u *AnnouncementUpdateOne) SetStatus(v string) *AnnouncementUpdateOne {
 func (_u *AnnouncementUpdateOne) SetNillableStatus(v *string) *AnnouncementUpdateOne {
 	if v != nil {
 		_u.SetStatus(*v)
+	}
+	return _u
+}
+
+// SetNotifyMode sets the "notify_mode" field.
+func (_u *AnnouncementUpdateOne) SetNotifyMode(v string) *AnnouncementUpdateOne {
+	_u.mutation.SetNotifyMode(v)
+	return _u
+}
+
+// SetNillableNotifyMode sets the "notify_mode" field if the given value is not nil.
+func (_u *AnnouncementUpdateOne) SetNillableNotifyMode(v *string) *AnnouncementUpdateOne {
+	if v != nil {
+		_u.SetNotifyMode(*v)
 	}
 	return _u
 }
@@ -683,6 +719,11 @@ func (_u *AnnouncementUpdateOne) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Announcement.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.NotifyMode(); ok {
+		if err := announcement.NotifyModeValidator(v); err != nil {
+			return &ValidationError{Name: "notify_mode", err: fmt.Errorf(`ent: validator failed for field "Announcement.notify_mode": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -723,6 +764,9 @@ func (_u *AnnouncementUpdateOne) sqlSave(ctx context.Context) (_node *Announceme
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(announcement.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.NotifyMode(); ok {
+		_spec.SetField(announcement.FieldNotifyMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Targeting(); ok {
 		_spec.SetField(announcement.FieldTargeting, field.TypeJSON, value)
