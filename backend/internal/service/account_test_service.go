@@ -406,13 +406,22 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if isOAuth && s.accountRepo != nil {
+		if updates, err := extractOpenAICodexProbeUpdates(resp); err == nil && len(updates) > 0 {
+			_ = s.accountRepo.UpdateExtra(ctx, account.ID, updates)
+			mergeAccountExtra(account, updates)
+		}
+		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
+			if resetAt := codexRateLimitResetAtFromSnapshot(snapshot, time.Now()); resetAt != nil {
+				_ = s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt)
+				account.RateLimitResetAt = resetAt
+			}
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		if isOAuth && s.accountRepo != nil {
-			if updates, err := extractOpenAICodexProbeUpdates(resp); err == nil && len(updates) > 0 {
-				_ = s.accountRepo.UpdateExtra(ctx, account.ID, updates)
-				mergeAccountExtra(account, updates)
-			}
 			if resetAt := (&RateLimitService{}).calculateOpenAI429ResetTime(resp.Header); resetAt != nil {
 				_ = s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt)
 				account.RateLimitResetAt = resetAt
