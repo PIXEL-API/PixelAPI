@@ -234,20 +234,19 @@ func TestApplyCodexOAuthTransform_CodexCLI_SuppliesDefaultWhenEmpty(t *testing.T
 	require.True(t, result.Modified)
 }
 
-func TestApplyCodexOAuthTransform_NonCodexCLI_OverridesInstructions(t *testing.T) {
-	// 非 Codex CLI 场景：使用内置 Codex CLI 指令覆盖
+func TestApplyCodexOAuthTransform_NonCodexCLI_PreservesExistingInstructions(t *testing.T) {
+	// 非 Codex CLI 场景：已有 instructions 时保留客户端的值，不再覆盖
 
 	reqBody := map[string]any{
 		"model":        "gpt-5.1",
 		"instructions": "old instructions",
 	}
 
-	result := applyCodexOAuthTransform(reqBody, false, false) // isCodexCLI=false
+	applyCodexOAuthTransform(reqBody, false, false) // isCodexCLI=false
 
 	instructions, ok := reqBody["instructions"].(string)
 	require.True(t, ok)
-	require.NotEqual(t, "old instructions", instructions)
-	require.True(t, result.Modified)
+	require.Equal(t, "old instructions", instructions)
 }
 
 func TestIsInstructionsEmpty(t *testing.T) {

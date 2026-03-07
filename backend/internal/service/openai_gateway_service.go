@@ -1597,13 +1597,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		patchDisabled = true
 	}
 
-	// 非透传模式下，保持历史行为：非 Codex CLI 请求在 instructions 为空时注入默认指令。
-	if !isCodexCLI && isInstructionsEmpty(reqBody) {
-		if instructions := strings.TrimSpace(GetOpenCodeInstructions()); instructions != "" {
-			reqBody["instructions"] = instructions
-			bodyModified = true
-			markPatchSet("instructions", instructions)
-		}
+	// 非透传模式下，instructions 为空时注入默认指令。
+	if isInstructionsEmpty(reqBody) {
+		reqBody["instructions"] = "You are a helpful coding assistant."
+		bodyModified = true
+		markPatchSet("instructions", "You are a helpful coding assistant.")
 	}
 
 	// 对所有请求执行模型映射（包含 Codex CLI）。
