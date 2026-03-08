@@ -507,7 +507,11 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte) []byte {
 					filtered = append(filtered, edit)
 				}
 				if len(filtered) != len(edits) {
-					cm["edits"] = filtered
+					if len(filtered) == 0 {
+						delete(cm, "edits")
+					} else {
+						cm["edits"] = filtered
+					}
 				}
 			}
 		}
