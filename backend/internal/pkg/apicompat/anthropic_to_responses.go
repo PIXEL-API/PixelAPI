@@ -169,7 +169,7 @@ func anthropicMsgToResponsesItems(m AnthropicMessage) ([]ResponsesInputItem, err
 
 // anthropicUserToResponses handles an Anthropic user message. Content can be a
 // plain string or an array of blocks. tool_result blocks are extracted into
-// function_call_output items.
+// function_call_output items. Image blocks are converted to input_image parts.
 func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error) {
 	// Try plain string.
 	var s string
@@ -184,28 +184,46 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 	}
 
 	var out []ResponsesInputItem
+	var toolResultImageParts []ResponsesContentPart
 
 	// Extract tool_result blocks → function_call_output items.
+	// Images inside tool_results are extracted separately because the
+	// Responses API function_call_output.output only accepts strings.
 	for _, b := range blocks {
 		if b.Type != "tool_result" {
 			continue
 		}
-		text := extractAnthropicToolResultText(b)
-		if text == "" {
-			// OpenAI Responses API requires "output" field; use placeholder for empty results.
-			text = "(empty)"
-		}
+		outputText, imageParts := convertToolResultOutput(b)
 		out = append(out, ResponsesInputItem{
 			Type:   "function_call_output",
 			CallID: toResponsesCallID(b.ToolUseID),
-			Output: text,
+			Output: outputText,
 		})
+		toolResultImageParts = append(toolResultImageParts, imageParts...)
 	}
 
-	// Remaining text blocks → user message.
-	text := extractAnthropicTextFromBlocks(blocks)
-	if text != "" {
-		content, _ := json.Marshal(text)
+	// Remaining text + image blocks → user message with content parts.
+	// Also include images extracted from tool_results so the model can see them.
+	var parts []ResponsesContentPart
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if b.Text != "" {
+				parts = append(parts, ResponsesContentPart{Type: "input_text", Text: b.Text})
+			}
+		case "image":
+			if uri := anthropicImageToDataURI(b.Source); uri != "" {
+				parts = append(parts, ResponsesContentPart{Type: "input_image", ImageURL: uri})
+			}
+		}
+	}
+	parts = append(parts, toolResultImageParts...)
+
+	if len(parts) > 0 {
+		content, err := json.Marshal(parts)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, ResponsesInputItem{Role: "user", Content: content})
 	}
 
@@ -290,26 +308,64 @@ func fromResponsesCallID(id string) string {
 	return id
 }
 
-// extractAnthropicToolResultText gets the text content from a tool_result block.
-func extractAnthropicToolResultText(b AnthropicContentBlock) string {
-	if len(b.Content) == 0 {
+// anthropicImageToDataURI converts an AnthropicImageSource to a data URI string.
+// Returns "" if the source is nil or has no data.
+func anthropicImageToDataURI(src *AnthropicImageSource) string {
+	if src == nil || src.Data == "" {
 		return ""
 	}
+	mediaType := src.MediaType
+	if mediaType == "" {
+		mediaType = "image/png"
+	}
+	return "data:" + mediaType + ";base64," + src.Data
+}
+
+// convertToolResultOutput extracts text and image content from a tool_result
+// block. Returns the text as a string for the function_call_output Output
+// field, plus any image parts that must be sent in a separate user message
+// (the Responses API output field only accepts strings).
+func convertToolResultOutput(b AnthropicContentBlock) (string, []ResponsesContentPart) {
+	if len(b.Content) == 0 {
+		return "(empty)", nil
+	}
+
+	// Try plain string content.
 	var s string
 	if err := json.Unmarshal(b.Content, &s); err == nil {
-		return s
+		if s == "" {
+			s = "(empty)"
+		}
+		return s, nil
 	}
+
+	// Array of content blocks — may contain text and/or images.
 	var inner []AnthropicContentBlock
-	if err := json.Unmarshal(b.Content, &inner); err == nil {
-		var parts []string
-		for _, ib := range inner {
-			if ib.Type == "text" && ib.Text != "" {
-				parts = append(parts, ib.Text)
+	if err := json.Unmarshal(b.Content, &inner); err != nil {
+		return "(empty)", nil
+	}
+
+	// Separate text (for function_call_output) from images (for user message).
+	var textParts []string
+	var imageParts []ResponsesContentPart
+	for _, ib := range inner {
+		switch ib.Type {
+		case "text":
+			if ib.Text != "" {
+				textParts = append(textParts, ib.Text)
+			}
+		case "image":
+			if uri := anthropicImageToDataURI(ib.Source); uri != "" {
+				imageParts = append(imageParts, ResponsesContentPart{Type: "input_image", ImageURL: uri})
 			}
 		}
-		return strings.Join(parts, "\n\n")
 	}
-	return ""
+
+	text := strings.Join(textParts, "\n\n")
+	if text == "" {
+		text = "(empty)"
+	}
+	return text, imageParts
 }
 
 // extractAnthropicTextFromBlocks joins all text blocks, ignoring thinking/
