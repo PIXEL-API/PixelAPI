@@ -89,6 +89,10 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 			_ = client.Close()
 			return nil, nil, err
 		}
+		if err := ensureSimpleModeAdminConcurrency(seedCtx, client); err != nil {
+			_ = client.Close()
+			return nil, nil, err
+		}
 	}
 
 	return client, drv.DB(), nil
