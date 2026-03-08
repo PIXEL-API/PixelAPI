@@ -71,6 +71,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			log.ImageCount,
 			sqlmock.AnyArg(), // image_size
 			sqlmock.AnyArg(), // media_type
+			sqlmock.AnyArg(), // service_tier
 			sqlmock.AnyArg(), // reasoning_effort
 			log.CacheTTLOverridden,
 			createdAt,
@@ -81,9 +82,73 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inserted)
 	require.Equal(t, int64(99), log.ID)
+	require.Nil(t, log.ServiceTier)
 	require.Equal(t, service.RequestTypeWSV2, log.RequestType)
 	require.True(t, log.Stream)
 	require.True(t, log.OpenAIWSMode)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	createdAt := time.Date(2025, 1, 2, 12, 0, 0, 0, time.UTC)
+	serviceTier := "priority"
+	log := &service.UsageLog{
+		UserID:      1,
+		APIKeyID:    2,
+		AccountID:   3,
+		RequestID:   "req-service-tier",
+		Model:       "gpt-5.4",
+		ServiceTier: &serviceTier,
+		CreatedAt:   createdAt,
+	}
+
+	mock.ExpectQuery("INSERT INTO usage_logs").
+		WithArgs(
+			log.UserID,
+			log.APIKeyID,
+			log.AccountID,
+			log.RequestID,
+			log.Model,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			log.InputTokens,
+			log.OutputTokens,
+			log.CacheCreationTokens,
+			log.CacheReadTokens,
+			log.CacheCreation5mTokens,
+			log.CacheCreation1hTokens,
+			log.InputCost,
+			log.OutputCost,
+			log.CacheCreationCost,
+			log.CacheReadCost,
+			log.TotalCost,
+			log.ActualCost,
+			log.RateMultiplier,
+			log.AccountRateMultiplier,
+			log.BillingType,
+			int16(service.RequestTypeSync),
+			false,
+			false,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			log.ImageCount,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			serviceTier,
+			sqlmock.AnyArg(),
+			log.CacheTTLOverridden,
+			createdAt,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
+
+	inserted, err := repo.Create(context.Background(), log)
+	require.NoError(t, err)
+	require.True(t, inserted)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -280,11 +345,14 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			0,
 			sql.NullString{},
 			sql.NullString{},
+			sql.NullString{Valid: true, String: "priority"},
 			sql.NullString{},
 			false,
 			now,
 		}})
 		require.NoError(t, err)
+		require.NotNil(t, log.ServiceTier)
+		require.Equal(t, "priority", *log.ServiceTier)
 		require.Equal(t, service.RequestTypeWSV2, log.RequestType)
 		require.True(t, log.Stream)
 		require.True(t, log.OpenAIWSMode)
@@ -316,13 +384,53 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			0,
 			sql.NullString{},
 			sql.NullString{},
+			sql.NullString{Valid: true, String: "flex"},
 			sql.NullString{},
 			false,
 			now,
 		}})
 		require.NoError(t, err)
+		require.NotNil(t, log.ServiceTier)
+		require.Equal(t, "flex", *log.ServiceTier)
 		require.Equal(t, service.RequestTypeStream, log.RequestType)
 		require.True(t, log.Stream)
 		require.False(t, log.OpenAIWSMode)
 	})
+
+	t.Run("service_tier_is_scanned", func(t *testing.T) {
+		now := time.Now().UTC()
+		log, err := scanUsageLog(usageLogScannerStub{values: []any{
+			int64(3),
+			int64(12),
+			int64(22),
+			int64(32),
+			sql.NullString{Valid: true, String: "req-3"},
+			"gpt-5.4",
+			sql.NullInt64{},
+			sql.NullInt64{},
+			1, 2, 3, 4, 5, 6,
+			0.1, 0.2, 0.3, 0.4, 1.0, 0.9,
+			1.0,
+			sql.NullFloat64{},
+			int16(service.BillingTypeBalance),
+			int16(service.RequestTypeSync),
+			false,
+			false,
+			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullString{},
+			sql.NullString{},
+			0,
+			sql.NullString{},
+			sql.NullString{},
+			sql.NullString{Valid: true, String: "priority"},
+			sql.NullString{},
+			false,
+			now,
+		}})
+		require.NoError(t, err)
+		require.NotNil(t, log.ServiceTier)
+		require.Equal(t, "priority", *log.ServiceTier)
+	})
+
 }
