@@ -264,11 +264,7 @@ func (h *AuthHandler) CompleteLinuxDoOAuthRegistration(c *gin.Context) {
 
 	tokenPair, _, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, req.InvitationCode)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		c.JSON(statusCode, gin.H{
-			"error":   infraerrors.Reason(err),
-			"message": infraerrors.Message(err),
-		})
+		response.ErrorFrom(c, err)
 		return
 	}
 
