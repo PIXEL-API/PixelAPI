@@ -439,6 +439,207 @@ func TestFilterSignatureSensitiveBlocksForRetry_DowngradesTools(t *testing.T) {
 	require.Contains(t, content1["text"], "tool_result")
 }
 
+// ============ Group 6b: context_management.edits 清理测试 ============
+
+// removeThinkingDependentContextStrategies — 边界用例
+
+func TestRemoveThinkingDependentContextStrategies_NoContextManagement(t *testing.T) {
+	input := []byte(`{"thinking":{"type":"enabled"},"messages":[]}`)
+	out := removeThinkingDependentContextStrategies(input)
+	require.Equal(t, input, out, "无 context_management 字段时应原样返回")
+}
+
+func TestRemoveThinkingDependentContextStrategies_EmptyEdits(t *testing.T) {
+	input := []byte(`{"context_management":{"edits":[]},"messages":[]}`)
+	out := removeThinkingDependentContextStrategies(input)
+	require.Equal(t, input, out, "edits 为空数组时应原样返回")
+}
+
+func TestRemoveThinkingDependentContextStrategies_NoClearThinkingEntry(t *testing.T) {
+	input := []byte(`{"context_management":{"edits":[{"type":"other_strategy"}]},"messages":[]}`)
+	out := removeThinkingDependentContextStrategies(input)
+	require.Equal(t, input, out, "edits 中无 clear_thinking_20251015 时应原样返回")
+}
+
+func TestRemoveThinkingDependentContextStrategies_RemovesSingleEntry(t *testing.T) {
+	input := []byte(`{"context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[]}`)
+	out := removeThinkingDependentContextStrategies(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	cm, ok := req["context_management"].(map[string]any)
+	require.True(t, ok)
+	_, hasEdits := cm["edits"]
+	require.False(t, hasEdits, "所有 edits 均为 clear_thinking_20251015 时应删除 edits 键")
+}
+
+func TestRemoveThinkingDependentContextStrategies_MixedEntries(t *testing.T) {
+	input := []byte(`{"context_management":{"edits":[{"type":"clear_thinking_20251015"},{"type":"other_strategy","param":1}]},"messages":[]}`)
+	out := removeThinkingDependentContextStrategies(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	cm, ok := req["context_management"].(map[string]any)
+	require.True(t, ok)
+	edits, ok := cm["edits"].([]any)
+	require.True(t, ok)
+	require.Len(t, edits, 1, "仅移除 clear_thinking_20251015，保留其他条目")
+	edit0, ok := edits[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "other_strategy", edit0["type"])
+}
+
+// FilterThinkingBlocksForRetry — 包含 context_management 的场景
+
+func TestFilterThinkingBlocksForRetry_RemovesClearThinkingStrategy_FastPath(t *testing.T) {
+	// 快速路径：messages 中无 thinking 块，仅有顶层 thinking 字段
+	// 这条路径曾因提前 return 跳过 removeThinkingDependentContextStrategies 而存在 bug
+	input := []byte(`{
+		"thinking":{"type":"enabled","budget_tokens":1024},
+		"context_management":{"edits":[{"type":"clear_thinking_20251015"}]},
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"Hello"}]}
+		]
+	}`)
+
+	out := FilterThinkingBlocksForRetry(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	_, hasThinking := req["thinking"]
+	require.False(t, hasThinking, "顶层 thinking 应被移除")
+
+	cm, ok := req["context_management"].(map[string]any)
+	require.True(t, ok)
+	_, hasEdits := cm["edits"]
+	require.False(t, hasEdits, "fast path 下 clear_thinking_20251015 应被移除，edits 键应被删除")
+}
+
+func TestFilterThinkingBlocksForRetry_RemovesClearThinkingStrategy_WithThinkingBlocks(t *testing.T) {
+	// 完整路径：messages 中有 thinking 块（非 fast path）
+	input := []byte(`{
+		"thinking":{"type":"enabled","budget_tokens":1024},
+		"context_management":{"edits":[{"type":"clear_thinking_20251015"},{"type":"keep_this"}]},
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"some thought","signature":"sig"},
+				{"type":"text","text":"Answer"}
+			]}
+		]
+	}`)
+
+	out := FilterThinkingBlocksForRetry(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	_, hasThinking := req["thinking"]
+	require.False(t, hasThinking, "顶层 thinking 应被移除")
+
+	cm, ok := req["context_management"].(map[string]any)
+	require.True(t, ok)
+	edits, ok := cm["edits"].([]any)
+	require.True(t, ok)
+	require.Len(t, edits, 1, "仅移除 clear_thinking_20251015，保留 keep_this")
+	edit0, ok := edits[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "keep_this", edit0["type"])
+}
+
+func TestFilterThinkingBlocksForRetry_NoContextManagement_Unaffected(t *testing.T) {
+	// 无 context_management 时不应报错，且 thinking 正常被移除
+	input := []byte(`{
+		"thinking":{"type":"enabled"},
+		"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]
+	}`)
+
+	out := FilterThinkingBlocksForRetry(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	_, hasThinking := req["thinking"]
+	require.False(t, hasThinking)
+	_, hasCM := req["context_management"]
+	require.False(t, hasCM)
+}
+
+// FilterSignatureSensitiveBlocksForRetry — 包含 context_management 的场景
+
+func TestFilterSignatureSensitiveBlocksForRetry_RemovesClearThinkingStrategy(t *testing.T) {
+	input := []byte(`{
+		"thinking":{"type":"enabled","budget_tokens":1024},
+		"context_management":{"edits":[{"type":"clear_thinking_20251015"}]},
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"thought","signature":"sig"}
+			]}
+		]
+	}`)
+
+	out := FilterSignatureSensitiveBlocksForRetry(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	_, hasThinking := req["thinking"]
+	require.False(t, hasThinking, "顶层 thinking 应被移除")
+
+	cm, ok := req["context_management"].(map[string]any)
+	require.True(t, ok)
+	edits, _ := cm["edits"].([]any)
+	for _, e := range edits {
+		em, ok := e.(map[string]any)
+		require.True(t, ok)
+		require.NotEqual(t, "clear_thinking_20251015", em["type"], "clear_thinking_20251015 应被移除")
+	}
+}
+
+func TestFilterSignatureSensitiveBlocksForRetry_PreservesNonThinkingStrategies(t *testing.T) {
+	input := []byte(`{
+		"thinking":{"type":"enabled"},
+		"context_management":{"edits":[{"type":"clear_thinking_20251015"},{"type":"other_edit"}]},
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"t","signature":"s"}
+			]}
+		]
+	}`)
+
+	out := FilterSignatureSensitiveBlocksForRetry(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+
+	cm, ok := req["context_management"].(map[string]any)
+	require.True(t, ok)
+	edits, ok := cm["edits"].([]any)
+	require.True(t, ok)
+	require.Len(t, edits, 1, "仅移除 clear_thinking_20251015，保留 other_edit")
+	edit0, ok := edits[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "other_edit", edit0["type"])
+}
+
+func TestFilterSignatureSensitiveBlocksForRetry_NoThinkingField_ContextManagementUntouched(t *testing.T) {
+	// 没有顶层 thinking 字段时，context_management 不应被修改
+	input := []byte(`{
+		"context_management":{"edits":[{"type":"clear_thinking_20251015"}]},
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"t","signature":"s"}
+			]}
+		]
+	}`)
+
+	out := FilterSignatureSensitiveBlocksForRetry(input)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	cm, ok := req["context_management"].(map[string]any)
+	require.True(t, ok)
+	edits, ok := cm["edits"].([]any)
+	require.True(t, ok)
+	require.Len(t, edits, 1, "无顶层 thinking 时 context_management 不应被修改")
+}
+
 // ============ Group 7: ParseGatewayRequest 补充单元测试 ============
 
 // Task 7.1 — 类型校验边界测试
