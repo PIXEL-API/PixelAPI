@@ -255,10 +255,18 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	if a.Type == service.AccountTypeAPIKey {
 		if limit := a.GetQuotaLimit(); limit > 0 {
 			out.QuotaLimit = &limit
-		}
-		used := a.GetQuotaUsed()
-		if out.QuotaLimit != nil {
+			used := a.GetQuotaUsed()
 			out.QuotaUsed = &used
+		}
+		if limit := a.GetQuotaDailyLimit(); limit > 0 {
+			out.QuotaDailyLimit = &limit
+			used := a.GetQuotaDailyUsed()
+			out.QuotaDailyUsed = &used
+		}
+		if limit := a.GetQuotaWeeklyLimit(); limit > 0 {
+			out.QuotaWeeklyLimit = &limit
+			used := a.GetQuotaWeeklyUsed()
+			out.QuotaWeeklyUsed = &used
 		}
 	}
 
