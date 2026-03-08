@@ -319,7 +319,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || !account.IsOpenAI() {
+	if shouldClearStickySession(account, req.RequestedModel) || !account.IsOpenAI() || !account.IsSchedulable() {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, nil
 	}
@@ -687,16 +687,20 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 
 	for i := 0; i < len(selectionOrder); i++ {
 		candidate := selectionOrder[i]
-		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, candidate.account.ID, candidate.account.Concurrency)
+		fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.RequestedModel)
+		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport) {
+			continue
+		}
+		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
 		if acquireErr != nil {
 			return nil, len(candidates), topK, loadSkew, acquireErr
 		}
 		if result != nil && result.Acquired {
 			if req.SessionHash != "" {
-				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, candidate.account.ID)
+				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
 			}
 			return &AccountSelectionResult{
-				Account:     candidate.account,
+				Account:     fresh,
 				Acquired:    true,
 				ReleaseFunc: result.ReleaseFunc,
 			}, len(candidates), topK, loadSkew, nil
@@ -705,16 +709,23 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 
 	cfg := s.service.schedulingConfig()
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
-	candidate := selectionOrder[0]
-	return &AccountSelectionResult{
-		Account: candidate.account,
-		WaitPlan: &AccountWaitPlan{
-			AccountID:      candidate.account.ID,
-			MaxConcurrency: candidate.account.Concurrency,
-			Timeout:        cfg.FallbackWaitTimeout,
-			MaxWaiting:     cfg.FallbackMaxWaiting,
-		},
-	}, len(candidates), topK, loadSkew, nil
+	for _, candidate := range selectionOrder {
+		fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.RequestedModel)
+		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport) {
+			continue
+		}
+		return &AccountSelectionResult{
+			Account: fresh,
+			WaitPlan: &AccountWaitPlan{
+				AccountID:      fresh.ID,
+				MaxConcurrency: fresh.Concurrency,
+				Timeout:        cfg.FallbackWaitTimeout,
+				MaxWaiting:     cfg.FallbackMaxWaiting,
+			},
+		}, len(candidates), topK, loadSkew, nil
+	}
+
+	return nil, len(candidates), topK, loadSkew, errors.New("no available accounts")
 }
 
 func (s *defaultOpenAIAccountScheduler) isAccountTransportCompatible(account *Account, requiredTransport OpenAIUpstreamTransport) bool {

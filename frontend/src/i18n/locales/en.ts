@@ -1694,7 +1694,8 @@ export default {
         rateLimited: 'Rate Limited',
         overloaded: 'Overloaded',
         tempUnschedulable: 'Temp Unschedulable',
-        rateLimitedUntil: 'Rate limited until {time}',
+        rateLimitedUntil: 'Rate limited and removed from scheduling. Auto resumes at {time}',
+        rateLimitedAutoResume: 'Auto resumes in {time}',
         modelRateLimitedUntil: '{model} rate limited until {time}',
         overloadedUntil: 'Overloaded until {time}',
         viewTempUnschedDetails: 'View temp unschedulable details'
