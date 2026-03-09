@@ -43,6 +43,9 @@ type ConcurrencyCache interface {
 
 	// 清理过期槽位（后台任务）
 	CleanupExpiredAccountSlots(ctx context.Context, accountID int64) error
+
+	// 启动时清理旧进程遗留槽位与等待计数
+	CleanupStaleProcessSlots(ctx context.Context, activeRequestPrefix string) error
 }
 
 var (
@@ -59,11 +62,20 @@ func initRequestIDPrefix() string {
 	return "r" + strconv.FormatUint(fallback, 36)
 }
 
-// generateRequestID generates a unique request ID for concurrency slot tracking.
-// Format: {process_random_prefix}-{base36_counter}
+func RequestIDPrefix() string {
+	return requestIDPrefix
+}
+
 func generateRequestID() string {
 	seq := requestIDCounter.Add(1)
 	return requestIDPrefix + "-" + strconv.FormatUint(seq, 36)
+}
+
+func (s *ConcurrencyService) CleanupStaleProcessSlots(ctx context.Context) error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	return s.cache.CleanupStaleProcessSlots(ctx, RequestIDPrefix())
 }
 
 const (
