@@ -259,6 +259,7 @@ func FilterThinkingBlocksForRetry(body []byte) []byte {
 	if !hasEmptyContent && !containsThinkingBlocks {
 		if topThinking := gjson.Get(jsonStr, "thinking"); topThinking.Exists() {
 			if out, err := sjson.DeleteBytes(body, "thinking"); err == nil {
+				out = removeThinkingDependentContextStrategies(out)
 				return out
 			}
 			return body
@@ -396,6 +397,10 @@ func FilterThinkingBlocksForRetry(body []byte) []byte {
 		} else {
 			return body
 		}
+		// Removing "thinking" makes any context_management strategy that requires it invalid
+		// (e.g. clear_thinking_20251015).  Strip those entries so the retry request does not
+		// receive a 400 "strategy requires thinking to be enabled or adaptive".
+		out = removeThinkingDependentContextStrategies(out)
 	}
 	if modified {
 		msgsBytes, err := json.Marshal(messages)
@@ -408,6 +413,49 @@ func FilterThinkingBlocksForRetry(body []byte) []byte {
 		}
 	}
 	return out
+}
+
+// removeThinkingDependentContextStrategies 从 context_management.edits 中移除
+// 需要 thinking 启用的策略（如 clear_thinking_20251015）。
+// 当顶层 "thinking" 字段被禁用时必须调用，否则上游会返回
+// "strategy requires thinking to be enabled or adaptive"。
+func removeThinkingDependentContextStrategies(body []byte) []byte {
+	jsonStr := *(*string)(unsafe.Pointer(&body))
+	editsRes := gjson.Get(jsonStr, "context_management.edits")
+	if !editsRes.Exists() || !editsRes.IsArray() {
+		return body
+	}
+
+	var filtered []json.RawMessage
+	hasRemoved := false
+	editsRes.ForEach(func(_, v gjson.Result) bool {
+		if v.Get("type").String() == "clear_thinking_20251015" {
+			hasRemoved = true
+			return true
+		}
+		filtered = append(filtered, json.RawMessage(v.Raw))
+		return true
+	})
+
+	if !hasRemoved {
+		return body
+	}
+
+	if len(filtered) == 0 {
+		if b, err := sjson.DeleteBytes(body, "context_management.edits"); err == nil {
+			return b
+		}
+		return body
+	}
+
+	filteredBytes, err := json.Marshal(filtered)
+	if err != nil {
+		return body
+	}
+	if b, err := sjson.SetRawBytes(body, "context_management.edits", filteredBytes); err == nil {
+		return b
+	}
+	return body
 }
 
 // FilterSignatureSensitiveBlocksForRetry is a stronger retry filter for cases where upstream errors indicate
@@ -445,6 +493,28 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte) []byte {
 	if _, exists := req["thinking"]; exists {
 		delete(req, "thinking")
 		modified = true
+		// Remove context_management strategies that require thinking to be enabled
+		// (e.g. clear_thinking_20251015), otherwise upstream returns 400.
+		if cm, ok := req["context_management"].(map[string]any); ok {
+			if edits, ok := cm["edits"].([]any); ok {
+				filtered := make([]any, 0, len(edits))
+				for _, edit := range edits {
+					if editMap, ok := edit.(map[string]any); ok {
+						if editMap["type"] == "clear_thinking_20251015" {
+							continue
+						}
+					}
+					filtered = append(filtered, edit)
+				}
+				if len(filtered) != len(edits) {
+					if len(filtered) == 0 {
+						delete(cm, "edits")
+					} else {
+						cm["edits"] = filtered
+					}
+				}
+			}
+		}
 	}
 
 	messages, ok := req["messages"].([]any)
