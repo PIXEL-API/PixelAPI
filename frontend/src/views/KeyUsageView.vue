@@ -226,6 +226,9 @@
                         class="text-sm font-semibold mt-1 tabular-nums"
                         :style="{ color: RING_GRADIENTS[i % 4].from }"
                       >{{ ring.amount }}</span>
+                      <p v-if="ring.resetAt && formatResetTime(ring.resetAt)" class="text-xs text-gray-400 dark:text-gray-500 mt-0.5 tabular-nums">
+                        ⟳ {{ formatResetTime(ring.resetAt) }}
+                      </p>
                     </template>
                   </div>
                 </div>
@@ -358,7 +361,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
@@ -396,6 +399,8 @@ const showLoading = ref(false)
 const showDatePicker = ref(false)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const resultData = ref<any>(null)
+const now = ref(new Date())
+let resetTimer: ReturnType<typeof setInterval> | null = null
 
 // ==================== Date Range State ====================
 
@@ -461,6 +466,7 @@ interface RingItem {
   amount: string
   isBalance?: boolean
   iconType: 'clock' | 'calendar' | 'dollar'
+  resetAt?: string | null
 }
 
 function getRingOffset(ring: RingItem): number {
@@ -544,6 +550,7 @@ const ringItems = computed<RingItem[]>(() => {
           pct,
           amount: `${usd(rl.used)} / ${usd(rl.limit)}`,
           iconType: windowIcons[rl.window] || 'clock',
+          resetAt: rl.reset_at,
         })
       }
     }
@@ -627,10 +634,15 @@ const detailRows = computed<DetailRow[]>(() => {
       const windowMap: Record<string, string> = { '5h': '5H', '1d': locale.value === 'zh' ? '日' : 'D', '7d': '7D' }
       for (const rl of data.rate_limits) {
         const pct = rl.limit > 0 ? (rl.used / rl.limit) * 100 : 0
+        let valueStr = `${usd(rl.used)} / ${usd(rl.limit)}`
+        const resetStr = formatResetTime(rl.reset_at)
+        if (resetStr) {
+          valueStr += ` (⟳ ${resetStr})`
+        }
         rows.push({
           iconBg: 'bg-primary-500/10', iconColor: 'text-primary-500', iconSvg: ICON_DOLLAR,
           label: `${t('keyUsage.usedQuota')} (${windowMap[rl.window] || rl.window})`,
-          value: `${usd(rl.used)} / ${usd(rl.limit)}`,
+          value: valueStr,
           valueClass: getUsageColor(pct),
         })
       }
@@ -798,11 +810,28 @@ function initTheme() {
   }
 }
 
+function formatResetTime(resetAt: string | null | undefined): string {
+  if (!resetAt) return ''
+  const diff = new Date(resetAt).getTime() - now.value.getTime()
+  if (diff <= 0) return t('keyUsage.resetNow')
+  const days = Math.floor(diff / 86400000)
+  const hours = Math.floor((diff % 86400000) / 3600000)
+  const mins = Math.floor((diff % 3600000) / 60000)
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${mins}m`
+  return `${mins}m`
+}
+
 onMounted(() => {
   initTheme()
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
   }
+  resetTimer = setInterval(() => { now.value = new Date() }, 60000)
+})
+
+onUnmounted(() => {
+  if (resetTimer) clearInterval(resetTimer)
 })
 </script>
 

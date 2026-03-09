@@ -71,7 +71,7 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 	if k == nil {
 		return nil
 	}
-	return &APIKey{
+	out := &APIKey{
 		ID:            k.ID,
 		UserID:        k.UserID,
 		Key:           k.Key,
@@ -98,6 +98,19 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		User:          UserFromServiceShallow(k.User),
 		Group:         GroupFromServiceShallow(k.Group),
 	}
+	if k.Window5hStart != nil && !service.IsWindowExpired(k.Window5hStart, service.RateLimitWindow5h) {
+		t := k.Window5hStart.Add(service.RateLimitWindow5h)
+		out.Reset5hAt = &t
+	}
+	if k.Window1dStart != nil && !service.IsWindowExpired(k.Window1dStart, service.RateLimitWindow1d) {
+		t := k.Window1dStart.Add(service.RateLimitWindow1d)
+		out.Reset1dAt = &t
+	}
+	if k.Window7dStart != nil && !service.IsWindowExpired(k.Window7dStart, service.RateLimitWindow7d) {
+		t := k.Window7dStart.Add(service.RateLimitWindow7d)
+		out.Reset7dAt = &t
+	}
+	return out
 }
 
 func GroupFromServiceShallow(g *service.Group) *Group {
