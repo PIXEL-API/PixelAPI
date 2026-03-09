@@ -647,6 +647,11 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 				} else {
 					user = newUser
 					s.assignDefaultSubscriptions(ctx, user.ID)
+					if invitationRedeemCode != nil {
+						if err := s.redeemRepo.Use(ctx, invitationRedeemCode.ID, user.ID); err != nil {
+							return nil, nil, ErrInvitationCodeInvalid
+						}
+					}
 				}
 			}
 		} else {
