@@ -5341,6 +5341,19 @@ func droppedBetaSet(extra ...string) map[string]struct{} {
 	return m
 }
 
+// containsBetaToken checks if a comma-separated header value contains the given token.
+func containsBetaToken(header, token string) bool {
+	if header == "" || token == "" {
+		return false
+	}
+	for _, p := range strings.Split(header, ",") {
+		if strings.TrimSpace(p) == token {
+			return true
+		}
+	}
+	return false
+}
+
 func buildBetaTokenSet(tokens []string) map[string]struct{} {
 	m := make(map[string]struct{}, len(tokens))
 	for _, t := range tokens {
