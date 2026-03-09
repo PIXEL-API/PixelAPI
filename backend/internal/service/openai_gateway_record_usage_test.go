@@ -334,3 +334,225 @@ func TestOpenAIGatewayServiceRecordUsage_ClampsActualInputTokensToZero(t *testin
 	require.NotNil(t, usageRepo.lastLog)
 	require.Equal(t, 0, usageRepo.lastLog.InputTokens)
 }
+
+func TestOpenAIGatewayServiceRecordUsage_Gpt54LongContextBillsWholeSession(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_gpt54_long_context",
+			Usage: OpenAIUsage{
+				InputTokens:  300000,
+				OutputTokens: 2000,
+			},
+			Model:    "gpt-5.4-2026-03-05",
+			Duration: time.Second,
+		},
+		APIKey:  &APIKey{ID: 1014},
+		User:    &User{ID: 2014},
+		Account: &Account{ID: 3014},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+
+	expectedInput := 300000 * 2.5e-6 * 2.0
+	expectedOutput := 2000 * 15e-6 * 1.5
+	require.InDelta(t, expectedInput, usageRepo.lastLog.InputCost, 1e-10)
+	require.InDelta(t, expectedOutput, usageRepo.lastLog.OutputCost, 1e-10)
+	require.InDelta(t, expectedInput+expectedOutput, usageRepo.lastLog.TotalCost, 1e-10)
+	require.InDelta(t, (expectedInput+expectedOutput)*1.1, usageRepo.lastLog.ActualCost, 1e-10)
+	require.Equal(t, 1, userRepo.deductCalls)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_ServiceTierPriorityUsesFastPricing(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	serviceTier := "priority"
+	usage := OpenAIUsage{InputTokens: 100, OutputTokens: 50}
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:   "resp_service_tier_priority",
+			ServiceTier: &serviceTier,
+			Usage:       usage,
+			Model:       "gpt-5.4",
+			Duration:    time.Second,
+		},
+		APIKey:  &APIKey{ID: 1015},
+		User:    &User{ID: 2015},
+		Account: &Account{ID: 3015},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.ServiceTier)
+	require.Equal(t, serviceTier, *usageRepo.lastLog.ServiceTier)
+
+	baseCost, calcErr := svc.billingService.CalculateCost("gpt-5.4", UsageTokens{InputTokens: 100, OutputTokens: 50}, 1.0)
+	require.NoError(t, calcErr)
+	require.InDelta(t, baseCost.TotalCost*2, usageRepo.lastLog.TotalCost, 1e-10)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_ServiceTierFlexHalvesCost(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	serviceTier := "flex"
+	usage := OpenAIUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 20}
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:   "resp_service_tier_flex",
+			ServiceTier: &serviceTier,
+			Usage:       usage,
+			Model:       "gpt-5.4",
+			Duration:    time.Second,
+		},
+		APIKey:  &APIKey{ID: 1016},
+		User:    &User{ID: 2016},
+		Account: &Account{ID: 3016},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+
+	baseCost, calcErr := svc.billingService.CalculateCost("gpt-5.4", UsageTokens{InputTokens: 80, OutputTokens: 50, CacheReadTokens: 20}, 1.0)
+	require.NoError(t, calcErr)
+	require.InDelta(t, baseCost.TotalCost*0.5, usageRepo.lastLog.TotalCost, 1e-10)
+}
+
+func TestNormalizeOpenAIServiceTier(t *testing.T) {
+	t.Run("fast maps to priority", func(t *testing.T) {
+		got := normalizeOpenAIServiceTier(" fast ")
+		require.NotNil(t, got)
+		require.Equal(t, "priority", *got)
+	})
+
+	t.Run("default ignored", func(t *testing.T) {
+		require.Nil(t, normalizeOpenAIServiceTier("default"))
+	})
+
+	t.Run("invalid ignored", func(t *testing.T) {
+		require.Nil(t, normalizeOpenAIServiceTier("turbo"))
+	})
+}
+
+func TestExtractOpenAIServiceTier(t *testing.T) {
+	require.Equal(t, "priority", *extractOpenAIServiceTier(map[string]any{"service_tier": "fast"}))
+	require.Equal(t, "flex", *extractOpenAIServiceTier(map[string]any{"service_tier": "flex"}))
+	require.Nil(t, extractOpenAIServiceTier(map[string]any{"service_tier": 1}))
+	require.Nil(t, extractOpenAIServiceTier(nil))
+}
+
+func TestExtractOpenAIServiceTierFromBody(t *testing.T) {
+	require.Equal(t, "priority", *extractOpenAIServiceTierFromBody([]byte(`{"service_tier":"fast"}`)))
+	require.Equal(t, "flex", *extractOpenAIServiceTierFromBody([]byte(`{"service_tier":"flex"}`)))
+	require.Nil(t, extractOpenAIServiceTierFromBody([]byte(`{"service_tier":"default"}`)))
+	require.Nil(t, extractOpenAIServiceTierFromBody(nil))
+}
+
+func TestOpenAIGatewayServiceRecordUsage_UsesBillingModelAndMetadataFields(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	serviceTier := "priority"
+	reasoning := "high"
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:       "resp_billing_model_override",
+			BillingModel:    "gpt-5.1-codex",
+			Model:           "gpt-5.1",
+			ServiceTier:     &serviceTier,
+			ReasoningEffort: &reasoning,
+			Usage: OpenAIUsage{
+				InputTokens:  20,
+				OutputTokens: 10,
+			},
+			Duration:     2 * time.Second,
+			FirstTokenMs: func() *int { v := 120; return &v }(),
+		},
+		APIKey:    &APIKey{ID: 10, GroupID: i64p(11), Group: &Group{ID: 11, RateMultiplier: 1.2}},
+		User:      &User{ID: 20},
+		Account:   &Account{ID: 30},
+		UserAgent: "codex-cli/1.0",
+		IPAddress: "127.0.0.1",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, "gpt-5.1-codex", usageRepo.lastLog.Model)
+	require.NotNil(t, usageRepo.lastLog.ServiceTier)
+	require.Equal(t, serviceTier, *usageRepo.lastLog.ServiceTier)
+	require.NotNil(t, usageRepo.lastLog.ReasoningEffort)
+	require.Equal(t, reasoning, *usageRepo.lastLog.ReasoningEffort)
+	require.NotNil(t, usageRepo.lastLog.UserAgent)
+	require.Equal(t, "codex-cli/1.0", *usageRepo.lastLog.UserAgent)
+	require.NotNil(t, usageRepo.lastLog.IPAddress)
+	require.Equal(t, "127.0.0.1", *usageRepo.lastLog.IPAddress)
+	require.NotNil(t, usageRepo.lastLog.GroupID)
+	require.Equal(t, int64(11), *usageRepo.lastLog.GroupID)
+	require.Equal(t, 1, userRepo.deductCalls)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_SubscriptionBillingSetsSubscriptionFields(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	subscription := &UserSubscription{ID: 99}
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_subscription_billing",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 5},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey:       &APIKey{ID: 100, GroupID: i64p(88), Group: &Group{ID: 88, SubscriptionType: SubscriptionTypeSubscription}},
+		User:         &User{ID: 200},
+		Account:      &Account{ID: 300},
+		Subscription: subscription,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, BillingTypeSubscription, usageRepo.lastLog.BillingType)
+	require.NotNil(t, usageRepo.lastLog.SubscriptionID)
+	require.Equal(t, subscription.ID, *usageRepo.lastLog.SubscriptionID)
+	require.Equal(t, 1, subRepo.incrementCalls)
+	require.Equal(t, 0, userRepo.deductCalls)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_SimpleModeSkipsBillingAfterPersist(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	svc.cfg.RunMode = config.RunModeSimple
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_simple_mode",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 5},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey:  &APIKey{ID: 1000},
+		User:    &User{ID: 2000},
+		Account: &Account{ID: 3000},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, usageRepo.calls)
+	require.Equal(t, 0, userRepo.deductCalls)
+	require.Equal(t, 0, subRepo.incrementCalls)
+}

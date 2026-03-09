@@ -399,7 +399,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	}()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false,"service_tier":"fast"}`))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -424,6 +424,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		require.True(t, result.OpenAIWSMode)
 		require.Equal(t, 2, result.Usage.InputTokens)
 		require.Equal(t, 3, result.Usage.OutputTokens)
+		require.NotNil(t, result.ServiceTier)
+		require.Equal(t, "priority", *result.ServiceTier)
 	case <-time.After(2 * time.Second):
 		t.Fatal("未收到 passthrough turn 结果回调")
 	}
@@ -2593,7 +2595,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnect
 	require.NoError(t, err)
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"custom-original-model","stream":false}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"custom-original-model","stream":false,"service_tier":"flex"}`))
 	cancelWrite()
 	require.NoError(t, err)
 	// 立即关闭客户端，模拟客户端在 relay 期间断连。
@@ -2611,6 +2613,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnect
 		require.Equal(t, "resp_ingress_disconnect", result.RequestID)
 		require.Equal(t, 2, result.Usage.InputTokens)
 		require.Equal(t, 1, result.Usage.OutputTokens)
+		require.NotNil(t, result.ServiceTier)
+		require.Equal(t, "flex", *result.ServiceTier)
 	case <-time.After(2 * time.Second):
 		t.Fatal("未收到断连后的 turn 结果回调")
 	}
