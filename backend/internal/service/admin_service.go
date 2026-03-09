@@ -1723,16 +1723,10 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
-	account, err := s.accountRepo.GetByID(ctx, id)
-	if err != nil {
+	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}
-	account.Status = StatusActive
-	account.ErrorMessage = ""
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, err
-	}
-	return account, nil
+	return s.accountRepo.GetByID(ctx, id)
 }
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {

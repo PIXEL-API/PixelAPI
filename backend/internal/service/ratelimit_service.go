@@ -28,6 +28,17 @@ type RateLimitService struct {
 	usageCache            map[int64]*geminiUsageCacheEntry
 }
 
+// SuccessfulTestRecoveryResult 表示测试成功后恢复了哪些运行时状态。
+type SuccessfulTestRecoveryResult struct {
+	ClearedError     bool
+	ClearedRateLimit bool
+}
+
+// AccountRecoveryOptions 控制账号恢复时的附加行为。
+type AccountRecoveryOptions struct {
+	InvalidateToken bool
+}
+
 type geminiUsageCacheEntry struct {
 	windowStart time.Time
 	cachedAt    time.Time
@@ -1040,6 +1051,42 @@ func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) 
 	return nil
 }
 
+// RecoverAccountState 按需恢复账号的可恢复运行时状态。
+func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID int64, options AccountRecoveryOptions) (*SuccessfulTestRecoveryResult, error) {
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &SuccessfulTestRecoveryResult{}
+	if account.Status == StatusError {
+		if err := s.accountRepo.ClearError(ctx, accountID); err != nil {
+			return nil, err
+		}
+		result.ClearedError = true
+		if options.InvalidateToken && s.tokenCacheInvalidator != nil && account.IsOAuth() {
+			if invalidateErr := s.tokenCacheInvalidator.InvalidateToken(ctx, account); invalidateErr != nil {
+				slog.Warn("recover_account_state_invalidate_token_failed", "account_id", accountID, "error", invalidateErr)
+			}
+		}
+	}
+
+	if hasRecoverableRuntimeState(account) {
+		if err := s.ClearRateLimit(ctx, accountID); err != nil {
+			return nil, err
+		}
+		result.ClearedRateLimit = true
+	}
+
+	return result, nil
+}
+
+// RecoverAccountAfterSuccessfulTest 将一次成功测试视为正常请求，
+// 按需恢复 error / rate-limit / overload / temp-unsched / model-rate-limit 等运行时状态。
+func (s *RateLimitService) RecoverAccountAfterSuccessfulTest(ctx context.Context, accountID int64) (*SuccessfulTestRecoveryResult, error) {
+	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{})
+}
+
 func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID int64) error {
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
 		return err
@@ -1054,6 +1101,36 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 		slog.Warn("clear_model_rate_limits_on_temp_unsched_reset_failed", "account_id", accountID, "error", err)
 	}
 	return nil
+}
+
+func hasRecoverableRuntimeState(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	if account.RateLimitedAt != nil || account.RateLimitResetAt != nil || account.OverloadUntil != nil || account.TempUnschedulableUntil != nil {
+		return true
+	}
+	if len(account.Extra) == 0 {
+		return false
+	}
+	return hasNonEmptyMapValue(account.Extra, "model_rate_limits") || hasNonEmptyMapValue(account.Extra, "antigravity_quota_scopes")
+}
+
+func hasNonEmptyMapValue(extra map[string]any, key string) bool {
+	raw, ok := extra[key]
+	if !ok || raw == nil {
+		return false
+	}
+	switch typed := raw.(type) {
+	case map[string]any:
+		return len(typed) > 0
+	case map[string]string:
+		return len(typed) > 0
+	case []any:
+		return len(typed) > 0
+	default:
+		return true
+	}
 }
 
 func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID int64) (*TempUnschedState, error) {
