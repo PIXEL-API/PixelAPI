@@ -3331,10 +3331,6 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 	if account.Platform == PlatformSora {
 		return s.isSoraModelSupportedByAccount(account, requestedModel)
 	}
-	// OpenAI 透传模式：仅替换认证，允许所有模型
-	if account.Platform == PlatformOpenAI && account.IsOpenAIPassthroughEnabled() {
-		return true
-	}
 	// OAuth/SetupToken 账号使用 Anthropic 标准映射（短ID → 长ID）
 	if account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
 		requestedModel = claude.NormalizeModelID(requestedModel)
