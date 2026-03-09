@@ -997,6 +997,11 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 	return fmt.Sprintf("user_%s_account__session_%s", userID, sessionID)
 }
 
+// GenerateSessionUUID creates a deterministic UUID4 from a seed string.
+func GenerateSessionUUID(seed string) string {
+	return generateSessionUUID(seed)
+}
+
 func generateSessionUUID(seed string) string {
 	if seed == "" {
 		return uuid.NewString()
