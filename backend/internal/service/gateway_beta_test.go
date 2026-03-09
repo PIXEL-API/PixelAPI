@@ -86,10 +86,10 @@ func TestStripBetaTokens(t *testing.T) {
 			want:   "oauth-2025-04-20,interleaved-thinking-2025-05-14",
 		},
 		{
-			name:   "DroppedBetas removes both context-1m and fast-mode",
+			name:   "DroppedBetas removes fast-mode only",
 			header: "oauth-2025-04-20,context-1m-2025-08-07,fast-mode-2026-02-01,interleaved-thinking-2025-05-14",
 			tokens: claude.DroppedBetas,
-			want:   "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+			want:   "oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14",
 		},
 	}
 
@@ -117,21 +117,21 @@ func TestMergeAnthropicBetaDropping_DroppedBetas(t *testing.T) {
 	drop := droppedBetaSet()
 
 	got := mergeAnthropicBetaDropping(required, incoming, drop)
-	require.Equal(t, "oauth-2025-04-20,interleaved-thinking-2025-05-14,foo-beta", got)
-	require.NotContains(t, got, "context-1m-2025-08-07")
+	require.Equal(t, "oauth-2025-04-20,interleaved-thinking-2025-05-14,context-1m-2025-08-07,foo-beta", got)
+	require.Contains(t, got, "context-1m-2025-08-07")
 	require.NotContains(t, got, "fast-mode-2026-02-01")
 }
 
 func TestDroppedBetaSet(t *testing.T) {
 	// Base set contains DroppedBetas
 	base := droppedBetaSet()
-	require.Contains(t, base, claude.BetaContext1M)
+	require.NotContains(t, base, claude.BetaContext1M)
 	require.Contains(t, base, claude.BetaFastMode)
 	require.Len(t, base, len(claude.DroppedBetas))
 
 	// With extra tokens
 	extended := droppedBetaSet(claude.BetaClaudeCode)
-	require.Contains(t, extended, claude.BetaContext1M)
+	require.NotContains(t, extended, claude.BetaContext1M)
 	require.Contains(t, extended, claude.BetaFastMode)
 	require.Contains(t, extended, claude.BetaClaudeCode)
 	require.Len(t, extended, len(claude.DroppedBetas)+1)
