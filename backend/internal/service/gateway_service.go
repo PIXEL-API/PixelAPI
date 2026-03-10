@@ -3948,6 +3948,20 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.forwardAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody, passthroughModel, parsed.Stream, startTime)
 	}
 
+	// Beta policy: evaluate once; block check + cache filter set for buildUpstreamRequest.
+	// Always overwrite the cache to prevent stale values from a previous retry with a different account.
+	if account.Platform == PlatformAnthropic && c != nil {
+		policy := s.evaluateBetaPolicy(ctx, c.GetHeader("anthropic-beta"), account)
+		if policy.blockErr != nil {
+			return nil, policy.blockErr
+		}
+		filterSet := policy.filterSet
+		if filterSet == nil {
+			filterSet = map[string]struct{}{}
+		}
+		c.Set(betaPolicyFilterSetKey, filterSet)
+	}
+
 	body := parsed.Body
 	reqModel := parsed.Model
 	reqStream := parsed.Stream
@@ -5133,6 +5147,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		applyClaudeOAuthHeaderDefaults(req, reqStream)
 	}
 
+	// Build effective drop set: merge static defaults with dynamic beta policy filter rules
+	policyFilterSet := s.getBetaPolicyFilterSet(ctx, c, account)
+	effectiveDropSet := mergeDropSets(policyFilterSet)
+	effectiveDropWithClaudeCodeSet := mergeDropSets(policyFilterSet, claude.BetaClaudeCode)
+
 	// 处理 anthropic-beta header（OAuth 账号需要包含 oauth beta）
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
@@ -5146,17 +5165,22 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// messages requests typically use only oauth + interleaved-thinking.
 			// Also drop claude-code beta if a downstream client added it.
 			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, droppedBetasWithClaudeCodeSet))
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropWithClaudeCodeSet))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
-			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBetaHeader), defaultDroppedBetasSet))
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBetaHeader), effectiveDropSet))
 		}
-	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
-		// API-key：仅在请求显式使用 beta 特性且客户端未提供时，按需补齐（默认关闭）
-		if requestNeedsBetaFeatures(body) {
-			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				req.Header.Set("anthropic-beta", beta)
+	} else {
+		// API-key accounts: apply beta policy filter to strip controlled tokens
+		if existingBeta := req.Header.Get("anthropic-beta"); existingBeta != "" {
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(existingBeta, effectiveDropSet))
+		} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
+			// API-key：仅在请求显式使用 beta 特性且客户端未提供时，按需补齐（默认关闭）
+			if requestNeedsBetaFeatures(body) {
+				if beta := defaultAPIKeyBetaHeader(body); beta != "" {
+					req.Header.Set("anthropic-beta", beta)
+				}
 			}
 		}
 	}
@@ -5334,6 +5358,104 @@ func stripBetaTokensWithSet(header string, drop map[string]struct{}) string {
 	return strings.Join(out, ",")
 }
 
+// BetaBlockedError indicates a request was blocked by a beta policy rule.
+type BetaBlockedError struct {
+	Message string
+}
+
+func (e *BetaBlockedError) Error() string { return e.Message }
+
+// betaPolicyResult holds the evaluated result of beta policy rules for a single request.
+type betaPolicyResult struct {
+	blockErr  *BetaBlockedError   // non-nil if a block rule matched
+	filterSet map[string]struct{} // tokens to filter (may be nil)
+}
+
+// evaluateBetaPolicy loads settings once and evaluates all rules against the given request.
+func (s *GatewayService) evaluateBetaPolicy(ctx context.Context, betaHeader string, account *Account) betaPolicyResult {
+	if s.settingService == nil {
+		return betaPolicyResult{}
+	}
+	settings, err := s.settingService.GetBetaPolicySettings(ctx)
+	if err != nil || settings == nil {
+		return betaPolicyResult{}
+	}
+	isOAuth := account.IsOAuth()
+	var result betaPolicyResult
+	for _, rule := range settings.Rules {
+		if !betaPolicyScopeMatches(rule.Scope, isOAuth) {
+			continue
+		}
+		switch rule.Action {
+		case BetaPolicyActionBlock:
+			if result.blockErr == nil && betaHeader != "" && containsBetaToken(betaHeader, rule.BetaToken) {
+				msg := rule.ErrorMessage
+				if msg == "" {
+					msg = "beta feature " + rule.BetaToken + " is not allowed"
+				}
+				result.blockErr = &BetaBlockedError{Message: msg}
+			}
+		case BetaPolicyActionFilter:
+			if result.filterSet == nil {
+				result.filterSet = make(map[string]struct{})
+			}
+			result.filterSet[rule.BetaToken] = struct{}{}
+		}
+	}
+	return result
+}
+
+// mergeDropSets merges the static defaultDroppedBetasSet with dynamic policy filter tokens.
+// Returns defaultDroppedBetasSet directly when policySet is empty (zero allocation).
+func mergeDropSets(policySet map[string]struct{}, extra ...string) map[string]struct{} {
+	if len(policySet) == 0 && len(extra) == 0 {
+		return defaultDroppedBetasSet
+	}
+	m := make(map[string]struct{}, len(defaultDroppedBetasSet)+len(policySet)+len(extra))
+	for t := range defaultDroppedBetasSet {
+		m[t] = struct{}{}
+	}
+	for t := range policySet {
+		m[t] = struct{}{}
+	}
+	for _, t := range extra {
+		m[t] = struct{}{}
+	}
+	return m
+}
+
+// betaPolicyFilterSetKey is the gin.Context key for caching the policy filter set within a request.
+const betaPolicyFilterSetKey = "betaPolicyFilterSet"
+
+// getBetaPolicyFilterSet returns the beta policy filter set, using the gin context cache if available.
+// In the /v1/messages path, Forward() evaluates the policy first and caches the result;
+// buildUpstreamRequest reuses it (zero extra DB calls). In the count_tokens path, this
+// evaluates on demand (one DB call).
+func (s *GatewayService) getBetaPolicyFilterSet(ctx context.Context, c *gin.Context, account *Account) map[string]struct{} {
+	if c != nil {
+		if v, ok := c.Get(betaPolicyFilterSetKey); ok {
+			if fs, ok := v.(map[string]struct{}); ok {
+				return fs
+			}
+		}
+	}
+	return s.evaluateBetaPolicy(ctx, "", account).filterSet
+}
+
+// betaPolicyScopeMatches checks whether a rule's scope matches the current account type.
+func betaPolicyScopeMatches(scope string, isOAuth bool) bool {
+	switch scope {
+	case BetaPolicyScopeAll:
+		return true
+	case BetaPolicyScopeOAuth:
+		return isOAuth
+	case BetaPolicyScopeAPIKey:
+		return !isOAuth
+	default:
+		return true // unknown scope → match all (fail-open)
+	}
+}
+
 // droppedBetaSet returns claude.DroppedBetas as a set, with optional extra tokens.
 func droppedBetaSet(extra ...string) map[string]struct{} {
 	m := make(map[string]struct{}, len(defaultDroppedBetasSet)+len(extra))
@@ -5370,10 +5492,7 @@ func buildBetaTokenSet(tokens []string) map[string]struct{} {
 	return m
 }
 
-var (
-	defaultDroppedBetasSet        = buildBetaTokenSet(claude.DroppedBetas)
-	droppedBetasWithClaudeCodeSet = droppedBetaSet(claude.BetaClaudeCode)
-)
+var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
 // This mirrors opencode-anthropic-auth behavior: do not trust downstream
@@ -7311,6 +7430,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		applyClaudeOAuthHeaderDefaults(req, false)
 	}
 
+	// Build effective drop set for count_tokens: merge static defaults with dynamic beta policy filter rules
+	ctEffectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account))
+
 	// OAuth 账号：处理 anthropic-beta header
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
@@ -7318,8 +7440,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 			incomingBeta := req.Header.Get("anthropic-beta")
 			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
-			drop := droppedBetaSet()
-			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, ctEffectiveDropSet))
 		} else {
 			clientBetaHeader := req.Header.Get("anthropic-beta")
 			if clientBetaHeader == "" {
@@ -7329,14 +7450,19 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 				if !strings.Contains(beta, claude.BetaTokenCounting) {
 					beta = beta + "," + claude.BetaTokenCounting
 				}
-				req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, defaultDroppedBetasSet))
+				req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, ctEffectiveDropSet))
 			}
 		}
-	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
-		// API-key：与 messages 同步的按需 beta 注入（默认关闭）
-		if requestNeedsBetaFeatures(body) {
-			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				req.Header.Set("anthropic-beta", beta)
+	} else {
+		// API-key accounts: apply beta policy filter to strip controlled tokens
+		if existingBeta := req.Header.Get("anthropic-beta"); existingBeta != "" {
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(existingBeta, ctEffectiveDropSet))
+		} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
+			// API-key：与 messages 同步的按需 beta 注入（默认关闭）
+			if requestNeedsBetaFeatures(body) {
+				if beta := defaultAPIKeyBetaHeader(body); beta != "" {
+					req.Header.Set("anthropic-beta", beta)
+				}
 			}
 		}
 	}

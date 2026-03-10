@@ -1405,6 +1405,61 @@ func (h *SettingHandler) UpdateRectifierSettings(c *gin.Context) {
 	})
 }
 
+// GetBetaPolicySettings 获取 Beta 策略配置
+// GET /api/v1/admin/settings/beta-policy
+func (h *SettingHandler) GetBetaPolicySettings(c *gin.Context) {
+	settings, err := h.settingService.GetBetaPolicySettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	rules := make([]dto.BetaPolicyRule, len(settings.Rules))
+	for i, r := range settings.Rules {
+		rules[i] = dto.BetaPolicyRule(r)
+	}
+	response.Success(c, dto.BetaPolicySettings{Rules: rules})
+}
+
+// UpdateBetaPolicySettingsRequest 更新 Beta 策略配置请求
+type UpdateBetaPolicySettingsRequest struct {
+	Rules []dto.BetaPolicyRule `json:"rules"`
+}
+
+// UpdateBetaPolicySettings 更新 Beta 策略配置
+// PUT /api/v1/admin/settings/beta-policy
+func (h *SettingHandler) UpdateBetaPolicySettings(c *gin.Context) {
+	var req UpdateBetaPolicySettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	rules := make([]service.BetaPolicyRule, len(req.Rules))
+	for i, r := range req.Rules {
+		rules[i] = service.BetaPolicyRule(r)
+	}
+
+	settings := &service.BetaPolicySettings{Rules: rules}
+	if err := h.settingService.SetBetaPolicySettings(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	// Re-fetch to return updated settings
+	updated, err := h.settingService.GetBetaPolicySettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	outRules := make([]dto.BetaPolicyRule, len(updated.Rules))
+	for i, r := range updated.Rules {
+		outRules[i] = dto.BetaPolicyRule(r)
+	}
+	response.Success(c, dto.BetaPolicySettings{Rules: outRules})
+}
+
 // UpdateStreamTimeoutSettingsRequest 更新流超时配置请求
 type UpdateStreamTimeoutSettingsRequest struct {
 	Enabled                bool   `json:"enabled"`
