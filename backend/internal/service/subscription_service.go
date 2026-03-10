@@ -707,15 +707,11 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 		if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, windowStart); err != nil {
 			return nil, err
 		}
-		sub.DailyWindowStart = &windowStart
-		sub.DailyUsageUSD = 0
 	}
 	if resetWeekly {
 		if err := s.userSubRepo.ResetWeeklyUsage(ctx, sub.ID, windowStart); err != nil {
 			return nil, err
 		}
-		sub.WeeklyWindowStart = &windowStart
-		sub.WeeklyUsageUSD = 0
 	}
 	// Invalidate caches, same as CheckAndResetWindows
 	s.InvalidateSubCache(sub.UserID, sub.GroupID)
