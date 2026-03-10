@@ -32,8 +32,12 @@ func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserS
 	return &cp, nil
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetDailyUsage(_ context.Context, _ int64, _ time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetDailyUsage(_ context.Context, _ int64, windowStart time.Time) error {
 	r.resetDailyCalled = true
+	if r.resetDailyErr == nil && r.sub != nil {
+		r.sub.DailyUsageUSD = 0
+		r.sub.DailyWindowStart = &windowStart
+	}
 	return r.resetDailyErr
 }
 
@@ -88,6 +92,19 @@ func TestAdminResetQuota_ResetWeeklyOnly(t *testing.T) {
 	require.True(t, stub.resetWeeklyCalled, "应调用 ResetWeeklyUsage")
 }
 
+func TestAdminResetQuota_BothFalseReturnsError(t *testing.T) {
+	stub := &resetQuotaUserSubRepoStub{
+		sub: &UserSubscription{ID: 7, UserID: 10, GroupID: 20},
+	}
+	svc := newResetQuotaSvc(stub)
+
+	_, err := svc.AdminResetQuota(context.Background(), 7, false, false)
+
+	require.ErrorIs(t, err, ErrInvalidInput)
+	require.False(t, stub.resetDailyCalled)
+	require.False(t, stub.resetWeeklyCalled)
+}
+
 func TestAdminResetQuota_SubscriptionNotFound(t *testing.T) {
 	stub := &resetQuotaUserSubRepoStub{sub: nil}
 	svc := newResetQuotaSvc(stub)
@@ -129,26 +146,21 @@ func TestAdminResetQuota_ResetWeeklyUsageError(t *testing.T) {
 }
 
 func TestAdminResetQuota_ReturnsRefreshedSub(t *testing.T) {
-	now := time.Now()
-	windowStart := startOfDay(now)
-	sub := &UserSubscription{
-		ID:            6,
-		UserID:        10,
-		GroupID:       20,
-		DailyUsageUSD: 99.9,
+	stub := &resetQuotaUserSubRepoStub{
+		sub: &UserSubscription{
+			ID:            6,
+			UserID:        10,
+			GroupID:       20,
+			DailyUsageUSD: 99.9,
+		},
 	}
-	stub := &resetQuotaUserSubRepoStub{sub: sub}
-	// 模拟 ResetDailyUsage 将 DB 中的数据归零
-	stub.resetDailyErr = nil
-	stub.ResetDailyUsage(context.Background(), sub.ID, windowStart) //nolint:errcheck
-	// 手动更新 stub 中的 sub，模拟 DB 写入效果
-	stub.resetDailyCalled = false
-	stub.sub.DailyUsageUSD = 0
-	stub.sub.DailyWindowStart = &windowStart
 
 	svc := newResetQuotaSvc(stub)
 	result, err := svc.AdminResetQuota(context.Background(), 6, true, false)
 
 	require.NoError(t, err)
+	// ResetDailyUsage stub 会将 sub.DailyUsageUSD 归零，
+	// 服务应返回第二次 GetByID 的刷新值而非初始的 99.9
 	require.Equal(t, float64(0), result.DailyUsageUSD, "返回的订阅应反映已归零的用量")
+	require.True(t, stub.resetDailyCalled)
 }
