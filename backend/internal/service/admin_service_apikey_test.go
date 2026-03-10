@@ -32,28 +32,44 @@ func (s *userRepoStubForGroupUpdate) AddGroupToAllowedGroups(_ context.Context, 
 	return s.addGroupErr
 }
 
-func (s *userRepoStubForGroupUpdate) Create(context.Context, *User) error                { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) GetByID(context.Context, int64) (*User, error)      { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) GetByEmail(context.Context, string) (*User, error)  { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) GetFirstAdmin(context.Context) (*User, error)       { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) Update(context.Context, *User) error                { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) Delete(context.Context, int64) error                { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) Create(context.Context, *User) error { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) GetByID(context.Context, int64) (*User, error) {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) GetByEmail(context.Context, string) (*User, error) {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) GetFirstAdmin(context.Context) (*User, error) {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) Update(context.Context, *User) error { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) Delete(context.Context, int64) error { panic("unexpected") }
 func (s *userRepoStubForGroupUpdate) List(context.Context, pagination.PaginationParams) ([]User, *pagination.PaginationResult, error) {
 	panic("unexpected")
 }
 func (s *userRepoStubForGroupUpdate) ListWithFilters(context.Context, pagination.PaginationParams, UserListFilters) ([]User, *pagination.PaginationResult, error) {
 	panic("unexpected")
 }
-func (s *userRepoStubForGroupUpdate) UpdateBalance(context.Context, int64, float64) error   { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) DeductBalance(context.Context, int64, float64) error   { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) UpdateConcurrency(context.Context, int64, int) error   { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) ExistsByEmail(context.Context, string) (bool, error)   { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) UpdateBalance(context.Context, int64, float64) error {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) DeductBalance(context.Context, int64, float64) error {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) UpdateConcurrency(context.Context, int64, int) error {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) ExistsByEmail(context.Context, string) (bool, error) {
+	panic("unexpected")
+}
 func (s *userRepoStubForGroupUpdate) RemoveGroupFromAllowedGroups(context.Context, int64) (int64, error) {
 	panic("unexpected")
 }
-func (s *userRepoStubForGroupUpdate) UpdateTotpSecret(context.Context, int64, *string) error { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) EnableTotp(context.Context, int64) error                { panic("unexpected") }
-func (s *userRepoStubForGroupUpdate) DisableTotp(context.Context, int64) error               { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) UpdateTotpSecret(context.Context, int64, *string) error {
+	panic("unexpected")
+}
+func (s *userRepoStubForGroupUpdate) EnableTotp(context.Context, int64) error  { panic("unexpected") }
+func (s *userRepoStubForGroupUpdate) DisableTotp(context.Context, int64) error { panic("unexpected") }
 
 // apiKeyRepoStubForGroupUpdate implements APIKeyRepository for AdminUpdateAPIKeyGroupID tests.
 type apiKeyRepoStubForGroupUpdate struct {
@@ -192,6 +208,29 @@ func (s *groupRepoStubForGroupUpdate) BindAccountsToGroup(context.Context, int64
 }
 func (s *groupRepoStubForGroupUpdate) UpdateSortOrders(context.Context, []GroupSortOrderUpdate) error {
 	panic("unexpected")
+}
+
+type userSubRepoStubForGroupUpdate struct {
+	userSubRepoNoop
+	getActiveSub  *UserSubscription
+	getActiveErr  error
+	called        bool
+	calledUserID  int64
+	calledGroupID int64
+}
+
+func (s *userSubRepoStubForGroupUpdate) GetActiveByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
+	s.called = true
+	s.calledUserID = userID
+	s.calledGroupID = groupID
+	if s.getActiveErr != nil {
+		return nil, s.getActiveErr
+	}
+	if s.getActiveSub == nil {
+		return nil, ErrSubscriptionNotFound
+	}
+	clone := *s.getActiveSub
+	return &clone, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -386,14 +425,49 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_NonExclusiveGroup_NoAllowedGroupU
 func TestAdminService_AdminUpdateAPIKeyGroupID_SubscriptionGroup_Blocked(t *testing.T) {
 	existing := &APIKey{ID: 1, UserID: 42, Key: "sk-test", GroupID: nil}
 	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
-	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 10, Name: "Sub", Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeSubscription}}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 10, Name: "Sub", Status: StatusActive, IsExclusive: false, SubscriptionType: SubscriptionTypeSubscription}}
+	userRepo := &userRepoStubForGroupUpdate{}
+	userSubRepo := &userSubRepoStubForGroupUpdate{getActiveErr: ErrSubscriptionNotFound}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo, userRepo: userRepo, userSubRepo: userSubRepo}
+
+	// 无有效订阅时应拒绝绑定
+	_, err := svc.AdminUpdateAPIKeyGroupID(context.Background(), 1, int64Ptr(10))
+	require.Error(t, err)
+	require.Equal(t, "SUBSCRIPTION_REQUIRED", infraerrors.Reason(err))
+	require.True(t, userSubRepo.called)
+	require.Equal(t, int64(42), userSubRepo.calledUserID)
+	require.Equal(t, int64(10), userSubRepo.calledGroupID)
+	require.False(t, userRepo.addGroupCalled)
+}
+
+func TestAdminService_AdminUpdateAPIKeyGroupID_SubscriptionGroup_RequiresRepo(t *testing.T) {
+	existing := &APIKey{ID: 1, UserID: 42, Key: "sk-test", GroupID: nil}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 10, Name: "Sub", Status: StatusActive, IsExclusive: false, SubscriptionType: SubscriptionTypeSubscription}}
 	userRepo := &userRepoStubForGroupUpdate{}
 	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo, userRepo: userRepo}
 
-	// 订阅类型分组应被阻止绑定
 	_, err := svc.AdminUpdateAPIKeyGroupID(context.Background(), 1, int64Ptr(10))
 	require.Error(t, err)
-	require.Equal(t, "SUBSCRIPTION_GROUP_NOT_ALLOWED", infraerrors.Reason(err))
+	require.Equal(t, "SUBSCRIPTION_REPOSITORY_UNAVAILABLE", infraerrors.Reason(err))
+	require.False(t, userRepo.addGroupCalled)
+}
+
+func TestAdminService_AdminUpdateAPIKeyGroupID_SubscriptionGroup_AllowsActiveSubscription(t *testing.T) {
+	existing := &APIKey{ID: 1, UserID: 42, Key: "sk-test", GroupID: nil}
+	apiKeyRepo := &apiKeyRepoStubForGroupUpdate{key: existing}
+	groupRepo := &groupRepoStubForGroupUpdate{group: &Group{ID: 10, Name: "Sub", Status: StatusActive, IsExclusive: true, SubscriptionType: SubscriptionTypeSubscription}}
+	userRepo := &userRepoStubForGroupUpdate{}
+	userSubRepo := &userSubRepoStubForGroupUpdate{
+		getActiveSub: &UserSubscription{ID: 99, UserID: 42, GroupID: 10},
+	}
+	svc := &adminServiceImpl{apiKeyRepo: apiKeyRepo, groupRepo: groupRepo, userRepo: userRepo, userSubRepo: userSubRepo}
+
+	got, err := svc.AdminUpdateAPIKeyGroupID(context.Background(), 1, int64Ptr(10))
+	require.NoError(t, err)
+	require.True(t, userSubRepo.called)
+	require.NotNil(t, got.APIKey.GroupID)
+	require.Equal(t, int64(10), *got.APIKey.GroupID)
 	require.False(t, userRepo.addGroupCalled)
 }
 
