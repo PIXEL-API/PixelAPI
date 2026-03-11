@@ -162,7 +162,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	if includeStats {
 		stats, err := h.dashboardService.GetDashboardStats(ctx)
 		if err != nil {
-			return nil, errors.New("Failed to get dashboard statistics")
+			return nil, errors.New("failed to get dashboard statistics")
 		}
 		resp.Stats = &dashboardSnapshotV2Stats{
 			DashboardStats: *stats,
@@ -186,7 +186,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.BillingType,
 		)
 		if err != nil {
-			return nil, errors.New("Failed to get usage trend")
+			return nil, errors.New("failed to get usage trend")
 		}
 		resp.Trend = trend
 	}
@@ -205,7 +205,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.BillingType,
 		)
 		if err != nil {
-			return nil, errors.New("Failed to get model statistics")
+			return nil, errors.New("failed to get model statistics")
 		}
 		resp.Models = models
 	}
@@ -224,7 +224,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.BillingType,
 		)
 		if err != nil {
-			return nil, errors.New("Failed to get group statistics")
+			return nil, errors.New("failed to get group statistics")
 		}
 		resp.Groups = groups
 	}
@@ -232,7 +232,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	if includeUsersTrend {
 		usersTrend, _, err := h.getUserUsageTrendCached(ctx, startTime, endTime, granularity, usersTrendLimit)
 		if err != nil {
-			return nil, errors.New("Failed to get user usage trend")
+			return nil, errors.New("failed to get user usage trend")
 		}
 		resp.UsersTrend = usersTrend
 	}
