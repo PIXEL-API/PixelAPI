@@ -249,6 +249,50 @@ func TestApplyCodexOAuthTransform_NonCodexCLI_PreservesExistingInstructions(t *t
 	require.Equal(t, "old instructions", instructions)
 }
 
+func TestApplyCodexOAuthTransform_StringInputConvertedToArray(t *testing.T) {
+	reqBody := map[string]any{"model": "gpt-5.4", "input": "Hello, world!"}
+	result := applyCodexOAuthTransform(reqBody, false, false)
+	require.True(t, result.Modified)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 1)
+	msg, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "message", msg["type"])
+	require.Equal(t, "user", msg["role"])
+	require.Equal(t, "Hello, world!", msg["content"])
+}
+
+func TestApplyCodexOAuthTransform_EmptyStringInputBecomesEmptyArray(t *testing.T) {
+	reqBody := map[string]any{"model": "gpt-5.4", "input": ""}
+	result := applyCodexOAuthTransform(reqBody, false, false)
+	require.True(t, result.Modified)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 0)
+}
+
+func TestApplyCodexOAuthTransform_WhitespaceStringInputBecomesEmptyArray(t *testing.T) {
+	reqBody := map[string]any{"model": "gpt-5.4", "input": "   "}
+	result := applyCodexOAuthTransform(reqBody, false, false)
+	require.True(t, result.Modified)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 0)
+}
+
+func TestApplyCodexOAuthTransform_StringInputWithToolsField(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": "Run the tests",
+		"tools": []any{map[string]any{"type": "function", "name": "bash"}},
+	}
+	applyCodexOAuthTransform(reqBody, false, false)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 1)
+}
+
 func TestIsInstructionsEmpty(t *testing.T) {
 	tests := []struct {
 		name     string
