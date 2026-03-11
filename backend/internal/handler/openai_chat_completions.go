@@ -62,6 +62,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	stream, _ := converted["stream"].(bool)
 	model, _ := converted["model"].(string)
+	originalWriter := c.Writer
 	writer := newChatCompletionsResponseWriter(c.Writer, stream, includeUsage, model)
 	c.Writer = writer
 	c.Request.Body = io.NopCloser(bytes.NewReader(convertedBody))
@@ -69,6 +70,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	h.Responses(c)
 	writer.Finalize()
+	c.Writer = originalWriter
 }
 
 type chatCompletionsResponseWriter struct {
@@ -165,6 +167,20 @@ func (w *chatCompletionsResponseWriter) Finalize() {
 
 func (w *chatCompletionsResponseWriter) SetPassthrough() {
 	w.passthrough = true
+}
+
+func (w *chatCompletionsResponseWriter) Status() int {
+	if w.ResponseWriter == nil {
+		return 0
+	}
+	return w.ResponseWriter.Status()
+}
+
+func (w *chatCompletionsResponseWriter) Written() bool {
+	if w.ResponseWriter == nil {
+		return false
+	}
+	return w.ResponseWriter.Written()
 }
 
 func (w *chatCompletionsResponseWriter) flushStreamBuffer() {
