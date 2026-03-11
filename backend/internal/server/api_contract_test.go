@@ -537,6 +537,7 @@ func TestAPIContracts(t *testing.T) {
 					"purchase_subscription_url": "",
 					"min_claude_code_version": "",
 					"allow_ungrouped_key_scheduling": false,
+					"backend_mode_enabled": false,
 					"custom_menu_items": []
 				}
 			}`,
