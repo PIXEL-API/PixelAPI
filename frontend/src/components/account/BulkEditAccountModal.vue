@@ -959,11 +959,11 @@ const allModels = [
   { value: 'gpt-5.1-2025-11-13', label: 'GPT-5.1' },
   { value: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini' },
   { value: 'gpt-5-2025-08-07', label: 'GPT-5' },
+  { value: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image' },
+  { value: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
   { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
   { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  { value: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
   { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-  { value: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image' },
   { value: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image (Legacy)' },
   { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
   { value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' }
