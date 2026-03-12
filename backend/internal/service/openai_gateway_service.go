@@ -1767,6 +1767,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			bodyModified = true
 			markPatchSet("model", normalizedModel)
 		}
+
+		// 移除 gpt-5.2-codex 以下的版本 verbosity 参数
+		// 确保高版本模型向低版本模型映射不报错
+		if !SupportsVerbosity(normalizedModel) {
+			if text, ok := reqBody["text"].(map[string]any); ok {
+				delete(text, "verbosity")
+			}
+		}
 	}
 
 	// 规范化 reasoning.effort 参数（minimal -> none），与上游允许值对齐。
