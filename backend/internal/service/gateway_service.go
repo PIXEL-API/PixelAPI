@@ -107,22 +107,6 @@ func GatewayModelsListCacheStats() (cacheHit, cacheMiss, store int64) {
 	return modelsListCacheHitTotal.Load(), modelsListCacheMissTotal.Load(), modelsListCacheStoreTotal.Load()
 }
 
-func claudeUsageHasAnyTokens(usage *ClaudeUsage) bool {
-	return usage != nil && (usage.InputTokens > 0 ||
-		usage.OutputTokens > 0 ||
-		usage.CacheCreationInputTokens > 0 ||
-		usage.CacheReadInputTokens > 0 ||
-		usage.CacheCreation5mTokens > 0 ||
-		usage.CacheCreation1hTokens > 0)
-}
-
-func openAIUsageHasAnyTokens(usage *OpenAIUsage) bool {
-	return usage != nil && (usage.InputTokens > 0 ||
-		usage.OutputTokens > 0 ||
-		usage.CacheCreationInputTokens > 0 ||
-		usage.CacheReadInputTokens > 0)
-}
-
 func openAIStreamEventIsTerminal(data string) bool {
 	trimmed := strings.TrimSpace(data)
 	if trimmed == "" {
