@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -11,6 +12,8 @@ import (
 type schedulerOutboxRepository struct {
 	db *sql.DB
 }
+
+const schedulerOutboxDedupWindow = time.Second
 
 func NewSchedulerOutboxRepository(db *sql.DB) service.SchedulerOutboxRepository {
 	return &schedulerOutboxRepository{db: db}
@@ -88,9 +91,37 @@ func enqueueSchedulerOutbox(ctx context.Context, exec sqlExecutor, eventType str
 		}
 		payloadArg = encoded
 	}
-	_, err := exec.ExecContext(ctx, `
+	query := `
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		VALUES ($1, $2, $3, $4)
-	`, eventType, accountID, groupID, payloadArg)
+	`
+	args := []any{eventType, accountID, groupID, payloadArg}
+	if schedulerOutboxEventSupportsDedup(eventType) {
+		query = `
+			INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+			SELECT $1, $2, $3, $4
+			WHERE NOT EXISTS (
+				SELECT 1
+				FROM scheduler_outbox
+				WHERE event_type = $1
+					AND account_id IS NOT DISTINCT FROM $2
+					AND group_id IS NOT DISTINCT FROM $3
+					AND created_at >= NOW() - make_interval(secs => $5)
+			)
+		`
+		args = append(args, schedulerOutboxDedupWindow.Seconds())
+	}
+	_, err := exec.ExecContext(ctx, query, args...)
 	return err
+}
+
+func schedulerOutboxEventSupportsDedup(eventType string) bool {
+	switch eventType {
+	case service.SchedulerOutboxEventAccountChanged,
+		service.SchedulerOutboxEventGroupChanged,
+		service.SchedulerOutboxEventFullRebuild:
+		return true
+	default:
+		return false
+	}
 }

@@ -16,19 +16,7 @@ type opsRepository struct {
 	db *sql.DB
 }
 
-func NewOpsRepository(db *sql.DB) service.OpsRepository {
-	return &opsRepository{db: db}
-}
-
-func (r *opsRepository) InsertErrorLog(ctx context.Context, input *service.OpsInsertErrorLogInput) (int64, error) {
-	if r == nil || r.db == nil {
-		return 0, fmt.Errorf("nil ops repository")
-	}
-	if input == nil {
-		return 0, fmt.Errorf("nil input")
-	}
-
-	q := `
+const insertOpsErrorLogSQL = `
 INSERT INTO ops_error_logs (
   request_id,
   client_request_id,
@@ -70,12 +58,77 @@ INSERT INTO ops_error_logs (
   created_at
 ) VALUES (
   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
-) RETURNING id`
+)`
+
+func NewOpsRepository(db *sql.DB) service.OpsRepository {
+	return &opsRepository{db: db}
+}
+
+func (r *opsRepository) InsertErrorLog(ctx context.Context, input *service.OpsInsertErrorLogInput) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("nil ops repository")
+	}
+	if input == nil {
+		return 0, fmt.Errorf("nil input")
+	}
 
 	var id int64
 	err := r.db.QueryRowContext(
 		ctx,
-		q,
+		insertOpsErrorLogSQL+" RETURNING id",
+		opsInsertErrorLogArgs(input)...,
+	).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (r *opsRepository) BatchInsertErrorLogs(ctx context.Context, inputs []*service.OpsInsertErrorLogInput) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("nil ops repository")
+	}
+	if len(inputs) == 0 {
+		return 0, nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	stmt, err := tx.PrepareContext(ctx, insertOpsErrorLogSQL)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = stmt.Close()
+	}()
+
+	var inserted int64
+	for _, input := range inputs {
+		if input == nil {
+			continue
+		}
+		if _, err = stmt.ExecContext(ctx, opsInsertErrorLogArgs(input)...); err != nil {
+			return inserted, err
+		}
+		inserted++
+	}
+
+	if err = tx.Commit(); err != nil {
+		return inserted, err
+	}
+	return inserted, nil
+}
+
+func opsInsertErrorLogArgs(input *service.OpsInsertErrorLogInput) []any {
+	return []any{
 		opsNullString(input.RequestID),
 		opsNullString(input.ClientRequestID),
 		opsNullInt64(input.UserID),
@@ -114,11 +167,7 @@ INSERT INTO ops_error_logs (
 		input.IsRetryable,
 		input.RetryCount,
 		input.CreatedAt,
-	).Scan(&id)
-	if err != nil {
-		return 0, err
 	}
-	return id, nil
 }
 
 func (r *opsRepository) ListErrorLogs(ctx context.Context, filter *service.OpsErrorLogFilter) (*service.OpsErrorLogList, error) {
