@@ -29,31 +29,6 @@ func (s *openAIRecordUsageLogRepoStub) Create(ctx context.Context, log *UsageLog
 	return s.inserted, s.err
 }
 
-type openAIRecordUsageBestEffortLogRepoStub struct {
-	UsageLogRepository
-
-	bestEffortErr   error
-	createErr       error
-	bestEffortCalls int
-	createCalls     int
-	lastLog         *UsageLog
-	lastCtxErr      error
-}
-
-func (s *openAIRecordUsageBestEffortLogRepoStub) CreateBestEffort(ctx context.Context, log *UsageLog) error {
-	s.bestEffortCalls++
-	s.lastLog = log
-	s.lastCtxErr = ctx.Err()
-	return s.bestEffortErr
-}
-
-func (s *openAIRecordUsageBestEffortLogRepoStub) Create(ctx context.Context, log *UsageLog) (bool, error) {
-	s.createCalls++
-	s.lastLog = log
-	s.lastCtxErr = ctx.Err()
-	return false, s.createErr
-}
-
 type openAIRecordUsageBillingRepoStub struct {
 	UsageBillingRepository
 
