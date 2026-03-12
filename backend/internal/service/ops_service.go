@@ -121,14 +121,74 @@ func (s *OpsService) IsMonitoringEnabled(ctx context.Context) bool {
 }
 
 func (s *OpsService) RecordError(ctx context.Context, entry *OpsInsertErrorLogInput, rawRequestBody []byte) error {
-	if entry == nil {
+	prepared, ok, err := s.prepareErrorLogInput(ctx, entry, rawRequestBody)
+	if err != nil {
+		log.Printf("[Ops] RecordError prepare failed: %v", err)
+		return err
+	}
+	if !ok {
 		return nil
+	}
+
+	if _, err := s.opsRepo.InsertErrorLog(ctx, prepared); err != nil {
+		// Never bubble up to gateway; best-effort logging.
+		log.Printf("[Ops] RecordError failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (s *OpsService) RecordErrorBatch(ctx context.Context, entries []*OpsInsertErrorLogInput) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	prepared := make([]*OpsInsertErrorLogInput, 0, len(entries))
+	for _, entry := range entries {
+		item, ok, err := s.prepareErrorLogInput(ctx, entry, nil)
+		if err != nil {
+			log.Printf("[Ops] RecordErrorBatch prepare failed: %v", err)
+			continue
+		}
+		if ok {
+			prepared = append(prepared, item)
+		}
+	}
+	if len(prepared) == 0 {
+		return nil
+	}
+	if len(prepared) == 1 {
+		_, err := s.opsRepo.InsertErrorLog(ctx, prepared[0])
+		if err != nil {
+			log.Printf("[Ops] RecordErrorBatch single insert failed: %v", err)
+		}
+		return err
+	}
+
+	if _, err := s.opsRepo.BatchInsertErrorLogs(ctx, prepared); err != nil {
+		log.Printf("[Ops] RecordErrorBatch failed, fallback to single inserts: %v", err)
+		var firstErr error
+		for _, entry := range prepared {
+			if _, insertErr := s.opsRepo.InsertErrorLog(ctx, entry); insertErr != nil {
+				log.Printf("[Ops] RecordErrorBatch fallback insert failed: %v", insertErr)
+				if firstErr == nil {
+					firstErr = insertErr
+				}
+			}
+		}
+		return firstErr
+	}
+	return nil
+}
+
+func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertErrorLogInput, rawRequestBody []byte) (*OpsInsertErrorLogInput, bool, error) {
+	if entry == nil {
+		return nil, false, nil
 	}
 	if !s.IsMonitoringEnabled(ctx) {
-		return nil
+		return nil, false, nil
 	}
 	if s.opsRepo == nil {
-		return nil
+		return nil, false, nil
 	}
 
 	// Ensure timestamps are always populated.
@@ -185,85 +245,88 @@ func (s *OpsService) RecordError(ctx context.Context, entry *OpsInsertErrorLogIn
 		}
 	}
 
-	// Sanitize + serialize upstream error events list.
-	if len(entry.UpstreamErrors) > 0 {
-		const maxEvents = 32
-		events := entry.UpstreamErrors
-		if len(events) > maxEvents {
-			events = events[len(events)-maxEvents:]
+	if err := sanitizeOpsUpstreamErrors(entry); err != nil {
+		return nil, false, err
+	}
+
+	return entry, true, nil
+}
+
+func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
+	if entry == nil || len(entry.UpstreamErrors) == 0 {
+		return nil
+	}
+
+	const maxEvents = 32
+	events := entry.UpstreamErrors
+	if len(events) > maxEvents {
+		events = events[len(events)-maxEvents:]
+	}
+
+	sanitized := make([]*OpsUpstreamErrorEvent, 0, len(events))
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		out := *ev
+
+		out.Platform = strings.TrimSpace(out.Platform)
+		out.UpstreamRequestID = truncateString(strings.TrimSpace(out.UpstreamRequestID), 128)
+		out.Kind = truncateString(strings.TrimSpace(out.Kind), 64)
+
+		if out.AccountID < 0 {
+			out.AccountID = 0
+		}
+		if out.UpstreamStatusCode < 0 {
+			out.UpstreamStatusCode = 0
+		}
+		if out.AtUnixMs < 0 {
+			out.AtUnixMs = 0
 		}
 
-		sanitized := make([]*OpsUpstreamErrorEvent, 0, len(events))
-		for _, ev := range events {
-			if ev == nil {
-				continue
-			}
-			out := *ev
+		msg := sanitizeUpstreamErrorMessage(strings.TrimSpace(out.Message))
+		msg = truncateString(msg, 2048)
+		out.Message = msg
 
-			out.Platform = strings.TrimSpace(out.Platform)
-			out.UpstreamRequestID = truncateString(strings.TrimSpace(out.UpstreamRequestID), 128)
-			out.Kind = truncateString(strings.TrimSpace(out.Kind), 64)
+		detail := strings.TrimSpace(out.Detail)
+		if detail != "" {
+			// Keep upstream detail small; request bodies are not stored here, only upstream error payloads.
+			sanitizedDetail, _ := sanitizeErrorBodyForStorage(detail, opsMaxStoredErrorBodyBytes)
+			out.Detail = sanitizedDetail
+		} else {
+			out.Detail = ""
+		}
 
-			if out.AccountID < 0 {
-				out.AccountID = 0
-			}
-			if out.UpstreamStatusCode < 0 {
-				out.UpstreamStatusCode = 0
-			}
-			if out.AtUnixMs < 0 {
-				out.AtUnixMs = 0
-			}
-
-			msg := sanitizeUpstreamErrorMessage(strings.TrimSpace(out.Message))
-			msg = truncateString(msg, 2048)
-			out.Message = msg
-
-			detail := strings.TrimSpace(out.Detail)
-			if detail != "" {
-				// Keep upstream detail small; request bodies are not stored here, only upstream error payloads.
-				sanitizedDetail, _ := sanitizeErrorBodyForStorage(detail, opsMaxStoredErrorBodyBytes)
-				out.Detail = sanitizedDetail
-			} else {
-				out.Detail = ""
-			}
-
-			out.UpstreamRequestBody = strings.TrimSpace(out.UpstreamRequestBody)
-			if out.UpstreamRequestBody != "" {
-				// Reuse the same sanitization/trimming strategy as request body storage.
-				// Keep it small so it is safe to persist in ops_error_logs JSON.
-				sanitized, truncated, _ := sanitizeAndTrimRequestBody([]byte(out.UpstreamRequestBody), 10*1024)
-				if sanitized != "" {
-					out.UpstreamRequestBody = sanitized
-					if truncated {
-						out.Kind = strings.TrimSpace(out.Kind)
-						if out.Kind == "" {
-							out.Kind = "upstream"
-						}
-						out.Kind = out.Kind + ":request_body_truncated"
+		out.UpstreamRequestBody = strings.TrimSpace(out.UpstreamRequestBody)
+		if out.UpstreamRequestBody != "" {
+			// Reuse the same sanitization/trimming strategy as request body storage.
+			// Keep it small so it is safe to persist in ops_error_logs JSON.
+			sanitizedBody, truncated, _ := sanitizeAndTrimRequestBody([]byte(out.UpstreamRequestBody), 10*1024)
+			if sanitizedBody != "" {
+				out.UpstreamRequestBody = sanitizedBody
+				if truncated {
+					out.Kind = strings.TrimSpace(out.Kind)
+					if out.Kind == "" {
+						out.Kind = "upstream"
 					}
-				} else {
-					out.UpstreamRequestBody = ""
+					out.Kind = out.Kind + ":request_body_truncated"
 				}
+			} else {
+				out.UpstreamRequestBody = ""
 			}
-
-			// Drop fully-empty events (can happen if only status code was known).
-			if out.UpstreamStatusCode == 0 && out.Message == "" && out.Detail == "" {
-				continue
-			}
-
-			evCopy := out
-			sanitized = append(sanitized, &evCopy)
 		}
 
-		entry.UpstreamErrorsJSON = marshalOpsUpstreamErrors(sanitized)
-		entry.UpstreamErrors = nil
+		// Drop fully-empty events (can happen if only status code was known).
+		if out.UpstreamStatusCode == 0 && out.Message == "" && out.Detail == "" {
+			continue
+		}
+
+		evCopy := out
+		sanitized = append(sanitized, &evCopy)
 	}
 
-	if _, err := s.opsRepo.InsertErrorLog(ctx, entry); err != nil {
-		// Never bubble up to gateway; best-effort logging.
-		log.Printf("[Ops] RecordError failed: %v", err)
-		return err
-	}
+	entry.UpstreamErrorsJSON = marshalOpsUpstreamErrors(sanitized)
+	entry.UpstreamErrors = nil
 	return nil
 }
 

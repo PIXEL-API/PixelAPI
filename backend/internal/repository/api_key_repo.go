@@ -452,6 +452,32 @@ func (r *apiKeyRepository) IncrementQuotaUsed(ctx context.Context, id int64, amo
 	return updated.QuotaUsed, nil
 }
 
+// IncrementQuotaUsedAndGetState atomically increments quota_used, conditionally marks the key
+// as quota_exhausted, and returns the latest quota state in one round trip.
+func (r *apiKeyRepository) IncrementQuotaUsedAndGetState(ctx context.Context, id int64, amount float64) (*service.APIKeyQuotaUsageState, error) {
+	query := `
+		UPDATE api_keys
+		SET
+			quota_used = quota_used + $1,
+			status = CASE
+				WHEN quota > 0 AND quota_used + $1 >= quota THEN $2
+				ELSE status
+			END,
+			updated_at = NOW()
+		WHERE id = $3 AND deleted_at IS NULL
+		RETURNING quota_used, quota, key, status
+	`
+
+	state := &service.APIKeyQuotaUsageState{}
+	if err := scanSingleRow(ctx, r.sql, query, []any{amount, service.StatusAPIKeyQuotaExhausted, id}, &state.QuotaUsed, &state.Quota, &state.Key, &state.Status); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		return nil, err
+	}
+	return state, nil
+}
+
 func (r *apiKeyRepository) UpdateLastUsed(ctx context.Context, id int64, usedAt time.Time) error {
 	affected, err := r.client.APIKey.Update().
 		Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).

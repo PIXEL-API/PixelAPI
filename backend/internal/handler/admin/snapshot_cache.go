@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type snapshotCacheEntry struct {
@@ -19,6 +21,12 @@ type snapshotCache struct {
 	mu    sync.RWMutex
 	ttl   time.Duration
 	items map[string]snapshotCacheEntry
+	sf    singleflight.Group
+}
+
+type snapshotCacheLoadResult struct {
+	Entry snapshotCacheEntry
+	Hit   bool
 }
 
 func newSnapshotCache(ttl time.Duration) *snapshotCache {
@@ -68,6 +76,41 @@ func (c *snapshotCache) Set(key string, payload any) snapshotCacheEntry {
 	c.items[key] = entry
 	c.mu.Unlock()
 	return entry
+}
+
+func (c *snapshotCache) GetOrLoad(key string, load func() (any, error)) (snapshotCacheEntry, bool, error) {
+	if load == nil {
+		return snapshotCacheEntry{}, false, nil
+	}
+	if entry, ok := c.Get(key); ok {
+		return entry, true, nil
+	}
+	if c == nil || key == "" {
+		payload, err := load()
+		if err != nil {
+			return snapshotCacheEntry{}, false, err
+		}
+		return c.Set(key, payload), false, nil
+	}
+
+	value, err, _ := c.sf.Do(key, func() (any, error) {
+		if entry, ok := c.Get(key); ok {
+			return snapshotCacheLoadResult{Entry: entry, Hit: true}, nil
+		}
+		payload, err := load()
+		if err != nil {
+			return nil, err
+		}
+		return snapshotCacheLoadResult{Entry: c.Set(key, payload), Hit: false}, nil
+	})
+	if err != nil {
+		return snapshotCacheEntry{}, false, err
+	}
+	result, ok := value.(snapshotCacheLoadResult)
+	if !ok {
+		return snapshotCacheEntry{}, false, nil
+	}
+	return result.Entry, result.Hit, nil
 }
 
 func buildETagFromAny(payload any) string {

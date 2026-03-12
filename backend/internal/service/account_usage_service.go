@@ -369,8 +369,11 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	}
 
 	if shouldRefreshOpenAICodexSnapshot(account, usage, now) && s.shouldProbeOpenAICodexSnapshot(account.ID, now) {
-		if updates, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil && len(updates) > 0 {
+		if updates, resetAt, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil && (len(updates) > 0 || resetAt != nil) {
 			mergeAccountExtra(account, updates)
+			if resetAt != nil {
+				account.RateLimitResetAt = resetAt
+			}
 			if usage.UpdatedAt == nil {
 				usage.UpdatedAt = &now
 			}
@@ -457,26 +460,26 @@ func (s *AccountUsageService) shouldProbeOpenAICodexSnapshot(accountID int64, no
 	return true
 }
 
-func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account) (map[string]any, error) {
+func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account) (map[string]any, *time.Time, error) {
 	if account == nil || !account.IsOAuth() {
-		return nil, nil
+		return nil, nil, nil
 	}
 	accessToken := account.GetOpenAIAccessToken()
 	if accessToken == "" {
-		return nil, fmt.Errorf("no access token available")
+		return nil, nil, fmt.Errorf("no access token available")
 	}
 	modelID := openaipkg.DefaultTestModel
 	payload := createOpenAITestPayload(modelID, true)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal openai probe payload: %w", err)
+		return nil, nil, fmt.Errorf("marshal openai probe payload: %w", err)
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, chatgptCodexURL, bytes.NewReader(payloadBytes))
 	if err != nil {
-		return nil, fmt.Errorf("create openai probe request: %w", err)
+		return nil, nil, fmt.Errorf("create openai probe request: %w", err)
 	}
 	req.Host = "chatgpt.com"
 	req.Header.Set("Content-Type", "application/json")
@@ -505,43 +508,67 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 		ResponseHeaderTimeout: 10 * time.Second,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("build openai probe client: %w", err)
+		return nil, nil, fmt.Errorf("build openai probe client: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai codex probe request failed: %w", err)
+		return nil, nil, fmt.Errorf("openai codex probe request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	updates, err := extractOpenAICodexProbeUpdates(resp)
+	updates, resetAt, err := extractOpenAICodexProbeSnapshot(resp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(updates) > 0 {
-		go func(accountID int64, updates map[string]any) {
-			updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer updateCancel()
+	if len(updates) > 0 || resetAt != nil {
+		s.persistOpenAICodexProbeSnapshot(account.ID, updates, resetAt)
+		return updates, resetAt, nil
+	}
+	return nil, nil, nil
+}
+
+func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, updates map[string]any, resetAt *time.Time) {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return
+	}
+	if len(updates) == 0 && resetAt == nil {
+		return
+	}
+
+	go func() {
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer updateCancel()
+		if len(updates) > 0 {
 			_ = s.accountRepo.UpdateExtra(updateCtx, accountID, updates)
-		}(account.ID, updates)
-		return updates, nil
+		}
+		if resetAt != nil {
+			_ = s.accountRepo.SetRateLimited(updateCtx, accountID, *resetAt)
+		}
+	}()
+}
+
+func extractOpenAICodexProbeSnapshot(resp *http.Response) (map[string]any, *time.Time, error) {
+	if resp == nil {
+		return nil, nil, nil
 	}
-	return nil, nil
+	if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
+		baseTime := time.Now()
+		updates := buildCodexUsageExtraUpdates(snapshot, baseTime)
+		resetAt := codexRateLimitResetAtFromSnapshot(snapshot, baseTime)
+		if len(updates) > 0 {
+			return updates, resetAt, nil
+		}
+		return nil, resetAt, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, nil, fmt.Errorf("openai codex probe returned status %d", resp.StatusCode)
+	}
+	return nil, nil, nil
 }
 
 func extractOpenAICodexProbeUpdates(resp *http.Response) (map[string]any, error) {
-	if resp == nil {
-		return nil, nil
-	}
-	if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
-		updates := buildCodexUsageExtraUpdates(snapshot, time.Now())
-		if len(updates) > 0 {
-			return updates, nil
-		}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("openai codex probe returned status %d", resp.StatusCode)
-	}
-	return nil, nil
+	updates, _, err := extractOpenAICodexProbeSnapshot(resp)
+	return updates, err
 }
 
 func mergeAccountExtra(account *Account, updates map[string]any) {
