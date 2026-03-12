@@ -51,6 +51,18 @@ type accountRepository struct {
 	schedulerCache service.SchedulerCache
 }
 
+var schedulerNeutralExtraKeyPrefixes = []string{
+	"codex_primary_",
+	"codex_secondary_",
+	"codex_5h_",
+	"codex_7d_",
+}
+
+var schedulerNeutralExtraKeys = map[string]struct{}{
+	"codex_usage_updated_at":     {},
+	"session_window_utilization": {},
+}
+
 // NewAccountRepository 创建账户仓储实例。
 // 这是对外暴露的构造函数，返回接口类型以便于依赖注入。
 func NewAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache service.SchedulerCache) service.AccountRepository {
@@ -1190,8 +1202,10 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue extra update failed: account=%d err=%v", id, err)
 		}
-	} else if shouldSyncSchedulerSnapshotForExtraUpdates(updates) {
-		// codex 限流快照仍需要让调度缓存尽快看见，避免 DB 抖动时丢失自愈链路。
+	} else {
+		// 观测型 extra 字段不需要触发 bucket 重建，但仍同步单账号快照，
+		// 让 sticky session / GetAccount 命中缓存时也能读到最新数据，
+		// 同时避免缓存局部 patch 覆盖掉并发写入的其它账号字段。
 		r.syncSchedulerAccountSnapshot(ctx, id)
 	}
 	return nil
@@ -1202,7 +1216,7 @@ func shouldEnqueueSchedulerOutboxForExtraUpdates(updates map[string]any) bool {
 		return false
 	}
 	for key := range updates {
-		if isSchedulerNeutralAccountExtraKey(key) {
+		if isSchedulerNeutralExtraKey(key) {
 			continue
 		}
 		return true
@@ -1210,91 +1224,20 @@ func shouldEnqueueSchedulerOutboxForExtraUpdates(updates map[string]any) bool {
 	return false
 }
 
-func shouldSyncSchedulerSnapshotForExtraUpdates(updates map[string]any) bool {
-	return codexExtraIndicatesRateLimit(updates, "7d") || codexExtraIndicatesRateLimit(updates, "5h")
-}
-
-func isSchedulerNeutralAccountExtraKey(key string) bool {
+func isSchedulerNeutralExtraKey(key string) bool {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return false
 	}
-	if key == "session_window_utilization" {
+	if _, ok := schedulerNeutralExtraKeys[key]; ok {
 		return true
 	}
-	return strings.HasPrefix(key, "codex_")
-}
-
-func codexExtraIndicatesRateLimit(updates map[string]any, window string) bool {
-	if len(updates) == 0 {
-		return false
+	for _, prefix := range schedulerNeutralExtraKeyPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
 	}
-	usedValue, ok := updates["codex_"+window+"_used_percent"]
-	if !ok || !extraValueIndicatesExhausted(usedValue) {
-		return false
-	}
-	return extraValueHasResetMarker(updates["codex_"+window+"_reset_at"]) ||
-		extraValueHasPositiveNumber(updates["codex_"+window+"_reset_after_seconds"])
-}
-
-func extraValueIndicatesExhausted(value any) bool {
-	number, ok := extraValueToFloat64(value)
-	return ok && number >= 100-1e-9
-}
-
-func extraValueHasPositiveNumber(value any) bool {
-	number, ok := extraValueToFloat64(value)
-	return ok && number > 0
-}
-
-func extraValueHasResetMarker(value any) bool {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v) != ""
-	case time.Time:
-		return !v.IsZero()
-	case *time.Time:
-		return v != nil && !v.IsZero()
-	default:
-		return false
-	}
-}
-
-func extraValueToFloat64(value any) (float64, bool) {
-	switch v := value.(type) {
-	case float64:
-		return v, true
-	case float32:
-		return float64(v), true
-	case int:
-		return float64(v), true
-	case int8:
-		return float64(v), true
-	case int16:
-		return float64(v), true
-	case int32:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case uint:
-		return float64(v), true
-	case uint8:
-		return float64(v), true
-	case uint16:
-		return float64(v), true
-	case uint32:
-		return float64(v), true
-	case uint64:
-		return float64(v), true
-	case json.Number:
-		parsed, err := v.Float64()
-		return parsed, err == nil
-	case string:
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return parsed, err == nil
-	default:
-		return 0, false
-	}
+	return false
 }
 
 func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates service.AccountBulkUpdate) (int64, error) {
