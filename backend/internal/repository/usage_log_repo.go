@@ -377,7 +377,7 @@ func (r *usageLogRepository) createBatched(ctx context.Context, log *service.Usa
 }
 
 func (r *usageLogRepository) ensureCreateBatcher() {
-	if r == nil || r.db == nil {
+	if r == nil || r.db == nil || r.createBatchCh != nil {
 		return
 	}
 	r.createBatchOnce.Do(func() {
@@ -387,7 +387,7 @@ func (r *usageLogRepository) ensureCreateBatcher() {
 }
 
 func (r *usageLogRepository) ensureBestEffortBatcher() {
-	if r == nil || r.db == nil {
+	if r == nil || r.db == nil || r.bestEffortBatchCh != nil {
 		return
 	}
 	r.bestEffortBatchOnce.Do(func() {
