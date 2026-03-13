@@ -154,6 +154,30 @@ export async function getGroupApiKeys(
 }
 
 /**
+ * Rate multiplier entry for a user in a group
+ */
+export interface GroupRateMultiplierEntry {
+  user_id: number
+  user_name: string
+  user_email: string
+  user_notes: string
+  user_status: string
+  rate_multiplier: number
+}
+
+/**
+ * Get rate multipliers for users in a group
+ * @param id - Group ID
+ * @returns List of user rate multiplier entries
+ */
+export async function getGroupRateMultipliers(id: number): Promise<GroupRateMultiplierEntry[]> {
+  const { data } = await apiClient.get<GroupRateMultiplierEntry[]>(
+    `/admin/groups/${id}/rate-multipliers`
+  )
+  return data
+}
+
+/**
  * Update group sort orders
  * @param updates - Array of { id, sort_order } objects
  * @returns Success confirmation
@@ -164,6 +188,33 @@ export async function updateSortOrder(
   const { data } = await apiClient.put<{ message: string }>('/admin/groups/sort-order', {
     updates
   })
+  return data
+}
+
+/**
+ * Clear all rate multipliers for a group
+ * @param id - Group ID
+ * @returns Success confirmation
+ */
+export async function clearGroupRateMultipliers(id: number): Promise<{ message: string }> {
+  const { data } = await apiClient.delete<{ message: string }>(`/admin/groups/${id}/rate-multipliers`)
+  return data
+}
+
+/**
+ * Batch set rate multipliers for users in a group
+ * @param id - Group ID
+ * @param entries - Array of { user_id, rate_multiplier }
+ * @returns Success confirmation
+ */
+export async function batchSetGroupRateMultipliers(
+  id: number,
+  entries: Array<{ user_id: number; rate_multiplier: number }>
+): Promise<{ message: string }> {
+  const { data } = await apiClient.put<{ message: string }>(
+    `/admin/groups/${id}/rate-multipliers`,
+    { entries }
+  )
   return data
 }
 
@@ -178,6 +229,9 @@ export const groupsAPI = {
   toggleStatus,
   getStats,
   getGroupApiKeys,
+  getGroupRateMultipliers,
+  clearGroupRateMultipliers,
+  batchSetGroupRateMultipliers,
   updateSortOrder
 }
 
