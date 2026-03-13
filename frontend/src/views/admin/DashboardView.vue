@@ -412,23 +412,29 @@ const lineOptions = computed(() => ({
 const userTrendChartData = computed(() => {
   if (!userTrend.value?.length) return null
 
-  // Extract display name from email (part before @)
-  const getDisplayName = (email: string, userId: number): string => {
-    if (email && email.includes('@')) {
-      return email.split('@')[0]
+  const getDisplayName = (point: UserUsageTrendPoint): string => {
+    const username = point.username?.trim()
+    if (username) {
+      return username
     }
-    return t('admin.redeem.userPrefix', { id: userId })
+
+    const email = point.email?.trim()
+    if (email) {
+      return email
+    }
+
+    return t('admin.redeem.userPrefix', { id: point.user_id })
   }
 
-  // Group by user
-  const userGroups = new Map<string, { name: string; data: Map<string, number> }>()
+  // Group by user_id to avoid merging different users with the same display name
+  const userGroups = new Map<number, { name: string; data: Map<string, number> }>()
   const allDates = new Set<string>()
 
   userTrend.value.forEach((point) => {
     allDates.add(point.date)
-    const key = getDisplayName(point.email, point.user_id)
+    const key = point.user_id
     if (!userGroups.has(key)) {
-      userGroups.set(key, { name: key, data: new Map() })
+      userGroups.set(key, { name: getDisplayName(point), data: new Map() })
     }
     userGroups.get(key)!.data.set(point.date, point.tokens)
   })
