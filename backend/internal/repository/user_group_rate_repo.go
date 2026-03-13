@@ -95,6 +95,35 @@ func (r *userGroupRateRepository) GetByUserIDs(ctx context.Context, userIDs []in
 	return result, nil
 }
 
+// GetByGroupID 获取指定分组下所有用户的专属倍率
+func (r *userGroupRateRepository) GetByGroupID(ctx context.Context, groupID int64) ([]service.UserGroupRateEntry, error) {
+	query := `
+		SELECT ugr.user_id, u.username, u.email, COALESCE(u.notes, ''), u.status, ugr.rate_multiplier
+		FROM user_group_rate_multipliers ugr
+		JOIN users u ON u.id = ugr.user_id
+		WHERE ugr.group_id = $1
+		ORDER BY ugr.user_id
+	`
+	rows, err := r.sql.QueryContext(ctx, query, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []service.UserGroupRateEntry
+	for rows.Next() {
+		var entry service.UserGroupRateEntry
+		if err := rows.Scan(&entry.UserID, &entry.UserName, &entry.UserEmail, &entry.UserNotes, &entry.UserStatus, &entry.RateMultiplier); err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetByUserAndGroup 获取用户在特定分组的专属倍率
 func (r *userGroupRateRepository) GetByUserAndGroup(ctx context.Context, userID, groupID int64) (*float64, error) {
 	query := `SELECT rate_multiplier FROM user_group_rate_multipliers WHERE user_id = $1 AND group_id = $2`
@@ -162,6 +191,31 @@ func (r *userGroupRateRepository) SyncUserGroupRates(ctx context.Context, userID
 	}
 
 	return nil
+}
+
+// SyncGroupRateMultipliers 批量同步分组的用户专属倍率（先删后插）
+func (r *userGroupRateRepository) SyncGroupRateMultipliers(ctx context.Context, groupID int64, entries []service.GroupRateMultiplierInput) error {
+	if _, err := r.sql.ExecContext(ctx, `DELETE FROM user_group_rate_multipliers WHERE group_id = $1`, groupID); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	userIDs := make([]int64, len(entries))
+	rates := make([]float64, len(entries))
+	for i, e := range entries {
+		userIDs[i] = e.UserID
+		rates[i] = e.RateMultiplier
+	}
+	now := time.Now()
+	_, err := r.sql.ExecContext(ctx, `
+		INSERT INTO user_group_rate_multipliers (user_id, group_id, rate_multiplier, created_at, updated_at)
+		SELECT data.user_id, $1::bigint, data.rate_multiplier, $2::timestamptz, $2::timestamptz
+		FROM unnest($3::bigint[], $4::double precision[]) AS data(user_id, rate_multiplier)
+		ON CONFLICT (user_id, group_id)
+		DO UPDATE SET rate_multiplier = EXCLUDED.rate_multiplier, updated_at = EXCLUDED.updated_at
+	`, groupID, now, pq.Array(userIDs), pq.Array(rates))
+	return err
 }
 
 // DeleteByGroupID 删除指定分组的所有用户专属倍率
