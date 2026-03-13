@@ -281,6 +281,31 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 			used := a.GetQuotaWeeklyUsed()
 			out.QuotaWeeklyUsed = &used
 		}
+		// 固定时间重置配置
+		if mode := a.GetQuotaDailyResetMode(); mode == "fixed" {
+			out.QuotaDailyResetMode = &mode
+			hour := a.GetQuotaDailyResetHour()
+			out.QuotaDailyResetHour = &hour
+		}
+		if mode := a.GetQuotaWeeklyResetMode(); mode == "fixed" {
+			out.QuotaWeeklyResetMode = &mode
+			day := a.GetQuotaWeeklyResetDay()
+			out.QuotaWeeklyResetDay = &day
+			hour := a.GetQuotaWeeklyResetHour()
+			out.QuotaWeeklyResetHour = &hour
+		}
+		if a.GetQuotaDailyResetMode() == "fixed" || a.GetQuotaWeeklyResetMode() == "fixed" {
+			tz := a.GetQuotaResetTimezone()
+			out.QuotaResetTimezone = &tz
+		}
+		if a.Extra != nil {
+			if v, ok := a.Extra["quota_daily_reset_at"].(string); ok && v != "" {
+				out.QuotaDailyResetAt = &v
+			}
+			if v, ok := a.Extra["quota_weekly_reset_at"].(string); ok && v != "" {
+				out.QuotaWeeklyResetAt = &v
+			}
+		}
 	}
 
 	return out
