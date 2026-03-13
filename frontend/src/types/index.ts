@@ -1162,6 +1162,21 @@ export interface UserUsageTrendPoint {
   actual_cost: number // 实际扣除
 }
 
+export interface UserSpendingRankingItem {
+  user_id: number
+  email: string
+  actual_cost: number
+  requests: number
+  tokens: number
+}
+
+export interface UserSpendingRankingResponse {
+  ranking: UserSpendingRankingItem[]
+  total_actual_cost: number
+  start_date: string
+  end_date: string
+}
+
 export interface ApiKeyUsageTrendPoint {
   date: string
   api_key_id: number
