@@ -550,6 +550,16 @@ async function saveAllSettings() {
 
             <div class="flex items-center justify-between">
               <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.displayAlertEvents') }}</label>
+                <p class="mt-1 text-xs text-gray-500">
+                  {{ t('admin.ops.settings.displayAlertEventsHint') }}
+                </p>
+              </div>
+              <Toggle v-model="advancedSettings.display_alert_events" />
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.displayOpenAITokenStats') }}</label>
                 <p class="mt-1 text-xs text-gray-500">
                   {{ t('admin.ops.settings.displayOpenAITokenStatsHint') }}
