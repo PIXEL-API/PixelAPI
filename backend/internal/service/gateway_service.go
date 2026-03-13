@@ -5853,25 +5853,6 @@ func containsBetaToken(header, token string) bool {
 	return false
 }
 
-// filterBetaTokensFromHeader removes tokens present in filterSet from a comma-separated header value.
-// Returns the filtered header string, or "" if all tokens were removed.
-func filterBetaTokensFromHeader(header string, filterSet map[string]struct{}) string {
-	if header == "" || len(filterSet) == 0 {
-		return header
-	}
-	var kept []string
-	for _, p := range strings.Split(header, ",") {
-		t := strings.TrimSpace(p)
-		if t == "" {
-			continue
-		}
-		if _, filtered := filterSet[t]; !filtered {
-			kept = append(kept, t)
-		}
-	}
-	return strings.Join(kept, ", ")
-}
-
 func filterBetaTokens(tokens []string, filterSet map[string]struct{}) []string {
 	if len(tokens) == 0 || len(filterSet) == 0 {
 		return tokens
