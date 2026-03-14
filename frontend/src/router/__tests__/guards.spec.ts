@@ -51,6 +51,7 @@ interface MockAuthState {
   isAuthenticated: boolean
   isAdmin: boolean
   isSimpleMode: boolean
+  backendModeEnabled: boolean
 }
 
 /**
@@ -70,7 +71,16 @@ function simulateGuard(
       authState.isAuthenticated &&
       (toPath === '/login' || toPath === '/register')
     ) {
+      if (authState.backendModeEnabled && !authState.isAdmin) {
+        return null
+      }
       return authState.isAdmin ? '/admin/dashboard' : '/dashboard'
+    }
+    if (authState.backendModeEnabled && !authState.isAuthenticated) {
+      const allowed = ['/login', '/key-usage', '/setup']
+      if (!allowed.some((path) => toPath === path || toPath.startsWith(path))) {
+        return '/login'
+      }
     }
     return null // 允许通过
   }
@@ -99,6 +109,17 @@ function simulateGuard(
     }
   }
 
+  // Backend mode: admin gets full access, non-admin blocked
+  if (authState.backendModeEnabled) {
+    if (authState.isAuthenticated && authState.isAdmin) {
+      return null
+    }
+    const allowed = ['/login', '/key-usage', '/setup']
+    if (!allowed.some((path) => toPath === path || toPath.startsWith(path))) {
+      return '/login'
+    }
+  }
+
   return null // 允许通过
 }
 
@@ -114,6 +135,7 @@ describe('路由守卫逻辑', () => {
       isAuthenticated: false,
       isAdmin: false,
       isSimpleMode: false,
+      backendModeEnabled: false,
     }
 
     it('访问需要认证的页面重定向到 /login', () => {
@@ -144,6 +166,7 @@ describe('路由守卫逻辑', () => {
       isAuthenticated: true,
       isAdmin: false,
       isSimpleMode: false,
+      backendModeEnabled: false,
     }
 
     it('访问 /login 重定向到 /dashboard', () => {
@@ -179,6 +202,7 @@ describe('路由守卫逻辑', () => {
       isAuthenticated: true,
       isAdmin: true,
       isSimpleMode: false,
+      backendModeEnabled: false,
     }
 
     it('访问 /login 重定向到 /admin/dashboard', () => {
@@ -205,6 +229,7 @@ describe('路由守卫逻辑', () => {
         isAuthenticated: true,
         isAdmin: false,
         isSimpleMode: true,
+        backendModeEnabled: false,
       }
       const redirect = simulateGuard('/subscriptions', {}, authState)
       expect(redirect).toBe('/dashboard')
@@ -215,6 +240,7 @@ describe('路由守卫逻辑', () => {
         isAuthenticated: true,
         isAdmin: false,
         isSimpleMode: true,
+        backendModeEnabled: false,
       }
       const redirect = simulateGuard('/redeem', {}, authState)
       expect(redirect).toBe('/dashboard')
@@ -225,6 +251,7 @@ describe('路由守卫逻辑', () => {
         isAuthenticated: true,
         isAdmin: true,
         isSimpleMode: true,
+        backendModeEnabled: false,
       }
       const redirect = simulateGuard('/admin/groups', { requiresAdmin: true }, authState)
       expect(redirect).toBe('/admin/dashboard')
@@ -235,6 +262,7 @@ describe('路由守卫逻辑', () => {
         isAuthenticated: true,
         isAdmin: true,
         isSimpleMode: true,
+        backendModeEnabled: false,
       }
       const redirect = simulateGuard(
         '/admin/subscriptions',
@@ -249,6 +277,7 @@ describe('路由守卫逻辑', () => {
         isAuthenticated: true,
         isAdmin: false,
         isSimpleMode: true,
+        backendModeEnabled: false,
       }
       const redirect = simulateGuard('/dashboard', {}, authState)
       expect(redirect).toBeNull()
@@ -259,8 +288,110 @@ describe('路由守卫逻辑', () => {
         isAuthenticated: true,
         isAdmin: false,
         isSimpleMode: true,
+        backendModeEnabled: false,
       }
       const redirect = simulateGuard('/keys', {}, authState)
+      expect(redirect).toBeNull()
+    })
+  })
+
+  describe('Backend Mode', () => {
+    it('unauthenticated: /home redirects to /login', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: false,
+        isAdmin: false,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/home', { requiresAuth: false }, authState)
+      expect(redirect).toBe('/login')
+    })
+
+    it('unauthenticated: /login is allowed', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: false,
+        isAdmin: false,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/login', { requiresAuth: false }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('unauthenticated: /key-usage is allowed', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: false,
+        isAdmin: false,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/key-usage', { requiresAuth: false }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('unauthenticated: /setup is allowed', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: false,
+        isAdmin: false,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/setup', { requiresAuth: false }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('admin: /admin/dashboard is allowed', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: true,
+        isAdmin: true,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/admin/dashboard', { requiresAdmin: true }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('admin: /login redirects to /admin/dashboard', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: true,
+        isAdmin: true,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/login', { requiresAuth: false }, authState)
+      expect(redirect).toBe('/admin/dashboard')
+    })
+
+    it('non-admin authenticated: /dashboard redirects to /login', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: true,
+        isAdmin: false,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/dashboard', {}, authState)
+      expect(redirect).toBe('/login')
+    })
+
+    it('non-admin authenticated: /login is allowed (no redirect loop)', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: true,
+        isAdmin: false,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/login', { requiresAuth: false }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('non-admin authenticated: /key-usage is allowed', () => {
+      const authState: MockAuthState = {
+        isAuthenticated: true,
+        isAdmin: false,
+        isSimpleMode: false,
+        backendModeEnabled: true,
+      }
+      const redirect = simulateGuard('/key-usage', { requiresAuth: false }, authState)
       expect(redirect).toBeNull()
     })
   })
