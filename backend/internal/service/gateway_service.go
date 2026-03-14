@@ -6129,6 +6129,29 @@ func extractUpstreamErrorMessage(body []byte) string {
 	return gjson.GetBytes(body, "message").String()
 }
 
+func extractUpstreamErrorCode(body []byte) string {
+	if code := strings.TrimSpace(gjson.GetBytes(body, "error.code").String()); code != "" {
+		return code
+	}
+
+	inner := strings.TrimSpace(gjson.GetBytes(body, "error.message").String())
+	if !strings.HasPrefix(inner, "{") {
+		return ""
+	}
+
+	if code := strings.TrimSpace(gjson.Get(inner, "error.code").String()); code != "" {
+		return code
+	}
+
+	if lastBrace := strings.LastIndex(inner, "}"); lastBrace >= 0 {
+		if code := strings.TrimSpace(gjson.Get(inner[:lastBrace+1], "error.code").String()); code != "" {
+			return code
+		}
+	}
+
+	return ""
+}
+
 func isCountTokensUnsupported404(statusCode int, body []byte) bool {
 	if statusCode != http.StatusNotFound {
 		return false
