@@ -343,6 +343,9 @@ func (s *stubUsageLogRepo) GetAPIKeyUsageTrend(ctx context.Context, startTime, e
 func (s *stubUsageLogRepo) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) ([]usagestats.UserUsageTrendPoint, error) {
 	return nil, nil
 }
+func (s *stubUsageLogRepo) GetUserSpendingRanking(ctx context.Context, startTime, endTime time.Time, limit int) (*usagestats.UserSpendingRankingResponse, error) {
+	return nil, nil
+}
 func (s *stubUsageLogRepo) GetBatchUserUsageStats(ctx context.Context, userIDs []int64, startTime, endTime time.Time) (map[int64]*usagestats.BatchUserUsageStats, error) {
 	return nil, nil
 }
@@ -428,6 +431,7 @@ func TestSoraGatewayHandler_ChatCompletions(t *testing.T) {
 		accountRepo,
 		groupRepo,
 		usageLogRepo,
+		nil,
 		nil,
 		nil,
 		nil,
