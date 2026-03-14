@@ -8,12 +8,24 @@ const props = defineProps<{
   totalLimit: number | null
   dailyLimit: number | null
   weeklyLimit: number | null
+  dailyResetMode: 'rolling' | 'fixed' | null
+  dailyResetHour: number | null
+  weeklyResetMode: 'rolling' | 'fixed' | null
+  weeklyResetDay: number | null
+  weeklyResetHour: number | null
+  resetTimezone: string | null
 }>()
 
 const emit = defineEmits<{
   'update:totalLimit': [value: number | null]
   'update:dailyLimit': [value: number | null]
   'update:weeklyLimit': [value: number | null]
+  'update:dailyResetMode': [value: 'rolling' | 'fixed' | null]
+  'update:dailyResetHour': [value: number | null]
+  'update:weeklyResetMode': [value: 'rolling' | 'fixed' | null]
+  'update:weeklyResetDay': [value: number | null]
+  'update:weeklyResetHour': [value: number | null]
+  'update:resetTimezone': [value: string | null]
 }>()
 
 const enabled = computed(() =>
@@ -35,8 +47,55 @@ watch(localEnabled, (val) => {
     emit('update:totalLimit', null)
     emit('update:dailyLimit', null)
     emit('update:weeklyLimit', null)
+    emit('update:dailyResetMode', null)
+    emit('update:dailyResetHour', null)
+    emit('update:weeklyResetMode', null)
+    emit('update:weeklyResetDay', null)
+    emit('update:weeklyResetHour', null)
+    emit('update:resetTimezone', null)
   }
 })
+
+// Whether any fixed mode is active (to show timezone selector)
+const hasFixedMode = computed(() =>
+  props.dailyResetMode === 'fixed' || props.weeklyResetMode === 'fixed'
+)
+
+// Common timezone options
+const timezoneOptions = [
+  'UTC',
+  'Asia/Shanghai',
+  'Asia/Tokyo',
+  'Asia/Seoul',
+  'Asia/Singapore',
+  'Asia/Kolkata',
+  'Asia/Dubai',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Europe/Moscow',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Sao_Paulo',
+  'Australia/Sydney',
+  'Pacific/Auckland',
+]
+
+// Hours for dropdown (0-23)
+const hourOptions = Array.from({ length: 24 }, (_, i) => i)
+
+// Day of week options
+const dayOptions = [
+  { value: 1, key: 'monday' },
+  { value: 2, key: 'tuesday' },
+  { value: 3, key: 'wednesday' },
+  { value: 4, key: 'thursday' },
+  { value: 5, key: 'friday' },
+  { value: 6, key: 'saturday' },
+  { value: 0, key: 'sunday' },
+]
 
 const onTotalInput = (e: Event) => {
   const raw = (e.target as HTMLInputElement).valueAsNumber
@@ -49,6 +108,25 @@ const onDailyInput = (e: Event) => {
 const onWeeklyInput = (e: Event) => {
   const raw = (e.target as HTMLInputElement).valueAsNumber
   emit('update:weeklyLimit', Number.isNaN(raw) ? null : raw)
+}
+
+const onDailyModeChange = (e: Event) => {
+  const val = (e.target as HTMLSelectElement).value as 'rolling' | 'fixed'
+  emit('update:dailyResetMode', val)
+  if (val === 'fixed') {
+    if (props.dailyResetHour == null) emit('update:dailyResetHour', 0)
+    if (!props.resetTimezone) emit('update:resetTimezone', 'UTC')
+  }
+}
+
+const onWeeklyModeChange = (e: Event) => {
+  const val = (e.target as HTMLSelectElement).value as 'rolling' | 'fixed'
+  emit('update:weeklyResetMode', val)
+  if (val === 'fixed') {
+    if (props.weeklyResetDay == null) emit('update:weeklyResetDay', 1)
+    if (props.weeklyResetHour == null) emit('update:weeklyResetHour', 0)
+    if (!props.resetTimezone) emit('update:resetTimezone', 'UTC')
+  }
 }
 </script>
 
@@ -94,7 +172,37 @@ const onWeeklyInput = (e: Event) => {
               :placeholder="t('admin.accounts.quotaLimitPlaceholder')"
             />
           </div>
-          <p class="input-hint">{{ t('admin.accounts.quotaDailyLimitHint') }}</p>
+          <!-- 日配额重置模式 -->
+          <div class="mt-2 flex items-center gap-2">
+            <label class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ t('admin.accounts.quotaResetMode') }}</label>
+            <select
+              :value="dailyResetMode || 'rolling'"
+              @change="onDailyModeChange"
+              class="input py-1 text-xs"
+            >
+              <option value="rolling">{{ t('admin.accounts.quotaResetModeRolling') }}</option>
+              <option value="fixed">{{ t('admin.accounts.quotaResetModeFixed') }}</option>
+            </select>
+          </div>
+          <!-- 固定模式：小时选择 -->
+          <div v-if="dailyResetMode === 'fixed'" class="mt-2 flex items-center gap-2">
+            <label class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ t('admin.accounts.quotaResetHour') }}</label>
+            <select
+              :value="dailyResetHour ?? 0"
+              @change="emit('update:dailyResetHour', Number(($event.target as HTMLSelectElement).value))"
+              class="input py-1 text-xs w-24"
+            >
+              <option v-for="h in hourOptions" :key="h" :value="h">{{ String(h).padStart(2, '0') }}:00</option>
+            </select>
+          </div>
+          <p class="input-hint">
+            <template v-if="dailyResetMode === 'fixed'">
+              {{ t('admin.accounts.quotaDailyLimitHintFixed', { hour: String(dailyResetHour ?? 0).padStart(2, '0'), timezone: resetTimezone || 'UTC' }) }}
+            </template>
+            <template v-else>
+              {{ t('admin.accounts.quotaDailyLimitHint') }}
+            </template>
+          </p>
         </div>
 
         <!-- 周配额 -->
@@ -112,7 +220,57 @@ const onWeeklyInput = (e: Event) => {
               :placeholder="t('admin.accounts.quotaLimitPlaceholder')"
             />
           </div>
-          <p class="input-hint">{{ t('admin.accounts.quotaWeeklyLimitHint') }}</p>
+          <!-- 周配额重置模式 -->
+          <div class="mt-2 flex items-center gap-2">
+            <label class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ t('admin.accounts.quotaResetMode') }}</label>
+            <select
+              :value="weeklyResetMode || 'rolling'"
+              @change="onWeeklyModeChange"
+              class="input py-1 text-xs"
+            >
+              <option value="rolling">{{ t('admin.accounts.quotaResetModeRolling') }}</option>
+              <option value="fixed">{{ t('admin.accounts.quotaResetModeFixed') }}</option>
+            </select>
+          </div>
+          <!-- 固定模式：星期几 + 小时 -->
+          <div v-if="weeklyResetMode === 'fixed'" class="mt-2 flex items-center gap-2 flex-wrap">
+            <label class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ t('admin.accounts.quotaWeeklyResetDay') }}</label>
+            <select
+              :value="weeklyResetDay ?? 1"
+              @change="emit('update:weeklyResetDay', Number(($event.target as HTMLSelectElement).value))"
+              class="input py-1 text-xs w-28"
+            >
+              <option v-for="d in dayOptions" :key="d.value" :value="d.value">{{ t('admin.accounts.dayOfWeek.' + d.key) }}</option>
+            </select>
+            <label class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ t('admin.accounts.quotaResetHour') }}</label>
+            <select
+              :value="weeklyResetHour ?? 0"
+              @change="emit('update:weeklyResetHour', Number(($event.target as HTMLSelectElement).value))"
+              class="input py-1 text-xs w-24"
+            >
+              <option v-for="h in hourOptions" :key="h" :value="h">{{ String(h).padStart(2, '0') }}:00</option>
+            </select>
+          </div>
+          <p class="input-hint">
+            <template v-if="weeklyResetMode === 'fixed'">
+              {{ t('admin.accounts.quotaWeeklyLimitHintFixed', { day: t('admin.accounts.dayOfWeek.' + (dayOptions.find(d => d.value === (weeklyResetDay ?? 1))?.key || 'monday')), hour: String(weeklyResetHour ?? 0).padStart(2, '0'), timezone: resetTimezone || 'UTC' }) }}
+            </template>
+            <template v-else>
+              {{ t('admin.accounts.quotaWeeklyLimitHint') }}
+            </template>
+          </p>
+        </div>
+
+        <!-- 时区选择（当任一维度使用固定模式时显示） -->
+        <div v-if="hasFixedMode">
+          <label class="input-label">{{ t('admin.accounts.quotaResetTimezone') }}</label>
+          <select
+            :value="resetTimezone || 'UTC'"
+            @change="emit('update:resetTimezone', ($event.target as HTMLSelectElement).value)"
+            class="input text-sm"
+          >
+            <option v-for="tz in timezoneOptions" :key="tz" :value="tz">{{ tz }}</option>
+          </select>
         </div>
 
         <!-- 总配额 -->

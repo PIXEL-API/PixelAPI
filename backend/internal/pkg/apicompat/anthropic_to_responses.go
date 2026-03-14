@@ -277,7 +277,6 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 			CallID:    fcID,
 			Name:      b.Name,
 			Arguments: args,
-			ID:        fcID,
 		})
 	}
 

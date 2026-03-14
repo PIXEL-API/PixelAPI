@@ -292,17 +292,19 @@ const rpmTooltip = computed(() => {
   }
 })
 
-// 是否显示各维度配额（仅 apikey 类型）
+// 是否显示各维度配额（apikey / bedrock 类型）
+const isQuotaEligible = computed(() => props.account.type === 'apikey' || props.account.type === 'bedrock')
+
 const showDailyQuota = computed(() => {
-  return props.account.type === 'apikey' && (props.account.quota_daily_limit ?? 0) > 0
+  return isQuotaEligible.value && (props.account.quota_daily_limit ?? 0) > 0
 })
 
 const showWeeklyQuota = computed(() => {
-  return props.account.type === 'apikey' && (props.account.quota_weekly_limit ?? 0) > 0
+  return isQuotaEligible.value && (props.account.quota_weekly_limit ?? 0) > 0
 })
 
 const showTotalQuota = computed(() => {
-  return props.account.type === 'apikey' && (props.account.quota_limit ?? 0) > 0
+  return isQuotaEligible.value && (props.account.quota_limit ?? 0) > 0
 })
 
 // 格式化费用显示
