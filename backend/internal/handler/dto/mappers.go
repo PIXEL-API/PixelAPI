@@ -264,8 +264,8 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		}
 	}
 
-	// 提取 API Key 账号配额限制（仅 apikey 类型有效）
-	if a.Type == service.AccountTypeAPIKey {
+	// 提取账号配额限制（apikey / bedrock 类型有效）
+	if a.IsAPIKeyOrBedrock() {
 		if limit := a.GetQuotaLimit(); limit > 0 {
 			out.QuotaLimit = &limit
 			used := a.GetQuotaUsed()
