@@ -262,6 +262,42 @@ func mustCreateApiKey(t *testing.T, client *dbent.Client, k *service.APIKey) *se
 		SetKey(k.Key).
 		SetName(k.Name).
 		SetStatus(k.Status)
+	if k.Quota != 0 {
+		create.SetQuota(k.Quota)
+	}
+	if k.QuotaUsed != 0 {
+		create.SetQuotaUsed(k.QuotaUsed)
+	}
+	if k.RateLimit5h != 0 {
+		create.SetRateLimit5h(k.RateLimit5h)
+	}
+	if k.RateLimit1d != 0 {
+		create.SetRateLimit1d(k.RateLimit1d)
+	}
+	if k.RateLimit7d != 0 {
+		create.SetRateLimit7d(k.RateLimit7d)
+	}
+	if k.Usage5h != 0 {
+		create.SetUsage5h(k.Usage5h)
+	}
+	if k.Usage1d != 0 {
+		create.SetUsage1d(k.Usage1d)
+	}
+	if k.Usage7d != 0 {
+		create.SetUsage7d(k.Usage7d)
+	}
+	if k.Window5hStart != nil {
+		create.SetWindow5hStart(*k.Window5hStart)
+	}
+	if k.Window1dStart != nil {
+		create.SetWindow1dStart(*k.Window1dStart)
+	}
+	if k.Window7dStart != nil {
+		create.SetWindow7dStart(*k.Window7dStart)
+	}
+	if k.ExpiresAt != nil {
+		create.SetExpiresAt(*k.ExpiresAt)
+	}
 	if k.GroupID != nil {
 		create.SetGroupID(*k.GroupID)
 	}

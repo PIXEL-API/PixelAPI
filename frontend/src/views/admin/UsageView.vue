@@ -89,6 +89,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { saveAs } from 'file-saver'
+import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'; import { adminAPI } from '@/api/admin'; import { adminUsageAPI } from '@/api/admin/usage'
 import { formatReasoningEffort } from '@/utils/format'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
@@ -104,7 +105,7 @@ import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, AdminUser } f
 const { t } = useI18n()
 const appStore = useAppStore()
 type DistributionMetric = 'tokens' | 'actual_cost'
-
+const route = useRoute()
 const usageStats = ref<AdminUsageStatsResponse | null>(null); const usageLogs = ref<AdminUsageLog[]>([]); const loading = ref(false); const exporting = ref(false)
 const trendData = ref<TrendDataPoint[]>([]); const modelStats = ref<ModelStat[]>([]); const groupStats = ref<GroupStat[]>([]); const chartsLoading = ref(false); const granularity = ref<'day' | 'hour'>('day')
 const modelDistributionMetric = ref<DistributionMetric>('tokens')
@@ -135,10 +136,42 @@ const formatLD = (d: Date) => {
   const day = String(d.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
-const now = new Date(); const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 6)
-const startDate = ref(formatLD(weekAgo)); const endDate = ref(formatLD(now))
+const getTodayLocalDate = () => formatLD(new Date())
+const startDate = ref(getTodayLocalDate()); const endDate = ref(getTodayLocalDate())
 const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
 const pagination = reactive({ page: 1, page_size: 20, total: 0 })
+
+const getSingleQueryValue = (value: string | null | Array<string | null> | undefined): string | undefined => {
+  if (Array.isArray(value)) return value.find((item): item is string => typeof item === 'string' && item.length > 0)
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+const getNumericQueryValue = (value: string | null | Array<string | null> | undefined): number | undefined => {
+  const raw = getSingleQueryValue(value)
+  if (!raw) return undefined
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+const applyRouteQueryFilters = () => {
+  const queryStartDate = getSingleQueryValue(route.query.start_date)
+  const queryEndDate = getSingleQueryValue(route.query.end_date)
+  const queryUserId = getNumericQueryValue(route.query.user_id)
+
+  if (queryStartDate) {
+    startDate.value = queryStartDate
+  }
+  if (queryEndDate) {
+    endDate.value = queryEndDate
+  }
+
+  filters.value = {
+    ...filters.value,
+    user_id: queryUserId,
+    start_date: startDate.value,
+    end_date: endDate.value
+  }
+}
 
 const loadLogs = async () => {
   abortController?.abort(); const c = new AbortController(); abortController = c; loading.value = true
@@ -191,7 +224,7 @@ const loadChartData = async () => {
 }
 const applyFilters = () => { pagination.page = 1; loadLogs(); loadStats(); loadChartData() }
 const refreshData = () => { loadLogs(); loadStats(); loadChartData() }
-const resetFilters = () => { startDate.value = formatLD(weekAgo); endDate.value = formatLD(now); filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null }; granularity.value = 'day'; applyFilters() }
+const resetFilters = () => { startDate.value = getTodayLocalDate(); endDate.value = getTodayLocalDate(); filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null }; granularity.value = 'day'; applyFilters() }
 const handlePageChange = (p: number) => { pagination.page = p; loadLogs() }
 const handlePageSizeChange = (s: number) => { pagination.page_size = s; pagination.page = 1; loadLogs() }
 const cancelExport = () => exportAbortController?.abort()
@@ -329,6 +362,7 @@ const handleColumnClickOutside = (event: MouseEvent) => {
 }
 
 onMounted(() => {
+  applyRouteQueryFilters()
   loadLogs()
   loadStats()
   window.setTimeout(() => {
