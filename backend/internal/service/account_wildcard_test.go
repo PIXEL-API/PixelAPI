@@ -268,6 +268,69 @@ func TestAccountGetMappedModel(t *testing.T) {
 	}
 }
 
+func TestAccountResolveMappedModel(t *testing.T) {
+	tests := []struct {
+		name           string
+		credentials    map[string]any
+		requestedModel string
+		expectedModel  string
+		expectedMatch  bool
+	}{
+		{
+			name:           "no mapping reports unmatched",
+			credentials:    nil,
+			requestedModel: "gpt-5.4",
+			expectedModel:  "gpt-5.4",
+			expectedMatch:  false,
+		},
+		{
+			name: "exact passthrough mapping still counts as matched",
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"gpt-5.4": "gpt-5.4",
+				},
+			},
+			requestedModel: "gpt-5.4",
+			expectedModel:  "gpt-5.4",
+			expectedMatch:  true,
+		},
+		{
+			name: "wildcard passthrough mapping still counts as matched",
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"gpt-*": "gpt-5.4",
+				},
+			},
+			requestedModel: "gpt-5.4",
+			expectedModel:  "gpt-5.4",
+			expectedMatch:  true,
+		},
+		{
+			name: "missing mapping reports unmatched",
+			credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"gpt-5.2": "gpt-5.2",
+				},
+			},
+			requestedModel: "gpt-5.4",
+			expectedModel:  "gpt-5.4",
+			expectedMatch:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{
+				Credentials: tt.credentials,
+			}
+			mappedModel, matched := account.ResolveMappedModel(tt.requestedModel)
+			if mappedModel != tt.expectedModel || matched != tt.expectedMatch {
+				t.Fatalf("ResolveMappedModel(%q) = (%q, %v), want (%q, %v)", tt.requestedModel, mappedModel, matched, tt.expectedModel, tt.expectedMatch)
+			}
+		})
+	}
+}
+
 func TestAccountGetModelMapping_AntigravityEnsuresGeminiDefaultPassthroughs(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAntigravity,
