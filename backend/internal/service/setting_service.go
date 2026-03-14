@@ -1278,7 +1278,7 @@ func (s *SettingService) SetBetaPolicySettings(ctx context.Context, settings *Be
 		BetaPolicyActionPass: true, BetaPolicyActionFilter: true, BetaPolicyActionBlock: true,
 	}
 	validScopes := map[string]bool{
-		BetaPolicyScopeAll: true, BetaPolicyScopeOAuth: true, BetaPolicyScopeAPIKey: true,
+		BetaPolicyScopeAll: true, BetaPolicyScopeOAuth: true, BetaPolicyScopeAPIKey: true, BetaPolicyScopeBedrock: true,
 	}
 
 	for i, rule := range settings.Rules {
