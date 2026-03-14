@@ -306,7 +306,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	}
 
 	identityKey := oidcIdentityKey(issuer, subject)
-	email := oidcSyntheticEmailFromIdentityKey(identityKey)
+	email := oidcSelectLoginEmail(userInfoClaims.Email, idClaims.Email, identityKey)
 	username := firstNonEmpty(
 		userInfoClaims.Username,
 		idClaims.PreferredUsername,
@@ -829,6 +829,14 @@ func oidcSyntheticEmailFromIdentityKey(identityKey string) string {
 	}
 	sum := sha256.Sum256([]byte(identityKey))
 	return "oidc-" + hex.EncodeToString(sum[:16]) + service.OIDCConnectSyntheticEmailDomain
+}
+
+func oidcSelectLoginEmail(userInfoEmail, idTokenEmail, identityKey string) string {
+	email := strings.TrimSpace(firstNonEmpty(userInfoEmail, idTokenEmail))
+	if email != "" {
+		return email
+	}
+	return oidcSyntheticEmailFromIdentityKey(identityKey)
 }
 
 func oidcFallbackUsername(subject string) string {
