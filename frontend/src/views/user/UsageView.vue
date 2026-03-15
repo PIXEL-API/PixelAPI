@@ -166,6 +166,12 @@
             </span>
           </template>
 
+          <template #cell-endpoint="{ row }">
+            <span class="text-sm text-gray-600 dark:text-gray-300 block max-w-[320px] whitespace-normal break-all">
+              {{ formatUsageEndpoints(row) }}
+            </span>
+          </template>
+
           <template #cell-stream="{ row }">
             <span
               class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
@@ -516,6 +522,7 @@ const columns = computed<Column[]>(() => [
   { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
   { key: 'model', label: t('usage.model'), sortable: true },
   { key: 'reasoning_effort', label: t('usage.reasoningEffort'), sortable: false },
+  { key: 'endpoint', label: t('usage.endpoint'), sortable: false },
   { key: 'stream', label: t('usage.type'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
@@ -613,6 +620,11 @@ const getRequestTypeExportText = (log: UsageLog): string => {
   if (requestType === 'stream') return 'Stream'
   if (requestType === 'sync') return 'Sync'
   return 'Unknown'
+}
+
+const formatUsageEndpoints = (log: UsageLog): string => {
+  const inbound = log.inbound_endpoint?.trim()
+  return inbound || '-'
 }
 
 const formatTokens = (value: number): string => {
@@ -789,6 +801,7 @@ const exportToCSV = async () => {
       'API Key Name',
       'Model',
       'Reasoning Effort',
+      'Inbound Endpoint',
       'Type',
       'Input Tokens',
       'Output Tokens',
@@ -806,6 +819,7 @@ const exportToCSV = async () => {
         log.api_key?.name || '',
         log.model,
         formatReasoningEffort(log.reasoning_effort),
+        log.inbound_endpoint || '',
         getRequestTypeExportText(log),
         log.input_tokens,
         log.output_tokens,

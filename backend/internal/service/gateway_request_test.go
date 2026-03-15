@@ -972,6 +972,76 @@ func BenchmarkParseGatewayRequest_Old_Large(b *testing.B) {
 	}
 }
 
+func TestParseGatewayRequest_OutputEffort(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantEffort string
+	}{
+		{
+			name:       "output_config.effort present",
+			body:       `{"model":"claude-opus-4-6","output_config":{"effort":"medium"},"messages":[]}`,
+			wantEffort: "medium",
+		},
+		{
+			name:       "output_config.effort max",
+			body:       `{"model":"claude-opus-4-6","output_config":{"effort":"max"},"messages":[]}`,
+			wantEffort: "max",
+		},
+		{
+			name:       "output_config without effort",
+			body:       `{"model":"claude-opus-4-6","output_config":{},"messages":[]}`,
+			wantEffort: "",
+		},
+		{
+			name:       "no output_config",
+			body:       `{"model":"claude-opus-4-6","messages":[]}`,
+			wantEffort: "",
+		},
+		{
+			name:       "effort with whitespace trimmed",
+			body:       `{"model":"claude-opus-4-6","output_config":{"effort":" high "},"messages":[]}`,
+			wantEffort: "high",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := ParseGatewayRequest([]byte(tt.body), "")
+			require.NoError(t, err)
+			require.Equal(t, tt.wantEffort, parsed.OutputEffort)
+		})
+	}
+}
+
+func TestNormalizeClaudeOutputEffort(t *testing.T) {
+	tests := []struct {
+		input string
+		want  *string
+	}{
+		{"low", strPtr("low")},
+		{"medium", strPtr("medium")},
+		{"high", strPtr("high")},
+		{"max", strPtr("max")},
+		{"LOW", strPtr("low")},
+		{"Max", strPtr("max")},
+		{" medium ", strPtr("medium")},
+		{"", nil},
+		{"unknown", nil},
+		{"xhigh", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := NormalizeClaudeOutputEffort(tt.input)
+			if tt.want == nil {
+				require.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				require.Equal(t, *tt.want, *got)
+			}
+		})
+	}
+}
+
 func BenchmarkParseGatewayRequest_New_Large(b *testing.B) {
 	data := buildLargeJSON()
 	b.SetBytes(int64(len(data)))
