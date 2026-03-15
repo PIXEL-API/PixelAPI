@@ -1516,6 +1516,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	wasOveragesEnabled := account.IsOveragesEnabled()
 
 	if input.Name != "" {
 		account.Name = input.Name
@@ -1529,7 +1530,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if len(input.Credentials) > 0 {
 		account.Credentials = input.Credentials
 	}
-	if len(input.Extra) > 0 {
+	if input.Extra != nil {
 		// 保留配额用量字段，防止编辑账号时意外重置
 		for _, key := range []string{"quota_used", "quota_daily_used", "quota_daily_start", "quota_weekly_used", "quota_weekly_start"} {
 			if v, ok := account.Extra[key]; ok {
@@ -1618,6 +1619,17 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 
 	if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, err
+	}
+	if account.Platform == PlatformAntigravity {
+		if !account.IsOveragesEnabled() && wasOveragesEnabled {
+			clearCreditsExhausted(account.ID)
+			if err := clearAntigravityCreditsOveragesState(ctx, s.accountRepo, account.ID); err != nil {
+				return nil, err
+			}
+		}
+		if account.IsOveragesEnabled() && !wasOveragesEnabled {
+			clearCreditsExhausted(account.ID)
+		}
 	}
 
 	// 绑定分组
