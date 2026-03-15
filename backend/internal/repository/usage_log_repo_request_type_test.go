@@ -73,6 +73,8 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // media_type
 			sqlmock.AnyArg(), // service_tier
 			sqlmock.AnyArg(), // reasoning_effort
+			sqlmock.AnyArg(), // inbound_endpoint
+			sqlmock.AnyArg(), // upstream_endpoint
 			log.CacheTTLOverridden,
 			createdAt,
 		).
@@ -140,6 +142,8 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			serviceTier,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			log.CacheTTLOverridden,
 			createdAt,
@@ -376,6 +380,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{Valid: true, String: "priority"},
 			sql.NullString{},
+			sql.NullString{},
+			sql.NullString{},
 			false,
 			now,
 		}})
@@ -415,6 +421,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{Valid: true, String: "flex"},
 			sql.NullString{},
+			sql.NullString{},
+			sql.NullString{},
 			false,
 			now,
 		}})
@@ -453,6 +461,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullString{Valid: true, String: "priority"},
+			sql.NullString{},
+			sql.NullString{},
 			sql.NullString{},
 			false,
 			now,
