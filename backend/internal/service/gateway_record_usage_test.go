@@ -369,3 +369,54 @@ func TestGatewayServiceRecordUsage_BillingErrorSkipsUsageLogWrite(t *testing.T) 
 	require.Equal(t, 1, billingRepo.calls)
 	require.Equal(t, 0, usageRepo.calls)
 }
+
+func TestGatewayServiceRecordUsage_ReasoningEffortPersisted(t *testing.T) {
+	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+
+	effort := "max"
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "effort_test",
+			Usage: ClaudeUsage{
+				InputTokens:  10,
+				OutputTokens: 5,
+			},
+			Model:           "claude-opus-4-6",
+			Duration:        time.Second,
+			ReasoningEffort: &effort,
+		},
+		APIKey:  &APIKey{ID: 1},
+		User:    &User{ID: 1},
+		Account: &Account{ID: 1},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.ReasoningEffort)
+	require.Equal(t, "max", *usageRepo.lastLog.ReasoningEffort)
+}
+
+func TestGatewayServiceRecordUsage_ReasoningEffortNil(t *testing.T) {
+	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "no_effort_test",
+			Usage: ClaudeUsage{
+				InputTokens:  10,
+				OutputTokens: 5,
+			},
+			Model:    "claude-sonnet-4",
+			Duration: time.Second,
+		},
+		APIKey:  &APIKey{ID: 1},
+		User:    &User{ID: 1},
+		Account: &Account{ID: 1},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Nil(t, usageRepo.lastLog.ReasoningEffort)
+}
