@@ -232,4 +232,3 @@ func (s *AntigravityGatewayService) handleCreditsRetryFailure(
 			prefix, modelKey, account.ID, creditsStatusCode, reqErr, truncateForLog(creditsRespBody, 200))
 	}
 }
-
