@@ -1042,6 +1042,11 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 		}
 	}
 
+	// 窗口已过期（resetAt 在 now 之前）→ 额度已重置，归零
+	if progress.ResetsAt != nil && !now.Before(*progress.ResetsAt) {
+		progress.Utilization = 0
+	}
+
 	return progress
 }
 
