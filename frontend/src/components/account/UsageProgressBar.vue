@@ -56,7 +56,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import type { WindowStats } from '@/types'
 import { formatCompactNumber } from '@/utils/format'
@@ -70,6 +71,29 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+
+// Reactive clock for countdown — only runs when a reset time is shown,
+// to avoid creating many idle timers across large account lists.
+const now = ref(new Date())
+const { pause: pauseClock, resume: resumeClock } = useIntervalFn(
+  () => {
+    now.value = new Date()
+  },
+  60_000,
+  { immediate: false },
+)
+if (props.resetsAt) resumeClock()
+watch(
+  () => props.resetsAt,
+  (val) => {
+    if (val) {
+      now.value = new Date()
+      resumeClock()
+    } else {
+      pauseClock()
+    }
+  },
+)
 
 // Label background colors
 const labelClass = computed(() => {
@@ -119,8 +143,7 @@ const displayPercent = computed(() => {
 const formatResetTime = computed(() => {
   if (!props.resetsAt) return '-'
   const date = new Date(props.resetsAt)
-  const now = new Date()
-  const diffMs = date.getTime() - now.getTime()
+  const diffMs = date.getTime() - now.value.getTime()
 
   if (diffMs <= 0) return '现在'
 
