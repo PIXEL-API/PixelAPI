@@ -24,9 +24,13 @@
         </div>
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <ModelDistributionChart
+            v-model:source="modelDistributionSource"
             v-model:metric="modelDistributionMetric"
-            :model-stats="modelStats"
-            :loading="chartsLoading"
+            :model-stats="requestedModelStats"
+            :upstream-model-stats="upstreamModelStats"
+            :mapping-model-stats="mappingModelStats"
+            :loading="modelStatsLoading"
+            :show-source-toggle="true"
             :show-metric-toggle="true"
             :start-date="startDate"
             :end-date="endDate"
@@ -115,7 +119,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { saveAs } from 'file-saver'
 import { useRoute } from 'vue-router'
@@ -136,10 +140,17 @@ const { t } = useI18n()
 const appStore = useAppStore()
 type DistributionMetric = 'tokens' | 'actual_cost'
 type EndpointSource = 'inbound' | 'upstream' | 'path'
+type ModelDistributionSource = 'requested' | 'upstream' | 'mapping'
 const route = useRoute()
 const usageStats = ref<AdminUsageStatsResponse | null>(null); const usageLogs = ref<AdminUsageLog[]>([]); const loading = ref(false); const exporting = ref(false)
-const trendData = ref<TrendDataPoint[]>([]); const modelStats = ref<ModelStat[]>([]); const groupStats = ref<GroupStat[]>([]); const chartsLoading = ref(false); const granularity = ref<'day' | 'hour'>('hour')
+const trendData = ref<TrendDataPoint[]>([]); const requestedModelStats = ref<ModelStat[]>([]); const upstreamModelStats = ref<ModelStat[]>([]); const mappingModelStats = ref<ModelStat[]>([]); const groupStats = ref<GroupStat[]>([]); const chartsLoading = ref(false); const modelStatsLoading = ref(false); const granularity = ref<'day' | 'hour'>('hour')
 const modelDistributionMetric = ref<DistributionMetric>('tokens')
+const modelDistributionSource = ref<ModelDistributionSource>('requested')
+const loadedModelSources = reactive<Record<ModelDistributionSource, boolean>>({
+  requested: false,
+  upstream: false,
+  mapping: false,
+})
 const groupDistributionMetric = ref<DistributionMetric>('tokens')
 const endpointDistributionMetric = ref<DistributionMetric>('tokens')
 const endpointDistributionSource = ref<EndpointSource>('inbound')
@@ -150,6 +161,7 @@ const endpointStatsLoading = ref(false)
 let abortController: AbortController | null = null; let exportAbortController: AbortController | null = null
 let chartReqSeq = 0
 let statsReqSeq = 0
+let modelStatsReqSeq = 0
 const exportProgress = reactive({ show: false, progress: 0, current: 0, total: 0, estimatedTime: '' })
 const cleanupDialogVisible = ref(false)
 // Balance history modal state
@@ -269,6 +281,68 @@ const loadStats = async () => {
     if (seq === statsReqSeq) endpointStatsLoading.value = false
   }
 }
+
+const resetModelStatsCache = () => {
+  requestedModelStats.value = []
+  upstreamModelStats.value = []
+  mappingModelStats.value = []
+  loadedModelSources.requested = false
+  loadedModelSources.upstream = false
+  loadedModelSources.mapping = false
+}
+
+const loadModelStats = async (source: ModelDistributionSource, force = false) => {
+  if (!force && loadedModelSources[source]) {
+    return
+  }
+
+  const seq = ++modelStatsReqSeq
+  modelStatsLoading.value = true
+  try {
+    const requestType = filters.value.request_type
+    const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
+    const baseParams = {
+      start_date: filters.value.start_date || startDate.value,
+      end_date: filters.value.end_date || endDate.value,
+      user_id: filters.value.user_id,
+      model: filters.value.model,
+      api_key_id: filters.value.api_key_id,
+      account_id: filters.value.account_id,
+      group_id: filters.value.group_id,
+      request_type: requestType,
+      stream: legacyStream === null ? undefined : legacyStream,
+      billing_type: filters.value.billing_type,
+    }
+
+    const response = await adminAPI.dashboard.getModelStats({ ...baseParams, model_source: source })
+
+    if (seq !== modelStatsReqSeq) return
+
+    const models = response.models || []
+    if (source === 'requested') {
+      requestedModelStats.value = models
+    } else if (source === 'upstream') {
+      upstreamModelStats.value = models
+    } else {
+      mappingModelStats.value = models
+    }
+    loadedModelSources[source] = true
+  } catch (error) {
+    if (seq !== modelStatsReqSeq) return
+    console.error('Failed to load model stats:', error)
+    if (source === 'requested') {
+      requestedModelStats.value = []
+    } else if (source === 'upstream') {
+      upstreamModelStats.value = []
+    } else {
+      mappingModelStats.value = []
+    }
+    loadedModelSources[source] = false
+  } finally {
+    if (seq === modelStatsReqSeq) modelStatsLoading.value = false
+  }
+}
+
 const loadChartData = async () => {
   const seq = ++chartReqSeq
   chartsLoading.value = true
@@ -289,18 +363,30 @@ const loadChartData = async () => {
       billing_type: filters.value.billing_type,
       include_stats: false,
       include_trend: true,
-      include_model_stats: true,
+      include_model_stats: false,
       include_group_stats: true,
       include_users_trend: false
     })
     if (seq !== chartReqSeq) return
     trendData.value = snapshot.trend || []
-    modelStats.value = snapshot.models || []
     groupStats.value = snapshot.groups || []
   } catch (error) { console.error('Failed to load chart data:', error) } finally { if (seq === chartReqSeq) chartsLoading.value = false }
 }
-const applyFilters = () => { pagination.page = 1; loadLogs(); loadStats(); loadChartData() }
-const refreshData = () => { loadLogs(); loadStats(); loadChartData() }
+const applyFilters = () => {
+  pagination.page = 1
+  resetModelStatsCache()
+  loadLogs()
+  loadStats()
+  loadModelStats(modelDistributionSource.value, true)
+  loadChartData()
+}
+const refreshData = () => {
+  resetModelStatsCache()
+  loadLogs()
+  loadStats()
+  loadModelStats(modelDistributionSource.value, true)
+  loadChartData()
+}
 const resetFilters = () => {
   const range = getLast24HoursRangeDates()
   startDate.value = range.start
@@ -329,7 +415,7 @@ const exportToExcel = async () => {
     const XLSX = await import('xlsx')
     const headers = [
       t('usage.time'), t('admin.usage.user'), t('usage.apiKeyFilter'),
-      t('admin.usage.account'), t('usage.model'), t('usage.reasoningEffort'), t('admin.usage.group'),
+      t('admin.usage.account'), t('usage.model'), t('usage.upstreamModel'), t('usage.reasoningEffort'), t('admin.usage.group'),
       t('usage.inboundEndpoint'), t('usage.upstreamEndpoint'),
       t('usage.type'),
       t('admin.usage.inputTokens'), t('admin.usage.outputTokens'),
@@ -348,7 +434,7 @@ const exportToExcel = async () => {
       if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
       const rows = (res.items || []).map((log: AdminUsageLog) => [
         log.created_at, log.user?.email || '', log.api_key?.name || '', log.account?.name || '', log.model,
-        formatReasoningEffort(log.reasoning_effort), log.group?.name || '',
+        log.upstream_model || '', formatReasoningEffort(log.reasoning_effort), log.group?.name || '',
         log.inbound_endpoint || '', log.upstream_endpoint || '', getRequestTypeLabel(log),
         log.input_tokens, log.output_tokens, log.cache_read_tokens, log.cache_creation_tokens,
         log.input_cost?.toFixed(6) || '0.000000', log.output_cost?.toFixed(6) || '0.000000',
@@ -458,6 +544,7 @@ onMounted(() => {
   applyRouteQueryFilters()
   loadLogs()
   loadStats()
+  loadModelStats(modelDistributionSource.value, true)
   window.setTimeout(() => {
     void loadChartData()
   }, 120)
@@ -465,4 +552,8 @@ onMounted(() => {
   document.addEventListener('click', handleColumnClickOutside)
 })
 onUnmounted(() => { abortController?.abort(); exportAbortController?.abort(); document.removeEventListener('click', handleColumnClickOutside) })
+
+watch(modelDistributionSource, (source) => {
+  void loadModelStats(source)
+})
 </script>
