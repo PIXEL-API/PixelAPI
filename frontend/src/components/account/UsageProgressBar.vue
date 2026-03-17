@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import type { WindowStats } from '@/types'
@@ -72,11 +72,28 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-// Reactive clock for countdown (updates every 60s)
+// Reactive clock for countdown — only runs when a reset time is shown,
+// to avoid creating many idle timers across large account lists.
 const now = ref(new Date())
-useIntervalFn(() => {
-  now.value = new Date()
-}, 60_000)
+const { pause: pauseClock, resume: resumeClock } = useIntervalFn(
+  () => {
+    now.value = new Date()
+  },
+  60_000,
+  { immediate: false },
+)
+if (props.resetsAt) resumeClock()
+watch(
+  () => props.resetsAt,
+  (val) => {
+    if (val) {
+      now.value = new Date()
+      resumeClock()
+    } else {
+      pauseClock()
+    }
+  },
+)
 
 // Label background colors
 const labelClass = computed(() => {
