@@ -308,7 +308,14 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+
+		// 403 表示账号被上游封禁，标记为 error 状态
+		if resp.StatusCode == http.StatusForbidden {
+			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
+		}
+
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	// Process SSE stream
