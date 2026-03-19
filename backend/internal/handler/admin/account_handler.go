@@ -1496,7 +1496,7 @@ func (h *OAuthHandler) SetupTokenCookieAuth(c *gin.Context) {
 }
 
 // GetUsage handles getting account usage information
-// GET /api/v1/admin/accounts/:id/usage
+// GET /api/v1/admin/accounts/:id/usage?source=passive|active
 func (h *AccountHandler) GetUsage(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -1504,7 +1504,14 @@ func (h *AccountHandler) GetUsage(c *gin.Context) {
 		return
 	}
 
-	usage, err := h.accountUsageService.GetUsage(c.Request.Context(), accountID)
+	source := c.DefaultQuery("source", "active")
+
+	var usage *service.UsageInfo
+	if source == "passive" {
+		usage, err = h.accountUsageService.GetPassiveUsage(c.Request.Context(), accountID)
+	} else {
+		usage, err = h.accountUsageService.GetUsage(c.Request.Context(), accountID)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
