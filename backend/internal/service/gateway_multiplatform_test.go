@@ -278,8 +278,8 @@ func (m *mockGroupRepoForGateway) ListActiveByPlatform(ctx context.Context, plat
 func (m *mockGroupRepoForGateway) ExistsByName(ctx context.Context, name string) (bool, error) {
 	return false, nil
 }
-func (m *mockGroupRepoForGateway) GetAccountCount(ctx context.Context, groupID int64) (int64, error) {
-	return 0, nil
+func (m *mockGroupRepoForGateway) GetAccountCount(ctx context.Context, groupID int64) (int64, int64, error) {
+	return 0, 0, nil
 }
 func (m *mockGroupRepoForGateway) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	return 0, nil

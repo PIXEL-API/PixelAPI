@@ -326,7 +326,6 @@ func isClaudeCodeCredentialScopeError(msg string) bool {
 // Some upstream APIs return non-standard "data:" without space (should be "data: ").
 var (
 	sseDataRe            = regexp.MustCompile(`^data:\s*`)
-	sessionIDRegex       = regexp.MustCompile(`session_([a-f0-9-]{36})`)
 	claudeCliUserAgentRe = regexp.MustCompile(`^claude-cli/\d+\.\d+\.\d+`)
 
 	// claudeCodePromptPrefixes 用于检测 Claude Code 系统提示词的前缀列表
@@ -491,6 +490,7 @@ type ForwardResult struct {
 	RequestID        string
 	Usage            ClaudeUsage
 	Model            string
+	UpstreamModel    string // Actual upstream model after mapping (empty = no mapping)
 	Stream           bool
 	Duration         time.Duration
 	FirstTokenMs     *int // 首字时间（流式请求）
@@ -644,8 +644,8 @@ func (s *GatewayService) GenerateSessionHash(parsed *ParsedRequest) string {
 
 	// 1. 最高优先级：从 metadata.user_id 提取 session_xxx
 	if parsed.MetadataUserID != "" {
-		if match := sessionIDRegex.FindStringSubmatch(parsed.MetadataUserID); len(match) > 1 {
-			return match[1]
+		if uid := ParseMetadataUserID(parsed.MetadataUserID); uid != nil && uid.SessionID != "" {
+			return uid.SessionID
 		}
 	}
 
@@ -1026,13 +1026,13 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 		sessionID = generateSessionUUID(seed)
 	}
 
-	// Prefer the newer format that includes account_uuid (if present),
-	// otherwise fall back to the legacy Claude Code format.
-	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
-	if accountUUID != "" {
-		return fmt.Sprintf("user_%s_account_%s_session_%s", userID, accountUUID, sessionID)
+	// 根据指纹 UA 版本选择输出格式
+	var uaVersion string
+	if fp != nil {
+		uaVersion = ExtractCLIVersion(fp.UserAgent)
 	}
-	return fmt.Sprintf("user_%s_account__session_%s", userID, sessionID)
+	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
+	return FormatMetadataUserID(userID, accountUUID, sessionID, uaVersion)
 }
 
 // GenerateSessionUUID creates a deterministic UUID4 from a seed string.
@@ -3989,7 +3989,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				passthroughModel = mappedModel
 			}
 		}
-		return s.forwardAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody, passthroughModel, parsed.Stream, startTime)
+		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
+			Body:          passthroughBody,
+			RequestModel:  passthroughModel,
+			OriginalModel: parsed.Model,
+			RequestStream: parsed.Stream,
+			StartTime:     startTime,
+		})
 	}
 
 	if account != nil && account.IsBedrock() {
@@ -4513,11 +4519,20 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
+		UpstreamModel:    mappedModel,
 		Stream:           reqStream,
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
 	}, nil
+}
+
+type anthropicPassthroughForwardInput struct {
+	Body          []byte
+	RequestModel  string
+	OriginalModel string
+	RequestStream bool
+	StartTime     time.Time
 }
 
 func (s *GatewayService) forwardAnthropicAPIKeyPassthrough(
@@ -4526,8 +4541,24 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthrough(
 	account *Account,
 	body []byte,
 	reqModel string,
+	originalModel string,
 	reqStream bool,
 	startTime time.Time,
+) (*ForwardResult, error) {
+	return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
+		Body:          body,
+		RequestModel:  reqModel,
+		OriginalModel: originalModel,
+		RequestStream: reqStream,
+		StartTime:     startTime,
+	})
+}
+
+func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	input anthropicPassthroughForwardInput,
 ) (*ForwardResult, error) {
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -4543,19 +4574,19 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthrough(
 	}
 
 	logger.LegacyPrintf("service.gateway", "[Anthropic 自动透传] 命中 API Key 透传分支: account=%d name=%s model=%s stream=%v",
-		account.ID, account.Name, reqModel, reqStream)
+		account.ID, account.Name, input.RequestModel, input.RequestStream)
 
 	if c != nil {
 		c.Set("anthropic_passthrough", true)
 	}
 	// 重试间复用同一请求体，避免每次 string(body) 产生额外分配。
-	setOpsUpstreamRequestBody(c, body)
+	setOpsUpstreamRequestBody(c, input.Body)
 
 	var resp *http.Response
 	retryStart := time.Now()
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
-		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-		upstreamReq, err := s.buildUpstreamRequestAnthropicAPIKeyPassthrough(upstreamCtx, c, account, body, token)
+		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, input.RequestStream)
+		upstreamReq, err := s.buildUpstreamRequestAnthropicAPIKeyPassthrough(upstreamCtx, c, account, input.Body, token)
 		releaseUpstreamCtx()
 		if err != nil {
 			return nil, err
@@ -4713,8 +4744,8 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthrough(
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	var clientDisconnect bool
-	if reqStream {
-		streamResult, err := s.handleStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account, startTime, reqModel)
+	if input.RequestStream {
+		streamResult, err := s.handleStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account, input.StartTime, input.RequestModel)
 		if err != nil {
 			return nil, err
 		}
@@ -4734,9 +4765,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthrough(
 	return &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
-		Model:            reqModel,
-		Stream:           reqStream,
-		Duration:         time.Since(startTime),
+		Model:            input.OriginalModel,
+		UpstreamModel:    input.RequestModel,
+		Stream:           input.RequestStream,
+		Duration:         time.Since(input.StartTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
 	}, nil
@@ -5241,6 +5273,7 @@ func (s *GatewayService) forwardBedrock(
 		RequestID:        resp.Header.Get("x-amzn-requestid"),
 		Usage:            *usage,
 		Model:            reqModel,
+		UpstreamModel:    mappedModel,
 		Stream:           reqStream,
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
@@ -5533,7 +5566,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// 如果启用了会话ID伪装，会在重写后替换 session 部分为固定值
 			accountUUID := account.GetExtraString("account_uuid")
 			if accountUUID != "" && fp.ClientID != "" {
-				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID); err == nil && len(newBody) > 0 {
+				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
 					body = newBody
 				}
 			}
@@ -6068,9 +6101,11 @@ func (s *GatewayService) isThinkingBlockSignatureError(respBody []byte) bool {
 		return true
 	}
 
-	// 检测空消息内容错误（可能是过滤 thinking blocks 后导致的）
+	// 检测空消息内容错误（可能是过滤 thinking blocks 后导致的，或客户端发送了空 text block）
 	// 例如: "all messages must have non-empty content"
-	if strings.Contains(msg, "non-empty content") || strings.Contains(msg, "empty content") {
+	//       "messages: text content blocks must be non-empty"
+	if strings.Contains(msg, "non-empty content") || strings.Contains(msg, "empty content") ||
+		strings.Contains(msg, "content blocks must be non-empty") {
 		logger.LegacyPrintf("service.gateway", "[SignatureCheck] Detected empty content error")
 		return true
 	}
@@ -7529,6 +7564,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		AccountID:             account.ID,
 		RequestID:             requestID,
 		Model:                 result.Model,
+		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
@@ -7710,6 +7746,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		AccountID:             account.ID,
 		RequestID:             requestID,
 		Model:                 result.Model,
+		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
@@ -8161,7 +8198,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		if err == nil {
 			accountUUID := account.GetExtraString("account_uuid")
 			if accountUUID != "" && fp.ClientID != "" {
-				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID); err == nil && len(newBody) > 0 {
+				if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
 					body = newBody
 				}
 			}
