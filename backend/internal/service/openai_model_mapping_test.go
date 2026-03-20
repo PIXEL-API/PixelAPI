@@ -68,3 +68,19 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveOpenAIForwardModel_PreventsClaudeModelFromFallingBackToGpt51(t *testing.T) {
+	account := &Account{
+		Credentials: map[string]any{},
+	}
+
+	withoutDefault := resolveOpenAIForwardModel(account, "claude-opus-4-6", "")
+	if got := normalizeCodexModel(withoutDefault); got != "gpt-5.1" {
+		t.Fatalf("normalizeCodexModel(%q) = %q, want %q", withoutDefault, got, "gpt-5.1")
+	}
+
+	withDefault := resolveOpenAIForwardModel(account, "claude-opus-4-6", "gpt-5.4")
+	if got := normalizeCodexModel(withDefault); got != "gpt-5.4" {
+		t.Fatalf("normalizeCodexModel(%q) = %q, want %q", withDefault, got, "gpt-5.4")
+	}
+}
