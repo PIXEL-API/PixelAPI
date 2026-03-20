@@ -276,11 +276,17 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		if limit := a.GetQuotaDailyLimit(); limit > 0 {
 			out.QuotaDailyLimit = &limit
 			used := a.GetQuotaDailyUsed()
+			if a.IsDailyQuotaPeriodExpired() {
+				used = 0
+			}
 			out.QuotaDailyUsed = &used
 		}
 		if limit := a.GetQuotaWeeklyLimit(); limit > 0 {
 			out.QuotaWeeklyLimit = &limit
 			used := a.GetQuotaWeeklyUsed()
+			if a.IsWeeklyQuotaPeriodExpired() {
+				used = 0
+			}
 			out.QuotaWeeklyUsed = &used
 		}
 		// 固定时间重置配置
