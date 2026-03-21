@@ -1742,7 +1742,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	return &ForwardResult{
 		RequestID:        requestID,
 		Usage:            *usage,
-		Model:            billingModel, // 使用映射模型用于计费和日志
+		Model:            originalModel,
+		UpstreamModel:    billingModel,
 		Stream:           claudeReq.Stream,
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
@@ -2435,7 +2436,8 @@ handleSuccess:
 	return &ForwardResult{
 		RequestID:        requestID,
 		Usage:            *usage,
-		Model:            billingModel,
+		Model:            originalModel,
+		UpstreamModel:    billingModel,
 		Stream:           stream,
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,

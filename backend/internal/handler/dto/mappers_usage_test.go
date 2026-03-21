@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -104,6 +105,47 @@ func TestUsageLogFromService_IncludesServiceTierForUserAndAdmin(t *testing.T) {
 	require.Equal(t, upstreamEndpoint, *adminDTO.UpstreamEndpoint)
 	require.NotNil(t, adminDTO.AccountRateMultiplier)
 	require.InDelta(t, 1.5, *adminDTO.AccountRateMultiplier, 1e-12)
+}
+
+func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *testing.T) {
+	t.Parallel()
+
+	upstreamModel := "claude-sonnet-4-20250514"
+	log := &service.UsageLog{
+		RequestID:      "req_4",
+		Model:          upstreamModel,
+		RequestedModel: "claude-sonnet-4",
+		UpstreamModel:  &upstreamModel,
+	}
+
+	userDTO := UsageLogFromService(log)
+	adminDTO := UsageLogFromServiceAdmin(log)
+
+	require.Equal(t, "claude-sonnet-4", userDTO.Model)
+	require.Equal(t, "claude-sonnet-4", adminDTO.Model)
+
+	userJSON, err := json.Marshal(userDTO)
+	require.NoError(t, err)
+	require.NotContains(t, string(userJSON), "upstream_model")
+
+	adminJSON, err := json.Marshal(adminDTO)
+	require.NoError(t, err)
+	require.Contains(t, string(adminJSON), `"upstream_model":"claude-sonnet-4-20250514"`)
+}
+
+func TestUsageLogFromService_FallsBackToLegacyModelWhenRequestedModelMissing(t *testing.T) {
+	t.Parallel()
+
+	log := &service.UsageLog{
+		RequestID: "req_legacy",
+		Model:     "claude-3",
+	}
+
+	userDTO := UsageLogFromService(log)
+	adminDTO := UsageLogFromServiceAdmin(log)
+
+	require.Equal(t, "claude-3", userDTO.Model)
+	require.Equal(t, "claude-3", adminDTO.Model)
 }
 
 func f64Ptr(value float64) *float64 {

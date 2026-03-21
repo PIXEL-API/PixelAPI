@@ -144,6 +144,11 @@ func TestSoraGatewayService_ForwardPromptEnhance(t *testing.T) {
 		ID:       1,
 		Platform: PlatformSora,
 		Status:   StatusActive,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"prompt-enhance-short-10s": "prompt-enhance-short-15s",
+			},
+		},
 	}
 	body := []byte(`{"model":"prompt-enhance-short-10s","messages":[{"role":"user","content":"cat running"}],"stream":false}`)
 
@@ -152,6 +157,7 @@ func TestSoraGatewayService_ForwardPromptEnhance(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "prompt", result.MediaType)
 	require.Equal(t, "prompt-enhance-short-10s", result.Model)
+	require.Equal(t, "prompt-enhance-short-15s", result.UpstreamModel)
 }
 
 func TestSoraGatewayService_ForwardStoryboardPrompt(t *testing.T) {
