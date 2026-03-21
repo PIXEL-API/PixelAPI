@@ -88,6 +88,7 @@ func (s *OpsAlertEvaluatorService) Start() {
 		if s.stopCh == nil {
 			s.stopCh = make(chan struct{})
 		}
+		s.wg.Add(1)
 		go s.run()
 	})
 }
@@ -105,7 +106,6 @@ func (s *OpsAlertEvaluatorService) Stop() {
 }
 
 func (s *OpsAlertEvaluatorService) run() {
-	s.wg.Add(1)
 	defer s.wg.Done()
 
 	// Start immediately to produce early feedback in ops dashboard.
@@ -848,7 +848,9 @@ func (s *OpsAlertEvaluatorService) tryAcquireLeaderLock(ctx context.Context, loc
 		return nil, false
 	}
 	return func() {
-		_, _ = opsAlertEvaluatorReleaseScript.Run(ctx, s.redisClient, []string{key}, s.instanceID).Result()
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		_, _ = opsAlertEvaluatorReleaseScript.Run(releaseCtx, s.redisClient, []string{key}, s.instanceID).Result()
 	}, true
 }
 
