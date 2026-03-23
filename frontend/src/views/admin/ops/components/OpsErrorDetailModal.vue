@@ -59,7 +59,14 @@
         <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
           <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.model') }}</div>
           <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
-            {{ detail.model || '—' }}
+            <template v-if="hasModelMapping(detail)">
+              <span class="font-mono">{{ detail.requested_model }}</span>
+              <span class="mx-1 text-gray-400">→</span>
+              <span class="font-mono text-primary-600 dark:text-primary-400">{{ detail.upstream_model }}</span>
+            </template>
+            <template v-else>
+              {{ displayModel(detail) || '—' }}
+            </template>
           </div>
         </div>
 
@@ -211,6 +218,22 @@ function isUpstreamError(d: OpsErrorDetail | null): boolean {
   const phase = String(d.phase || '').toLowerCase()
   const owner = String(d.error_owner || '').toLowerCase()
   return phase === 'upstream' && owner === 'provider'
+}
+
+function hasModelMapping(d: OpsErrorDetail | null): boolean {
+  if (!d) return false
+  const requested = String(d.requested_model || '').trim()
+  const upstream = String(d.upstream_model || '').trim()
+  return !!requested && !!upstream && requested !== upstream
+}
+
+function displayModel(d: OpsErrorDetail | null): string {
+  if (!d) return ''
+  const upstream = String(d.upstream_model || '').trim()
+  if (upstream) return upstream
+  const requested = String(d.requested_model || '').trim()
+  if (requested) return requested
+  return String(d.model || '').trim()
 }
 
 const correlatedUpstream = ref<OpsErrorDetail[]>([])
