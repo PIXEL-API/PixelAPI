@@ -367,8 +367,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			// 🔄 Refresh OAuth token after creation
 			if targetType == AccountTypeOAuth {
 				if refreshedCreds := s.refreshOAuthToken(ctx, account); refreshedCreds != nil {
-					account.Credentials = refreshedCreds
-					_ = s.accountRepo.Update(ctx, account)
+					_ = persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds)
 				}
 			}
 			item.Action = "created"
@@ -402,8 +401,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		// 🔄 Refresh OAuth token after update
 		if targetType == AccountTypeOAuth {
 			if refreshedCreds := s.refreshOAuthToken(ctx, existing); refreshedCreds != nil {
-				existing.Credentials = refreshedCreds
-				_ = s.accountRepo.Update(ctx, existing)
+				_ = persistAccountCredentials(ctx, s.accountRepo, existing, refreshedCreds)
 			}
 		}
 
@@ -620,8 +618,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			}
 			// 🔄 Refresh OAuth token after creation
 			if refreshedCreds := s.refreshOAuthToken(ctx, account); refreshedCreds != nil {
-				account.Credentials = refreshedCreds
-				_ = s.accountRepo.Update(ctx, account)
+				_ = persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds)
 			}
 			item.Action = "created"
 			result.Created++
@@ -652,8 +649,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 
 		// 🔄 Refresh OAuth token after update
 		if refreshedCreds := s.refreshOAuthToken(ctx, existing); refreshedCreds != nil {
-			existing.Credentials = refreshedCreds
-			_ = s.accountRepo.Update(ctx, existing)
+			_ = persistAccountCredentials(ctx, s.accountRepo, existing, refreshedCreds)
 		}
 
 		item.Action = "updated"
@@ -862,8 +858,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				continue
 			}
 			if refreshedCreds := s.refreshOAuthToken(ctx, account); refreshedCreds != nil {
-				account.Credentials = refreshedCreds
-				_ = s.accountRepo.Update(ctx, account)
+				_ = persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds)
 			}
 			item.Action = "created"
 			result.Created++
@@ -893,8 +888,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 
 		if refreshedCreds := s.refreshOAuthToken(ctx, existing); refreshedCreds != nil {
-			existing.Credentials = refreshedCreds
-			_ = s.accountRepo.Update(ctx, existing)
+			_ = persistAccountCredentials(ctx, s.accountRepo, existing, refreshedCreds)
 		}
 
 		item.Action = "updated"

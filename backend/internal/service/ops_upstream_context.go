@@ -93,6 +93,10 @@ type OpsUpstreamErrorEvent struct {
 	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
 	UpstreamRequestID  string `json:"upstream_request_id,omitempty"`
 
+	// UpstreamURL is the actual upstream URL that was called (host + path, query/fragment stripped).
+	// Helps debug 404/routing errors by showing which endpoint was targeted.
+	UpstreamURL string `json:"upstream_url,omitempty"`
+
 	// Best-effort upstream request capture (sanitized+trimmed).
 	// Required for retrying a specific upstream attempt.
 	UpstreamRequestBody string `json:"upstream_request_body,omitempty"`
@@ -119,6 +123,7 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	ev.UpstreamRequestBody = strings.TrimSpace(ev.UpstreamRequestBody)
 	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)
 	ev.Kind = strings.TrimSpace(ev.Kind)
+	ev.UpstreamURL = strings.TrimSpace(ev.UpstreamURL)
 	ev.Message = strings.TrimSpace(ev.Message)
 	ev.Detail = strings.TrimSpace(ev.Detail)
 	if ev.Message != "" {
@@ -204,4 +209,20 @@ func ParseOpsUpstreamErrors(raw string) ([]*OpsUpstreamErrorEvent, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// safeUpstreamURL returns scheme + host + path from a URL, stripping query/fragment
+// to avoid leaking sensitive query parameters (e.g. OAuth tokens).
+func safeUpstreamURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(rawURL, '?'); idx >= 0 {
+		rawURL = rawURL[:idx]
+	}
+	if idx := strings.IndexByte(rawURL, '#'); idx >= 0 {
+		rawURL = rawURL[:idx]
+	}
+	return rawURL
 }
