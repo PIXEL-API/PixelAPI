@@ -13,6 +13,8 @@ export interface OpenAITokenInfo {
   scope?: string
   email?: string
   name?: string
+  plan_type?: string
+  privacy_mode?: string
   // OpenAI specific IDs (extracted from ID Token)
   chatgpt_account_id?: string
   chatgpt_user_id?: string
@@ -126,9 +128,11 @@ export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
   }
 
   // Validate refresh token and get full token info
+  // clientId: 指定 OAuth client_id（用于第三方渠道获取的 RT，如 app_LlGpXReQgckcGGUo2JrYvtJK）
   const validateRefreshToken = async (
     refreshToken: string,
-    proxyId?: number | null
+    proxyId?: number | null,
+    clientId?: string
   ): Promise<OpenAITokenInfo | null> => {
     if (!refreshToken.trim()) {
       error.value = 'Missing refresh token'
@@ -143,11 +147,12 @@ export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
       const tokenInfo = await adminAPI.accounts.refreshOpenAIToken(
         refreshToken.trim(),
         proxyId,
-        `${endpointPrefix}/refresh-token`
+        `${endpointPrefix}/refresh-token`,
+        clientId
       )
       return tokenInfo as OpenAITokenInfo
     } catch (err: any) {
-      error.value = err.response?.data?.detail || 'Failed to validate refresh token'
+      error.value = err.response?.data?.detail || err.message || 'Failed to validate refresh token'
       appStore.showError(error.value)
       return null
     } finally {
@@ -182,22 +187,23 @@ export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
     }
   }
 
-  // Build credentials for OpenAI OAuth account
+  // Build credentials for OpenAI OAuth account (aligned with backend BuildAccountCredentials)
   const buildCredentials = (tokenInfo: OpenAITokenInfo): Record<string, unknown> => {
     const creds: Record<string, unknown> = {
       access_token: tokenInfo.access_token,
-      refresh_token: tokenInfo.refresh_token,
-      token_type: tokenInfo.token_type,
-      expires_in: tokenInfo.expires_in,
-      expires_at: tokenInfo.expires_at,
-      scope: tokenInfo.scope
+      expires_at: tokenInfo.expires_at
     }
 
-    if (tokenInfo.client_id) {
-      creds.client_id = tokenInfo.client_id
+    // 仅在返回了新的 refresh_token 时才写入，防止用空值覆盖已有令牌
+    if (tokenInfo.refresh_token) {
+      creds.refresh_token = tokenInfo.refresh_token
     }
-
-    // Include OpenAI specific IDs (required for forwarding)
+    if (tokenInfo.id_token) {
+      creds.id_token = tokenInfo.id_token
+    }
+    if (tokenInfo.email) {
+      creds.email = tokenInfo.email
+    }
     if (tokenInfo.chatgpt_account_id) {
       creds.chatgpt_account_id = tokenInfo.chatgpt_account_id
     }
@@ -206,6 +212,12 @@ export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
     }
     if (tokenInfo.organization_id) {
       creds.organization_id = tokenInfo.organization_id
+    }
+    if (tokenInfo.plan_type) {
+      creds.plan_type = tokenInfo.plan_type
+    }
+    if (tokenInfo.client_id) {
+      creds.client_id = tokenInfo.client_id
     }
 
     return creds
@@ -219,6 +231,9 @@ export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
     }
     if (tokenInfo.name) {
       extra.name = tokenInfo.name
+    }
+    if (tokenInfo.privacy_mode) {
+      extra.privacy_mode = tokenInfo.privacy_mode
     }
     return Object.keys(extra).length > 0 ? extra : undefined
   }

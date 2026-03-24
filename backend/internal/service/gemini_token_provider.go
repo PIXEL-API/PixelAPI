@@ -135,7 +135,7 @@ func (p *GeminiTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 			if tierID != "" {
 				account.Credentials["tier_id"] = tierID
 			}
-			_ = p.accountRepo.Update(ctx, account)
+			_ = persistAccountCredentials(ctx, p.accountRepo, account, account.Credentials)
 		}
 	}
 

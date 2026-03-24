@@ -233,10 +233,26 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.DefaultBalance < 0 {
 		req.DefaultBalance = 0
 	}
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+	req.SMTPPassword = strings.TrimSpace(req.SMTPPassword)
+	req.SMTPFrom = strings.TrimSpace(req.SMTPFrom)
+	req.SMTPFromName = strings.TrimSpace(req.SMTPFromName)
 	if req.SMTPPort <= 0 {
 		req.SMTPPort = 587
 	}
 	req.DefaultSubscriptions = normalizeDefaultSubscriptions(req.DefaultSubscriptions)
+
+	// SMTP 配置保护：如果请求中 smtp_host 为空但数据库中已有配置，则保留已有 SMTP 配置
+	// 防止前端加载设置失败时空表单覆盖已保存的 SMTP 配置
+	if req.SMTPHost == "" && previousSettings.SMTPHost != "" {
+		req.SMTPHost = previousSettings.SMTPHost
+		req.SMTPPort = previousSettings.SMTPPort
+		req.SMTPUsername = previousSettings.SMTPUsername
+		req.SMTPFrom = previousSettings.SMTPFrom
+		req.SMTPFromName = previousSettings.SMTPFromName
+		req.SMTPUseTLS = previousSettings.SMTPUseTLS
+	}
 
 	// Turnstile 参数验证
 	if req.TurnstileEnabled {
@@ -881,7 +897,7 @@ func equalDefaultSubscriptions(a, b []service.DefaultSubscriptionSetting) bool {
 
 // TestSMTPRequest 测试SMTP连接请求
 type TestSMTPRequest struct {
-	SMTPHost     string `json:"smtp_host" binding:"required"`
+	SMTPHost     string `json:"smtp_host"`
 	SMTPPort     int    `json:"smtp_port"`
 	SMTPUsername string `json:"smtp_username"`
 	SMTPPassword string `json:"smtp_password"`
@@ -897,17 +913,34 @@ func (h *SettingHandler) TestSMTPConnection(c *gin.Context) {
 		return
 	}
 
-	if req.SMTPPort <= 0 {
-		req.SMTPPort = 587
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+
+	var savedConfig *service.SMTPConfig
+	if cfg, err := h.emailService.GetSMTPConfig(c.Request.Context()); err == nil && cfg != nil {
+		savedConfig = cfg
 	}
 
-	// 如果未提供密码，从数据库获取已保存的密码
-	password := req.SMTPPassword
-	if password == "" {
-		savedConfig, err := h.emailService.GetSMTPConfig(c.Request.Context())
-		if err == nil && savedConfig != nil {
-			password = savedConfig.Password
+	if req.SMTPHost == "" && savedConfig != nil {
+		req.SMTPHost = savedConfig.Host
+	}
+	if req.SMTPPort <= 0 {
+		if savedConfig != nil && savedConfig.Port > 0 {
+			req.SMTPPort = savedConfig.Port
+		} else {
+			req.SMTPPort = 587
 		}
+	}
+	if req.SMTPUsername == "" && savedConfig != nil {
+		req.SMTPUsername = savedConfig.Username
+	}
+	password := strings.TrimSpace(req.SMTPPassword)
+	if password == "" && savedConfig != nil {
+		password = savedConfig.Password
+	}
+	if req.SMTPHost == "" {
+		response.BadRequest(c, "SMTP host is required")
+		return
 	}
 
 	config := &service.SMTPConfig{
@@ -930,7 +963,7 @@ func (h *SettingHandler) TestSMTPConnection(c *gin.Context) {
 // SendTestEmailRequest 发送测试邮件请求
 type SendTestEmailRequest struct {
 	Email        string `json:"email" binding:"required,email"`
-	SMTPHost     string `json:"smtp_host" binding:"required"`
+	SMTPHost     string `json:"smtp_host"`
 	SMTPPort     int    `json:"smtp_port"`
 	SMTPUsername string `json:"smtp_username"`
 	SMTPPassword string `json:"smtp_password"`
@@ -948,17 +981,42 @@ func (h *SettingHandler) SendTestEmail(c *gin.Context) {
 		return
 	}
 
-	if req.SMTPPort <= 0 {
-		req.SMTPPort = 587
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+	req.SMTPFrom = strings.TrimSpace(req.SMTPFrom)
+	req.SMTPFromName = strings.TrimSpace(req.SMTPFromName)
+
+	var savedConfig *service.SMTPConfig
+	if cfg, err := h.emailService.GetSMTPConfig(c.Request.Context()); err == nil && cfg != nil {
+		savedConfig = cfg
 	}
 
-	// 如果未提供密码，从数据库获取已保存的密码
-	password := req.SMTPPassword
-	if password == "" {
-		savedConfig, err := h.emailService.GetSMTPConfig(c.Request.Context())
-		if err == nil && savedConfig != nil {
-			password = savedConfig.Password
+	if req.SMTPHost == "" && savedConfig != nil {
+		req.SMTPHost = savedConfig.Host
+	}
+	if req.SMTPPort <= 0 {
+		if savedConfig != nil && savedConfig.Port > 0 {
+			req.SMTPPort = savedConfig.Port
+		} else {
+			req.SMTPPort = 587
 		}
+	}
+	if req.SMTPUsername == "" && savedConfig != nil {
+		req.SMTPUsername = savedConfig.Username
+	}
+	password := strings.TrimSpace(req.SMTPPassword)
+	if password == "" && savedConfig != nil {
+		password = savedConfig.Password
+	}
+	if req.SMTPFrom == "" && savedConfig != nil {
+		req.SMTPFrom = savedConfig.From
+	}
+	if req.SMTPFromName == "" && savedConfig != nil {
+		req.SMTPFromName = savedConfig.FromName
+	}
+	if req.SMTPHost == "" {
+		response.BadRequest(c, "SMTP host is required")
+		return
 	}
 
 	config := &service.SMTPConfig{
