@@ -18239,6 +18239,7 @@ type UsageLogMutation struct {
 	id                          *int64
 	request_id                  *string
 	model                       *string
+	requested_model             *string
 	upstream_model              *string
 	input_tokens                *int
 	addinput_tokens             *int
@@ -18575,6 +18576,55 @@ func (m *UsageLogMutation) OldModel(ctx context.Context) (v string, err error) {
 // ResetModel resets all changes to the "model" field.
 func (m *UsageLogMutation) ResetModel() {
 	m.model = nil
+}
+
+// SetRequestedModel sets the "requested_model" field.
+func (m *UsageLogMutation) SetRequestedModel(s string) {
+	m.requested_model = &s
+}
+
+// RequestedModel returns the value of the "requested_model" field in the mutation.
+func (m *UsageLogMutation) RequestedModel() (r string, exists bool) {
+	v := m.requested_model
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestedModel returns the old "requested_model" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldRequestedModel(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestedModel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestedModel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestedModel: %w", err)
+	}
+	return oldValue.RequestedModel, nil
+}
+
+// ClearRequestedModel clears the value of the "requested_model" field.
+func (m *UsageLogMutation) ClearRequestedModel() {
+	m.requested_model = nil
+	m.clearedFields[usagelog.FieldRequestedModel] = struct{}{}
+}
+
+// RequestedModelCleared returns if the "requested_model" field was cleared in this mutation.
+func (m *UsageLogMutation) RequestedModelCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldRequestedModel]
+	return ok
+}
+
+// ResetRequestedModel resets all changes to the "requested_model" field.
+func (m *UsageLogMutation) ResetRequestedModel() {
+	m.requested_model = nil
+	delete(m.clearedFields, usagelog.FieldRequestedModel)
 }
 
 // SetUpstreamModel sets the "upstream_model" field.
@@ -20247,7 +20297,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 33)
+	fields := make([]string, 0, 34)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -20262,6 +20312,9 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.model != nil {
 		fields = append(fields, usagelog.FieldModel)
+	}
+	if m.requested_model != nil {
+		fields = append(fields, usagelog.FieldRequestedModel)
 	}
 	if m.upstream_model != nil {
 		fields = append(fields, usagelog.FieldUpstreamModel)
@@ -20365,6 +20418,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.RequestID()
 	case usagelog.FieldModel:
 		return m.Model()
+	case usagelog.FieldRequestedModel:
+		return m.RequestedModel()
 	case usagelog.FieldUpstreamModel:
 		return m.UpstreamModel()
 	case usagelog.FieldGroupID:
@@ -20440,6 +20495,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldRequestID(ctx)
 	case usagelog.FieldModel:
 		return m.OldModel(ctx)
+	case usagelog.FieldRequestedModel:
+		return m.OldRequestedModel(ctx)
 	case usagelog.FieldUpstreamModel:
 		return m.OldUpstreamModel(ctx)
 	case usagelog.FieldGroupID:
@@ -20539,6 +20596,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetModel(v)
+		return nil
+	case usagelog.FieldRequestedModel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestedModel(v)
 		return nil
 	case usagelog.FieldUpstreamModel:
 		v, ok := value.(string)
@@ -20985,6 +21049,9 @@ func (m *UsageLogMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *UsageLogMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(usagelog.FieldRequestedModel) {
+		fields = append(fields, usagelog.FieldRequestedModel)
+	}
 	if m.FieldCleared(usagelog.FieldUpstreamModel) {
 		fields = append(fields, usagelog.FieldUpstreamModel)
 	}
@@ -21029,6 +21096,9 @@ func (m *UsageLogMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *UsageLogMutation) ClearField(name string) error {
 	switch name {
+	case usagelog.FieldRequestedModel:
+		m.ClearRequestedModel()
+		return nil
 	case usagelog.FieldUpstreamModel:
 		m.ClearUpstreamModel()
 		return nil
@@ -21081,6 +21151,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldModel:
 		m.ResetModel()
+		return nil
+	case usagelog.FieldRequestedModel:
+		m.ResetRequestedModel()
 		return nil
 	case usagelog.FieldUpstreamModel:
 		m.ResetUpstreamModel()
