@@ -526,4 +526,3 @@ func (s *TokenRefreshService) ensureAntigravityPrivacy(ctx context.Context, acco
 		)
 	}
 }
-

@@ -36,27 +36,3 @@ func NormalizeAntigravitySubscription(resp *antigravity.LoadCodeAssistResponse) 
 		PlanType: antigravity.TierIDToPlanType(tierID),
 	}
 }
-
-func applyAntigravitySubscriptionResult(account *Account, result AntigravitySubscriptionResult) (map[string]any, map[string]any) {
-	credentials := make(map[string]any)
-	for k, v := range account.Credentials {
-		credentials[k] = v
-	}
-	credentials["plan_type"] = result.PlanType
-
-	extra := make(map[string]any)
-	for k, v := range account.Extra {
-		extra[k] = v
-	}
-	if result.SubscriptionStatus != "" {
-		extra["subscription_status"] = result.SubscriptionStatus
-	} else {
-		delete(extra, "subscription_status")
-	}
-	if result.SubscriptionError != "" {
-		extra["subscription_error"] = result.SubscriptionError
-	} else {
-		delete(extra, "subscription_error")
-	}
-	return credentials, extra
-}
