@@ -16,3 +16,26 @@ func TestApplyAntigravityPrivacyMode_SetsInMemoryExtra(t *testing.T) {
 		t.Fatalf("expected privacy_mode %q, got %v", AntigravityPrivacySet, got)
 	}
 }
+
+func TestApplyAntigravityPrivacyMode_PreservedBySubscriptionResult(t *testing.T) {
+	account := &Account{
+		Credentials: map[string]any{
+			"access_token": "token",
+		},
+		Extra: map[string]any{
+			"existing": "value",
+		},
+	}
+	applyAntigravityPrivacyMode(account, AntigravityPrivacySet)
+
+	_, extra := applyAntigravitySubscriptionResult(account, AntigravitySubscriptionResult{
+		PlanType: "Pro",
+	})
+
+	if got := extra["privacy_mode"]; got != AntigravityPrivacySet {
+		t.Fatalf("expected subscription writeback to keep privacy_mode %q, got %v", AntigravityPrivacySet, got)
+	}
+	if got := extra["existing"]; got != "value" {
+		t.Fatalf("expected existing extra fields to be preserved, got %v", got)
+	}
+}
