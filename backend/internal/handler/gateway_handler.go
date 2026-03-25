@@ -422,11 +422,24 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					}
 				}
 				wroteFallback := h.ensureForwardErrorResponse(c, streamStarted)
-				reqLog.Error("gateway.forward_failed",
+				forwardFailedFields := []zap.Field{
 					zap.Int64("account_id", account.ID),
+					zap.String("account_name", account.Name),
+					zap.String("account_platform", account.Platform),
 					zap.Bool("fallback_error_response_written", wroteFallback),
 					zap.Error(err),
-				)
+				}
+				if account.Proxy != nil {
+					forwardFailedFields = append(forwardFailedFields,
+						zap.Int64("proxy_id", account.Proxy.ID),
+						zap.String("proxy_name", account.Proxy.Name),
+						zap.String("proxy_host", account.Proxy.Host),
+						zap.Int("proxy_port", account.Proxy.Port),
+					)
+				} else if account.ProxyID != nil {
+					forwardFailedFields = append(forwardFailedFields, zap.Int64p("proxy_id", account.ProxyID))
+				}
+				reqLog.Error("gateway.forward_failed", forwardFailedFields...)
 				return
 			}
 
@@ -741,11 +754,24 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					}
 				}
 				wroteFallback := h.ensureForwardErrorResponse(c, streamStarted)
-				reqLog.Error("gateway.forward_failed",
+				forwardFailedFields := []zap.Field{
 					zap.Int64("account_id", account.ID),
+					zap.String("account_name", account.Name),
+					zap.String("account_platform", account.Platform),
 					zap.Bool("fallback_error_response_written", wroteFallback),
 					zap.Error(err),
-				)
+				}
+				if account.Proxy != nil {
+					forwardFailedFields = append(forwardFailedFields,
+						zap.Int64("proxy_id", account.Proxy.ID),
+						zap.String("proxy_name", account.Proxy.Name),
+						zap.String("proxy_host", account.Proxy.Host),
+						zap.Int("proxy_port", account.Proxy.Port),
+					)
+				} else if account.ProxyID != nil {
+					forwardFailedFields = append(forwardFailedFields, zap.Int64p("proxy_id", account.ProxyID))
+				}
+				reqLog.Error("gateway.forward_failed", forwardFailedFields...)
 				return
 			}
 
