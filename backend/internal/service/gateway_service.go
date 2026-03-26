@@ -4188,7 +4188,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			if readErr == nil {
 				_ = resp.Body.Close()
 
-				if s.isThinkingBlockSignatureError(respBody) && s.settingService.IsSignatureRectifierEnabled(ctx) {
+				if s.shouldRectifySignatureError(ctx, account, respBody) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						Platform:           account.Platform,
 						AccountID:          account.ID,
@@ -4243,7 +4243,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 							retryRespBody, retryReadErr := io.ReadAll(io.LimitReader(retryResp.Body, 2<<20))
 							_ = retryResp.Body.Close()
-							if retryReadErr == nil && retryResp.StatusCode == 400 && s.isThinkingBlockSignatureError(retryRespBody) {
+							if retryReadErr == nil && retryResp.StatusCode == 400 && s.isSignatureErrorPattern(ctx, account, retryRespBody) {
 								appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 									Platform:           account.Platform,
 									AccountID:          account.ID,
@@ -6145,6 +6145,59 @@ func truncateForLog(b []byte, maxBytes int) string {
 	return s
 }
 
+// shouldRectifySignatureError 统一判断是否应触发签名整流（strip thinking blocks 并重试）。
+// 根据账号类型检查对应的开关和匹配模式。
+func (s *GatewayService) shouldRectifySignatureError(ctx context.Context, account *Account, respBody []byte) bool {
+	if account.Type == AccountTypeAPIKey {
+		// API Key 账号：独立开关，一次读取配置
+		settings, err := s.settingService.GetRectifierSettings(ctx)
+		if err != nil || !settings.Enabled || !settings.APIKeySignatureEnabled {
+			return false
+		}
+		// 先检查内置模式（同 OAuth），再检查自定义关键词
+		if s.isThinkingBlockSignatureError(respBody) {
+			return true
+		}
+		return matchSignaturePatterns(respBody, settings.APIKeySignaturePatterns)
+	}
+	// OAuth/SetupToken/Upstream/Bedrock 等：保持原有行为（内置模式 + 原开关）
+	return s.isThinkingBlockSignatureError(respBody) && s.settingService.IsSignatureRectifierEnabled(ctx)
+}
+
+// isSignatureErrorPattern 仅做模式匹配，不检查开关。
+// 用于已进入重试流程后的二阶段检测（此时开关已在首次调用时验证过）。
+func (s *GatewayService) isSignatureErrorPattern(ctx context.Context, account *Account, respBody []byte) bool {
+	if s.isThinkingBlockSignatureError(respBody) {
+		return true
+	}
+	if account.Type == AccountTypeAPIKey {
+		settings, err := s.settingService.GetRectifierSettings(ctx)
+		if err != nil {
+			return false
+		}
+		return matchSignaturePatterns(respBody, settings.APIKeySignaturePatterns)
+	}
+	return false
+}
+
+// matchSignaturePatterns 检查响应体是否匹配自定义关键词列表（不区分大小写）。
+func matchSignaturePatterns(respBody []byte, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	bodyLower := strings.ToLower(string(respBody))
+	for _, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if strings.Contains(bodyLower, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
 // isThinkingBlockSignatureError 检测是否是thinking block相关错误
 // 这类错误可以通过过滤thinking blocks并重试来解决
 func (s *GatewayService) isThinkingBlockSignatureError(respBody []byte) bool {
@@ -8013,7 +8066,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 检测 thinking block 签名错误（400）并重试一次（过滤 thinking blocks）
-	if resp.StatusCode == 400 && s.isThinkingBlockSignatureError(respBody) && s.settingService.IsSignatureRectifierEnabled(ctx) {
+	if resp.StatusCode == 400 && s.shouldRectifySignatureError(ctx, account, respBody) {
 		logger.LegacyPrintf("service.gateway", "Account %d: detected thinking block signature error on count_tokens, retrying with filtered thinking blocks", account.ID)
 
 		filteredBody := FilterThinkingBlocksForRetry(body)
