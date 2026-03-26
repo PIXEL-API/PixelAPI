@@ -174,6 +174,7 @@ func getHeaderOrDefault(headers http.Header, key, defaultValue string) string {
 }
 
 // ApplyFingerprint 将指纹应用到请求头（覆盖原有的x-stainless-*头）
+// 使用 setHeaderRaw 保持原始大小写（如 X-Stainless-OS 而非 X-Stainless-Os）
 func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 	if fp == nil {
 		return
@@ -181,27 +182,27 @@ func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 
 	// 设置user-agent
 	if fp.UserAgent != "" {
-		req.Header.Set("user-agent", fp.UserAgent)
+		setHeaderRaw(req.Header, "User-Agent", fp.UserAgent)
 	}
 
-	// 设置x-stainless-*头
+	// 设置x-stainless-*头（保持与 claude.DefaultHeaders 一致的大小写）
 	if fp.StainlessLang != "" {
-		req.Header.Set("X-Stainless-Lang", fp.StainlessLang)
+		setHeaderRaw(req.Header, "X-Stainless-Lang", fp.StainlessLang)
 	}
 	if fp.StainlessPackageVersion != "" {
-		req.Header.Set("X-Stainless-Package-Version", fp.StainlessPackageVersion)
+		setHeaderRaw(req.Header, "X-Stainless-Package-Version", fp.StainlessPackageVersion)
 	}
 	if fp.StainlessOS != "" {
-		req.Header.Set("X-Stainless-OS", fp.StainlessOS)
+		setHeaderRaw(req.Header, "X-Stainless-OS", fp.StainlessOS)
 	}
 	if fp.StainlessArch != "" {
-		req.Header.Set("X-Stainless-Arch", fp.StainlessArch)
+		setHeaderRaw(req.Header, "X-Stainless-Arch", fp.StainlessArch)
 	}
 	if fp.StainlessRuntime != "" {
-		req.Header.Set("X-Stainless-Runtime", fp.StainlessRuntime)
+		setHeaderRaw(req.Header, "X-Stainless-Runtime", fp.StainlessRuntime)
 	}
 	if fp.StainlessRuntimeVersion != "" {
-		req.Header.Set("X-Stainless-Runtime-Version", fp.StainlessRuntimeVersion)
+		setHeaderRaw(req.Header, "X-Stainless-Runtime-Version", fp.StainlessRuntimeVersion)
 	}
 }
 

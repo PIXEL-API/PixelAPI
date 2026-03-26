@@ -129,6 +129,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                 settings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:          settings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                   settings.BackendModeEnabled,
+		EnableFingerprintUnification:         settings.EnableFingerprintUnification,
+		EnableMetadataPassthrough:            settings.EnableMetadataPassthrough,
 	})
 }
 
@@ -209,6 +211,10 @@ type UpdateSettingsRequest struct {
 
 	// Backend Mode
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
+
+	// Gateway forwarding behavior
+	EnableFingerprintUnification *bool `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough    *bool `json:"enable_metadata_passthrough"`
 }
 
 // UpdateSettings 更新系统设置
@@ -601,6 +607,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpsMetricsIntervalSeconds
 		}(),
+		EnableFingerprintUnification: func() bool {
+			if req.EnableFingerprintUnification != nil {
+				return *req.EnableFingerprintUnification
+			}
+			return previousSettings.EnableFingerprintUnification
+		}(),
+		EnableMetadataPassthrough: func() bool {
+			if req.EnableMetadataPassthrough != nil {
+				return *req.EnableMetadataPassthrough
+			}
+			return previousSettings.EnableMetadataPassthrough
+		}(),
 	}
 
 	if err := h.settingService.UpdateSettings(c.Request.Context(), settings); err != nil {
@@ -679,6 +697,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                 updatedSettings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:          updatedSettings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                   updatedSettings.BackendModeEnabled,
+		EnableFingerprintUnification:         updatedSettings.EnableFingerprintUnification,
+		EnableMetadataPassthrough:            updatedSettings.EnableMetadataPassthrough,
 	})
 }
 
@@ -850,6 +870,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.CustomMenuItems != after.CustomMenuItems {
 		changed = append(changed, "custom_menu_items")
+	}
+	if before.EnableFingerprintUnification != after.EnableFingerprintUnification {
+		changed = append(changed, "enable_fingerprint_unification")
+	}
+	if before.EnableMetadataPassthrough != after.EnableMetadataPassthrough {
+		changed = append(changed, "enable_metadata_passthrough")
 	}
 	return changed
 }
