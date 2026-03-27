@@ -445,6 +445,18 @@ func (s *stubAdminService) EnsureOpenAIPrivacy(ctx context.Context, account *ser
 	return ""
 }
 
+func (s *stubAdminService) EnsureAntigravityPrivacy(ctx context.Context, account *service.Account) string {
+	return ""
+}
+
+func (s *stubAdminService) ForceOpenAIPrivacy(ctx context.Context, account *service.Account) string {
+	return ""
+}
+
+func (s *stubAdminService) ForceAntigravityPrivacy(ctx context.Context, account *service.Account) string {
+	return ""
+}
+
 func (s *stubAdminService) ReplaceUserGroup(ctx context.Context, userID, oldGroupID, newGroupID int64) (*service.ReplaceUserGroupResult, error) {
 	return &service.ReplaceUserGroupResult{MigratedKeys: 0}, nil
 }
