@@ -443,11 +443,8 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 	if s.privacyClientFactory == nil {
 		return
 	}
-	// 已设置过则跳过
-	if account.Extra != nil {
-		if _, ok := account.Extra["privacy_mode"]; ok {
-			return
-		}
+	if shouldSkipOpenAIPrivacyEnsure(account.Extra) {
+		return
 	}
 
 	token, _ := account.Credentials["access_token"].(string)

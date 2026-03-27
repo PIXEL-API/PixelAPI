@@ -2639,10 +2639,8 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 	if s.privacyClientFactory == nil {
 		return ""
 	}
-	if account.Extra != nil {
-		if _, ok := account.Extra["privacy_mode"]; ok {
-			return ""
-		}
+	if shouldSkipOpenAIPrivacyEnsure(account.Extra) {
+		return ""
 	}
 
 	token, _ := account.Credentials["access_token"].(string)
