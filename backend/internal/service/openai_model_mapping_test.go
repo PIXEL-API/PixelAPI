@@ -58,6 +58,19 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			defaultMappedModel: "gpt-4o-mini",
 			expectedModel:      "gpt-5.4",
 		},
+		{
+			name: "normalizes gpt reasoning alias before passthrough mapping",
+			account: &Account{
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{
+						"gpt-5.4": "gpt-5.4",
+					},
+				},
+			},
+			requestedModel:     "gpt-5.4-xhigh",
+			defaultMappedModel: "gpt-5.1",
+			expectedModel:      "gpt-5.4",
+		},
 	}
 
 	for _, tt := range tests {
