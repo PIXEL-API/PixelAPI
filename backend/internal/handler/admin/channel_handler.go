@@ -24,18 +24,20 @@ func NewChannelHandler(channelService *service.ChannelService) *ChannelHandler {
 // --- Request / Response types ---
 
 type createChannelRequest struct {
-	Name         string                       `json:"name" binding:"required,max=100"`
-	Description  string                       `json:"description"`
-	GroupIDs     []int64                      `json:"group_ids"`
-	ModelPricing []channelModelPricingRequest `json:"model_pricing"`
+	Name         string                         `json:"name" binding:"required,max=100"`
+	Description  string                         `json:"description"`
+	GroupIDs     []int64                        `json:"group_ids"`
+	ModelPricing []channelModelPricingRequest   `json:"model_pricing"`
+	ModelMapping map[string]string              `json:"model_mapping"`
 }
 
 type updateChannelRequest struct {
-	Name         string                        `json:"name" binding:"omitempty,max=100"`
-	Description  *string                       `json:"description"`
-	Status       string                        `json:"status" binding:"omitempty,oneof=active disabled"`
-	GroupIDs     *[]int64                      `json:"group_ids"`
-	ModelPricing *[]channelModelPricingRequest `json:"model_pricing"`
+	Name         string                          `json:"name" binding:"omitempty,max=100"`
+	Description  *string                         `json:"description"`
+	Status       string                          `json:"status" binding:"omitempty,oneof=active disabled"`
+	GroupIDs     *[]int64                        `json:"group_ids"`
+	ModelPricing *[]channelModelPricingRequest   `json:"model_pricing"`
+	ModelMapping map[string]string               `json:"model_mapping"`
 }
 
 type channelModelPricingRequest struct {
@@ -62,14 +64,15 @@ type pricingIntervalRequest struct {
 }
 
 type channelResponse struct {
-	ID           int64                         `json:"id"`
-	Name         string                        `json:"name"`
-	Description  string                        `json:"description"`
-	Status       string                        `json:"status"`
-	GroupIDs     []int64                       `json:"group_ids"`
-	ModelPricing []channelModelPricingResponse `json:"model_pricing"`
-	CreatedAt    string                        `json:"created_at"`
-	UpdatedAt    string                        `json:"updated_at"`
+	ID           int64                          `json:"id"`
+	Name         string                         `json:"name"`
+	Description  string                         `json:"description"`
+	Status       string                         `json:"status"`
+	GroupIDs     []int64                        `json:"group_ids"`
+	ModelPricing []channelModelPricingResponse  `json:"model_pricing"`
+	ModelMapping map[string]string              `json:"model_mapping"`
+	CreatedAt    string                         `json:"created_at"`
+	UpdatedAt    string                         `json:"updated_at"`
 }
 
 type channelModelPricingResponse struct {
@@ -106,12 +109,16 @@ func channelToResponse(ch *service.Channel) *channelResponse {
 		Name:        ch.Name,
 		Description: ch.Description,
 		Status:      ch.Status,
-		GroupIDs:    ch.GroupIDs,
+		GroupIDs:     ch.GroupIDs,
+		ModelMapping: ch.ModelMapping,
 		CreatedAt:   ch.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:   ch.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	if resp.GroupIDs == nil {
 		resp.GroupIDs = []int64{}
+	}
+	if resp.ModelMapping == nil {
+		resp.ModelMapping = map[string]string{}
 	}
 
 	resp.ModelPricing = make([]channelModelPricingResponse, 0, len(ch.ModelPricing))
@@ -246,6 +253,7 @@ func (h *ChannelHandler) Create(c *gin.Context) {
 		Description:  req.Description,
 		GroupIDs:     req.GroupIDs,
 		ModelPricing: pricingRequestToService(req.ModelPricing),
+		ModelMapping: req.ModelMapping,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -271,10 +279,11 @@ func (h *ChannelHandler) Update(c *gin.Context) {
 	}
 
 	input := &service.UpdateChannelInput{
-		Name:        req.Name,
-		Description: req.Description,
-		Status:      req.Status,
-		GroupIDs:    req.GroupIDs,
+		Name:         req.Name,
+		Description:  req.Description,
+		Status:       req.Status,
+		GroupIDs:     req.GroupIDs,
+		ModelMapping: req.ModelMapping,
 	}
 	if req.ModelPricing != nil {
 		pricing := pricingRequestToService(*req.ModelPricing)
