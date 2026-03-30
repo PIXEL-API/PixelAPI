@@ -970,6 +970,7 @@ async function handleSubmit() {
   }
 
   const { group_ids, model_pricing, model_mapping } = formToAPI()
+  console.log('[handleSubmit] model_pricing to send:', JSON.stringify(model_pricing))
 
   submitting.value = true
   try {
