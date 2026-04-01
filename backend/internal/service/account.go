@@ -515,6 +515,45 @@ func ensureAntigravityDefaultPassthroughs(mapping map[string]string, models []st
 	}
 }
 
+func normalizeRequestedModelForLookup(platform, requestedModel string) string {
+	trimmed := strings.TrimSpace(requestedModel)
+	if trimmed == "" {
+		return ""
+	}
+	if platform != PlatformGemini && platform != PlatformAntigravity {
+		return trimmed
+	}
+	if trimmed == "gemini-3.1-pro-preview-customtools" {
+		return "gemini-3.1-pro-preview"
+	}
+	return trimmed
+}
+
+func mappingSupportsRequestedModel(mapping map[string]string, requestedModel string) bool {
+	if requestedModel == "" {
+		return false
+	}
+	if _, exists := mapping[requestedModel]; exists {
+		return true
+	}
+	for pattern := range mapping {
+		if matchWildcard(pattern, requestedModel) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveRequestedModelInMapping(mapping map[string]string, requestedModel string) (mappedModel string, matched bool) {
+	if requestedModel == "" {
+		return "", false
+	}
+	if mappedModel, exists := mapping[requestedModel]; exists {
+		return mappedModel, true
+	}
+	return matchWildcardMappingResult(mapping, requestedModel)
+}
+
 // IsModelSupported 检查模型是否在 model_mapping 中（支持通配符）
 // 如果未配置 mapping，返回 true（允许所有模型）
 func (a *Account) IsModelSupported(requestedModel string) bool {
@@ -522,17 +561,11 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 	if len(mapping) == 0 {
 		return true // 无映射 = 允许所有
 	}
-	// 精确匹配
-	if _, exists := mapping[requestedModel]; exists {
+	if mappingSupportsRequestedModel(mapping, requestedModel) {
 		return true
 	}
-	// 通配符匹配
-	for pattern := range mapping {
-		if matchWildcard(pattern, requestedModel) {
-			return true
-		}
-	}
-	return false
+	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
+	return normalized != requestedModel && mappingSupportsRequestedModel(mapping, normalized)
 }
 
 // GetMappedModel 获取映射后的模型名（支持通配符，最长优先匹配）
@@ -549,12 +582,16 @@ func (a *Account) ResolveMappedModel(requestedModel string) (mappedModel string,
 	if len(mapping) == 0 {
 		return requestedModel, false
 	}
-	// 精确匹配优先
-	if mappedModel, exists := mapping[requestedModel]; exists {
+	if mappedModel, matched := resolveRequestedModelInMapping(mapping, requestedModel); matched {
 		return mappedModel, true
 	}
-	// 通配符匹配（最长优先）
-	return matchWildcardMappingResult(mapping, requestedModel)
+	normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
+	if normalized != requestedModel {
+		if mappedModel, matched := resolveRequestedModelInMapping(mapping, normalized); matched {
+			return mappedModel, true
+		}
+	}
+	return requestedModel, false
 }
 
 func (a *Account) GetBaseURL() string {
