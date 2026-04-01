@@ -237,6 +237,60 @@ func TestOpenAIGatewayService_GenerateSessionHashWithFallback(t *testing.T) {
 	require.Equal(t, "", empty)
 }
 
+func TestOpenAIGatewayService_GenerateSessionHash_ContentFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+
+	svc := &OpenAIGatewayService{}
+
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"system","content":"You are helpful."},{"role":"user","content":"Hello"}]}`)
+
+	hash := svc.GenerateSessionHash(c, body)
+	require.NotEmpty(t, hash, "content-based fallback should produce a hash")
+
+	hash2 := svc.GenerateSessionHash(c, body)
+	require.Equal(t, hash, hash2, "same content should produce same hash")
+
+	bodyExtended := []byte(`{"model":"gpt-5.4","messages":[{"role":"system","content":"You are helpful."},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi!"},{"role":"user","content":"How are you?"}]}`)
+	hashExtended := svc.GenerateSessionHash(c, bodyExtended)
+	require.Equal(t, hash, hashExtended, "hash should be stable across later turns")
+
+	bodyDifferent := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"Different question"}]}`)
+	hashDifferent := svc.GenerateSessionHash(c, bodyDifferent)
+	require.NotEqual(t, hash, hashDifferent, "different content should produce different hash")
+}
+
+func TestOpenAIGatewayService_GenerateSessionHash_ExplicitSignalWinsOverContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"Hello"}]}`)
+
+	contentHash := svc.GenerateSessionHash(c, body)
+	require.NotEmpty(t, contentHash)
+
+	c.Request.Header.Set("session_id", "explicit-session")
+	explicitHash := svc.GenerateSessionHash(c, body)
+	require.NotEmpty(t, explicitHash)
+	require.NotEqual(t, contentHash, explicitHash, "explicit session_id should override content fallback")
+}
+
+func TestOpenAIGatewayService_GenerateSessionHash_EmptyBodyStillEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
+
+	svc := &OpenAIGatewayService{}
+	require.Empty(t, svc.GenerateSessionHash(c, []byte(`{}`)))
+	require.Empty(t, svc.GenerateSessionHash(c, nil))
+}
+
 func (c stubConcurrencyCache) GetAccountWaitingCount(ctx context.Context, accountID int64) (int, error) {
 	if c.waitCounts != nil {
 		if count, ok := c.waitCounts[accountID]; ok {
