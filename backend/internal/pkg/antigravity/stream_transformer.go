@@ -32,9 +32,10 @@ type StreamingProcessor struct {
 	groundingChunks   []GeminiGroundingChunk
 
 	// 累计 usage
-	inputTokens     int
-	outputTokens    int
-	cacheReadTokens int
+	inputTokens       int
+	outputTokens      int
+	cacheReadTokens   int
+	imageOutputTokens int
 }
 
 // NewStreamingProcessor 创建流式响应处理器
@@ -43,6 +44,28 @@ func NewStreamingProcessor(originalModel string) *StreamingProcessor {
 		blockType:     BlockTypeNone,
 		originalModel: originalModel,
 	}
+}
+
+// SetUsageMapHook sets an optional hook that modifies usage maps before they are emitted.
+func (p *StreamingProcessor) SetUsageMapHook(fn UsageMapHook) {
+	p.usageMapHook = fn
+}
+
+func usageToMap(u ClaudeUsage) map[string]any {
+	m := map[string]any{
+		"input_tokens":  u.InputTokens,
+		"output_tokens": u.OutputTokens,
+	}
+	if u.CacheCreationInputTokens > 0 {
+		m["cache_creation_input_tokens"] = u.CacheCreationInputTokens
+	}
+	if u.CacheReadInputTokens > 0 {
+		m["cache_read_input_tokens"] = u.CacheReadInputTokens
+	}
+	if u.ImageOutputTokens > 0 {
+		m["image_output_tokens"] = u.ImageOutputTokens
+	}
+	return m
 }
 
 // ProcessLine 处理 SSE 行，返回 Claude SSE 事件
@@ -87,6 +110,7 @@ func (p *StreamingProcessor) ProcessLine(line string) []byte {
 		p.inputTokens = geminiResp.UsageMetadata.PromptTokenCount - cached
 		p.outputTokens = geminiResp.UsageMetadata.CandidatesTokenCount + geminiResp.UsageMetadata.ThoughtsTokenCount
 		p.cacheReadTokens = cached
+		p.imageOutputTokens = geminiResp.UsageMetadata.ImageOutputTokens()
 	}
 
 	// 处理 parts
@@ -127,6 +151,7 @@ func (p *StreamingProcessor) Finish() ([]byte, *ClaudeUsage) {
 		InputTokens:          p.inputTokens,
 		OutputTokens:         p.outputTokens,
 		CacheReadInputTokens: p.cacheReadTokens,
+		ImageOutputTokens:    p.imageOutputTokens,
 	}
 
 	if !p.messageStartSent {
@@ -158,6 +183,7 @@ func (p *StreamingProcessor) emitMessageStart(v1Resp *V1InternalResponse) []byte
 		usage.InputTokens = v1Resp.Response.UsageMetadata.PromptTokenCount - cached
 		usage.OutputTokens = v1Resp.Response.UsageMetadata.CandidatesTokenCount + v1Resp.Response.UsageMetadata.ThoughtsTokenCount
 		usage.CacheReadInputTokens = cached
+		usage.ImageOutputTokens = v1Resp.Response.UsageMetadata.ImageOutputTokens()
 	}
 
 	responseID := v1Resp.ResponseID
@@ -485,6 +511,7 @@ func (p *StreamingProcessor) emitFinish(finishReason string) []byte {
 		InputTokens:          p.inputTokens,
 		OutputTokens:         p.outputTokens,
 		CacheReadInputTokens: p.cacheReadTokens,
+		ImageOutputTokens:    p.imageOutputTokens,
 	}
 
 	deltaEvent := map[string]any{
