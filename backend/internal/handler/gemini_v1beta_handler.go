@@ -121,7 +121,7 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		googleError(c, http.StatusBadGateway, err.Error())
 		return
 	}
-	if shouldFallbackGeminiModel(modelName, res) {
+	if shouldFallbackGeminiModels(res) {
 		c.JSON(http.StatusOK, gemini.FallbackModel(modelName))
 		return
 	}
@@ -184,7 +184,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	setOpsRequestContext(c, modelName, stream, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(stream, false)))
 
-	// 解析渠道级模型映射
+	// 解析渠道级模型映射 + 限制检查
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, modelName)
 	reqModel := modelName // 保存映射前的原始模型名
 	if channelMapping.Mapped {
@@ -680,16 +680,6 @@ func shouldFallbackGeminiModels(res *service.UpstreamHTTPResult) bool {
 		return true
 	}
 	return false
-}
-
-func shouldFallbackGeminiModel(modelName string, res *service.UpstreamHTTPResult) bool {
-	if shouldFallbackGeminiModels(res) {
-		return true
-	}
-	if res == nil || res.StatusCode != http.StatusNotFound {
-		return false
-	}
-	return gemini.HasFallbackModel(modelName)
 }
 
 // extractGeminiCLISessionHash 从 Gemini CLI 请求中提取会话标识。
