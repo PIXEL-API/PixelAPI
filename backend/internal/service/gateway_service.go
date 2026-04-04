@@ -7782,7 +7782,6 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		APIKeyService:      input.APIKeyService,
 		ChannelUsageFields: input.ChannelUsageFields,
 	}, &recordUsageOpts{
-		ParsedRequest:    input.ParsedRequest,
 		EnableClaudePath: true,
 	})
 }
@@ -7867,21 +7866,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		result.Usage.InputTokens = 0
 	}
 
-	// Claude Max cache billing policy（仅 Claude 路径启用）
-	cacheTTLOverridden := false
-	simulatedClaudeMax := false
-	if opts.EnableClaudePath {
-		var apiKeyGroup *Group
-		if apiKey != nil {
-			apiKeyGroup = apiKey.Group
-		}
-		claudeMaxOutcome := applyClaudeMaxCacheBillingPolicyToUsage(&result.Usage, opts.ParsedRequest, apiKeyGroup, result.Model, account.ID)
-		simulatedClaudeMax = claudeMaxOutcome.Simulated ||
-			(shouldApplyClaudeMaxBillingRulesForUsage(apiKeyGroup, result.Model, opts.ParsedRequest) && hasCacheCreationTokens(result.Usage))
-	}
-
 	// Cache TTL Override: 确保计费时 token 分类与账号设置一致
-	if account.IsCacheTTLOverrideEnabled() && !simulatedClaudeMax {
+	cacheTTLOverridden := false
+	if account.IsCacheTTLOverrideEnabled() {
 		applyCacheTTLOverride(&result.Usage, account.GetCacheTTLOverrideTarget())
 		cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
 	}
