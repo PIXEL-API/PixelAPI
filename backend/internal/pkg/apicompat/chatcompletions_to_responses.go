@@ -33,7 +33,7 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 		TopP:        req.TopP,
 		Stream:      true, // upstream always streams
 		Include:     []string{"reasoning.encrypted_content"},
-		ServiceTier:  req.ServiceTier,
+		ServiceTier: req.ServiceTier,
 	}
 
 	storeFalse := false
