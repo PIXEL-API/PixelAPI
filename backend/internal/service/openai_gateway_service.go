@@ -4277,7 +4277,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result.BillingModel != "" {
 		billingModel = strings.TrimSpace(result.BillingModel)
 	}
-	if input.BillingModelSource == BillingModelSourceChannelMapped && input.ChannelMappedModel != "" {
+	if input.BillingModelSource == BillingModelSourceChannelMapped && input.ChannelMappedModel != "" && input.ChannelMappedModel != input.OriginalModel {
 		billingModel = input.ChannelMappedModel
 	}
 	if input.BillingModelSource == BillingModelSourceRequested && input.OriginalModel != "" {
