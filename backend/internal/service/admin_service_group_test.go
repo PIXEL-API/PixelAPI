@@ -349,7 +349,7 @@ func TestAdminService_UpdateGroup_ClearsMessagesDispatchFieldsWhenPlatformChange
 	svc := &adminServiceImpl{groupRepo: repo}
 
 	group, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
-		Platform: ptrString(PlatformAnthropic),
+		Platform: PlatformAnthropic,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, group)
