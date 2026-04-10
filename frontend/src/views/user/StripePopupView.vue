@@ -56,6 +56,11 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
+import { extractApiErrorMessage } from '@/utils/apiError'
+
+interface StripeWithWechatPay {
+  confirmWechatPayPayment(clientSecret: string, options: Record<string, unknown>): Promise<{ error?: { message?: string }; paymentIntent?: { status: string } }>
+}
 
 const METHOD_COLORS: Record<string, string> = {
   alipay: '#00AEEF',
@@ -123,7 +128,7 @@ async function initStripe(clientSecret: string, publishableKey: string) {
     } else if (method === 'wechat_pay') {
       // WeChat: Stripe shows its built-in QR dialog, user scans, promise resolves
       hint.value = t('payment.stripePopup.loadingQr')
-      const result = await (stripe as any).confirmWechatPayPayment(clientSecret, {
+      const result = await (stripe as unknown as StripeWithWechatPay).confirmWechatPayPayment(clientSecret, {
         payment_method_options: { wechat_pay: { client: 'web' } },
       })
       if (result.error) {
@@ -137,7 +142,7 @@ async function initStripe(clientSecret: string, publishableKey: string) {
       }
     }
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : t('payment.stripeLoadFailed')
+    error.value = extractApiErrorMessage(err, t('payment.stripeLoadFailed'))
   }
 }
 
