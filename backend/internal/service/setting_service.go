@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -161,12 +162,15 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyHideCcsImportButton,
 		SettingKeyPurchaseSubscriptionEnabled,
 		SettingKeyPurchaseSubscriptionURL,
+		SettingKeyTableDefaultPageSize,
+		SettingKeyTablePageSizeOptions,
 		SettingKeyCustomMenuItems,
 		SettingKeyCustomEndpoints,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyBackendModeEnabled,
 		SettingKeyOIDCConnectEnabled,
 		SettingKeyOIDCConnectProviderName,
+		SettingPaymentEnabled,
 	}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
@@ -200,6 +204,10 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	registrationEmailSuffixWhitelist := ParseRegistrationEmailSuffixWhitelist(
 		settings[SettingKeyRegistrationEmailSuffixWhitelist],
 	)
+	tableDefaultPageSize, tablePageSizeOptions := parseTablePreferences(
+		settings[SettingKeyTableDefaultPageSize],
+		settings[SettingKeyTablePageSizeOptions],
+	)
 
 	return &PublicSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
@@ -221,12 +229,15 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		HideCcsImportButton:              settings[SettingKeyHideCcsImportButton] == "true",
 		PurchaseSubscriptionEnabled:      settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
 		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
+		TableDefaultPageSize:             tableDefaultPageSize,
+		TablePageSizeOptions:             tablePageSizeOptions,
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
 		OIDCOAuthEnabled:                 oidcEnabled,
 		OIDCOAuthProviderName:            oidcProviderName,
+		PaymentEnabled:                   settings[SettingPaymentEnabled] == "true",
 	}, nil
 }
 
@@ -270,12 +281,15 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		HideCcsImportButton              bool            `json:"hide_ccs_import_button"`
 		PurchaseSubscriptionEnabled      bool            `json:"purchase_subscription_enabled"`
 		PurchaseSubscriptionURL          string          `json:"purchase_subscription_url,omitempty"`
+		TableDefaultPageSize             int             `json:"table_default_page_size"`
+		TablePageSizeOptions             []int           `json:"table_page_size_options"`
 		CustomMenuItems                  json.RawMessage `json:"custom_menu_items"`
 		CustomEndpoints                  json.RawMessage `json:"custom_endpoints"`
 		LinuxDoOAuthEnabled              bool            `json:"linuxdo_oauth_enabled"`
 		BackendModeEnabled               bool            `json:"backend_mode_enabled"`
 		OIDCOAuthEnabled                 bool            `json:"oidc_oauth_enabled"`
 		OIDCOAuthProviderName            string          `json:"oidc_oauth_provider_name"`
+		PaymentEnabled                   bool            `json:"payment_enabled"`
 		Version                          string          `json:"version,omitempty"`
 	}{
 		RegistrationEnabled:              settings.RegistrationEnabled,
@@ -297,12 +311,15 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		HideCcsImportButton:              settings.HideCcsImportButton,
 		PurchaseSubscriptionEnabled:      settings.PurchaseSubscriptionEnabled,
 		PurchaseSubscriptionURL:          settings.PurchaseSubscriptionURL,
+		TableDefaultPageSize:             settings.TableDefaultPageSize,
+		TablePageSizeOptions:             settings.TablePageSizeOptions,
 		CustomMenuItems:                  filterUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                  safeRawJSONArray(settings.CustomEndpoints),
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		BackendModeEnabled:               settings.BackendModeEnabled,
 		OIDCOAuthEnabled:                 settings.OIDCOAuthEnabled,
 		OIDCOAuthProviderName:            settings.OIDCOAuthProviderName,
+		PaymentEnabled:                   settings.PaymentEnabled,
 		Version:                          s.version,
 	}, nil
 }
@@ -522,6 +539,16 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyHideCcsImportButton] = strconv.FormatBool(settings.HideCcsImportButton)
 	updates[SettingKeyPurchaseSubscriptionEnabled] = strconv.FormatBool(settings.PurchaseSubscriptionEnabled)
 	updates[SettingKeyPurchaseSubscriptionURL] = strings.TrimSpace(settings.PurchaseSubscriptionURL)
+	tableDefaultPageSize, tablePageSizeOptions := normalizeTablePreferences(
+		settings.TableDefaultPageSize,
+		settings.TablePageSizeOptions,
+	)
+	updates[SettingKeyTableDefaultPageSize] = strconv.Itoa(tableDefaultPageSize)
+	tablePageSizeOptionsJSON, err := json.Marshal(tablePageSizeOptions)
+	if err != nil {
+		return fmt.Errorf("marshal table page size options: %w", err)
+	}
+	updates[SettingKeyTablePageSizeOptions] = string(tablePageSizeOptionsJSON)
 	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 	updates[SettingKeyCustomEndpoints] = settings.CustomEndpoints
 
@@ -875,6 +902,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeySiteLogo:                         "",
 		SettingKeyPurchaseSubscriptionEnabled:      "false",
 		SettingKeyPurchaseSubscriptionURL:          "",
+		SettingKeyTableDefaultPageSize:             "20",
+		SettingKeyTablePageSizeOptions:             "[10,20,50,100]",
 		SettingKeyCustomMenuItems:                  "[]",
 		SettingKeyCustomEndpoints:                  "[]",
 		SettingKeyOIDCConnectEnabled:               "false",
@@ -946,6 +975,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
 	}
+	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
+		settings[SettingKeyTableDefaultPageSize],
+		settings[SettingKeyTablePageSizeOptions],
+	)
 
 	// 解析整数类型
 	if port, err := strconv.Atoi(settings[SettingKeySMTPPort]); err == nil {
@@ -1219,6 +1252,50 @@ func parseDefaultSubscriptions(raw string) []DefaultSubscriptionSetting {
 	}
 
 	return normalized
+}
+
+func parseTablePreferences(defaultPageSizeRaw, optionsRaw string) (int, []int) {
+	defaultPageSize := 20
+	if v, err := strconv.Atoi(strings.TrimSpace(defaultPageSizeRaw)); err == nil {
+		defaultPageSize = v
+	}
+
+	var options []int
+	if strings.TrimSpace(optionsRaw) != "" {
+		_ = json.Unmarshal([]byte(optionsRaw), &options)
+	}
+
+	return normalizeTablePreferences(defaultPageSize, options)
+}
+
+func normalizeTablePreferences(defaultPageSize int, options []int) (int, []int) {
+	const minPageSize = 5
+	const maxPageSize = 1000
+	const fallbackPageSize = 20
+
+	seen := make(map[int]struct{}, len(options))
+	normalizedOptions := make([]int, 0, len(options))
+	for _, option := range options {
+		if option < minPageSize || option > maxPageSize {
+			continue
+		}
+		if _, ok := seen[option]; ok {
+			continue
+		}
+		seen[option] = struct{}{}
+		normalizedOptions = append(normalizedOptions, option)
+	}
+	sort.Ints(normalizedOptions)
+
+	if defaultPageSize < minPageSize || defaultPageSize > maxPageSize {
+		defaultPageSize = fallbackPageSize
+	}
+
+	if len(normalizedOptions) == 0 {
+		normalizedOptions = []int{10, 20, 50}
+	}
+
+	return defaultPageSize, normalizedOptions
 }
 
 // getStringOrDefault 获取字符串值或默认值
