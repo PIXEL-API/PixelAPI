@@ -176,6 +176,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableMetadataPassthrough:            settings.EnableMetadataPassthrough,
 		EnableCCHSigning:                     settings.EnableCCHSigning,
 		WebSearchEmulationEnabled:            settings.WebSearchEmulationEnabled,
+		BalanceLowNotifyEnabled:              settings.BalanceLowNotifyEnabled,
+		BalanceLowNotifyThresholdType:        settings.BalanceLowNotifyThresholdType,
+		BalanceLowNotifyThreshold:            settings.BalanceLowNotifyThreshold,
+		AccountQuotaNotifyEmails:             settings.AccountQuotaNotifyEmails,
 		PaymentEnabled:                       paymentCfg.Enabled,
 		PaymentMinAmount:                     paymentCfg.MinAmount,
 		PaymentMaxAmount:                     paymentCfg.MaxAmount,
@@ -304,6 +308,12 @@ type UpdateSettingsRequest struct {
 	EnableFingerprintUnification *bool `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough    *bool `json:"enable_metadata_passthrough"`
 	EnableCCHSigning             *bool `json:"enable_cch_signing"`
+
+	// Balance low notification
+	BalanceLowNotifyEnabled       *bool     `json:"balance_low_notify_enabled"`
+	BalanceLowNotifyThresholdType *string   `json:"balance_low_notify_threshold_type"`
+	BalanceLowNotifyThreshold     *float64  `json:"balance_low_notify_threshold"`
+	AccountQuotaNotifyEmails      *[]string `json:"account_quota_notify_emails"`
 
 	// Payment configuration (integrated into settings, full replace)
 	PaymentEnabled           *bool    `json:"payment_enabled"`
@@ -882,6 +892,30 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.EnableCCHSigning
 		}(),
+		BalanceLowNotifyEnabled: func() bool {
+			if req.BalanceLowNotifyEnabled != nil {
+				return *req.BalanceLowNotifyEnabled
+			}
+			return previousSettings.BalanceLowNotifyEnabled
+		}(),
+		BalanceLowNotifyThresholdType: func() string {
+			if req.BalanceLowNotifyThresholdType != nil {
+				return *req.BalanceLowNotifyThresholdType
+			}
+			return previousSettings.BalanceLowNotifyThresholdType
+		}(),
+		BalanceLowNotifyThreshold: func() float64 {
+			if req.BalanceLowNotifyThreshold != nil {
+				return *req.BalanceLowNotifyThreshold
+			}
+			return previousSettings.BalanceLowNotifyThreshold
+		}(),
+		AccountQuotaNotifyEmails: func() []string {
+			if req.AccountQuotaNotifyEmails != nil {
+				return *req.AccountQuotaNotifyEmails
+			}
+			return previousSettings.AccountQuotaNotifyEmails
+		}(),
 	}
 
 	if err := h.settingService.UpdateSettings(c.Request.Context(), settings); err != nil {
@@ -1028,6 +1062,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableFingerprintUnification:         updatedSettings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:            updatedSettings.EnableMetadataPassthrough,
 		EnableCCHSigning:                     updatedSettings.EnableCCHSigning,
+		BalanceLowNotifyEnabled:              updatedSettings.BalanceLowNotifyEnabled,
+		BalanceLowNotifyThresholdType:        updatedSettings.BalanceLowNotifyThresholdType,
+		BalanceLowNotifyThreshold:            updatedSettings.BalanceLowNotifyThreshold,
+		AccountQuotaNotifyEmails:             updatedSettings.AccountQuotaNotifyEmails,
 		PaymentEnabled:                       updatedPaymentCfg.Enabled,
 		PaymentMinAmount:                     updatedPaymentCfg.MinAmount,
 		PaymentMaxAmount:                     updatedPaymentCfg.MaxAmount,
