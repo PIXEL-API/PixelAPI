@@ -1939,7 +1939,7 @@ func (h *SettingHandler) GetWebSearchEmulationConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, service.SanitizeWebSearchConfig(c.Request.Context(), cfg))
+	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), cfg))
 }
 
 // UpdateWebSearchEmulationConfig 更新 Web Search 模拟配置
