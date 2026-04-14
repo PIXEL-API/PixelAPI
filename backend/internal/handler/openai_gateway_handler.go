@@ -47,6 +47,13 @@ func resolveOpenAIForwardDefaultMappedModel(apiKey *service.APIKey, fallbackMode
 	return strings.TrimSpace(apiKey.Group.DefaultMappedModel)
 }
 
+func resolveOpenAIMessagesDispatchMappedModel(apiKey *service.APIKey, requestedModel string) string {
+	if apiKey == nil || apiKey.Group == nil {
+		return ""
+	}
+	return strings.TrimSpace(apiKey.Group.ResolveMessagesDispatchModel(requestedModel))
+}
+
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
 func NewOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
