@@ -30,7 +30,6 @@ type ProviderInstanceResponse struct {
 	Limits          string            `json:"limits"`
 	Enabled         bool              `json:"enabled"`
 	RefundEnabled   bool              `json:"refund_enabled"`
-	AllowUserRefund bool              `json:"allow_user_refund"`
 	SortOrder       int               `json:"sort_order"`
 	PaymentMode     string            `json:"payment_mode"`
 }
@@ -47,7 +46,7 @@ func (s *PaymentConfigService) ListProviderInstancesWithConfig(ctx context.Conte
 		resp := ProviderInstanceResponse{
 			ID: int64(inst.ID), ProviderKey: inst.ProviderKey, Name: inst.Name,
 			SupportedTypes: splitTypes(inst.SupportedTypes), Limits: inst.Limits,
-			Enabled: inst.Enabled, RefundEnabled: inst.RefundEnabled, AllowUserRefund: inst.AllowUserRefund,
+			Enabled: inst.Enabled, RefundEnabled: inst.RefundEnabled,
 			SortOrder: inst.SortOrder, PaymentMode: inst.PaymentMode,
 		}
 		resp.Config, err = s.decryptAndMaskConfig(inst.Config)
@@ -111,12 +110,10 @@ func (s *PaymentConfigService) CreateProviderInstance(ctx context.Context, req C
 	if err != nil {
 		return nil, err
 	}
-	allowUserRefund := req.AllowUserRefund && req.RefundEnabled
 	return s.entClient.PaymentProviderInstance.Create().
 		SetProviderKey(req.ProviderKey).SetName(req.Name).SetConfig(enc).
 		SetSupportedTypes(typesStr).SetEnabled(req.Enabled).SetPaymentMode(req.PaymentMode).
 		SetSortOrder(req.SortOrder).SetLimits(req.Limits).SetRefundEnabled(req.RefundEnabled).
-		SetAllowUserRefund(allowUserRefund).
 		Save(ctx)
 }
 
@@ -224,21 +221,6 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 	}
 	if req.RefundEnabled != nil {
 		u.SetRefundEnabled(*req.RefundEnabled)
-		// Cascade: turning off refund_enabled also disables allow_user_refund
-		if !*req.RefundEnabled {
-			u.SetAllowUserRefund(false)
-		}
-	}
-	if req.AllowUserRefund != nil {
-		// Only allow enabling when refund_enabled is true
-		if *req.AllowUserRefund {
-			inst, err := s.entClient.PaymentProviderInstance.Get(ctx, id)
-			if err == nil && inst.RefundEnabled {
-				u.SetAllowUserRefund(true)
-			}
-		} else {
-			u.SetAllowUserRefund(false)
-		}
 	}
 	if req.PaymentMode != nil {
 		u.SetPaymentMode(*req.PaymentMode)
@@ -250,7 +232,6 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 func (s *PaymentConfigService) GetUserRefundEligibleInstanceIDs(ctx context.Context) ([]string, error) {
 	instances, err := s.entClient.PaymentProviderInstance.Query().
 		Where(
-			paymentproviderinstance.AllowUserRefundEQ(true),
 			paymentproviderinstance.RefundEnabledEQ(true),
 		).Select(paymentproviderinstance.FieldID).All(ctx)
 	if err != nil {
