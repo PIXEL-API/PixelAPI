@@ -78,7 +78,6 @@ func RegisterPaymentRoutes(
 			adminOrders.POST("/:id/refund", adminPaymentHandler.ProcessRefund)
 		}
 
-
 		// Subscription Plans
 		plans := adminGroup.Group("/plans")
 		{
