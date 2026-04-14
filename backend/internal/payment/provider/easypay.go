@@ -27,6 +27,8 @@ const (
 	maxEasypayResponseSize = 1 << 20 // 1MB
 	tradeStatusSuccess     = "TRADE_SUCCESS"
 	signTypeMD5            = "MD5"
+	paymentModePopup       = "popup"
+	deviceMobile           = "mobile"
 )
 
 // EasyPay implements payment.Provider for the EasyPay aggregation platform.
@@ -61,7 +63,7 @@ func (e *EasyPay) CreatePayment(ctx context.Context, req payment.CreatePaymentRe
 	// Payment mode determined by instance config, not payment type.
 	// "popup" → hosted page (submit.php); "qrcode"/default → API call (mapi.php).
 	mode := e.config["paymentMode"]
-	if mode == "popup" {
+	if mode == paymentModePopup {
 		return e.createRedirectPayment(req)
 	}
 	return e.createAPIPayment(ctx, req)
@@ -80,6 +82,9 @@ func (e *EasyPay) createRedirectPayment(req payment.CreatePaymentRequest) (*paym
 	}
 	if cid := e.resolveCID(req.PaymentType); cid != "" {
 		params["cid"] = cid
+	}
+	if req.IsMobile {
+		params["device"] = deviceMobile
 	}
 	params["sign"] = easyPaySign(params, e.config["pkey"])
 	params["sign_type"] = signTypeMD5
@@ -106,7 +111,7 @@ func (e *EasyPay) createAPIPayment(ctx context.Context, req payment.CreatePaymen
 		params["cid"] = cid
 	}
 	if req.IsMobile {
-		params["device"] = "mobile"
+		params["device"] = deviceMobile
 	}
 	params["sign"] = easyPaySign(params, e.config["pkey"])
 	params["sign_type"] = signTypeMD5
@@ -120,6 +125,7 @@ func (e *EasyPay) createAPIPayment(ctx context.Context, req payment.CreatePaymen
 		Msg     string `json:"msg"`
 		TradeNo string `json:"trade_no"`
 		PayURL  string `json:"payurl"`
+		PayURL2 string `json:"payurl2"` // H5 mobile payment URL
 		QRCode  string `json:"qrcode"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -128,7 +134,11 @@ func (e *EasyPay) createAPIPayment(ctx context.Context, req payment.CreatePaymen
 	if resp.Code != easypayCodeSuccess {
 		return nil, fmt.Errorf("easypay error: %s", resp.Msg)
 	}
-	return &payment.CreatePaymentResponse{TradeNo: resp.TradeNo, PayURL: resp.PayURL, QRCode: resp.QRCode}, nil
+	payURL := resp.PayURL
+	if req.IsMobile && resp.PayURL2 != "" {
+		payURL = resp.PayURL2
+	}
+	return &payment.CreatePaymentResponse{TradeNo: resp.TradeNo, PayURL: payURL, QRCode: resp.QRCode}, nil
 }
 
 // resolveURLs returns (notifyURL, returnURL) preferring request values,
