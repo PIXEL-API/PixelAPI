@@ -327,6 +327,7 @@ type OpenAIGatewayService struct {
 	openaiWSResolver      OpenAIWSProtocolResolver
 	resolver              *ModelPricingResolver
 	channelService        *ChannelService
+	balanceNotifyService  *BalanceNotifyService
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -364,6 +365,7 @@ func NewOpenAIGatewayService(
 	openAITokenProvider *OpenAITokenProvider,
 	resolver *ModelPricingResolver,
 	channelService *ChannelService,
+	balanceNotifyService *BalanceNotifyService,
 ) *OpenAIGatewayService {
 	svc := &OpenAIGatewayService{
 		accountRepo:         accountRepo,
@@ -393,6 +395,7 @@ func NewOpenAIGatewayService(
 		openaiWSResolver:      NewOpenAIWSProtocolResolver(cfg),
 		resolver:              resolver,
 		channelService:        channelService,
+		balanceNotifyService:  balanceNotifyService,
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 	}
@@ -477,11 +480,12 @@ func (s *OpenAIGatewayService) getCodexSnapshotThrottle() *accountWriteThrottle 
 
 func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 	return &billingDeps{
-		accountRepo:         s.accountRepo,
-		userRepo:            s.userRepo,
-		userSubRepo:         s.userSubRepo,
-		billingCacheService: s.billingCacheService,
-		deferredService:     s.deferredService,
+		accountRepo:          s.accountRepo,
+		userRepo:             s.userRepo,
+		userSubRepo:          s.userSubRepo,
+		billingCacheService:  s.billingCacheService,
+		deferredService:      s.deferredService,
+		balanceNotifyService: s.balanceNotifyService,
 	}
 }
 
@@ -4567,6 +4571,14 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	if subscription != nil {
 		usageLog.SubscriptionID = &subscription.ID
+	}
+
+	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
+	if apiKey.GroupID != nil {
+		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
+			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
+			tokens, cost.TotalCost,
+		)
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
