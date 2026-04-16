@@ -264,11 +264,11 @@ func (s *SchedulerSnapshotService) pollOutbox() {
 	}
 
 	lastID := events[len(events)-1].ID
-	wmCtx, wmCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer wmCancel()
 	var wmErr error
 	for i := range 3 {
+		wmCtx, wmCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		wmErr = s.cache.SetOutboxWatermark(wmCtx, lastID)
+		wmCancel()
 		if wmErr == nil {
 			break
 		}
