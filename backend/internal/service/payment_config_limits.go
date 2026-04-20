@@ -20,6 +20,18 @@ func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*M
 		return nil, fmt.Errorf("query provider instances: %w", err)
 	}
 	typeInstances := pcGroupByPaymentType(instances)
+	if s.settingRepo != nil {
+		vals, err := s.settingRepo.GetMultiple(ctx, []string{
+			SettingPaymentVisibleMethodAlipayEnabled,
+			SettingPaymentVisibleMethodAlipaySource,
+			SettingPaymentVisibleMethodWxpayEnabled,
+			SettingPaymentVisibleMethodWxpaySource,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query visible method settings: %w", err)
+		}
+		typeInstances = pcApplyVisibleMethodRouting(typeInstances, vals, buildVisibleMethodSourceAvailability(instances))
+	}
 	resp := &MethodLimitsResponse{
 		Methods: make(map[string]MethodLimits, len(typeInstances)),
 	}
@@ -29,6 +41,40 @@ func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*M
 	}
 	resp.GlobalMin, resp.GlobalMax = pcComputeGlobalRange(resp.Methods)
 	return resp, nil
+}
+
+func pcApplyVisibleMethodRouting(typeInstances map[string][]*dbent.PaymentProviderInstance, vals map[string]string, available map[string]bool) map[string][]*dbent.PaymentProviderInstance {
+	if len(typeInstances) == 0 {
+		return typeInstances
+	}
+
+	filtered := make(map[string][]*dbent.PaymentProviderInstance, len(typeInstances))
+	for paymentType, instances := range typeInstances {
+		visibleMethod := NormalizeVisibleMethod(paymentType)
+		switch visibleMethod {
+		case payment.TypeAlipay, payment.TypeWxpay:
+			if !visibleMethodShouldBeExposed(visibleMethod, vals, available) {
+				continue
+			}
+			targetProviderKey, ok := VisibleMethodProviderKeyForSource(visibleMethod, vals[visibleMethodSourceSettingKey(visibleMethod)])
+			if !ok {
+				continue
+			}
+			matching := make([]*dbent.PaymentProviderInstance, 0, len(instances))
+			for _, inst := range instances {
+				if inst.ProviderKey == targetProviderKey {
+					matching = append(matching, inst)
+				}
+			}
+			if len(matching) == 0 {
+				continue
+			}
+			filtered[paymentType] = matching
+		default:
+			filtered[paymentType] = instances
+		}
+	}
+	return filtered
 }
 
 // GetMethodLimits returns per-payment-type limits from enabled provider instances.

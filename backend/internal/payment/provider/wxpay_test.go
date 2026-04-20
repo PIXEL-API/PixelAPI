@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -260,6 +261,36 @@ func TestNewWxpay(t *testing.T) {
 				t.Errorf("instanceID = %q, want %q", got.instanceID, "test-instance")
 			}
 		})
+	}
+}
+
+func TestBuildWxpayResultURLPreservesResumeToken(t *testing.T) {
+	t.Parallel()
+
+	resultURL, err := buildWxpayResultURL("https://app.example.com/payment/result?order_id=42&resume_token=resume-42&status=success", payment.CreatePaymentRequest{
+		OrderID:     "sub2_42",
+		PaymentType: payment.TypeWxpay,
+	})
+	if err != nil {
+		t.Fatalf("buildWxpayResultURL returned error: %v", err)
+	}
+
+	parsed, err := url.Parse(resultURL)
+	if err != nil {
+		t.Fatalf("url.Parse returned error: %v", err)
+	}
+	query := parsed.Query()
+	if parsed.Path != wxpayResultPath {
+		t.Fatalf("path = %q, want %q", parsed.Path, wxpayResultPath)
+	}
+	if query.Get("resume_token") != "resume-42" {
+		t.Fatalf("resume_token = %q, want %q", query.Get("resume_token"), "resume-42")
+	}
+	if query.Get("order_id") != "42" {
+		t.Fatalf("order_id = %q, want %q", query.Get("order_id"), "42")
+	}
+	if query.Get("out_trade_no") != "sub2_42" {
+		t.Fatalf("out_trade_no = %q, want %q", query.Get("out_trade_no"), "sub2_42")
 	}
 }
 
