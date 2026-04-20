@@ -184,6 +184,77 @@ describe('OidcCallbackView', () => {
     expect(replace).toHaveBeenCalledWith('/profile')
   })
 
+  it('renders pending email collection ui and routes to register with the entered email', async () => {
+    exchangePendingOAuthCompletion.mockResolvedValue({
+      error: 'email_required',
+      redirect: '/profile',
+      provider_fallback: 'ExampleID'
+    })
+
+    const wrapper = mount(OidcCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(setToken).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Continue with email')
+
+    await wrapper.get('input[type="email"]').setValue('alice@example.com')
+    await wrapper.get('button').trigger('click')
+
+    expect(replace).toHaveBeenCalledWith({
+      path: '/register',
+      query: {
+        email: 'alice@example.com',
+        redirect: '/profile',
+        provider: 'ExampleID'
+      }
+    })
+  })
+
+  it('renders existing-account binding ui and routes to login', async () => {
+    exchangePendingOAuthCompletion.mockResolvedValue({
+      error: 'existing_account_binding_required',
+      redirect: '/profile',
+      existing_account_email: 'alice@example.com'
+    })
+
+    const wrapper = mount(OidcCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('alice@example.com')
+    expect(wrapper.text()).toContain('Sign in to bind')
+
+    await wrapper.get('button').trigger('click')
+
+    expect(replace).toHaveBeenCalledWith({
+      path: '/login',
+      query: {
+        email: 'alice@example.com',
+        redirect: '/profile',
+        provider: 'ExampleID'
+      }
+    })
+  })
+
   it('renders adoption choices for invitation flow and submits the selected values', async () => {
     exchangePendingOAuthCompletion.mockResolvedValue({
       error: 'invitation_required',

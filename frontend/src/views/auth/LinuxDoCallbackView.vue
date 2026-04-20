@@ -11,7 +11,10 @@
       </div>
 
       <transition name="fade">
-        <div v-if="needsInvitation || needsAdoptionConfirmation" class="space-y-4">
+        <div
+          v-if="needsInvitation || needsAdoptionConfirmation || needsCreateAccount || needsBindLogin"
+          class="space-y-4"
+        >
           <div
             v-if="adoptionRequired && (suggestedDisplayName || suggestedAvatarUrl)"
             class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-800/60"
@@ -99,6 +102,90 @@
               {{ isSubmitting ? t('common.processing') : 'Continue' }}
             </button>
           </template>
+
+          <template v-else-if="needsCreateAccount">
+            <p class="text-sm text-gray-700 dark:text-gray-300">
+              Enter an email address to create your account and continue.
+            </p>
+            <div class="space-y-3">
+              <input
+                v-model="pendingAccountEmail"
+                data-testid="linuxdo-create-account-email"
+                type="email"
+                class="input w-full"
+                placeholder="you@example.com"
+                :disabled="isSubmitting"
+                @keyup.enter="handleCreateAccount"
+              />
+              <button
+                data-testid="linuxdo-create-account-submit"
+                class="btn btn-primary w-full"
+                :disabled="isSubmitting || !pendingAccountEmail.trim()"
+                @click="handleCreateAccount"
+              >
+                {{ isSubmitting ? t('common.processing') : 'Create account' }}
+              </button>
+              <button
+                class="btn btn-secondary w-full"
+                :disabled="isSubmitting"
+                @click="switchToBindLoginMode"
+              >
+                I already have an account
+              </button>
+            </div>
+            <transition name="fade">
+              <p v-if="accountActionError" class="text-sm text-red-600 dark:text-red-400">
+                {{ accountActionError }}
+              </p>
+            </transition>
+          </template>
+
+          <template v-else-if="needsBindLogin">
+            <p class="text-sm text-gray-700 dark:text-gray-300">
+              Log in to an existing account to bind this LinuxDo sign-in.
+            </p>
+            <div class="space-y-3">
+              <input
+                v-model="bindLoginEmail"
+                data-testid="linuxdo-bind-login-email"
+                type="email"
+                class="input w-full"
+                placeholder="you@example.com"
+                :disabled="isSubmitting"
+                @keyup.enter="handleBindLogin"
+              />
+              <input
+                v-model="bindLoginPassword"
+                data-testid="linuxdo-bind-login-password"
+                type="password"
+                class="input w-full"
+                placeholder="Password"
+                :disabled="isSubmitting"
+                @keyup.enter="handleBindLogin"
+              />
+              <button
+                data-testid="linuxdo-bind-login-submit"
+                class="btn btn-primary w-full"
+                :disabled="isSubmitting || !bindLoginEmail.trim() || !bindLoginPassword"
+                @click="handleBindLogin"
+              >
+                {{ isSubmitting ? t('common.processing') : 'Log in and bind' }}
+              </button>
+              <button
+                v-if="canReturnToCreateAccount"
+                class="btn btn-secondary w-full"
+                :disabled="isSubmitting"
+                @click="switchToCreateAccountMode"
+              >
+                Use a different email
+              </button>
+            </div>
+            <transition name="fade">
+              <p v-if="accountActionError" class="text-sm text-red-600 dark:text-red-400">
+                {{ accountActionError }}
+              </p>
+            </transition>
+          </template>
         </div>
       </transition>
 
@@ -127,11 +214,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
 import Icon from '@/components/icons/Icon.vue'
+import { apiClient } from '@/api/client'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
   completeLinuxDoOAuthRegistration,
@@ -165,7 +253,22 @@ const suggestedAvatarUrl = ref('')
 const adoptDisplayName = ref(true)
 const adoptAvatar = ref(true)
 const needsAdoptionConfirmation = ref(false)
+const pendingAccountAction = ref<'none' | 'create_account' | 'bind_login'>('none')
+const pendingAccountEmail = ref('')
+const bindLoginEmail = ref('')
+const bindLoginPassword = ref('')
+const accountActionError = ref('')
+const canReturnToCreateAccount = ref(false)
 const bindSuccessMessage = t('profile.authBindings.bindSuccess')
+
+const needsCreateAccount = computed(() => pendingAccountAction.value === 'create_account')
+const needsBindLogin = computed(() => pendingAccountAction.value === 'bind_login')
+
+type LinuxDoPendingActionResponse = PendingOAuthExchangeResponse & {
+  step?: string
+  email?: string
+  resolved_email?: string
+}
 
 function parseFragmentParams(): URLSearchParams {
   const raw = typeof window !== 'undefined' ? window.location.hash : ''
@@ -187,6 +290,17 @@ function currentAdoptionDecision(): OAuthAdoptionDecision {
     adoptDisplayName: adoptDisplayName.value,
     adoptAvatar: adoptAvatar.value
   }
+}
+
+function serializeAdoptionDecision(decision: OAuthAdoptionDecision): Record<string, boolean> {
+  const payload: Record<string, boolean> = {}
+  if (typeof decision.adoptDisplayName === 'boolean') {
+    payload.adopt_display_name = decision.adoptDisplayName
+  }
+  if (typeof decision.adoptAvatar === 'boolean') {
+    payload.adopt_avatar = decision.adoptAvatar
+  }
+  return payload
 }
 
 function applyAdoptionSuggestionState(completion: {
@@ -213,6 +327,62 @@ function hasSuggestedProfile(completion: {
   return Boolean(completion.suggested_display_name || completion.suggested_avatar_url)
 }
 
+function extractPendingAccountEmail(completion: LinuxDoPendingActionResponse): string {
+  return (completion.email || completion.resolved_email || '').trim()
+}
+
+function resolvePendingAccountAction(completion: LinuxDoPendingActionResponse): 'none' | 'create_account' | 'bind_login' {
+  const raw = (completion.step || completion.error || '').trim().toLowerCase()
+  if (raw === 'email_required' || raw === 'create_account_required' || raw === 'create_account') {
+    return 'create_account'
+  }
+  if (raw === 'bind_login_required' || raw === 'bind_login') {
+    return 'bind_login'
+  }
+  return 'none'
+}
+
+function applyPendingAccountAction(completion: LinuxDoPendingActionResponse) {
+  const action = resolvePendingAccountAction(completion)
+  pendingAccountAction.value = action
+  accountActionError.value = ''
+
+  const email = extractPendingAccountEmail(completion)
+  if (action === 'create_account') {
+    pendingAccountEmail.value = email
+    canReturnToCreateAccount.value = true
+    return
+  }
+
+  if (action === 'bind_login') {
+    bindLoginEmail.value = email
+    bindLoginPassword.value = ''
+    canReturnToCreateAccount.value = false
+    return
+  }
+
+  canReturnToCreateAccount.value = false
+}
+
+function switchToBindLoginMode() {
+  pendingAccountAction.value = 'bind_login'
+  bindLoginEmail.value = bindLoginEmail.value.trim() || pendingAccountEmail.value.trim()
+  bindLoginPassword.value = ''
+  accountActionError.value = ''
+  canReturnToCreateAccount.value = true
+}
+
+function switchToCreateAccountMode() {
+  pendingAccountAction.value = 'create_account'
+  pendingAccountEmail.value = pendingAccountEmail.value.trim() || bindLoginEmail.value.trim()
+  accountActionError.value = ''
+}
+
+function getRequestErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string; response?: { data?: { detail?: string; message?: string } } }
+  return err.response?.data?.detail || err.response?.data?.message || err.message || fallback
+}
+
 async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redirect: string) {
   if (getOAuthCompletionKind(completion) === 'bind') {
     const bindRedirect = sanitizeRedirectPath(completion.redirect || '/profile')
@@ -229,6 +399,29 @@ async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redi
   await authStore.setToken(completion.access_token)
   appStore.showSuccess(t('auth.loginSuccess'))
   await router.replace(redirect)
+}
+
+async function finalizePendingAccountResponse(completion: LinuxDoPendingActionResponse) {
+  applyAdoptionSuggestionState(completion)
+
+  if (completion.error === 'invitation_required') {
+    pendingAccountAction.value = 'none'
+    needsInvitation.value = true
+    needsAdoptionConfirmation.value = false
+    isProcessing.value = false
+    return
+  }
+
+  applyPendingAccountAction(completion)
+  if (pendingAccountAction.value !== 'none') {
+    needsInvitation.value = false
+    needsAdoptionConfirmation.value = false
+    isProcessing.value = false
+    return
+  }
+
+  const redirect = sanitizeRedirectPath(completion.redirect || redirectTo.value)
+  await finalizeCompletion(completion, redirect)
 }
 
 async function handleSubmitInvitation() {
@@ -260,14 +453,49 @@ async function handleContinueLogin() {
     const completion = await exchangePendingOAuthCompletion(currentAdoptionDecision())
     await finalizeCompletion(completion, redirectTo.value)
   } catch (e: unknown) {
-    const err = e as { message?: string; response?: { data?: { detail?: string; message?: string } } }
-    errorMessage.value =
-      err.response?.data?.detail ||
-      err.response?.data?.message ||
-      err.message ||
-      t('auth.loginFailed')
+    errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
     appStore.showError(errorMessage.value)
     needsAdoptionConfirmation.value = false
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+async function handleCreateAccount() {
+  accountActionError.value = ''
+  const email = pendingAccountEmail.value.trim()
+  if (!email) return
+
+  isSubmitting.value = true
+  try {
+    const { data } = await apiClient.post<LinuxDoPendingActionResponse>('/auth/oauth/pending/create-account', {
+      email,
+      ...serializeAdoptionDecision(currentAdoptionDecision())
+    })
+    await finalizePendingAccountResponse(data)
+  } catch (e: unknown) {
+    accountActionError.value = getRequestErrorMessage(e, t('auth.loginFailed'))
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+async function handleBindLogin() {
+  accountActionError.value = ''
+  const email = bindLoginEmail.value.trim()
+  const password = bindLoginPassword.value
+  if (!email || !password) return
+
+  isSubmitting.value = true
+  try {
+    const { data } = await apiClient.post<LinuxDoPendingActionResponse>('/auth/oauth/pending/bind-login', {
+      email,
+      password,
+      ...serializeAdoptionDecision(currentAdoptionDecision())
+    })
+    await finalizePendingAccountResponse(data)
+  } catch (e: unknown) {
+    accountActionError.value = getRequestErrorMessage(e, t('auth.loginFailed'))
   } finally {
     isSubmitting.value = false
   }
@@ -299,6 +527,12 @@ onMounted(async () => {
       return
     }
 
+    applyPendingAccountAction(completion as LinuxDoPendingActionResponse)
+    if (pendingAccountAction.value !== 'none') {
+      isProcessing.value = false
+      return
+    }
+
     if (adoptionRequired.value && hasSuggestedProfile(completion)) {
       needsAdoptionConfirmation.value = true
       isProcessing.value = false
@@ -307,12 +541,7 @@ onMounted(async () => {
 
     await finalizeCompletion(completion, redirect)
   } catch (e: unknown) {
-    const err = e as { message?: string; response?: { data?: { detail?: string; message?: string } } }
-    errorMessage.value =
-      err.response?.data?.detail ||
-      err.response?.data?.message ||
-      err.message ||
-      t('auth.loginFailed')
+    errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
     appStore.showError(errorMessage.value)
     isProcessing.value = false
   }
