@@ -30,7 +30,10 @@ func newAdminServiceMigrationReportTestClient(t *testing.T) *dbent.Client {
 		report_type TEXT NOT NULL,
 		report_key TEXT NOT NULL,
 		details TEXT NOT NULL DEFAULT '{}',
-		created_at DATETIME NOT NULL
+		created_at DATETIME NOT NULL,
+		resolved_at DATETIME NULL,
+		resolved_by_user_id INTEGER NULL,
+		resolution_note TEXT NOT NULL DEFAULT ''
 	)`)
 	require.NoError(t, err)
 
@@ -87,6 +90,35 @@ VALUES
 	summary, err := svc.GetAuthIdentityMigrationReportSummary(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, int64(3), summary.Total)
+	require.Equal(t, int64(3), summary.OpenTotal)
+	require.Zero(t, summary.ResolvedTotal)
 	require.Equal(t, int64(1), summary.ByType["oidc_synthetic_email_requires_manual_recovery"])
 	require.Equal(t, int64(2), summary.ByType["wechat_provider_key_conflict"])
+}
+
+func TestAdminServiceResolveAuthIdentityMigrationReport(t *testing.T) {
+	client := newAdminServiceMigrationReportTestClient(t)
+	driver, ok := client.Driver().(*entsql.Driver)
+	require.True(t, ok)
+
+	now := time.Now().UTC()
+	_, err := driver.DB().ExecContext(context.Background(), `
+INSERT INTO auth_identity_migration_reports (report_type, report_key, details, created_at)
+VALUES ($1, $2, $3, $4)`,
+		"oidc_synthetic_email_requires_manual_recovery", "u-1", `{"user_id":1}`, now,
+	)
+	require.NoError(t, err)
+
+	svc := &adminServiceImpl{entClient: client}
+	report, err := svc.ResolveAuthIdentityMigrationReport(context.Background(), 1, 99, "resolved by admin binding")
+	require.NoError(t, err)
+	require.NotNil(t, report.ResolvedAt)
+	require.NotNil(t, report.ResolvedByUserID)
+	require.Equal(t, int64(99), *report.ResolvedByUserID)
+	require.Equal(t, "resolved by admin binding", report.ResolutionNote)
+
+	summary, err := svc.GetAuthIdentityMigrationReportSummary(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, summary.OpenTotal)
+	require.Equal(t, int64(1), summary.ResolvedTotal)
 }

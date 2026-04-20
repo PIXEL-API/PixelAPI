@@ -42,6 +42,7 @@ type AdminService interface {
 	ListAuthIdentityMigrationReports(ctx context.Context, reportType string, page, pageSize int) ([]AuthIdentityMigrationReport, int64, error)
 	GetAuthIdentityMigrationReportSummary(ctx context.Context) (*AuthIdentityMigrationReportSummary, error)
 	BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error)
+	ResolveAuthIdentityMigrationReport(ctx context.Context, reportID, resolvedByUserID int64, resolutionNote string) (*AuthIdentityMigrationReport, error)
 
 	// Group management
 	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error)
@@ -137,16 +138,21 @@ type UpdateUserInput struct {
 }
 
 type AuthIdentityMigrationReport struct {
-	ID         int64          `json:"id"`
-	ReportType string         `json:"report_type"`
-	ReportKey  string         `json:"report_key"`
-	Details    map[string]any `json:"details"`
-	CreatedAt  time.Time      `json:"created_at"`
+	ID               int64          `json:"id"`
+	ReportType       string         `json:"report_type"`
+	ReportKey        string         `json:"report_key"`
+	Details          map[string]any `json:"details"`
+	CreatedAt        time.Time      `json:"created_at"`
+	ResolvedAt       *time.Time     `json:"resolved_at,omitempty"`
+	ResolvedByUserID *int64         `json:"resolved_by_user_id,omitempty"`
+	ResolutionNote   string         `json:"resolution_note,omitempty"`
 }
 
 type AuthIdentityMigrationReportSummary struct {
-	Total  int64            `json:"total"`
-	ByType map[string]int64 `json:"by_type"`
+	Total         int64            `json:"total"`
+	OpenTotal     int64            `json:"open_total"`
+	ResolvedTotal int64            `json:"resolved_total"`
+	ByType        map[string]int64 `json:"by_type"`
 }
 
 type AdminBindAuthIdentityInput struct {
@@ -874,7 +880,7 @@ WHERE ($1 = '' OR report_type = $1)`,
 	}
 
 	rows, err := db.QueryContext(ctx, `
-SELECT id, report_type, report_key, details, created_at
+SELECT id, report_type, report_key, details, created_at, resolved_at, resolved_by_user_id, resolution_note
 FROM auth_identity_migration_reports
 WHERE ($1 = '' OR report_type = $1)
 ORDER BY created_at DESC, id DESC
@@ -909,7 +915,11 @@ func (s *adminServiceImpl) GetAuthIdentityMigrationReportSummary(ctx context.Con
 	}
 
 	rows, err := db.QueryContext(ctx, `
-SELECT report_type, COUNT(*)
+SELECT
+	report_type,
+	COUNT(*),
+	SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END),
+	SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END)
 FROM auth_identity_migration_reports
 GROUP BY report_type
 ORDER BY report_type ASC`)
@@ -924,16 +934,70 @@ ORDER BY report_type ASC`)
 	for rows.Next() {
 		var reportType string
 		var count int64
-		if err := rows.Scan(&reportType, &count); err != nil {
+		var openCount int64
+		var resolvedCount int64
+		if err := rows.Scan(&reportType, &count, &openCount, &resolvedCount); err != nil {
 			return nil, err
 		}
 		summary.ByType[reportType] = count
 		summary.Total += count
+		summary.OpenTotal += openCount
+		summary.ResolvedTotal += resolvedCount
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return summary, nil
+}
+
+func (s *adminServiceImpl) ResolveAuthIdentityMigrationReport(ctx context.Context, reportID, resolvedByUserID int64, resolutionNote string) (*AuthIdentityMigrationReport, error) {
+	if reportID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "report id must be greater than 0")
+	}
+	if resolvedByUserID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "resolved_by_user_id must be greater than 0")
+	}
+
+	db, err := s.adminSQLDB()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	result, err := db.ExecContext(ctx, `
+UPDATE auth_identity_migration_reports
+SET
+	resolved_at = COALESCE(resolved_at, $2),
+	resolved_by_user_id = COALESCE(resolved_by_user_id, $3),
+	resolution_note = $4
+WHERE id = $1`,
+		reportID,
+		now,
+		resolvedByUserID,
+		strings.TrimSpace(resolutionNote),
+	)
+	if err != nil {
+		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, infraerrors.NotFound("AUTH_IDENTITY_MIGRATION_REPORT_NOT_FOUND", "auth identity migration report not found")
+	}
+
+	row := db.QueryRowContext(ctx, `
+SELECT id, report_type, report_key, details, created_at, resolved_at, resolved_by_user_id, resolution_note
+FROM auth_identity_migration_reports
+WHERE id = $1`,
+		reportID,
+	)
+	report, err := scanAuthIdentityMigrationReport(row)
+	if err != nil {
+		return nil, err
+	}
+	return &report, nil
 }
 
 func (s *adminServiceImpl) BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error) {
@@ -1170,10 +1234,22 @@ func cloneAdminAuthIdentityMetadata(input map[string]any) map[string]any {
 
 func scanAuthIdentityMigrationReport(scanner interface{ Scan(dest ...any) error }) (AuthIdentityMigrationReport, error) {
 	var (
-		report  AuthIdentityMigrationReport
-		details []byte
+		report           AuthIdentityMigrationReport
+		details          []byte
+		resolvedAt       sql.NullTime
+		resolvedByUserID sql.NullInt64
+		resolutionNote   sql.NullString
 	)
-	if err := scanner.Scan(&report.ID, &report.ReportType, &report.ReportKey, &details, &report.CreatedAt); err != nil {
+	if err := scanner.Scan(
+		&report.ID,
+		&report.ReportType,
+		&report.ReportKey,
+		&details,
+		&report.CreatedAt,
+		&resolvedAt,
+		&resolvedByUserID,
+		&resolutionNote,
+	); err != nil {
 		return AuthIdentityMigrationReport{}, err
 	}
 	report.Details = map[string]any{}
@@ -1181,6 +1257,15 @@ func scanAuthIdentityMigrationReport(scanner interface{ Scan(dest ...any) error 
 		if err := json.Unmarshal(details, &report.Details); err != nil {
 			return AuthIdentityMigrationReport{}, err
 		}
+	}
+	if resolvedAt.Valid {
+		report.ResolvedAt = &resolvedAt.Time
+	}
+	if resolvedByUserID.Valid {
+		report.ResolvedByUserID = &resolvedByUserID.Int64
+	}
+	if resolutionNote.Valid {
+		report.ResolutionNote = resolutionNote.String
 	}
 	return report, nil
 }

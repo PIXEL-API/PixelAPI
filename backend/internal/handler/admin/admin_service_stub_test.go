@@ -249,6 +249,20 @@ func (s *stubAdminService) BindUserAuthIdentity(ctx context.Context, userID int6
 	return result, nil
 }
 
+func (s *stubAdminService) ResolveAuthIdentityMigrationReport(ctx context.Context, reportID, resolvedByUserID int64, resolutionNote string) (*service.AuthIdentityMigrationReport, error) {
+	now := time.Now().UTC()
+	for i := range s.migrationReports {
+		if s.migrationReports[i].ID != reportID {
+			continue
+		}
+		s.migrationReports[i].ResolvedAt = &now
+		s.migrationReports[i].ResolvedByUserID = &resolvedByUserID
+		s.migrationReports[i].ResolutionNote = resolutionNote
+		return &s.migrationReports[i], nil
+	}
+	return nil, nil
+}
+
 func (s *stubAdminService) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]service.Group, int64, error) {
 	return s.groups, int64(len(s.groups)), nil
 }
