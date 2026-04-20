@@ -141,6 +141,70 @@ func TestGetOrderProviderInstanceLeavesAmbiguousLegacyOrderUnresolved(t *testing
 	require.Nil(t, got)
 }
 
+func TestGetOrderProviderInstanceLeavesLegacyProviderKeyUnresolvedWhenHistoricalInstancesConflict(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("stripe-disabled-legacy").
+		SetConfig("{}").
+		SetSupportedTypes("stripe").
+		SetEnabled(false).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("stripe-enabled-current").
+		SetConfig("{}").
+		SetSupportedTypes("stripe").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	providerKey := payment.TypeStripe
+	order := &dbent.PaymentOrder{
+		PaymentType: payment.TypeStripe,
+		ProviderKey: &providerKey,
+	}
+
+	svc := &PaymentService{
+		entClient:    client,
+		loadBalancer: newWebhookProviderTestLoadBalancer(client),
+	}
+
+	got, err := svc.getOrderProviderInstance(ctx, order)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestGetOrderProviderInstanceLeavesProviderKeyMatchUnresolvedWhenTypeNotSupported(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeWxpay).
+		SetName("wxpay-only").
+		SetConfig("{}").
+		SetSupportedTypes("wxpay").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	providerKey := payment.TypeWxpay
+	order := &dbent.PaymentOrder{
+		PaymentType: payment.TypeAlipayDirect,
+		ProviderKey: &providerKey,
+	}
+
+	svc := &PaymentService{
+		entClient:    client,
+		loadBalancer: newWebhookProviderTestLoadBalancer(client),
+	}
+
+	got, err := svc.getOrderProviderInstance(ctx, order)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
 func TestGetWebhookProviderRejectsAmbiguousRegistryFallback(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
