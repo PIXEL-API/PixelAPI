@@ -243,6 +243,18 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 	if subject != "" {
 		email = linuxDoSyntheticEmail(subject)
 	}
+	identityKey := service.PendingAuthIdentityKey{
+		ProviderType:    "linuxdo",
+		ProviderKey:     "linuxdo",
+		ProviderSubject: subject,
+	}
+	upstreamClaims := map[string]any{
+		"email":                  email,
+		"username":               username,
+		"subject":                subject,
+		"suggested_display_name": displayName,
+		"suggested_avatar_url":   avatarURL,
+	}
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, linuxDoOAuthBindUserCookieName)
 		if err != nil {
@@ -250,23 +262,13 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 			return
 		}
 		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-			Intent: oauthIntentBindCurrentUser,
-			Identity: service.PendingAuthIdentityKey{
-				ProviderType:    "linuxdo",
-				ProviderKey:     "linuxdo",
-				ProviderSubject: subject,
-			},
-			TargetUserID:      &targetUserID,
-			ResolvedEmail:     email,
-			RedirectTo:        redirectTo,
-			BrowserSessionKey: browserSessionKey,
-			UpstreamIdentityClaims: map[string]any{
-				"email":                  email,
-				"username":               username,
-				"subject":                subject,
-				"suggested_display_name": displayName,
-				"suggested_avatar_url":   avatarURL,
-			},
+			Intent:                 oauthIntentBindCurrentUser,
+			Identity:               identityKey,
+			TargetUserID:           &targetUserID,
+			ResolvedEmail:          email,
+			RedirectTo:             redirectTo,
+			BrowserSessionKey:      browserSessionKey,
+			UpstreamIdentityClaims: upstreamClaims,
 			CompletionResponse: map[string]any{
 				"redirect": redirectTo,
 			},
@@ -278,27 +280,60 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		return
 	}
 
+	existingIdentityUser, err := h.findOAuthIdentityUser(c.Request.Context(), identityKey)
+	if err != nil {
+		redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
+		return
+	}
+	if existingIdentityUser != nil {
+		tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), existingIdentityUser.Email, username, "")
+		if err != nil {
+			redirectOAuthError(c, frontendCallback, "login_failed", infraerrors.Reason(err), infraerrors.Message(err))
+			return
+		}
+		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+			Intent:                 oauthIntentLogin,
+			Identity:               identityKey,
+			TargetUserID:           &user.ID,
+			ResolvedEmail:          existingIdentityUser.Email,
+			RedirectTo:             redirectTo,
+			BrowserSessionKey:      browserSessionKey,
+			UpstreamIdentityClaims: upstreamClaims,
+			CompletionResponse: map[string]any{
+				"access_token":  tokenPair.AccessToken,
+				"refresh_token": tokenPair.RefreshToken,
+				"expires_in":    tokenPair.ExpiresIn,
+				"token_type":    "Bearer",
+				"redirect":      redirectTo,
+			},
+		}); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
+	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
+		if err := h.createOAuthEmailRequiredPendingSession(c, identityKey, redirectTo, browserSessionKey, upstreamClaims); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
 	// 传入空邀请码；如果需要邀请码，服务层返回 ErrOAuthInvitationRequired
 	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, "")
 	if err != nil {
 		if errors.Is(err, service.ErrOAuthInvitationRequired) {
 			if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-				Intent: "login",
-				Identity: service.PendingAuthIdentityKey{
-					ProviderType:    "linuxdo",
-					ProviderKey:     "linuxdo",
-					ProviderSubject: subject,
-				},
-				ResolvedEmail:     email,
-				RedirectTo:        redirectTo,
-				BrowserSessionKey: browserSessionKey,
-				UpstreamIdentityClaims: map[string]any{
-					"email":                  email,
-					"username":               username,
-					"subject":                subject,
-					"suggested_display_name": displayName,
-					"suggested_avatar_url":   avatarURL,
-				},
+				Intent:                 "login",
+				Identity:               identityKey,
+				ResolvedEmail:          email,
+				RedirectTo:             redirectTo,
+				BrowserSessionKey:      browserSessionKey,
+				UpstreamIdentityClaims: upstreamClaims,
 				CompletionResponse: map[string]any{
 					"error":    "invitation_required",
 					"redirect": redirectTo,
@@ -316,23 +351,13 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 	}
 
 	if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-		Intent: "login",
-		Identity: service.PendingAuthIdentityKey{
-			ProviderType:    "linuxdo",
-			ProviderKey:     "linuxdo",
-			ProviderSubject: subject,
-		},
-		TargetUserID:      &user.ID,
-		ResolvedEmail:     email,
-		RedirectTo:        redirectTo,
-		BrowserSessionKey: browserSessionKey,
-		UpstreamIdentityClaims: map[string]any{
-			"email":                  email,
-			"username":               username,
-			"subject":                subject,
-			"suggested_display_name": displayName,
-			"suggested_avatar_url":   avatarURL,
-		},
+		Intent:                 "login",
+		Identity:               identityKey,
+		TargetUserID:           &user.ID,
+		ResolvedEmail:          email,
+		RedirectTo:             redirectTo,
+		BrowserSessionKey:      browserSessionKey,
+		UpstreamIdentityClaims: upstreamClaims,
 		CompletionResponse: map[string]any{
 			"access_token":  tokenPair.AccessToken,
 			"refresh_token": tokenPair.RefreshToken,

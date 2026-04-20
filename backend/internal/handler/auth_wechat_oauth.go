@@ -214,6 +214,11 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		"suggested_display_name": strings.TrimSpace(userInfo.Nickname),
 		"suggested_avatar_url":   strings.TrimSpace(userInfo.HeadImgURL),
 	}
+	identityRef := service.PendingAuthIdentityKey{
+		ProviderType:    "wechat",
+		ProviderKey:     wechatOAuthProviderKey,
+		ProviderSubject: providerSubject,
+	}
 
 	normalizedIntent := normalizeWeChatOAuthIntent(intent)
 	if normalizedIntent == wechatOAuthIntentBind {
@@ -226,6 +231,34 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 			default:
 				redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
 			}
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
+	existingIdentityUser, err := h.findOAuthIdentityUser(c.Request.Context(), identityRef)
+	if err != nil {
+		redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
+		return
+	}
+	if existingIdentityUser != nil {
+		tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), existingIdentityUser.Email, username, "")
+		if err != nil {
+			redirectOAuthError(c, frontendCallback, "login_failed", infraerrors.Reason(err), infraerrors.Message(err))
+			return
+		}
+		if err := h.createWeChatPendingSession(c, normalizedIntent, providerSubject, existingIdentityUser.Email, redirectTo, browserSessionKey, upstreamClaims, tokenPair, nil, &user.ID); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
+	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
+		if err := h.createOAuthEmailRequiredPendingSession(c, identityRef, redirectTo, browserSessionKey, upstreamClaims); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
 			return
 		}
 		redirectToFrontendCallback(c, frontendCallback)

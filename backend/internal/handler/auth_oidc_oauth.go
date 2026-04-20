@@ -342,6 +342,21 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		idClaims.Name,
 		oidcFallbackUsername(subject),
 	)
+	identityRef := service.PendingAuthIdentityKey{
+		ProviderType:    "oidc",
+		ProviderKey:     issuer,
+		ProviderSubject: subject,
+	}
+	upstreamClaims := map[string]any{
+		"email":                  email,
+		"username":               username,
+		"subject":                subject,
+		"issuer":                 issuer,
+		"email_verified":         emailVerified != nil && *emailVerified,
+		"provider_fallback":      strings.TrimSpace(cfg.ProviderName),
+		"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, idClaims.Name, username),
+		"suggested_avatar_url":   userInfoClaims.AvatarURL,
+	}
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, oidcOAuthBindUserCookieName)
 		if err != nil {
@@ -349,26 +364,13 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 			return
 		}
 		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-			Intent: oauthIntentBindCurrentUser,
-			Identity: service.PendingAuthIdentityKey{
-				ProviderType:    "oidc",
-				ProviderKey:     issuer,
-				ProviderSubject: subject,
-			},
-			TargetUserID:      &targetUserID,
-			ResolvedEmail:     email,
-			RedirectTo:        redirectTo,
-			BrowserSessionKey: browserSessionKey,
-			UpstreamIdentityClaims: map[string]any{
-				"email":                  email,
-				"username":               username,
-				"subject":                subject,
-				"issuer":                 issuer,
-				"email_verified":         emailVerified != nil && *emailVerified,
-				"provider_fallback":      strings.TrimSpace(cfg.ProviderName),
-				"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, idClaims.Name, username),
-				"suggested_avatar_url":   userInfoClaims.AvatarURL,
-			},
+			Intent:                 oauthIntentBindCurrentUser,
+			Identity:               identityRef,
+			TargetUserID:           &targetUserID,
+			ResolvedEmail:          email,
+			RedirectTo:             redirectTo,
+			BrowserSessionKey:      browserSessionKey,
+			UpstreamIdentityClaims: upstreamClaims,
 			CompletionResponse: map[string]any{
 				"redirect": redirectTo,
 			},
@@ -380,30 +382,60 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
+	existingIdentityUser, err := h.findOAuthIdentityUser(c.Request.Context(), identityRef)
+	if err != nil {
+		redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
+		return
+	}
+	if existingIdentityUser != nil {
+		tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), existingIdentityUser.Email, username, "")
+		if err != nil {
+			redirectOAuthError(c, frontendCallback, "login_failed", infraerrors.Reason(err), infraerrors.Message(err))
+			return
+		}
+		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+			Intent:                 oauthIntentLogin,
+			Identity:               identityRef,
+			TargetUserID:           &user.ID,
+			ResolvedEmail:          existingIdentityUser.Email,
+			RedirectTo:             redirectTo,
+			BrowserSessionKey:      browserSessionKey,
+			UpstreamIdentityClaims: upstreamClaims,
+			CompletionResponse: map[string]any{
+				"access_token":  tokenPair.AccessToken,
+				"refresh_token": tokenPair.RefreshToken,
+				"expires_in":    tokenPair.ExpiresIn,
+				"token_type":    "Bearer",
+				"redirect":      redirectTo,
+			},
+		}); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
+	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
+		if err := h.createOAuthEmailRequiredPendingSession(c, identityRef, redirectTo, browserSessionKey, upstreamClaims); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
 	// 传入空邀请码；如果需要邀请码，服务层返回 ErrOAuthInvitationRequired
 	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, "")
 	if err != nil {
 		if errors.Is(err, service.ErrOAuthInvitationRequired) {
 			if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-				Intent: "login",
-				Identity: service.PendingAuthIdentityKey{
-					ProviderType:    "oidc",
-					ProviderKey:     issuer,
-					ProviderSubject: subject,
-				},
-				ResolvedEmail:     email,
-				RedirectTo:        redirectTo,
-				BrowserSessionKey: browserSessionKey,
-				UpstreamIdentityClaims: map[string]any{
-					"email":                  email,
-					"username":               username,
-					"subject":                subject,
-					"issuer":                 issuer,
-					"email_verified":         emailVerified != nil && *emailVerified,
-					"provider_fallback":      strings.TrimSpace(cfg.ProviderName),
-					"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, idClaims.Name, username),
-					"suggested_avatar_url":   userInfoClaims.AvatarURL,
-				},
+				Intent:                 "login",
+				Identity:               identityRef,
+				ResolvedEmail:          email,
+				RedirectTo:             redirectTo,
+				BrowserSessionKey:      browserSessionKey,
+				UpstreamIdentityClaims: upstreamClaims,
 				CompletionResponse: map[string]any{
 					"error":    "invitation_required",
 					"redirect": redirectTo,
@@ -420,26 +452,13 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	}
 
 	if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-		Intent: "login",
-		Identity: service.PendingAuthIdentityKey{
-			ProviderType:    "oidc",
-			ProviderKey:     issuer,
-			ProviderSubject: subject,
-		},
-		TargetUserID:      &user.ID,
-		ResolvedEmail:     email,
-		RedirectTo:        redirectTo,
-		BrowserSessionKey: browserSessionKey,
-		UpstreamIdentityClaims: map[string]any{
-			"email":                  email,
-			"username":               username,
-			"subject":                subject,
-			"issuer":                 issuer,
-			"email_verified":         emailVerified != nil && *emailVerified,
-			"provider_fallback":      strings.TrimSpace(cfg.ProviderName),
-			"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, idClaims.Name, username),
-			"suggested_avatar_url":   userInfoClaims.AvatarURL,
-		},
+		Intent:                 "login",
+		Identity:               identityRef,
+		TargetUserID:           &user.ID,
+		ResolvedEmail:          email,
+		RedirectTo:             redirectTo,
+		BrowserSessionKey:      browserSessionKey,
+		UpstreamIdentityClaims: upstreamClaims,
 		CompletionResponse: map[string]any{
 			"access_token":  tokenPair.AccessToken,
 			"refresh_token": tokenPair.RefreshToken,
