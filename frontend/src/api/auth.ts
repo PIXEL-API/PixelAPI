@@ -186,6 +186,18 @@ export interface RefreshTokenResponse {
   token_type: string
 }
 
+export interface PendingOAuthExchangeResponse {
+  access_token?: string
+  refresh_token?: string
+  expires_in?: number
+  token_type?: string
+  redirect?: string
+  error?: string
+  adoption_required?: boolean
+  suggested_display_name?: string
+  suggested_avatar_url?: string
+}
+
 /**
  * Refresh the access token using the refresh token
  * @returns New token pair
@@ -337,12 +349,10 @@ export async function resetPassword(request: ResetPasswordRequest): Promise<Rese
 
 /**
  * Complete LinuxDo OAuth registration by supplying an invitation code
- * @param pendingOAuthToken - Short-lived JWT from the OAuth callback
  * @param invitationCode - Invitation code entered by the user
  * @returns Token pair on success
  */
 export async function completeLinuxDoOAuthRegistration(
-  pendingOAuthToken: string,
   invitationCode: string
 ): Promise<{ access_token: string; refresh_token: string; expires_in: number; token_type: string }> {
   const { data } = await apiClient.post<{
@@ -351,7 +361,6 @@ export async function completeLinuxDoOAuthRegistration(
     expires_in: number
     token_type: string
   }>('/auth/oauth/linuxdo/complete-registration', {
-    pending_oauth_token: pendingOAuthToken,
     invitation_code: invitationCode
   })
   return data
@@ -359,12 +368,10 @@ export async function completeLinuxDoOAuthRegistration(
 
 /**
  * Complete OIDC OAuth registration by supplying an invitation code
- * @param pendingOAuthToken - Short-lived JWT from the OAuth callback
  * @param invitationCode - Invitation code entered by the user
  * @returns Token pair on success
  */
 export async function completeOIDCOAuthRegistration(
-  pendingOAuthToken: string,
   invitationCode: string
 ): Promise<{ access_token: string; refresh_token: string; expires_in: number; token_type: string }> {
   const { data } = await apiClient.post<{
@@ -373,9 +380,13 @@ export async function completeOIDCOAuthRegistration(
     expires_in: number
     token_type: string
   }>('/auth/oauth/oidc/complete-registration', {
-    pending_oauth_token: pendingOAuthToken,
     invitation_code: invitationCode
   })
+  return data
+}
+
+export async function exchangePendingOAuthCompletion(): Promise<PendingOAuthExchangeResponse> {
+  const { data } = await apiClient.post<PendingOAuthExchangeResponse>('/auth/oauth/pending/exchange', {})
   return data
 }
 
@@ -402,6 +413,7 @@ export const authAPI = {
   resetPassword,
   refreshToken,
   revokeAllSessions,
+  exchangePendingOAuthCompletion,
   completeLinuxDoOAuthRegistration,
   completeOIDCOAuthRegistration
 }
