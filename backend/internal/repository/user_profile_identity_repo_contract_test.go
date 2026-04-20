@@ -187,6 +187,48 @@ func (s *UserProfileIdentityRepoSuite) TestBindAuthIdentityToUser_IsIdempotentAn
 	s.Require().ErrorIs(err, ErrAuthIdentityChannelOwnershipConflict)
 }
 
+func (s *UserProfileIdentityRepoSuite) TestCreateAuthIdentity_RejectsChannelProviderMismatch() {
+	user := s.mustCreateUser("provider-mismatch-create")
+
+	_, err := s.repo.CreateAuthIdentity(s.ctx, CreateAuthIdentityInput{
+		UserID: user.ID,
+		Canonical: AuthIdentityKey{
+			ProviderType:    "wechat",
+			ProviderKey:     "wechat-main",
+			ProviderSubject: "union-create-mismatch",
+		},
+		Channel: &AuthIdentityChannelKey{
+			ProviderType:   "linuxdo",
+			ProviderKey:    "linuxdo-main",
+			Channel:        "oauth",
+			ChannelAppID:   "app-mismatch",
+			ChannelSubject: "openid-create-mismatch",
+		},
+	})
+	s.Require().ErrorIs(err, ErrAuthIdentityChannelProviderMismatch)
+}
+
+func (s *UserProfileIdentityRepoSuite) TestBindAuthIdentityToUser_RejectsChannelProviderMismatch() {
+	user := s.mustCreateUser("provider-mismatch-bind")
+
+	_, err := s.repo.BindAuthIdentityToUser(s.ctx, BindAuthIdentityInput{
+		UserID: user.ID,
+		Canonical: AuthIdentityKey{
+			ProviderType:    "wechat",
+			ProviderKey:     "wechat-main",
+			ProviderSubject: "union-bind-mismatch",
+		},
+		Channel: &AuthIdentityChannelKey{
+			ProviderType:   "wechat",
+			ProviderKey:    "wechat-legacy",
+			Channel:        "oa",
+			ChannelAppID:   "wx-app-bind-mismatch",
+			ChannelSubject: "openid-bind-mismatch",
+		},
+	})
+	s.Require().ErrorIs(err, ErrAuthIdentityChannelProviderMismatch)
+}
+
 func (s *UserProfileIdentityRepoSuite) TestWithUserProfileIdentityTx_RollsBackIdentityAndGrantOnError() {
 	user := s.mustCreateUser("tx-rollback")
 	expectedErr := errors.New("rollback")
