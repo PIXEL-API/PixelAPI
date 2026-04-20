@@ -2,9 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,10 +21,14 @@ var (
 	ErrPasswordIncorrect       = infraerrors.BadRequest("PASSWORD_INCORRECT", "current password is incorrect")
 	ErrInsufficientPerms       = infraerrors.Forbidden("INSUFFICIENT_PERMISSIONS", "insufficient permissions")
 	ErrNotifyCodeUserRateLimit = infraerrors.TooManyRequests("NOTIFY_CODE_USER_RATE_LIMIT", "too many verification codes requested, please try again later")
+	ErrAvatarInvalid           = infraerrors.BadRequest("AVATAR_INVALID", "avatar must be a valid image data URL or http(s) URL")
+	ErrAvatarTooLarge          = infraerrors.BadRequest("AVATAR_TOO_LARGE", "avatar image must be 100KB or smaller")
+	ErrAvatarNotImage          = infraerrors.BadRequest("AVATAR_NOT_IMAGE", "avatar content must be an image")
 )
 
 const (
-	maxNotifyEmails = 3 // Maximum number of notification emails per user
+	maxNotifyEmails      = 3 // Maximum number of notification emails per user
+	maxInlineAvatarBytes = 100 * 1024
 
 	// User-level rate limiting for notify email verification codes
 	notifyCodeUserRateLimit  = 5
@@ -47,6 +55,9 @@ type UserRepository interface {
 	GetFirstAdmin(ctx context.Context) (*User, error)
 	Update(ctx context.Context, user *User) error
 	Delete(ctx context.Context, id int64) error
+	GetUserAvatar(ctx context.Context, userID int64) (*UserAvatar, error)
+	UpsertUserAvatar(ctx context.Context, userID int64, input UpsertUserAvatarInput) (*UserAvatar, error)
+	DeleteUserAvatar(ctx context.Context, userID int64) error
 
 	List(ctx context.Context, params pagination.PaginationParams) ([]User, *pagination.PaginationResult, error)
 	ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters UserListFilters) ([]User, *pagination.PaginationResult, error)
@@ -71,9 +82,28 @@ type UserRepository interface {
 type UpdateProfileRequest struct {
 	Email                  *string  `json:"email"`
 	Username               *string  `json:"username"`
+	AvatarURL              *string  `json:"avatar_url"`
 	Concurrency            *int     `json:"concurrency"`
 	BalanceNotifyEnabled   *bool    `json:"balance_notify_enabled"`
 	BalanceNotifyThreshold *float64 `json:"balance_notify_threshold"`
+}
+
+type UserAvatar struct {
+	StorageProvider string
+	StorageKey      string
+	URL             string
+	ContentType     string
+	ByteSize        int
+	SHA256          string
+}
+
+type UpsertUserAvatarInput struct {
+	StorageProvider string
+	StorageKey      string
+	URL             string
+	ContentType     string
+	ByteSize        int
+	SHA256          string
 }
 
 // ChangePasswordRequest 修改密码请求
@@ -115,6 +145,9 @@ func (s *UserService) GetProfile(ctx context.Context, userID int64) (*User, erro
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
+	if err := s.hydrateUserAvatar(ctx, user); err != nil {
+		return nil, fmt.Errorf("get user avatar: %w", err)
+	}
 	return user, nil
 }
 
@@ -143,6 +176,27 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req Updat
 		user.Username = *req.Username
 	}
 
+	if req.AvatarURL != nil {
+		avatarValue := strings.TrimSpace(*req.AvatarURL)
+		switch {
+		case avatarValue == "":
+			if err := s.userRepo.DeleteUserAvatar(ctx, userID); err != nil {
+				return nil, fmt.Errorf("delete avatar: %w", err)
+			}
+			applyUserAvatar(user, nil)
+		default:
+			avatarInput, err := normalizeUserAvatarInput(avatarValue)
+			if err != nil {
+				return nil, err
+			}
+			avatar, err := s.userRepo.UpsertUserAvatar(ctx, userID, avatarInput)
+			if err != nil {
+				return nil, fmt.Errorf("upsert avatar: %w", err)
+			}
+			applyUserAvatar(user, avatar)
+		}
+	}
+
 	if req.Concurrency != nil {
 		user.Concurrency = *req.Concurrency
 	}
@@ -166,6 +220,87 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req Updat
 	}
 
 	return user, nil
+}
+
+func applyUserAvatar(user *User, avatar *UserAvatar) {
+	if user == nil {
+		return
+	}
+	if avatar == nil {
+		user.AvatarURL = ""
+		user.AvatarSource = ""
+		user.AvatarMIME = ""
+		user.AvatarByteSize = 0
+		user.AvatarSHA256 = ""
+		return
+	}
+
+	user.AvatarURL = avatar.URL
+	user.AvatarSource = avatar.StorageProvider
+	user.AvatarMIME = avatar.ContentType
+	user.AvatarByteSize = avatar.ByteSize
+	user.AvatarSHA256 = avatar.SHA256
+}
+
+func normalizeUserAvatarInput(raw string) (UpsertUserAvatarInput, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return UpsertUserAvatarInput{}, ErrAvatarInvalid
+	}
+	if strings.HasPrefix(raw, "data:") {
+		return normalizeInlineUserAvatarInput(raw)
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed == nil {
+		return UpsertUserAvatarInput{}, ErrAvatarInvalid
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return UpsertUserAvatarInput{}, ErrAvatarInvalid
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return UpsertUserAvatarInput{}, ErrAvatarInvalid
+	}
+
+	return UpsertUserAvatarInput{
+		StorageProvider: "remote_url",
+		URL:             raw,
+	}, nil
+}
+
+func normalizeInlineUserAvatarInput(raw string) (UpsertUserAvatarInput, error) {
+	body := strings.TrimPrefix(raw, "data:")
+	meta, encoded, ok := strings.Cut(body, ",")
+	if !ok {
+		return UpsertUserAvatarInput{}, ErrAvatarInvalid
+	}
+	meta = strings.TrimSpace(meta)
+	encoded = strings.TrimSpace(encoded)
+	if !strings.HasSuffix(strings.ToLower(meta), ";base64") {
+		return UpsertUserAvatarInput{}, ErrAvatarInvalid
+	}
+
+	contentType := strings.TrimSpace(meta[:len(meta)-len(";base64")])
+	if contentType == "" || !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		return UpsertUserAvatarInput{}, ErrAvatarNotImage
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return UpsertUserAvatarInput{}, ErrAvatarInvalid
+	}
+	if len(decoded) > maxInlineAvatarBytes {
+		return UpsertUserAvatarInput{}, ErrAvatarTooLarge
+	}
+
+	sum := sha256.Sum256(decoded)
+	return UpsertUserAvatarInput{
+		StorageProvider: "inline",
+		URL:             raw,
+		ContentType:     contentType,
+		ByteSize:        len(decoded),
+		SHA256:          hex.EncodeToString(sum[:]),
+	}, nil
 }
 
 // ChangePassword 修改密码
@@ -202,7 +337,23 @@ func (s *UserService) GetByID(ctx context.Context, id int64) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
+	if err := s.hydrateUserAvatar(ctx, user); err != nil {
+		return nil, fmt.Errorf("get user avatar: %w", err)
+	}
 	return user, nil
+}
+
+func (s *UserService) hydrateUserAvatar(ctx context.Context, user *User) error {
+	if s == nil || s.userRepo == nil || user == nil || user.ID == 0 {
+		return nil
+	}
+
+	avatar, err := s.userRepo.GetUserAvatar(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	applyUserAvatar(user, avatar)
+	return nil
 }
 
 // List 获取用户列表（管理员功能）

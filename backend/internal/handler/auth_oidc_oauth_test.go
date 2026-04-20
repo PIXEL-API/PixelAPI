@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -12,7 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
+	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
+	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 )
@@ -122,4 +129,81 @@ func buildRSAJWK(kid string, pub *rsa.PublicKey) oidcJWK {
 		N:   n,
 		E:   e,
 	}
+}
+
+func TestCompleteOIDCOAuthRegistrationAppliesPendingAdoptionDecision(t *testing.T) {
+	handler, client := newOAuthPendingFlowTestHandler(t, false)
+	ctx := context.Background()
+
+	session, err := client.PendingAuthSession.Create().
+		SetSessionToken("oidc-complete-session").
+		SetIntent("login").
+		SetProviderType("oidc").
+		SetProviderKey("https://issuer.example.com").
+		SetProviderSubject("oidc-subject-1").
+		SetResolvedEmail("93a310f4c1944c5bbd2e246df1f76485@oidc-connect.invalid").
+		SetBrowserSessionKey("oidc-browser").
+		SetUpstreamIdentityClaims(map[string]any{
+			"username":               "oidc_user",
+			"issuer":                 "https://issuer.example.com",
+			"suggested_display_name": "OIDC Display",
+			"suggested_avatar_url":   "https://cdn.example/oidc.png",
+		}).
+		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = service.NewAuthPendingIdentityService(client).UpsertAdoptionDecision(ctx, service.PendingIdentityAdoptionDecisionInput{
+		PendingAuthSessionID: session.ID,
+		AdoptAvatar:          true,
+	})
+	require.NoError(t, err)
+
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","adopt_display_name":true}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/complete-registration", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("oidc-browser")})
+	c.Request = req
+
+	handler.CompleteOIDCOAuthRegistration(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	responseData := decodeJSONBody(t, recorder)
+	require.NotEmpty(t, responseData["access_token"])
+
+	userEntity, err := client.User.Query().
+		Where(dbuser.EmailEQ(session.ResolvedEmail)).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "OIDC Display", userEntity.Username)
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ("https://issuer.example.com"),
+			authidentity.ProviderSubjectEQ("oidc-subject-1"),
+		).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, userEntity.ID, identity.UserID)
+	require.Equal(t, "OIDC Display", identity.Metadata["display_name"])
+	require.Equal(t, "https://cdn.example/oidc.png", identity.Metadata["avatar_url"])
+
+	decision, err := client.IdentityAdoptionDecision.Query().
+		Where(identityadoptiondecision.PendingAuthSessionIDEQ(session.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, decision.IdentityID)
+	require.Equal(t, identity.ID, *decision.IdentityID)
+	require.True(t, decision.AdoptDisplayName)
+	require.True(t, decision.AdoptAvatar)
+
+	consumed, err := client.PendingAuthSession.Query().
+		Where(pendingauthsession.IDEQ(session.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, consumed.ConsumedAt)
 }

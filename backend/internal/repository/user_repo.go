@@ -64,6 +64,9 @@ func (r *userRepository) Create(ctx context.Context, userIn *service.User) error
 		SetBalance(userIn.Balance).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
+		SetSignupSource(userSignupSourceOrDefault(userIn.SignupSource)).
+		SetNillableLastLoginAt(userIn.LastLoginAt).
+		SetNillableLastActiveAt(userIn.LastActiveAt).
 		Save(ctx)
 	if err != nil {
 		return translatePersistenceError(err, nil, service.ErrEmailExists)
@@ -151,6 +154,15 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		SetNillableBalanceNotifyThreshold(userIn.BalanceNotifyThreshold).
 		SetBalanceNotifyExtraEmails(marshalExtraEmails(userIn.BalanceNotifyExtraEmails)).
 		SetTotalRecharged(userIn.TotalRecharged)
+	if userIn.SignupSource != "" {
+		updateOp = updateOp.SetSignupSource(userIn.SignupSource)
+	}
+	if userIn.LastLoginAt != nil {
+		updateOp = updateOp.SetLastLoginAt(*userIn.LastLoginAt)
+	}
+	if userIn.LastActiveAt != nil {
+		updateOp = updateOp.SetLastActiveAt(*userIn.LastActiveAt)
+	}
 	if userIn.BalanceNotifyThreshold == nil {
 		updateOp = updateOp.ClearBalanceNotifyThreshold()
 	}
@@ -300,6 +312,7 @@ func userListOrder(params pagination.PaginationParams) []func(*entsql.Selector) 
 
 	var field string
 	defaultField := true
+	nullsLastField := false
 	switch sortBy {
 	case "email":
 		field = dbuser.FieldEmail
@@ -322,6 +335,14 @@ func userListOrder(params pagination.PaginationParams) []func(*entsql.Selector) 
 	case "created_at":
 		field = dbuser.FieldCreatedAt
 		defaultField = false
+	case "last_login_at":
+		field = dbuser.FieldLastLoginAt
+		defaultField = false
+		nullsLastField = true
+	case "last_active_at":
+		field = dbuser.FieldLastActiveAt
+		defaultField = false
+		nullsLastField = true
 	default:
 		field = dbuser.FieldID
 	}
@@ -330,10 +351,22 @@ func userListOrder(params pagination.PaginationParams) []func(*entsql.Selector) 
 		if defaultField && field == dbuser.FieldID {
 			return []func(*entsql.Selector){dbent.Asc(dbuser.FieldID)}
 		}
+		if nullsLastField {
+			return []func(*entsql.Selector){
+				entsql.OrderByField(field, entsql.OrderNullsLast()).ToFunc(),
+				dbent.Asc(dbuser.FieldID),
+			}
+		}
 		return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbuser.FieldID)}
 	}
 	if defaultField && field == dbuser.FieldID {
 		return []func(*entsql.Selector){dbent.Desc(dbuser.FieldID)}
+	}
+	if nullsLastField {
+		return []func(*entsql.Selector){
+			entsql.OrderByField(field, entsql.OrderDesc(), entsql.OrderNullsLast()).ToFunc(),
+			dbent.Desc(dbuser.FieldID),
+		}
 	}
 	return []func(*entsql.Selector){dbent.Desc(field), dbent.Desc(dbuser.FieldID)}
 }
@@ -558,8 +591,19 @@ func applyUserEntityToService(dst *service.User, src *dbent.User) {
 		return
 	}
 	dst.ID = src.ID
+	dst.SignupSource = src.SignupSource
+	dst.LastLoginAt = src.LastLoginAt
+	dst.LastActiveAt = src.LastActiveAt
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
+}
+
+func userSignupSourceOrDefault(signupSource string) string {
+	signupSource = strings.TrimSpace(signupSource)
+	if signupSource == "" {
+		return "email"
+	}
+	return signupSource
 }
 
 // marshalExtraEmails serializes notify email entries to JSON for storage.

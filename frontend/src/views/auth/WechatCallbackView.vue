@@ -1,0 +1,361 @@
+<template>
+  <AuthLayout>
+    <div class="space-y-6">
+      <div class="text-center">
+        <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+          {{ t('auth.oidc.callbackTitle', { providerName }) }}
+        </h2>
+        <p class="mt-2 text-sm text-gray-500 dark:text-dark-400">
+          {{
+            isProcessing
+              ? t('auth.oidc.callbackProcessing', { providerName })
+              : t('auth.oidc.callbackHint')
+          }}
+        </p>
+      </div>
+
+      <transition name="fade">
+        <div v-if="needsInvitation || needsAdoptionConfirmation" class="space-y-4">
+          <div
+            v-if="adoptionRequired && (suggestedDisplayName || suggestedAvatarUrl)"
+            class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-800/60"
+          >
+            <div class="space-y-3">
+              <div class="space-y-1">
+                <p class="text-sm font-medium text-gray-900 dark:text-white">
+                  Use {{ providerName }} profile details
+                </p>
+                <p class="text-xs text-gray-500 dark:text-dark-400">
+                  Choose whether to apply the nickname or avatar from {{ providerName }} to this account.
+                </p>
+              </div>
+
+              <label
+                v-if="suggestedDisplayName"
+                class="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3 text-sm dark:border-dark-600 dark:bg-dark-900/50"
+              >
+                <input v-model="adoptDisplayName" type="checkbox" class="mt-1 h-4 w-4" />
+                <span class="space-y-1">
+                  <span class="block font-medium text-gray-900 dark:text-white">
+                    Use display name
+                  </span>
+                  <span class="block text-gray-500 dark:text-dark-400">
+                    {{ suggestedDisplayName }}
+                  </span>
+                </span>
+              </label>
+
+              <label
+                v-if="suggestedAvatarUrl"
+                class="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3 text-sm dark:border-dark-600 dark:bg-dark-900/50"
+              >
+                <input v-model="adoptAvatar" type="checkbox" class="mt-1 h-4 w-4" />
+                <img
+                  :src="suggestedAvatarUrl"
+                  :alt="`${providerName} avatar`"
+                  class="h-10 w-10 rounded-full border border-gray-200 object-cover dark:border-dark-600"
+                />
+                <span class="space-y-1">
+                  <span class="block font-medium text-gray-900 dark:text-white">
+                    Use avatar
+                  </span>
+                  <span class="block break-all text-gray-500 dark:text-dark-400">
+                    {{ suggestedAvatarUrl }}
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <template v-if="needsInvitation">
+            <p class="text-sm text-gray-700 dark:text-gray-300">
+              {{ t('auth.oidc.invitationRequired', { providerName }) }}
+            </p>
+            <div>
+              <input
+                v-model="invitationCode"
+                type="text"
+                class="input w-full"
+                :placeholder="t('auth.invitationCodePlaceholder')"
+                :disabled="isSubmitting"
+                @keyup.enter="handleSubmitInvitation"
+              />
+            </div>
+            <transition name="fade">
+              <p v-if="invitationError" class="text-sm text-red-600 dark:text-red-400">
+                {{ invitationError }}
+              </p>
+            </transition>
+            <button
+              class="btn btn-primary w-full"
+              :disabled="isSubmitting || !invitationCode.trim()"
+              @click="handleSubmitInvitation"
+            >
+              {{
+                isSubmitting
+                  ? t('auth.oidc.completing')
+                  : t('auth.oidc.completeRegistration')
+              }}
+            </button>
+          </template>
+
+          <template v-else-if="needsAdoptionConfirmation">
+            <p class="text-sm text-gray-700 dark:text-gray-300">
+              Review the {{ providerName }} profile details before continuing.
+            </p>
+            <button class="btn btn-primary w-full" :disabled="isSubmitting" @click="handleContinueLogin">
+              {{ isSubmitting ? t('common.processing') : 'Continue' }}
+            </button>
+          </template>
+        </div>
+      </transition>
+
+      <transition name="fade">
+        <div
+          v-if="errorMessage"
+          class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800/50 dark:bg-red-900/20"
+        >
+          <div class="flex items-start gap-3">
+            <div class="flex-shrink-0">
+              <Icon name="exclamationCircle" size="md" class="text-red-500" />
+            </div>
+            <div class="space-y-2">
+              <p class="text-sm text-red-700 dark:text-red-400">
+                {{ errorMessage }}
+              </p>
+              <router-link to="/login" class="btn btn-primary">
+                {{ t('auth.oidc.backToLogin') }}
+              </router-link>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </div>
+  </AuthLayout>
+</template>
+
+<script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { AuthLayout } from '@/components/layout'
+import Icon from '@/components/icons/Icon.vue'
+import { apiClient } from '@/api/client'
+import { useAuthStore, useAppStore } from '@/stores'
+
+interface OAuthTokenResponse {
+  access_token: string
+  refresh_token: string
+  expires_in: number
+  token_type: string
+}
+
+interface PendingOAuthExchangeResponse {
+  access_token?: string
+  refresh_token?: string
+  expires_in?: number
+  token_type?: string
+  redirect?: string
+  error?: string
+  adoption_required?: boolean
+  suggested_display_name?: string
+  suggested_avatar_url?: string
+}
+
+const route = useRoute()
+const router = useRouter()
+const { t } = useI18n()
+
+const authStore = useAuthStore()
+const appStore = useAppStore()
+
+const isProcessing = ref(true)
+const errorMessage = ref('')
+const needsInvitation = ref(false)
+const invitationCode = ref('')
+const isSubmitting = ref(false)
+const invitationError = ref('')
+const redirectTo = ref('/dashboard')
+const adoptionRequired = ref(false)
+const suggestedDisplayName = ref('')
+const suggestedAvatarUrl = ref('')
+const adoptDisplayName = ref(true)
+const adoptAvatar = ref(true)
+const needsAdoptionConfirmation = ref(false)
+
+const providerName = 'WeChat'
+
+function parseFragmentParams(): URLSearchParams {
+  const raw = typeof window !== 'undefined' ? window.location.hash : ''
+  const hash = raw.startsWith('#') ? raw.slice(1) : raw
+  return new URLSearchParams(hash)
+}
+
+function sanitizeRedirectPath(path: string | null | undefined): string {
+  if (!path) return '/dashboard'
+  if (!path.startsWith('/')) return '/dashboard'
+  if (path.startsWith('//')) return '/dashboard'
+  if (path.includes('://')) return '/dashboard'
+  if (path.includes('\n') || path.includes('\r')) return '/dashboard'
+  return path
+}
+
+function currentAdoptionDecision(): Record<string, boolean> {
+  return {
+    adopt_display_name: adoptDisplayName.value,
+    adopt_avatar: adoptAvatar.value,
+  }
+}
+
+function applyAdoptionSuggestionState(completion: PendingOAuthExchangeResponse) {
+  adoptionRequired.value = completion.adoption_required === true
+  suggestedDisplayName.value = completion.suggested_display_name || ''
+  suggestedAvatarUrl.value = completion.suggested_avatar_url || ''
+
+  if (!suggestedDisplayName.value) {
+    adoptDisplayName.value = false
+  }
+  if (!suggestedAvatarUrl.value) {
+    adoptAvatar.value = false
+  }
+}
+
+function hasSuggestedProfile(completion: PendingOAuthExchangeResponse): boolean {
+  return Boolean(completion.suggested_display_name || completion.suggested_avatar_url)
+}
+
+async function exchangePendingOAuthCompletion(): Promise<PendingOAuthExchangeResponse> {
+  const { data } = await apiClient.post<PendingOAuthExchangeResponse>('/auth/oauth/pending/exchange', {})
+  return data
+}
+
+async function finalizeLogin(completion: PendingOAuthExchangeResponse, redirect: string) {
+  if (!completion.access_token) {
+    throw new Error(t('auth.oidc.callbackMissingToken'))
+  }
+
+  if (completion.refresh_token) {
+    localStorage.setItem('refresh_token', completion.refresh_token)
+  }
+  if (completion.expires_in) {
+    localStorage.setItem('token_expires_at', String(Date.now() + completion.expires_in * 1000))
+  }
+
+  await authStore.setToken(completion.access_token)
+  appStore.showSuccess(t('auth.loginSuccess'))
+  await router.replace(redirect)
+}
+
+async function completeWeChatOAuthRegistration(invitation: string): Promise<OAuthTokenResponse> {
+  const { data } = await apiClient.post<OAuthTokenResponse>('/auth/oauth/wechat/complete-registration', {
+    invitation_code: invitation,
+    ...currentAdoptionDecision(),
+  })
+  return data
+}
+
+async function handleSubmitInvitation() {
+  invitationError.value = ''
+  if (!invitationCode.value.trim()) return
+
+  isSubmitting.value = true
+  try {
+    const tokenData = await completeWeChatOAuthRegistration(invitationCode.value.trim())
+    if (tokenData.refresh_token) {
+      localStorage.setItem('refresh_token', tokenData.refresh_token)
+    }
+    if (tokenData.expires_in) {
+      localStorage.setItem('token_expires_at', String(Date.now() + tokenData.expires_in * 1000))
+    }
+    await authStore.setToken(tokenData.access_token)
+    appStore.showSuccess(t('auth.loginSuccess'))
+    await router.replace(redirectTo.value)
+  } catch (e: unknown) {
+    const err = e as { message?: string; response?: { data?: { message?: string } } }
+    invitationError.value =
+      err.response?.data?.message || err.message || t('auth.oidc.completeRegistrationFailed')
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+async function handleContinueLogin() {
+  isSubmitting.value = true
+  try {
+    const { data } = await apiClient.post<PendingOAuthExchangeResponse>(
+      '/auth/oauth/pending/exchange',
+      currentAdoptionDecision()
+    )
+    await finalizeLogin(data, redirectTo.value)
+  } catch (e: unknown) {
+    const err = e as { message?: string; response?: { data?: { detail?: string; message?: string } } }
+    errorMessage.value =
+      err.response?.data?.detail ||
+      err.response?.data?.message ||
+      err.message ||
+      t('auth.loginFailed')
+    appStore.showError(errorMessage.value)
+    needsAdoptionConfirmation.value = false
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+onMounted(async () => {
+  const params = parseFragmentParams()
+  const error = params.get('error')
+  const errorDesc = params.get('error_description') || params.get('error_message') || ''
+
+  if (error) {
+    errorMessage.value = errorDesc || error
+    appStore.showError(errorMessage.value)
+    isProcessing.value = false
+    return
+  }
+
+  try {
+    const completion = await exchangePendingOAuthCompletion()
+    const redirect = sanitizeRedirectPath(
+      completion.redirect || (route.query.redirect as string | undefined) || '/dashboard'
+    )
+    applyAdoptionSuggestionState(completion)
+    redirectTo.value = redirect
+
+    if (completion.error === 'invitation_required') {
+      needsInvitation.value = true
+      isProcessing.value = false
+      return
+    }
+
+    if (adoptionRequired.value && hasSuggestedProfile(completion)) {
+      needsAdoptionConfirmation.value = true
+      isProcessing.value = false
+      return
+    }
+
+    await finalizeLogin(completion, redirect)
+  } catch (e: unknown) {
+    const err = e as { message?: string; response?: { data?: { detail?: string; message?: string } } }
+    errorMessage.value =
+      err.response?.data?.detail ||
+      err.response?.data?.message ||
+      err.message ||
+      t('auth.loginFailed')
+    appStore.showError(errorMessage.value)
+    isProcessing.value = false
+  }
+})
+</script>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: all 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+</style>

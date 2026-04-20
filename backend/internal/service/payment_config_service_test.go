@@ -1,9 +1,17 @@
 package service
 
 import (
+	"context"
+	"database/sql"
 	"testing"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	_ "modernc.org/sqlite"
 )
 
 func TestPcParseFloat(t *testing.T) {
@@ -163,6 +171,20 @@ func TestParsePaymentConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("enabled types are normalized to visible methods and deduplicated", func(t *testing.T) {
+		t.Parallel()
+		vals := map[string]string{
+			SettingEnabledPaymentTypes: "alipay_direct, alipay, wxpay_direct, wxpay",
+		}
+		cfg := svc.parsePaymentConfig(vals)
+		if len(cfg.EnabledTypes) != 2 {
+			t.Fatalf("EnabledTypes len = %d, want 2", len(cfg.EnabledTypes))
+		}
+		if cfg.EnabledTypes[0] != "alipay" || cfg.EnabledTypes[1] != "wxpay" {
+			t.Fatalf("EnabledTypes = %v, want [alipay wxpay]", cfg.EnabledTypes)
+		}
+	})
+
 	t.Run("empty enabled types string", func(t *testing.T) {
 		t.Parallel()
 		vals := map[string]string{
@@ -204,3 +226,167 @@ func TestGetBasePaymentType(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyVisibleMethodRoutingToEnabledTypes(t *testing.T) {
+	t.Parallel()
+
+	base := []string{"alipay", "wxpay", "stripe"}
+	vals := map[string]string{
+		SettingPaymentVisibleMethodAlipayEnabled: "true",
+		SettingPaymentVisibleMethodAlipaySource:  VisibleMethodSourceOfficialAlipay,
+		SettingPaymentVisibleMethodWxpayEnabled:  "true",
+		SettingPaymentVisibleMethodWxpaySource:   VisibleMethodSourceOfficialWechat,
+	}
+	available := map[string]bool{
+		VisibleMethodSourceOfficialAlipay: true,
+		VisibleMethodSourceOfficialWechat: false,
+	}
+
+	got := applyVisibleMethodRoutingToEnabledTypes(base, vals, available)
+	want := []string{"alipay", "stripe"}
+	if len(got) != len(want) {
+		t.Fatalf("applyVisibleMethodRoutingToEnabledTypes len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("applyVisibleMethodRoutingToEnabledTypes[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestApplyVisibleMethodRoutingAddsConfiguredVisibleMethod(t *testing.T) {
+	t.Parallel()
+
+	base := []string{"stripe"}
+	vals := map[string]string{
+		SettingPaymentVisibleMethodAlipayEnabled: "true",
+		SettingPaymentVisibleMethodAlipaySource:  VisibleMethodSourceEasyPayAlipay,
+	}
+	available := map[string]bool{
+		VisibleMethodSourceEasyPayAlipay: true,
+	}
+
+	got := applyVisibleMethodRoutingToEnabledTypes(base, vals, available)
+	want := []string{"stripe", "alipay"}
+	if len(got) != len(want) {
+		t.Fatalf("applyVisibleMethodRoutingToEnabledTypes len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("applyVisibleMethodRoutingToEnabledTypes[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestBuildVisibleMethodSourceAvailability(t *testing.T) {
+	t.Parallel()
+
+	instances := []*dbent.PaymentProviderInstance{
+		{ProviderKey: payment.TypeAlipay, SupportedTypes: "alipay"},
+		{ProviderKey: payment.TypeEasyPay, SupportedTypes: "wxpay_direct, alipay"},
+		{ProviderKey: payment.TypeWxpay, SupportedTypes: "wxpay_direct"},
+	}
+
+	got := buildVisibleMethodSourceAvailability(instances)
+	if !got[VisibleMethodSourceOfficialAlipay] {
+		t.Fatalf("expected %q to be available", VisibleMethodSourceOfficialAlipay)
+	}
+	if !got[VisibleMethodSourceEasyPayAlipay] {
+		t.Fatalf("expected %q to be available", VisibleMethodSourceEasyPayAlipay)
+	}
+	if !got[VisibleMethodSourceOfficialWechat] {
+		t.Fatalf("expected %q to be available", VisibleMethodSourceOfficialWechat)
+	}
+	if !got[VisibleMethodSourceEasyPayWechat] {
+		t.Fatalf("expected %q to be available", VisibleMethodSourceEasyPayWechat)
+	}
+}
+
+func TestGetPaymentConfigAppliesVisibleMethodRouting(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeEasyPay).
+		SetName("EasyPay Alipay").
+		SetConfig("{}").
+		SetSupportedTypes("alipay").
+		SetEnabled(true).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create easypay instance: %v", err)
+	}
+
+	svc := &PaymentConfigService{
+		entClient: client,
+		settingRepo: &paymentConfigSettingRepoStub{
+			values: map[string]string{
+				SettingEnabledPaymentTypes:               "alipay,wxpay,stripe",
+				SettingPaymentVisibleMethodAlipayEnabled: "true",
+				SettingPaymentVisibleMethodAlipaySource:  "easypay",
+				SettingPaymentVisibleMethodWxpayEnabled:  "true",
+				SettingPaymentVisibleMethodWxpaySource:   "wxpay",
+			},
+		},
+	}
+
+	cfg, err := svc.GetPaymentConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetPaymentConfig returned error: %v", err)
+	}
+
+	want := []string{payment.TypeAlipay, payment.TypeStripe}
+	if len(cfg.EnabledTypes) != len(want) {
+		t.Fatalf("EnabledTypes len = %d, want %d (%v)", len(cfg.EnabledTypes), len(want), cfg.EnabledTypes)
+	}
+	for i := range want {
+		if cfg.EnabledTypes[i] != want[i] {
+			t.Fatalf("EnabledTypes[%d] = %q, want %q (full=%v)", i, cfg.EnabledTypes[i], want[i], cfg.EnabledTypes)
+		}
+	}
+}
+
+func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:payment_config_service?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+type paymentConfigSettingRepoStub struct {
+	values map[string]string
+}
+
+func (s *paymentConfigSettingRepoStub) Get(context.Context, string) (*Setting, error) {
+	return nil, nil
+}
+func (s *paymentConfigSettingRepoStub) GetValue(_ context.Context, key string) (string, error) {
+	return s.values[key], nil
+}
+func (s *paymentConfigSettingRepoStub) Set(context.Context, string, string) error { return nil }
+func (s *paymentConfigSettingRepoStub) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		out[key] = s.values[key]
+	}
+	return out, nil
+}
+func (s *paymentConfigSettingRepoStub) SetMultiple(context.Context, map[string]string) error {
+	return nil
+}
+func (s *paymentConfigSettingRepoStub) GetAll(context.Context) (map[string]string, error) {
+	return s.values, nil
+}
+func (s *paymentConfigSettingRepoStub) Delete(context.Context, string) error { return nil }
