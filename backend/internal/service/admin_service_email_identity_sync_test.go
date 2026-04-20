@@ -4,9 +4,11 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,18 +23,112 @@ type replaceEmailCall struct {
 	newEmail string
 }
 
-type emailSyncUserRepoStub struct {
-	*userRepoStub
+type emailSyncRepoStub struct {
+	user         *User
+	nextID       int64
+	updateCalls  int
+	created      []*User
+	updated      []*User
 	ensureCalls  []ensureEmailCall
 	replaceCalls []replaceEmailCall
 }
 
-func (s *emailSyncUserRepoStub) EnsureEmailAuthIdentity(_ context.Context, userID int64, email string) error {
+func (s *emailSyncRepoStub) Create(_ context.Context, user *User) error {
+	if s.nextID != 0 && user.ID == 0 {
+		user.ID = s.nextID
+	}
+	s.created = append(s.created, user)
+	s.user = user
+	return nil
+}
+
+func (s *emailSyncRepoStub) GetByID(_ context.Context, _ int64) (*User, error) {
+	if s.user == nil {
+		return nil, ErrUserNotFound
+	}
+	cloned := *s.user
+	return &cloned, nil
+}
+
+func (s *emailSyncRepoStub) GetByEmail(_ context.Context, _ string) (*User, error) {
+	return nil, ErrUserNotFound
+}
+
+func (s *emailSyncRepoStub) GetFirstAdmin(context.Context) (*User, error) {
+	return nil, fmt.Errorf("unexpected GetFirstAdmin call")
+}
+
+func (s *emailSyncRepoStub) Update(_ context.Context, user *User) error {
+	s.updateCalls++
+	s.updated = append(s.updated, user)
+	s.user = user
+	return nil
+}
+
+func (s *emailSyncRepoStub) Delete(context.Context, int64) error { return nil }
+
+func (s *emailSyncRepoStub) GetUserAvatar(context.Context, int64) (*UserAvatar, error) {
+	return nil, fmt.Errorf("unexpected GetUserAvatar call")
+}
+
+func (s *emailSyncRepoStub) UpsertUserAvatar(context.Context, int64, UpsertUserAvatarInput) (*UserAvatar, error) {
+	return nil, fmt.Errorf("unexpected UpsertUserAvatar call")
+}
+
+func (s *emailSyncRepoStub) DeleteUserAvatar(context.Context, int64) error {
+	return fmt.Errorf("unexpected DeleteUserAvatar call")
+}
+
+func (s *emailSyncRepoStub) List(context.Context, pagination.PaginationParams) ([]User, *pagination.PaginationResult, error) {
+	return nil, nil, fmt.Errorf("unexpected List call")
+}
+
+func (s *emailSyncRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, UserListFilters) ([]User, *pagination.PaginationResult, error) {
+	return nil, nil, fmt.Errorf("unexpected ListWithFilters call")
+}
+
+func (s *emailSyncRepoStub) GetLatestUsedAtByUserIDs(context.Context, []int64) (map[int64]*time.Time, error) {
+	return map[int64]*time.Time{}, nil
+}
+
+func (s *emailSyncRepoStub) GetLatestUsedAtByUserID(context.Context, int64) (*time.Time, error) {
+	return nil, nil
+}
+
+func (s *emailSyncRepoStub) UpdateBalance(context.Context, int64, float64) error { return nil }
+
+func (s *emailSyncRepoStub) DeductBalance(context.Context, int64, float64) error { return nil }
+
+func (s *emailSyncRepoStub) UpdateConcurrency(context.Context, int64, int) error { return nil }
+
+func (s *emailSyncRepoStub) ExistsByEmail(context.Context, string) (bool, error) { return false, nil }
+
+func (s *emailSyncRepoStub) RemoveGroupFromAllowedGroups(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+
+func (s *emailSyncRepoStub) AddGroupToAllowedGroups(context.Context, int64, int64) error { return nil }
+
+func (s *emailSyncRepoStub) RemoveGroupFromUserAllowedGroups(context.Context, int64, int64) error {
+	return nil
+}
+
+func (s *emailSyncRepoStub) ListUserAuthIdentities(context.Context, int64) ([]UserAuthIdentityRecord, error) {
+	return nil, nil
+}
+
+func (s *emailSyncRepoStub) UpdateTotpSecret(context.Context, int64, *string) error { return nil }
+
+func (s *emailSyncRepoStub) EnableTotp(context.Context, int64) error { return nil }
+
+func (s *emailSyncRepoStub) DisableTotp(context.Context, int64) error { return nil }
+
+func (s *emailSyncRepoStub) EnsureEmailAuthIdentity(_ context.Context, userID int64, email string) error {
 	s.ensureCalls = append(s.ensureCalls, ensureEmailCall{userID: userID, email: email})
 	return nil
 }
 
-func (s *emailSyncUserRepoStub) ReplaceEmailAuthIdentity(_ context.Context, userID int64, oldEmail, newEmail string) error {
+func (s *emailSyncRepoStub) ReplaceEmailAuthIdentity(_ context.Context, userID int64, oldEmail, newEmail string) error {
 	s.replaceCalls = append(s.replaceCalls, replaceEmailCall{
 		userID:   userID,
 		oldEmail: oldEmail,
@@ -41,16 +137,8 @@ func (s *emailSyncUserRepoStub) ReplaceEmailAuthIdentity(_ context.Context, user
 	return nil
 }
 
-func (s *emailSyncUserRepoStub) GetLatestUsedAtByUserIDs(context.Context, []int64) (map[int64]*time.Time, error) {
-	return map[int64]*time.Time{}, nil
-}
-
-func (s *emailSyncUserRepoStub) GetLatestUsedAtByUserID(context.Context, int64) (*time.Time, error) {
-	return nil, nil
-}
-
 func TestAdminService_CreateUser_EnsuresEmailAuthIdentity(t *testing.T) {
-	repo := &emailSyncUserRepoStub{userRepoStub: &userRepoStub{nextID: 55}}
+	repo := &emailSyncRepoStub{nextID: 55}
 	svc := &adminServiceImpl{userRepo: repo}
 
 	user, err := svc.CreateUser(context.Background(), &CreateUserInput{
@@ -67,15 +155,13 @@ func TestAdminService_CreateUser_EnsuresEmailAuthIdentity(t *testing.T) {
 }
 
 func TestAdminService_UpdateUser_ReplacesEmailAuthIdentity(t *testing.T) {
-	repo := &emailSyncUserRepoStub{
-		userRepoStub: &userRepoStub{
-			user: &User{
-				ID:          91,
-				Email:       "before@example.com",
-				Role:        RoleUser,
-				Status:      StatusActive,
-				Concurrency: 3,
-			},
+	repo := &emailSyncRepoStub{
+		user: &User{
+			ID:          91,
+			Email:       "before@example.com",
+			Role:        RoleUser,
+			Status:      StatusActive,
+			Concurrency: 3,
 		},
 	}
 	svc := &adminServiceImpl{userRepo: repo}
