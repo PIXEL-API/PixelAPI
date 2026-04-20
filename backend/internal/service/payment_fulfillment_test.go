@@ -198,7 +198,7 @@ func TestExpectedNotificationProviderKeyPrefersOrderInstanceProvider(t *testing.
 
 	assert.Equal(t,
 		payment.TypeEasyPay,
-		expectedNotificationProviderKey(registry, payment.TypeAlipay, payment.TypeEasyPay),
+		expectedNotificationProviderKey(registry, payment.TypeAlipay, "", payment.TypeEasyPay),
 	)
 }
 
@@ -213,7 +213,7 @@ func TestExpectedNotificationProviderKeyUsesRegistryMappingForLegacyOrders(t *te
 
 	assert.Equal(t,
 		payment.TypeEasyPay,
-		expectedNotificationProviderKey(registry, payment.TypeAlipay, ""),
+		expectedNotificationProviderKey(registry, payment.TypeAlipay, "", ""),
 	)
 }
 
@@ -222,6 +222,21 @@ func TestExpectedNotificationProviderKeyFallsBackToPaymentType(t *testing.T) {
 
 	assert.Equal(t,
 		payment.TypeWxpay,
-		expectedNotificationProviderKey(nil, payment.TypeWxpay, ""),
+		expectedNotificationProviderKey(nil, payment.TypeWxpay, "", ""),
+	)
+}
+
+func TestExpectedNotificationProviderKeyPrefersOrderSnapshotProviderKey(t *testing.T) {
+	t.Parallel()
+
+	registry := payment.NewRegistry()
+	registry.Register(paymentFulfillmentTestProvider{
+		key:            payment.TypeAlipay,
+		supportedTypes: []payment.PaymentType{payment.TypeAlipay},
+	})
+
+	assert.Equal(t,
+		payment.TypeEasyPay,
+		expectedNotificationProviderKey(registry, payment.TypeAlipay, payment.TypeEasyPay, ""),
 	)
 }
