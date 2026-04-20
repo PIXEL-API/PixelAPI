@@ -104,7 +104,7 @@ func (s *AuthService) RegisterOAuthEmailAccount(
 		return nil, nil, ErrServiceUnavailable
 	}
 
-	s.postAuthUserBootstrap(ctx, user, signupSource, true)
+	s.postAuthUserBootstrap(ctx, user, signupSource, false)
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 
 	if invitationRedeemCode != nil {

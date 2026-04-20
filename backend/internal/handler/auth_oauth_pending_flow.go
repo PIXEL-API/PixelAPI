@@ -253,6 +253,35 @@ func pendingSessionWantsInvitation(payload map[string]any) bool {
 	return strings.EqualFold(strings.TrimSpace(pendingSessionStringValue(payload, "error")), "invitation_required")
 }
 
+func pendingOAuthCompletionIncludesTokenPayload(payload map[string]any) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	for _, key := range []string{"access_token", "refresh_token"} {
+		if value := pendingSessionStringValue(payload, key); value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func ensurePendingOAuthCompleteRegistrationSession(session *dbent.PendingAuthSession) error {
+	if session == nil {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+	if strings.TrimSpace(session.Intent) != oauthIntentLogin {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+	if session.TargetUserID != nil && *session.TargetUserID > 0 {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+	payload, _ := readCompletionResponse(session.LocalFlowState)
+	if strings.EqualFold(strings.TrimSpace(pendingSessionStringValue(payload, "step")), "bind_login_required") {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+	return nil
+}
+
 func (r oauthAdoptionDecisionRequest) hasDecision() bool {
 	return r.AdoptDisplayName != nil || r.AdoptAvatar != nil
 }
@@ -1090,6 +1119,10 @@ func (h *AuthHandler) bindPendingOAuthLogin(c *gin.Context, provider string) {
 		response.ErrorFrom(c, infraerrors.Conflict("PENDING_AUTH_TARGET_USER_MISMATCH", "pending oauth session must be completed by the targeted user"))
 		return
 	}
+	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	decision, err := h.ensurePendingOAuthAdoptionDecision(c, session.ID, req.adoptionDecision())
 	if err != nil {
@@ -1192,6 +1225,10 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		c.JSON(http.StatusOK, buildPendingOAuthSessionStatusPayload(session))
 		return
 	}
+	if err := h.ensureBackendModeAllowsNewUserLogin(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	tokenPair, user, err := h.authService.RegisterOAuthEmailAccount(
 		c.Request.Context(),
@@ -1215,6 +1252,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		response.ErrorFrom(c, infraerrors.InternalServer("PENDING_AUTH_BIND_APPLY_FAILED", "failed to bind pending oauth identity").WithCause(err))
 		return
 	}
+	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 
 	if _, err := pendingSvc.ConsumeBrowserSession(c.Request.Context(), session.SessionToken, session.BrowserSessionKey); err != nil {
 		clearCookies()
@@ -1279,6 +1317,25 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		}
 	}
 	applySuggestedProfileToCompletionResponse(payload, session.UpstreamIdentityClaims)
+	if pendingOAuthCompletionIncludesTokenPayload(payload) {
+		if session.TargetUserID == nil || *session.TargetUserID <= 0 {
+			clearCookies()
+			response.ErrorFrom(c, infraerrors.InternalServer("PENDING_AUTH_COMPLETION_INVALID", "pending auth completion payload is invalid"))
+			return
+		}
+		user, err := h.userService.GetByID(c.Request.Context(), *session.TargetUserID)
+		if err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	}
 
 	if pendingSessionWantsInvitation(payload) {
 		if adoptionDecision.hasDecision() {
