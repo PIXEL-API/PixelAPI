@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 const routeState = vi.hoisted(() => ({
@@ -73,7 +73,11 @@ describe('PaymentResultView', () => {
     window.localStorage.clear()
   })
 
-  it('restores order id from a matching resume token and does not trust query success flags', async () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('renders a pending state instead of a failure state when the restored order is still pending', async () => {
     routeState.query = {
       resume_token: 'resume-42',
       order_id: '999',
@@ -107,8 +111,43 @@ describe('PaymentResultView', () => {
 
     expect(pollOrderStatus).toHaveBeenCalledWith(42)
     expect(verifyOrderPublic).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('payment.result.failed')
+    expect(wrapper.text()).toContain('payment.result.processing')
     expect(wrapper.text()).not.toContain('payment.result.success')
+    expect(wrapper.text()).not.toContain('payment.result.failed')
+  })
+
+  it('refreshes a pending resume-token result until the order becomes paid', async () => {
+    vi.useFakeTimers()
+    routeState.query = {
+      resume_token: 'resume-77',
+    }
+    resolveOrderPublicByResumeToken
+      .mockResolvedValueOnce({
+        data: orderFactory('PENDING'),
+      })
+      .mockResolvedValueOnce({
+        data: orderFactory('PAID'),
+      })
+
+    const wrapper = mount(PaymentResultView, {
+      global: {
+        stubs: {
+          OrderStatusBadge: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('payment.result.processing')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('payment.result.success')
+    expect(wrapper.text()).not.toContain('payment.result.failed')
   })
 
   it('does not fall back to public out_trade_no verification when resume_token recovery fails', async () => {
