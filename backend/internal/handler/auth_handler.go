@@ -296,6 +296,7 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 			c.Request.Context(),
 			h.entClient(),
 			h.authService,
+			h.userService,
 			pendingSession,
 			decision,
 			&user.ID,
