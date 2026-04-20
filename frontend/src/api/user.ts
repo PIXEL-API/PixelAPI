@@ -5,8 +5,8 @@
 
 import { apiClient } from './client'
 import {
+  resolveWeChatOAuthStartStrict,
   prepareOAuthBindAccessTokenCookie,
-  resolveWeChatOAuthStart,
   type WeChatOAuthPublicSettings,
 } from './auth'
 import type { User, ChangePasswordRequest, NotifyEmailEntry, UserAuthProvider } from '@/types'
@@ -107,7 +107,7 @@ function resolveWeChatOAuthBindingMode(
   settings?: WeChatOAuthPublicSettings | null
 ): 'open' | 'mp' | null {
   if (settings) {
-    return resolveWeChatOAuthStart(settings).mode
+    return resolveWeChatOAuthStartStrict(settings).mode
   }
   return resolveWeChatOAuthMode()
 }

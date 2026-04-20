@@ -352,6 +352,7 @@ export async function getPublicSettings(): Promise<PublicSettings> {
 export type WeChatOAuthMode = 'open' | 'mp'
 export type WeChatOAuthUnavailableReason =
   | 'not_configured'
+  | 'capability_unknown'
   | 'external_browser_required'
   | 'wechat_browser_required'
 
@@ -367,6 +368,16 @@ export type WeChatOAuthPublicSettings = {
   wechat_oauth_enabled?: boolean
   wechat_oauth_open_enabled?: boolean
   wechat_oauth_mp_enabled?: boolean
+}
+
+export function hasExplicitWeChatOAuthCapabilities(
+  settings: WeChatOAuthPublicSettings | null | undefined,
+): settings is WeChatOAuthPublicSettings & {
+  wechat_oauth_open_enabled: boolean
+  wechat_oauth_mp_enabled: boolean
+} {
+  return typeof settings?.wechat_oauth_open_enabled === 'boolean'
+    && typeof settings?.wechat_oauth_mp_enabled === 'boolean'
 }
 
 export function resolveWeChatOAuthStart(
@@ -402,6 +413,28 @@ export function resolveWeChatOAuthStart(
     return { mode: null, openEnabled, mpEnabled, isWeChatBrowser, unavailableReason: 'wechat_browser_required' }
   }
   return { mode: null, openEnabled, mpEnabled, isWeChatBrowser, unavailableReason: 'not_configured' }
+}
+
+export function resolveWeChatOAuthStartStrict(
+  settings: WeChatOAuthPublicSettings | null | undefined,
+  userAgent?: string,
+): ResolvedWeChatOAuthStart {
+  const normalizedUserAgent = (userAgent
+    ?? (typeof navigator !== 'undefined' ? navigator.userAgent : '')
+    ?? '').trim()
+  const isWeChatBrowser = /MicroMessenger/i.test(normalizedUserAgent)
+
+  if (!hasExplicitWeChatOAuthCapabilities(settings)) {
+    return {
+      mode: null,
+      openEnabled: false,
+      mpEnabled: false,
+      isWeChatBrowser,
+      unavailableReason: 'capability_unknown',
+    }
+  }
+
+  return resolveWeChatOAuthStart(settings, normalizedUserAgent)
 }
 
 /**

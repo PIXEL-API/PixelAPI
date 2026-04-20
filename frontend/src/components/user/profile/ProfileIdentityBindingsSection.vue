@@ -52,7 +52,11 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import { resolveWeChatOAuthStart, type WeChatOAuthPublicSettings } from '@/api/auth'
+import {
+  hasExplicitWeChatOAuthCapabilities,
+  resolveWeChatOAuthStartStrict,
+  type WeChatOAuthPublicSettings,
+} from '@/api/auth'
 import { startOAuthBinding } from '@/api/user'
 import { useAppStore } from '@/stores'
 import type { User, UserAuthBindingStatus, UserAuthProvider } from '@/types'
@@ -82,15 +86,11 @@ const route = useRoute()
 const appStore = useAppStore()
 
 const wechatOAuthSettings = computed<WeChatOAuthPublicSettings | null>(() => {
-  if (appStore.cachedPublicSettings) {
+  if (hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings)) {
     return appStore.cachedPublicSettings
   }
 
-  if (
-    typeof props.wechatEnabled === 'boolean' ||
-    typeof props.wechatOpenEnabled === 'boolean' ||
-    typeof props.wechatMpEnabled === 'boolean'
-  ) {
+  if (typeof props.wechatOpenEnabled === 'boolean' && typeof props.wechatMpEnabled === 'boolean') {
     return {
       wechat_oauth_enabled: props.wechatEnabled,
       wechat_oauth_open_enabled: props.wechatOpenEnabled,
@@ -101,7 +101,7 @@ const wechatOAuthSettings = computed<WeChatOAuthPublicSettings | null>(() => {
   return null
 })
 
-const resolvedWeChatBinding = computed(() => resolveWeChatOAuthStart(wechatOAuthSettings.value))
+const resolvedWeChatBinding = computed(() => resolveWeChatOAuthStartStrict(wechatOAuthSettings.value))
 
 function normalizeBindingStatus(binding: boolean | UserAuthBindingStatus | undefined): boolean | null {
   if (typeof binding === 'boolean') {
