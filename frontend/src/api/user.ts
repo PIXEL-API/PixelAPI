@@ -4,7 +4,11 @@
  */
 
 import { apiClient } from './client'
-import { prepareOAuthBindAccessTokenCookie } from './auth'
+import {
+  prepareOAuthBindAccessTokenCookie,
+  resolveWeChatOAuthStart,
+  type WeChatOAuthPublicSettings,
+} from './auth'
 import type { User, ChangePasswordRequest, NotifyEmailEntry, UserAuthProvider } from '@/types'
 
 /**
@@ -89,6 +93,7 @@ export type BindableOAuthProvider = Exclude<UserAuthProvider, 'email'>
 
 interface BuildOAuthBindingStartURLOptions {
   redirectTo?: string
+  wechatOAuthSettings?: WeChatOAuthPublicSettings | null
 }
 
 export function resolveWeChatOAuthMode(): 'open' | 'mp' {
@@ -98,10 +103,19 @@ export function resolveWeChatOAuthMode(): 'open' | 'mp' {
   return /MicroMessenger/i.test(navigator.userAgent) ? 'mp' : 'open'
 }
 
+function resolveWeChatOAuthBindingMode(
+  settings?: WeChatOAuthPublicSettings | null
+): 'open' | 'mp' | null {
+  if (settings) {
+    return resolveWeChatOAuthStart(settings).mode
+  }
+  return resolveWeChatOAuthMode()
+}
+
 export function buildOAuthBindingStartURL(
   provider: BindableOAuthProvider,
   options: BuildOAuthBindingStartURLOptions = {}
-): string {
+): string | null {
   const redirectTo = options.redirectTo?.trim() || '/profile'
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
   const normalized = apiBase.replace(/\/$/, '')
@@ -111,7 +125,11 @@ export function buildOAuthBindingStartURL(
   })
 
   if (provider === 'wechat') {
-    params.set('mode', resolveWeChatOAuthMode())
+    const mode = resolveWeChatOAuthBindingMode(options.wechatOAuthSettings)
+    if (!mode) {
+      return null
+    }
+    params.set('mode', mode)
   }
 
   return `${normalized}/auth/oauth/${provider}/start?${params.toString()}`
@@ -124,8 +142,12 @@ export function startOAuthBinding(
   if (typeof window === 'undefined') {
     return
   }
+  const startURL = buildOAuthBindingStartURL(provider, options)
+  if (!startURL) {
+    return
+  }
   prepareOAuthBindAccessTokenCookie()
-  window.location.href = buildOAuthBindingStartURL(provider, options)
+  window.location.href = startURL
 }
 
 export const userAPI = {

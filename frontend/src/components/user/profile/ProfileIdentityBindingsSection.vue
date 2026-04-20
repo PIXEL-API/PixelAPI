@@ -52,7 +52,9 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
+import { resolveWeChatOAuthStart, type WeChatOAuthPublicSettings } from '@/api/auth'
 import { startOAuthBinding } from '@/api/user'
+import { useAppStore } from '@/stores'
 import type { User, UserAuthBindingStatus, UserAuthProvider } from '@/types'
 
 const props = withDefaults(
@@ -62,17 +64,44 @@ const props = withDefaults(
     oidcEnabled?: boolean
     oidcProviderName?: string
     wechatEnabled?: boolean
+    wechatOpenEnabled?: boolean
+    wechatMpEnabled?: boolean
   }>(),
   {
     linuxdoEnabled: false,
     oidcEnabled: false,
     oidcProviderName: 'OIDC',
     wechatEnabled: false,
+    wechatOpenEnabled: undefined,
+    wechatMpEnabled: undefined,
   }
 )
 
 const { t } = useI18n()
 const route = useRoute()
+const appStore = useAppStore()
+
+const wechatOAuthSettings = computed<WeChatOAuthPublicSettings | null>(() => {
+  if (appStore.cachedPublicSettings) {
+    return appStore.cachedPublicSettings
+  }
+
+  if (
+    typeof props.wechatEnabled === 'boolean' ||
+    typeof props.wechatOpenEnabled === 'boolean' ||
+    typeof props.wechatMpEnabled === 'boolean'
+  ) {
+    return {
+      wechat_oauth_enabled: props.wechatEnabled,
+      wechat_oauth_open_enabled: props.wechatOpenEnabled,
+      wechat_oauth_mp_enabled: props.wechatMpEnabled,
+    }
+  }
+
+  return null
+})
+
+const resolvedWeChatBinding = computed(() => resolveWeChatOAuthStart(wechatOAuthSettings.value))
 
 function normalizeBindingStatus(binding: boolean | UserAuthBindingStatus | undefined): boolean | null {
   if (typeof binding === 'boolean') {
@@ -129,7 +158,7 @@ const providerItems = computed(() => [
     provider: 'wechat' as const,
     label: t('profile.authBindings.providers.wechat'),
     bound: getBindingStatus('wechat'),
-    canBind: props.wechatEnabled && !getBindingStatus('wechat'),
+    canBind: resolvedWeChatBinding.value.mode !== null && !getBindingStatus('wechat'),
   },
 ])
 
@@ -139,6 +168,7 @@ function startBinding(provider: UserAuthProvider): void {
   }
   startOAuthBinding(provider, {
     redirectTo: route.fullPath || '/profile',
+    wechatOAuthSettings: provider === 'wechat' ? wechatOAuthSettings.value : null,
   })
 }
 </script>
