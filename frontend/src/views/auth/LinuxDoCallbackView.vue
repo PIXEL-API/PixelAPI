@@ -113,37 +113,14 @@
             <p class="text-sm text-gray-700 dark:text-gray-300">
               Enter an email address to create your account and continue.
             </p>
-            <div class="space-y-3">
-              <input
-                v-model="pendingAccountEmail"
-                data-testid="linuxdo-create-account-email"
-                type="email"
-                class="input w-full"
-                placeholder="you@example.com"
-                :disabled="isSubmitting"
-                @keyup.enter="handleCreateAccount"
-              />
-              <button
-                data-testid="linuxdo-create-account-submit"
-                class="btn btn-primary w-full"
-                :disabled="isSubmitting || !pendingAccountEmail.trim()"
-                @click="handleCreateAccount"
-              >
-                {{ isSubmitting ? t('common.processing') : 'Create account' }}
-              </button>
-              <button
-                class="btn btn-secondary w-full"
-                :disabled="isSubmitting"
-                @click="switchToBindLoginMode"
-              >
-                I already have an account
-              </button>
-            </div>
-            <transition name="fade">
-              <p v-if="accountActionError" class="text-sm text-red-600 dark:text-red-400">
-                {{ accountActionError }}
-              </p>
-            </transition>
+            <PendingOAuthCreateAccountForm
+              test-id-prefix="linuxdo"
+              :initial-email="pendingAccountEmail"
+              :is-submitting="isSubmitting"
+              :error-message="accountActionError"
+              @submit="handleCreateAccount"
+              @switch-to-bind="switchToBindLoginMode"
+            />
           </template>
 
           <template v-else-if="needsBindLogin">
@@ -258,6 +235,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
+import PendingOAuthCreateAccountForm, {
+  type PendingOAuthCreateAccountPayload
+} from '@/components/auth/PendingOAuthCreateAccountForm.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { apiClient } from '@/api/client'
 import { useAuthStore, useAppStore } from '@/stores'
@@ -432,9 +412,9 @@ function applyTotpChallenge(completion: LinuxDoPendingActionResponse): boolean {
   return true
 }
 
-function switchToBindLoginMode() {
+function switchToBindLoginMode(nextEmail?: string) {
   pendingAccountAction.value = 'bind_login'
-  bindLoginEmail.value = bindLoginEmail.value.trim() || pendingAccountEmail.value.trim()
+  bindLoginEmail.value = bindLoginEmail.value.trim() || nextEmail?.trim() || pendingAccountEmail.value.trim()
   bindLoginPassword.value = ''
   accountActionError.value = ''
   canReturnToCreateAccount.value = true
@@ -533,15 +513,16 @@ async function handleContinueLogin() {
   }
 }
 
-async function handleCreateAccount() {
+async function handleCreateAccount(payload: PendingOAuthCreateAccountPayload) {
   accountActionError.value = ''
-  const email = pendingAccountEmail.value.trim()
-  if (!email) return
+  if (!payload.email || !payload.password) return
 
   isSubmitting.value = true
   try {
     const { data } = await apiClient.post<LinuxDoPendingActionResponse>('/auth/oauth/pending/create-account', {
-      email,
+      email: payload.email,
+      password: payload.password,
+      verify_code: payload.verifyCode || undefined,
       ...serializeAdoptionDecision(currentAdoptionDecision())
     })
     await finalizePendingAccountResponse(data)
