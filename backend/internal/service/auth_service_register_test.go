@@ -584,6 +584,29 @@ func TestAuthService_Register_GrantOnSignupFalseFallsBackToGlobalDefaults(t *tes
 	require.Equal(t, 5, assigner.calls[0].ValidityDays)
 }
 
+func TestAuthService_Register_GrantOnSignupMergesSourceOverridesWithGlobalDefaults(t *testing.T) {
+	repo := &userRepoStub{nextID: 54}
+	assigner := &defaultSubscriptionAssignerStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyDefaultSubscriptions:                `[{"group_id":31,"validity_days":5}]`,
+		SettingKeyAuthSourceDefaultEmailBalance:       "9.5",
+		SettingKeyAuthSourceDefaultEmailConcurrency:   "5",
+		SettingKeyAuthSourceDefaultEmailSubscriptions: `[]`,
+		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "true",
+	}, nil)
+	service.defaultSubAssigner = assigner
+
+	_, user, err := service.Register(context.Background(), "email-merged@test.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, 9.5, user.Balance)
+	require.Equal(t, 2, user.Concurrency)
+	require.Len(t, assigner.calls, 1)
+	require.Equal(t, int64(31), assigner.calls[0].GroupID)
+	require.Equal(t, 5, assigner.calls[0].ValidityDays)
+}
+
 func TestAuthService_LoginOrRegisterOAuthWithTokenPair_UsesLinuxDoAuthSourceDefaultsOnSignup(t *testing.T) {
 	repo := &userRepoStub{nextID: 61}
 	assigner := &defaultSubscriptionAssignerStub{}

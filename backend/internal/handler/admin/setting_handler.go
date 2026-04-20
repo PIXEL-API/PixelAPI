@@ -1011,10 +1011,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}(),
 	}
 
-	if err := h.settingService.UpdateSettings(c.Request.Context(), settings); err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
 	authSourceDefaults := &service.AuthSourceDefaultSettings{
 		Email: service.ProviderDefaultGrantSettings{
 			Balance:          float64ValueOrDefault(req.AuthSourceDefaultEmailBalance, previousAuthSourceDefaults.Email.Balance),
@@ -1046,7 +1042,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		},
 		ForceEmailOnThirdPartySignup: boolValueOrDefault(req.ForceEmailOnThirdPartySignup, previousAuthSourceDefaults.ForceEmailOnThirdPartySignup),
 	}
-	if err := h.settingService.UpdateAuthSourceDefaultSettings(c.Request.Context(), authSourceDefaults); err != nil {
+	if err := h.settingService.UpdateSettingsWithAuthSourceDefaults(c.Request.Context(), settings, authSourceDefaults); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -1086,7 +1082,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 
-	h.auditSettingsUpdate(c, previousSettings, settings, req)
+	h.auditSettingsUpdate(c, previousSettings, settings, previousAuthSourceDefaults, authSourceDefaults, req)
 
 	// 重新获取设置返回
 	updatedSettings, err := h.settingService.GetAllSettings(c.Request.Context())
@@ -1245,12 +1241,12 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentCancelRateLimitUnit != nil || req.PaymentCancelRateLimitMode != nil
 }
 
-func (h *SettingHandler) auditSettingsUpdate(c *gin.Context, before *service.SystemSettings, after *service.SystemSettings, req UpdateSettingsRequest) {
+func (h *SettingHandler) auditSettingsUpdate(c *gin.Context, before *service.SystemSettings, after *service.SystemSettings, beforeAuthSourceDefaults *service.AuthSourceDefaultSettings, afterAuthSourceDefaults *service.AuthSourceDefaultSettings, req UpdateSettingsRequest) {
 	if before == nil || after == nil {
 		return
 	}
 
-	changed := diffSettings(before, after, req)
+	changed := diffSettings(before, after, beforeAuthSourceDefaults, afterAuthSourceDefaults, req)
 	if len(changed) == 0 {
 		return
 	}
@@ -1265,7 +1261,7 @@ func (h *SettingHandler) auditSettingsUpdate(c *gin.Context, before *service.Sys
 	)
 }
 
-func diffSettings(before *service.SystemSettings, after *service.SystemSettings, req UpdateSettingsRequest) []string {
+func diffSettings(before *service.SystemSettings, after *service.SystemSettings, beforeAuthSourceDefaults *service.AuthSourceDefaultSettings, afterAuthSourceDefaults *service.AuthSourceDefaultSettings, req UpdateSettingsRequest) []string {
 	changed := make([]string, 0, 20)
 	if before.RegistrationEnabled != after.RegistrationEnabled {
 		changed = append(changed, "registration_enabled")
@@ -1534,6 +1530,50 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if !equalNotifyEmailEntries(before.AccountQuotaNotifyEmails, after.AccountQuotaNotifyEmails) {
 		changed = append(changed, "account_quota_notify_emails")
+	}
+	changed = appendAuthSourceDefaultChanges(changed, beforeAuthSourceDefaults, afterAuthSourceDefaults)
+	return changed
+}
+
+func appendAuthSourceDefaultChanges(changed []string, before *service.AuthSourceDefaultSettings, after *service.AuthSourceDefaultSettings) []string {
+	if before == nil {
+		before = &service.AuthSourceDefaultSettings{}
+	}
+	if after == nil {
+		after = &service.AuthSourceDefaultSettings{}
+	}
+
+	type providerDefaultGrantField struct {
+		name   string
+		before service.ProviderDefaultGrantSettings
+		after  service.ProviderDefaultGrantSettings
+	}
+
+	fields := []providerDefaultGrantField{
+		{name: "email", before: before.Email, after: after.Email},
+		{name: "linuxdo", before: before.LinuxDo, after: after.LinuxDo},
+		{name: "oidc", before: before.OIDC, after: after.OIDC},
+		{name: "wechat", before: before.WeChat, after: after.WeChat},
+	}
+	for _, field := range fields {
+		if field.before.Balance != field.after.Balance {
+			changed = append(changed, "auth_source_default_"+field.name+"_balance")
+		}
+		if field.before.Concurrency != field.after.Concurrency {
+			changed = append(changed, "auth_source_default_"+field.name+"_concurrency")
+		}
+		if !equalDefaultSubscriptions(field.before.Subscriptions, field.after.Subscriptions) {
+			changed = append(changed, "auth_source_default_"+field.name+"_subscriptions")
+		}
+		if field.before.GrantOnSignup != field.after.GrantOnSignup {
+			changed = append(changed, "auth_source_default_"+field.name+"_grant_on_signup")
+		}
+		if field.before.GrantOnFirstBind != field.after.GrantOnFirstBind {
+			changed = append(changed, "auth_source_default_"+field.name+"_grant_on_first_bind")
+		}
+	}
+	if before.ForceEmailOnThirdPartySignup != after.ForceEmailOnThirdPartySignup {
+		changed = append(changed, "force_email_on_third_party_signup")
 	}
 	return changed
 }
