@@ -3,9 +3,14 @@
 package provider
 
 import (
+	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/payment"
+	"github.com/smartwalle/alipay/v3"
 )
 
 func TestIsTradeNotExist(t *testing.T) {
@@ -128,5 +133,113 @@ func TestNewAlipay(t *testing.T) {
 				t.Errorf("instanceID = %q, want %q", got.instanceID, "test-instance")
 			}
 		})
+	}
+}
+
+func TestCreateTradeUsesPreCreateForDesktop(t *testing.T) {
+	origPreCreate := alipayTradePreCreate
+	origPagePay := alipayTradePagePay
+	origWapPay := alipayTradeWapPay
+	t.Cleanup(func() {
+		alipayTradePreCreate = origPreCreate
+		alipayTradePagePay = origPagePay
+		alipayTradeWapPay = origWapPay
+	})
+
+	preCreateCalls := 0
+	pagePayCalls := 0
+	wapPayCalls := 0
+	alipayTradePreCreate = func(ctx context.Context, client *alipay.Client, param alipay.TradePreCreate) (*alipay.TradePreCreateRsp, error) {
+		preCreateCalls++
+		if param.OutTradeNo != "sub2_100" {
+			t.Fatalf("out_trade_no = %q, want %q", param.OutTradeNo, "sub2_100")
+		}
+		if param.NotifyURL != "https://merchant.example.com/api/v1/payment/webhook/alipay" {
+			t.Fatalf("notify_url = %q", param.NotifyURL)
+		}
+		return &alipay.TradePreCreateRsp{
+			OutTradeNo: "sub2_100",
+			QRCode:     "https://qr.alipay.example.com/precreate-token",
+		}, nil
+	}
+	alipayTradePagePay = func(client *alipay.Client, param alipay.TradePagePay) (*url.URL, error) {
+		pagePayCalls++
+		return url.Parse("https://openapi.alipay.com/gateway.do?page-pay")
+	}
+	alipayTradeWapPay = func(client *alipay.Client, param alipay.TradeWapPay) (*url.URL, error) {
+		wapPayCalls++
+		return url.Parse("https://openapi.alipay.com/gateway.do?wap-pay")
+	}
+
+	provider := &Alipay{}
+	resp, err := provider.createTrade(context.Background(), &alipay.Client{}, payment.CreatePaymentRequest{
+		OrderID: "sub2_100",
+		Amount:  "88.00",
+		Subject: "Balance recharge",
+	}, "https://merchant.example.com/api/v1/payment/webhook/alipay", "https://merchant.example.com/payment/result", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if preCreateCalls != 1 {
+		t.Fatalf("precreate calls = %d, want 1", preCreateCalls)
+	}
+	if pagePayCalls != 0 {
+		t.Fatalf("page pay calls = %d, want 0", pagePayCalls)
+	}
+	if wapPayCalls != 0 {
+		t.Fatalf("wap pay calls = %d, want 0", wapPayCalls)
+	}
+	if resp.QRCode != "https://qr.alipay.example.com/precreate-token" {
+		t.Fatalf("qr_code = %q", resp.QRCode)
+	}
+	if resp.PayURL != "" {
+		t.Fatalf("pay_url = %q, want empty", resp.PayURL)
+	}
+}
+
+func TestCreateTradeUsesWapPayForMobile(t *testing.T) {
+	origPreCreate := alipayTradePreCreate
+	origWapPay := alipayTradeWapPay
+	t.Cleanup(func() {
+		alipayTradePreCreate = origPreCreate
+		alipayTradeWapPay = origWapPay
+	})
+
+	preCreateCalls := 0
+	alipayTradePreCreate = func(ctx context.Context, client *alipay.Client, param alipay.TradePreCreate) (*alipay.TradePreCreateRsp, error) {
+		preCreateCalls++
+		return &alipay.TradePreCreateRsp{}, nil
+	}
+
+	wapPayCalls := 0
+	alipayTradeWapPay = func(client *alipay.Client, param alipay.TradeWapPay) (*url.URL, error) {
+		wapPayCalls++
+		if param.ReturnURL != "https://merchant.example.com/payment/result" {
+			t.Fatalf("return_url = %q", param.ReturnURL)
+		}
+		return url.Parse("https://openapi.alipay.com/gateway.do?wap-pay")
+	}
+
+	provider := &Alipay{}
+	resp, err := provider.createTrade(context.Background(), &alipay.Client{}, payment.CreatePaymentRequest{
+		OrderID:  "sub2_101",
+		Amount:   "18.00",
+		Subject:  "Balance recharge",
+		IsMobile: true,
+	}, "https://merchant.example.com/api/v1/payment/webhook/alipay", "https://merchant.example.com/payment/result", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if preCreateCalls != 0 {
+		t.Fatalf("precreate calls = %d, want 0", preCreateCalls)
+	}
+	if wapPayCalls != 1 {
+		t.Fatalf("wap pay calls = %d, want 1", wapPayCalls)
+	}
+	if resp.PayURL == "" {
+		t.Fatal("expected pay_url for mobile wap pay")
+	}
+	if resp.QRCode != "" {
+		t.Fatalf("qr_code = %q, want empty", resp.QRCode)
 	}
 }
