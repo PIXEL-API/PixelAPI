@@ -13,6 +13,7 @@ vi.mock('@/api/client', () => ({
 }))
 
 import {
+  bindUserAuthIdentity,
   getAuthIdentityMigrationReportSummary,
   listAuthIdentityMigrationReports,
   resolveAuthIdentityMigrationReport,
@@ -78,6 +79,33 @@ describe('admin users auth identity migration reports API', () => {
 
     expect(post).toHaveBeenCalledWith('/admin/users/auth-identity-migration-reports/7/resolve', {
       resolution_note: 'resolved by admin',
+    })
+    expect(result).toBe(response)
+  })
+
+  it('binds a canonical auth identity to a user for remediation', async () => {
+    const response = {
+      identity_id: 11,
+      provider_type: 'oidc',
+      provider_key: 'https://issuer.example',
+      provider_subject: 'subject-123',
+    }
+    post.mockResolvedValue({ data: response })
+
+    const result = await bindUserAuthIdentity(42, {
+      provider_type: 'oidc',
+      provider_key: 'https://issuer.example',
+      provider_subject: 'subject-123',
+      issuer: 'https://issuer.example',
+      metadata: { source: 'migration-report' },
+    })
+
+    expect(post).toHaveBeenCalledWith('/admin/users/42/auth-identities', {
+      provider_type: 'oidc',
+      provider_key: 'https://issuer.example',
+      provider_subject: 'subject-123',
+      issuer: 'https://issuer.example',
+      metadata: { source: 'migration-report' },
     })
     expect(result).toBe(response)
   })
