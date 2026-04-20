@@ -1,4 +1,4 @@
-import type { CreateOrderResult, MethodLimit, OrderType } from '@/types/payment'
+import type { CreateOrderRequest, CreateOrderResult, MethodLimit, OrderType } from '@/types/payment'
 
 export const PAYMENT_RECOVERY_STORAGE_KEY = 'payment.recovery.current'
 
@@ -49,6 +49,15 @@ export interface PaymentLaunchDecision {
   stripeMethod?: StripeVisibleMethod
 }
 
+export interface BuildCreateOrderPayloadInput {
+  amount: number
+  paymentType: string
+  orderType: OrderType
+  planId?: number
+  origin?: string
+  isWechatBrowser: boolean
+}
+
 type CreateOrderFlowResult = CreateOrderResult & {
   resume_token?: string
 }
@@ -75,6 +84,28 @@ export function getVisibleMethods(methods: Record<string, MethodLimit>): Record<
   })
 
   return visible
+}
+
+export function buildCreateOrderPayload(input: BuildCreateOrderPayloadInput): CreateOrderRequest {
+  const visibleMethod = normalizeVisibleMethod(input.paymentType) || input.paymentType.trim()
+  const normalizedOrigin = (input.origin || '').trim().replace(/\/+$/, '')
+  const payload: CreateOrderRequest = {
+    amount: input.amount,
+    payment_type: visibleMethod,
+    order_type: input.orderType,
+    payment_source: visibleMethod === 'wxpay' && input.isWechatBrowser
+      ? 'wechat_in_app_resume'
+      : 'hosted_redirect',
+  }
+
+  if (input.planId) {
+    payload.plan_id = input.planId
+  }
+  if (normalizedOrigin) {
+    payload.return_url = `${normalizedOrigin}/payment/result`
+  }
+
+  return payload
 }
 
 export function decidePaymentLaunch(

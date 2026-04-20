@@ -4,6 +4,8 @@ package service
 
 import (
 	"context"
+	"net/url"
+	"strconv"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
@@ -71,6 +73,48 @@ func TestCanonicalizeReturnURLRejectsRelativeURL(t *testing.T) {
 
 	if _, err := CanonicalizeReturnURL("/payment/result"); err == nil {
 		t.Fatal("CanonicalizeReturnURL should reject relative URLs")
+	}
+}
+
+func TestBuildPaymentReturnURL(t *testing.T) {
+	t.Parallel()
+
+	got, err := buildPaymentReturnURL("https://example.com/payment/result?from=checkout#fragment", 42, "resume-token")
+	if err != nil {
+		t.Fatalf("buildPaymentReturnURL returned error: %v", err)
+	}
+
+	parsed, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("url.Parse returned error: %v", err)
+	}
+	if parsed.Fragment != "" {
+		t.Fatalf("buildPaymentReturnURL should strip fragments, got %q", parsed.Fragment)
+	}
+	query := parsed.Query()
+	if query.Get("from") != "checkout" {
+		t.Fatalf("expected original query to be preserved, got %q", query.Get("from"))
+	}
+	if query.Get("order_id") != strconv.FormatInt(42, 10) {
+		t.Fatalf("order_id = %q", query.Get("order_id"))
+	}
+	if query.Get("resume_token") != "resume-token" {
+		t.Fatalf("resume_token = %q", query.Get("resume_token"))
+	}
+	if query.Get("status") != "success" {
+		t.Fatalf("status = %q", query.Get("status"))
+	}
+}
+
+func TestBuildPaymentReturnURLEmptyBase(t *testing.T) {
+	t.Parallel()
+
+	got, err := buildPaymentReturnURL("", 42, "resume-token")
+	if err != nil {
+		t.Fatalf("buildPaymentReturnURL returned error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("buildPaymentReturnURL = %q, want empty string", got)
 	}
 }
 

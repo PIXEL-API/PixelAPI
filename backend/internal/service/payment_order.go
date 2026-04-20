@@ -22,6 +22,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if req.OrderType == "" {
 		req.OrderType = payment.OrderTypeBalance
 	}
+	if normalized := NormalizeVisibleMethod(req.PaymentType); normalized != "" {
+		req.PaymentType = normalized
+	}
 	cfg, err := s.configService.GetPaymentConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get payment config: %w", err)
@@ -212,7 +215,38 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	}
 	subject := s.buildPaymentSubject(plan, limitAmount, cfg)
 	outTradeNo := order.OutTradeNo
-	pr, err := prov.CreatePayment(ctx, payment.CreatePaymentRequest{OrderID: outTradeNo, Amount: payAmountStr, PaymentType: req.PaymentType, Subject: subject, ClientIP: req.ClientIP, IsMobile: req.IsMobile, InstanceSubMethods: sel.SupportedTypes})
+	canonicalReturnURL, err := CanonicalizeReturnURL(req.ReturnURL)
+	if err != nil {
+		return nil, err
+	}
+	resumeToken := ""
+	if resume := s.paymentResume(); resume != nil {
+		resumeToken, err = resume.CreateToken(ResumeTokenClaims{
+			OrderID:            order.ID,
+			UserID:             order.UserID,
+			ProviderInstanceID: sel.InstanceID,
+			ProviderKey:        sel.ProviderKey,
+			PaymentType:        req.PaymentType,
+			CanonicalReturnURL: canonicalReturnURL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create payment resume token: %w", err)
+		}
+	}
+	providerReturnURL, err := buildPaymentReturnURL(canonicalReturnURL, order.ID, resumeToken)
+	if err != nil {
+		return nil, err
+	}
+	pr, err := prov.CreatePayment(ctx, payment.CreatePaymentRequest{
+		OrderID:            outTradeNo,
+		Amount:             payAmountStr,
+		PaymentType:        req.PaymentType,
+		Subject:            subject,
+		ReturnURL:          providerReturnURL,
+		ClientIP:           req.ClientIP,
+		IsMobile:           req.IsMobile,
+		InstanceSubMethods: sel.SupportedTypes,
+	})
 	if err != nil {
 		slog.Error("[PaymentService] CreatePayment failed", "provider", sel.ProviderKey, "instance", sel.InstanceID, "error", err)
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", fmt.Sprintf("payment gateway error: %s", err.Error()))
@@ -227,8 +261,22 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		"payAmount":      order.PayAmount,
 		"paymentType":    req.PaymentType,
 		"orderType":      req.OrderType,
+		"paymentSource":  NormalizePaymentSource(req.PaymentSource),
 	})
-	return &CreateOrderResponse{OrderID: order.ID, Amount: order.Amount, PayAmount: payAmount, FeeRate: order.FeeRate, Status: OrderStatusPending, PaymentType: req.PaymentType, PayURL: pr.PayURL, QRCode: pr.QRCode, ClientSecret: pr.ClientSecret, ExpiresAt: order.ExpiresAt, PaymentMode: sel.PaymentMode}, nil
+	return &CreateOrderResponse{
+		OrderID:      order.ID,
+		Amount:       order.Amount,
+		PayAmount:    payAmount,
+		FeeRate:      order.FeeRate,
+		Status:       OrderStatusPending,
+		PaymentType:  req.PaymentType,
+		PayURL:       pr.PayURL,
+		QRCode:       pr.QRCode,
+		ClientSecret: pr.ClientSecret,
+		ExpiresAt:    order.ExpiresAt,
+		PaymentMode:  sel.PaymentMode,
+		ResumeToken:  resumeToken,
+	}, nil
 }
 
 func (s *PaymentService) buildPaymentSubject(plan *dbent.SubscriptionPlan, limitAmount float64, cfg *PaymentConfig) string {
