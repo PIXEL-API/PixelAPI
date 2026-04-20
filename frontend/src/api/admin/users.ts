@@ -6,6 +6,30 @@
 import { apiClient } from '../client'
 import type { AdminUser, UpdateUserRequest, PaginatedResponse, ApiKey } from '@/types'
 
+export interface AuthIdentityMigrationReport {
+  id: number
+  report_type: string
+  report_key: string
+  details: Record<string, unknown>
+  created_at: string
+  resolved_at?: string | null
+  resolved_by_user_id?: number | null
+  resolution_note?: string
+}
+
+export interface AuthIdentityMigrationReportSummary {
+  total: number
+  open_total: number
+  resolved_total: number
+  by_type: Record<string, number>
+}
+
+export interface ListAuthIdentityMigrationReportsParams {
+  page?: number
+  pageSize?: number
+  reportType?: string
+}
+
 /**
  * List all users with pagination
  * @param page - Page number (default: 1)
@@ -248,6 +272,42 @@ export async function replaceGroup(
   return data
 }
 
+export async function getAuthIdentityMigrationReportSummary(): Promise<AuthIdentityMigrationReportSummary> {
+  const { data } = await apiClient.get<AuthIdentityMigrationReportSummary>(
+    '/admin/users/auth-identity-migration-reports/summary'
+  )
+  return data
+}
+
+export async function listAuthIdentityMigrationReports(
+  params: ListAuthIdentityMigrationReportsParams = {}
+): Promise<PaginatedResponse<AuthIdentityMigrationReport>> {
+  const { data } = await apiClient.get<PaginatedResponse<AuthIdentityMigrationReport>>(
+    '/admin/users/auth-identity-migration-reports',
+    {
+      params: {
+        page: params.page ?? 1,
+        page_size: params.pageSize ?? 20,
+        report_type: params.reportType ?? ''
+      }
+    }
+  )
+  return data
+}
+
+export async function resolveAuthIdentityMigrationReport(
+  id: number,
+  resolutionNote: string
+): Promise<AuthIdentityMigrationReport> {
+  const { data } = await apiClient.post<AuthIdentityMigrationReport>(
+    `/admin/users/auth-identity-migration-reports/${id}/resolve`,
+    {
+      resolution_note: resolutionNote
+    }
+  )
+  return data
+}
+
 export const usersAPI = {
   list,
   getById,
@@ -260,7 +320,10 @@ export const usersAPI = {
   getUserApiKeys,
   getUserUsageStats,
   getUserBalanceHistory,
-  replaceGroup
+  replaceGroup,
+  getAuthIdentityMigrationReportSummary,
+  listAuthIdentityMigrationReports,
+  resolveAuthIdentityMigrationReport
 }
 
 export default usersAPI
