@@ -217,8 +217,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorRepository := repository.NewChannelMonitorRepository(client, sqlDB)
 	channelMonitorService := service.ProvideChannelMonitorService(channelMonitorRepository, secretEncryptor)
 	channelMonitorHandler := admin.NewChannelMonitorHandler(channelMonitorService)
-	channelMonitorUserHandler := handler.NewChannelMonitorUserHandler(channelMonitorService)
-	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService)
+	channelMonitorUserHandler := handler.NewChannelMonitorUserHandler(channelMonitorService, settingService)
+	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService)
 	_ = channelMonitorRunner
 	registry := payment.ProvideRegistry()
 	encryptionKey, err := payment.ProvideEncryptionKey(configConfig)
