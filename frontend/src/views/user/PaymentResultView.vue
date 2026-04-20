@@ -150,7 +150,17 @@ onMounted(async () => {
     }
   }
 
-  if (orderId) {
+  if (!order.value && !orderId && resumeToken) {
+    try {
+      const result = await paymentAPI.resolveOrderPublicByResumeToken(resumeToken)
+      order.value = result.data
+      orderId = result.data.id
+    } catch (_err: unknown) {
+      // Resume token recovery failed, continue to legacy fallback paths.
+    }
+  }
+
+  if (!order.value && orderId) {
     try {
       order.value = await paymentStore.pollOrderStatus(orderId)
     } catch (_err: unknown) {

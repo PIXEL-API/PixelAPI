@@ -72,6 +72,11 @@ export const paymentAPI = {
     return apiClient.post<PaymentOrder>('/payment/public/orders/verify', { out_trade_no: outTradeNo })
   },
 
+  /** Resolve an order from a signed resume token without auth */
+  resolveOrderPublicByResumeToken(resumeToken: string) {
+    return apiClient.post<PaymentOrder>('/payment/public/orders/resolve', { resume_token: resumeToken })
+  },
+
   /** Request a refund for a completed order */
   requestRefund(id: number, data: { reason: string }) {
     return apiClient.post(`/payment/orders/${id}/refund-request`, data)
