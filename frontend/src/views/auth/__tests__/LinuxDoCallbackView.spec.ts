@@ -7,8 +7,11 @@ const replace = vi.fn()
 const showSuccess = vi.fn()
 const showError = vi.fn()
 const setToken = vi.fn()
+const setPendingAuthSession = vi.fn()
+const clearPendingAuthSession = vi.fn()
 const exchangePendingOAuthCompletion = vi.fn()
 const completeLinuxDoOAuthRegistration = vi.fn()
+const getPublicSettings = vi.fn()
 const login2FA = vi.fn()
 const apiClientPost = vi.fn()
 const sendVerifyCode = vi.fn()
@@ -34,7 +37,9 @@ vi.mock('vue-i18n', async () => {
 
 vi.mock('@/stores', () => ({
   useAuthStore: () => ({
-    setToken
+    setToken,
+    setPendingAuthSession,
+    clearPendingAuthSession
   }),
   useAppStore: () => ({
     showSuccess,
@@ -54,6 +59,7 @@ vi.mock('@/api/auth', async () => {
     ...actual,
     exchangePendingOAuthCompletion: (...args: any[]) => exchangePendingOAuthCompletion(...args),
     completeLinuxDoOAuthRegistration: (...args: any[]) => completeLinuxDoOAuthRegistration(...args),
+    getPublicSettings: (...args: any[]) => getPublicSettings(...args),
     login2FA: (...args: any[]) => login2FA(...args),
     sendVerifyCode: (...args: any[]) => sendVerifyCode(...args)
   }
@@ -65,11 +71,18 @@ describe('LinuxDoCallbackView', () => {
     showSuccess.mockReset()
     showError.mockReset()
     setToken.mockReset()
+    setPendingAuthSession.mockReset()
+    clearPendingAuthSession.mockReset()
     exchangePendingOAuthCompletion.mockReset()
     completeLinuxDoOAuthRegistration.mockReset()
+    getPublicSettings.mockReset()
     login2FA.mockReset()
     apiClientPost.mockReset()
     sendVerifyCode.mockReset()
+    getPublicSettings.mockResolvedValue({
+      turnstile_enabled: false,
+      turnstile_site_key: ''
+    })
   })
 
   it('does not send adoption decisions during the initial exchange', async () => {
@@ -206,6 +219,72 @@ describe('LinuxDoCallbackView', () => {
     expect(setToken).not.toHaveBeenCalled()
     expect(showSuccess).toHaveBeenCalledWith('profile.authBindings.bindSuccess')
     expect(replace).toHaveBeenCalledWith('/profile/security')
+  })
+
+  it('keeps rendering pending bind-login UI when adoption confirmation leads to another pending step', async () => {
+    exchangePendingOAuthCompletion
+      .mockResolvedValueOnce({
+        redirect: '/profile/security',
+        adoption_required: true,
+        suggested_display_name: 'LinuxDo Nick',
+        suggested_avatar_url: 'https://cdn.example/linuxdo.png'
+      })
+      .mockResolvedValueOnce({
+        step: 'bind_login_required',
+        redirect: '/profile/security',
+        email: 'existing@example.com',
+        adoption_required: true,
+        suggested_display_name: 'LinuxDo Nick',
+        suggested_avatar_url: 'https://cdn.example/linuxdo.png'
+      })
+
+    const wrapper = mount(LinuxDoCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+    await wrapper.findAll('button')[0].trigger('click')
+    await flushPromises()
+
+    expect(showSuccess).not.toHaveBeenCalled()
+    expect(replace).not.toHaveBeenCalled()
+    expect((wrapper.get('[data-testid="linuxdo-bind-login-email"]').element as HTMLInputElement).value).toBe(
+      'existing@example.com'
+    )
+  })
+
+  it('persists a pending auth session when the oauth flow still needs account creation', async () => {
+    exchangePendingOAuthCompletion.mockResolvedValue({
+      error: 'email_required',
+      redirect: '/welcome'
+    })
+
+    mount(LinuxDoCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(setPendingAuthSession).toHaveBeenCalledWith({
+      token: '',
+      token_field: 'pending_oauth_token',
+      provider: 'linuxdo',
+      redirect: '/welcome'
+    })
   })
 
   it('renders adoption choices for invitation flow and submits the selected values', async () => {

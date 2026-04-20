@@ -296,6 +296,19 @@ type LinuxDoPendingActionResponse = PendingOAuthExchangeResponse & {
   resolved_email?: string
 }
 
+function persistPendingAuthSession(redirect?: string) {
+  authStore.setPendingAuthSession({
+    token: '',
+    token_field: 'pending_oauth_token',
+    provider: 'linuxdo',
+    redirect: sanitizeRedirectPath(redirect || redirectTo.value)
+  })
+}
+
+function clearPendingAuthSession() {
+  authStore.clearPendingAuthSession()
+}
+
 function parseFragmentParams(): URLSearchParams {
   const raw = typeof window !== 'undefined' ? window.location.hash : ''
   const hash = raw.startsWith('#') ? raw.slice(1) : raw
@@ -434,6 +447,7 @@ function getRequestErrorMessage(error: unknown, fallback: string): string {
 async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redirect: string) {
   if (getOAuthCompletionKind(completion) === 'bind') {
     const bindRedirect = sanitizeRedirectPath(completion.redirect || '/profile')
+    clearPendingAuthSession()
     appStore.showSuccess(bindSuccessMessage)
     await router.replace(bindRedirect)
     return
@@ -451,16 +465,19 @@ async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redi
 
 async function finalizePendingAccountResponse(completion: LinuxDoPendingActionResponse) {
   applyAdoptionSuggestionState(completion)
+  const redirect = sanitizeRedirectPath(completion.redirect || redirectTo.value)
 
   if (completion.error === 'invitation_required') {
     pendingAccountAction.value = 'none'
     needsInvitation.value = true
     needsAdoptionConfirmation.value = false
     isProcessing.value = false
+    persistPendingAuthSession(redirect)
     return
   }
 
   if (applyTotpChallenge(completion)) {
+    persistPendingAuthSession(redirect)
     return
   }
 
@@ -469,10 +486,10 @@ async function finalizePendingAccountResponse(completion: LinuxDoPendingActionRe
     needsInvitation.value = false
     needsAdoptionConfirmation.value = false
     isProcessing.value = false
+    persistPendingAuthSession(redirect)
     return
   }
 
-  const redirect = sanitizeRedirectPath(completion.redirect || redirectTo.value)
   await finalizeCompletion(completion, redirect)
 }
 
@@ -502,8 +519,8 @@ async function handleSubmitInvitation() {
 async function handleContinueLogin() {
   isSubmitting.value = true
   try {
-    const completion = await exchangePendingOAuthCompletion(currentAdoptionDecision())
-    await finalizeCompletion(completion, redirectTo.value)
+    const completion = await exchangePendingOAuthCompletion(currentAdoptionDecision()) as LinuxDoPendingActionResponse
+    await finalizePendingAccountResponse(completion)
   } catch (e: unknown) {
     errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
     appStore.showError(errorMessage.value)
@@ -598,27 +615,32 @@ onMounted(async () => {
     if (completion.error === 'invitation_required') {
       needsInvitation.value = true
       isProcessing.value = false
+      persistPendingAuthSession(redirect)
       return
     }
 
     if (applyTotpChallenge(completion as LinuxDoPendingActionResponse)) {
+      persistPendingAuthSession(redirect)
       return
     }
 
     applyPendingAccountAction(completion as LinuxDoPendingActionResponse)
     if (pendingAccountAction.value !== 'none') {
       isProcessing.value = false
+      persistPendingAuthSession(redirect)
       return
     }
 
     if (adoptionRequired.value && hasSuggestedProfile(completion)) {
       needsAdoptionConfirmation.value = true
       isProcessing.value = false
+      persistPendingAuthSession(redirect)
       return
     }
 
     await finalizeCompletion(completion, redirect)
   } catch (e: unknown) {
+    clearPendingAuthSession()
     errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
     appStore.showError(errorMessage.value)
     isProcessing.value = false
