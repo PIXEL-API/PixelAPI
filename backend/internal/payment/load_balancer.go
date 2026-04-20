@@ -45,9 +45,29 @@ type DefaultLoadBalancer struct {
 	counter       atomic.Uint64
 }
 
+type contextKey string
+
+const wxpayJSAPIAppIDContextKey contextKey = "payment.wxpay.jsapi_app_id"
+
 // NewDefaultLoadBalancer creates a new load balancer.
 func NewDefaultLoadBalancer(db *dbent.Client, encryptionKey []byte) *DefaultLoadBalancer {
 	return &DefaultLoadBalancer{db: db, encryptionKey: encryptionKey}
+}
+
+func WithWxpayJSAPIAppID(ctx context.Context, appID string) context.Context {
+	appID = strings.TrimSpace(appID)
+	if appID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, wxpayJSAPIAppIDContextKey, appID)
+}
+
+func wxpayJSAPIAppIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	appID, _ := ctx.Value(wxpayJSAPIAppIDContextKey).(string)
+	return strings.TrimSpace(appID)
 }
 
 // instanceCandidate pairs an instance with its pre-fetched daily usage.
@@ -116,6 +136,7 @@ func (lb *DefaultLoadBalancer) queryEnabledInstances(
 	}
 
 	var matched []*dbent.PaymentProviderInstance
+	expectedWxpayJSAPIAppID := wxpayJSAPIAppIDFromContext(ctx)
 	for _, inst := range instances {
 		// Stripe: match by provider_key because supported_types lists sub-types (card,link,alipay,wxpay),
 		// not "stripe" itself. The checkout page aggregates all sub-types under "stripe".
@@ -124,6 +145,16 @@ func (lb *DefaultLoadBalancer) queryEnabledInstances(
 				matched = append(matched, inst)
 			}
 		} else if InstanceSupportsType(inst.SupportedTypes, paymentType) {
+			if expectedWxpayJSAPIAppID != "" && normalizeVisibleMethodSupportType(paymentType) == TypeWxpay && inst.ProviderKey == TypeWxpay {
+				config, cfgErr := lb.decryptConfig(inst.Config)
+				if cfgErr != nil {
+					slog.Warn("skip wxpay instance with unreadable config during jsapi filtering", "instance_id", inst.ID, "error", cfgErr)
+					continue
+				}
+				if resolveWxpayJSAPIAppID(config) != expectedWxpayJSAPIAppID {
+					continue
+				}
+			}
 			matched = append(matched, inst)
 		}
 	}
@@ -356,6 +387,13 @@ func legacyVisibleMethodAlias(paymentType PaymentType) PaymentType {
 	default:
 		return ""
 	}
+}
+
+func resolveWxpayJSAPIAppID(config map[string]string) string {
+	if appID := strings.TrimSpace(config["mpAppId"]); appID != "" {
+		return appID
+	}
+	return strings.TrimSpace(config["appId"])
 }
 
 // GetInstanceConfig decrypts and returns the configuration for a provider instance by ID.

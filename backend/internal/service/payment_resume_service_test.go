@@ -4,6 +4,10 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"testing"
@@ -150,6 +154,27 @@ func TestPaymentResumeTokenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreateTokenRejectsMissingSigningKey(t *testing.T) {
+	t.Parallel()
+
+	svc := NewPaymentResumeService(nil)
+	_, err := svc.CreateToken(ResumeTokenClaims{OrderID: 42})
+	if err == nil {
+		t.Fatal("CreateToken should reject missing signing key")
+	}
+}
+
+func TestParseTokenRejectsFallbackSignedTokenWhenSigningKeyMissing(t *testing.T) {
+	t.Parallel()
+
+	token := mustCreateFallbackSignedToken(t, ResumeTokenClaims{OrderID: 42, UserID: 7})
+	svc := NewPaymentResumeService(nil)
+	_, err := svc.ParseToken(token)
+	if err == nil {
+		t.Fatal("ParseToken should reject tokens when signing key is missing")
+	}
+}
+
 func TestWeChatPaymentResumeTokenRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +205,31 @@ func TestWeChatPaymentResumeTokenRoundTrip(t *testing.T) {
 	}
 	if claims.RedirectTo != "/purchase?from=wechat" || claims.Scope != "snsapi_base" {
 		t.Fatalf("claims redirect/scope mismatch: %+v", claims)
+	}
+}
+
+func TestCreateWeChatPaymentResumeTokenRejectsMissingSigningKey(t *testing.T) {
+	t.Parallel()
+
+	svc := NewPaymentResumeService(nil)
+	_, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{OpenID: "openid-123"})
+	if err == nil {
+		t.Fatal("CreateWeChatPaymentResumeToken should reject missing signing key")
+	}
+}
+
+func TestParseWeChatPaymentResumeTokenRejectsFallbackSignedTokenWhenSigningKeyMissing(t *testing.T) {
+	t.Parallel()
+
+	token := mustCreateFallbackSignedToken(t, WeChatPaymentResumeClaims{
+		TokenType:   wechatPaymentResumeTokenType,
+		OpenID:      "openid-123",
+		PaymentType: payment.TypeWxpay,
+	})
+	svc := NewPaymentResumeService(nil)
+	_, err := svc.ParseWeChatPaymentResumeToken(token)
+	if err == nil {
+		t.Fatal("ParseWeChatPaymentResumeToken should reject tokens when signing key is missing")
 	}
 }
 
@@ -314,4 +364,18 @@ func (c *captureLoadBalancer) SelectInstance(_ context.Context, providerKey stri
 	c.lastProviderKey = providerKey
 	c.lastPaymentType = paymentType
 	return &payment.InstanceSelection{ProviderKey: providerKey, SupportedTypes: paymentType}, nil
+}
+
+func mustCreateFallbackSignedToken(t *testing.T, claims any) string {
+	t.Helper()
+
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, []byte(paymentResumeFallbackSigningKey))
+	_, _ = mac.Write([]byte(encodedPayload))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return encodedPayload + "." + signature
 }

@@ -208,10 +208,28 @@ func TestGetOrderProviderInstanceLeavesProviderKeyMatchUnresolvedWhenTypeNotSupp
 func TestGetWebhookProviderRejectsAmbiguousRegistryFallback(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
+	wxpayConfigA := encryptWebhookProviderConfig(t, map[string]string{
+		"appId":       "wx-app-a",
+		"mchId":       "mch-a",
+		"privateKey":  "private-key-a",
+		"apiV3Key":    webhookProviderTestEncryptionKey,
+		"publicKey":   "public-key-a",
+		"publicKeyId": "public-key-id-a",
+		"certSerial":  "cert-serial-a",
+	})
+	wxpayConfigB := encryptWebhookProviderConfig(t, map[string]string{
+		"appId":       "wx-app-b",
+		"mchId":       "mch-b",
+		"privateKey":  "private-key-b",
+		"apiV3Key":    webhookProviderTestEncryptionKey,
+		"publicKey":   "public-key-b",
+		"publicKeyId": "public-key-id-b",
+		"certSerial":  "cert-serial-b",
+	})
 	_, err := client.PaymentProviderInstance.Create().
 		SetProviderKey(payment.TypeWxpay).
 		SetName("wxpay-a").
-		SetConfig("{}").
+		SetConfig(wxpayConfigA).
 		SetSupportedTypes("wxpay").
 		SetEnabled(true).
 		Save(ctx)
@@ -219,8 +237,40 @@ func TestGetWebhookProviderRejectsAmbiguousRegistryFallback(t *testing.T) {
 	_, err = client.PaymentProviderInstance.Create().
 		SetProviderKey(payment.TypeWxpay).
 		SetName("wxpay-b").
-		SetConfig("{}").
+		SetConfig(wxpayConfigB).
 		SetSupportedTypes("wxpay").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		entClient:       client,
+		loadBalancer:    newWebhookProviderTestLoadBalancer(client),
+		registry:        payment.NewRegistry(),
+		providersLoaded: true,
+	}
+
+	providers, err := svc.GetWebhookProviders(ctx, payment.TypeWxpay, "")
+	require.NoError(t, err)
+	require.Len(t, providers, 2)
+}
+
+func TestGetWebhookProvidersRejectAmbiguousFallbackForNonWxpay(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeAlipay).
+		SetName("alipay-a").
+		SetConfig("{}").
+		SetSupportedTypes("alipay").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeAlipay).
+		SetName("alipay-b").
+		SetConfig("{}").
+		SetSupportedTypes("alipay").
 		SetEnabled(true).
 		Save(ctx)
 	require.NoError(t, err)
@@ -231,7 +281,7 @@ func TestGetWebhookProviderRejectsAmbiguousRegistryFallback(t *testing.T) {
 		providersLoaded: true,
 	}
 
-	_, err = svc.GetWebhookProvider(ctx, payment.TypeWxpay, "")
+	_, err = svc.GetWebhookProviders(ctx, payment.TypeAlipay, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ambiguous")
 }
@@ -260,8 +310,10 @@ func TestGetWebhookProviderAllowsSingleInstanceRegistryFallback(t *testing.T) {
 		providersLoaded: true,
 	}
 
-	prov, err := svc.GetWebhookProvider(ctx, payment.TypeStripe, "")
+	providers, err := svc.GetWebhookProviders(ctx, payment.TypeStripe, "")
 	require.NoError(t, err)
+	require.Len(t, providers, 1)
+	prov := providers[0]
 	require.Equal(t, payment.TypeStripe, prov.ProviderKey())
 }
 
@@ -308,7 +360,7 @@ func TestGetWebhookProviderRejectsRegistryFallbackForPinnedOrder(t *testing.T) {
 		providersLoaded: true,
 	}
 
-	_, err = svc.GetWebhookProvider(ctx, payment.TypeWxpay, "sub2_test_pinned_order")
+	_, err = svc.GetWebhookProviders(ctx, payment.TypeWxpay, "sub2_test_pinned_order")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "provider instance")
 }
