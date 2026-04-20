@@ -373,7 +373,8 @@ func TestAuthService_Register_CreateEmailExistsRace(t *testing.T) {
 func TestAuthService_Register_Success(t *testing.T) {
 	repo := &userRepoStub{nextID: 5}
 	service := newAuthService(repo, map[string]string{
-		SettingKeyRegistrationEnabled: "true",
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "false",
 	}, nil)
 
 	token, user, err := service.Register(context.Background(), "user@test.com", "password")
@@ -520,8 +521,9 @@ func TestAuthService_Register_AssignsDefaultSubscriptions(t *testing.T) {
 	repo := &userRepoStub{nextID: 42}
 	assigner := &defaultSubscriptionAssignerStub{}
 	service := newAuthService(repo, map[string]string{
-		SettingKeyRegistrationEnabled:  "true",
-		SettingKeyDefaultSubscriptions: `[{"group_id":11,"validity_days":30},{"group_id":12,"validity_days":7}]`,
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyDefaultSubscriptions:                `[{"group_id":11,"validity_days":30},{"group_id":12,"validity_days":7}]`,
+		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "false",
 	}, nil)
 	service.defaultSubAssigner = assigner
 
