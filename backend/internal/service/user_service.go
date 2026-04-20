@@ -403,6 +403,11 @@ func normalizeUserAvatarInput(raw string) (UpsertUserAvatarInput, error) {
 	}, nil
 }
 
+func ValidateUserAvatar(raw string) error {
+	_, err := normalizeUserAvatarInput(raw)
+	return err
+}
+
 func normalizeInlineUserAvatarInput(raw string) (UpsertUserAvatarInput, error) {
 	body := strings.TrimPrefix(raw, "data:")
 	meta, encoded, ok := strings.Cut(body, ",")
