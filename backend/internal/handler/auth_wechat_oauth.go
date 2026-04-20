@@ -193,11 +193,11 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 
 	unionid := strings.TrimSpace(firstNonEmpty(userInfo.UnionID, tokenResp.UnionID))
 	openid := strings.TrimSpace(firstNonEmpty(userInfo.OpenID, tokenResp.OpenID))
-	providerSubject := firstNonEmpty(unionid, openid)
-	if providerSubject == "" {
-		redirectOAuthError(c, frontendCallback, "provider_error", "wechat_missing_subject", "")
+	if unionid == "" {
+		redirectOAuthError(c, frontendCallback, "provider_error", "wechat_missing_unionid", "")
 		return
 	}
+	providerSubject := unionid
 
 	username := firstNonEmpty(userInfo.Nickname, wechatFallbackUsername(providerSubject))
 	email := wechatSyntheticEmail(providerSubject)
