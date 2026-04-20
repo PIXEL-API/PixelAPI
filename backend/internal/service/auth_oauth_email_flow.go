@@ -147,5 +147,11 @@ func (s *AuthService) ValidatePasswordCredentials(ctx context.Context, email, pa
 // RecordSuccessfulLogin updates last-login activity after a non-standard login
 // flow finishes with a real session.
 func (s *AuthService) RecordSuccessfulLogin(ctx context.Context, userID int64) {
+	if s != nil && s.userRepo != nil && userID > 0 {
+		user, err := s.userRepo.GetByID(ctx, userID)
+		if err == nil {
+			s.backfillEmailIdentityOnSuccessfulLogin(ctx, user)
+		}
+	}
 	s.touchUserLogin(ctx, userID)
 }
