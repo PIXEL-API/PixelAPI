@@ -768,9 +768,6 @@ func (s *AuthService) postAuthUserBootstrap(ctx context.Context, user *User, sig
 	}
 	s.updateUserSignupSource(ctx, user.ID, signupSource)
 
-	if signupSource == "email" {
-		s.ensureEmailAuthIdentity(ctx, user)
-	}
 	if touchLogin {
 		s.touchUserLogin(ctx, user.ID)
 	}
@@ -807,21 +804,81 @@ func (s *AuthService) backfillEmailIdentityOnSuccessfulLogin(ctx context.Context
 	if s == nil || user == nil || user.ID <= 0 {
 		return
 	}
-	if s.ensureEmailAuthIdentity(ctx, user) {
+	identity, created := s.ensureEmailAuthIdentity(ctx, user)
+	if s.shouldApplyEmailFirstBindDefaults(ctx, user.ID, identity, created) {
 		if err := s.ApplyProviderDefaultSettingsOnFirstBind(ctx, user.ID, "email"); err != nil {
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to apply email first bind defaults: user_id=%d err=%v", user.ID, err)
 		}
 	}
 }
 
-func (s *AuthService) ensureEmailAuthIdentity(ctx context.Context, user *User) bool {
-	if s == nil || s.entClient == nil || user == nil || user.ID <= 0 {
+func (s *AuthService) shouldApplyEmailFirstBindDefaults(
+	ctx context.Context,
+	userID int64,
+	identity *dbent.AuthIdentity,
+	created bool,
+) bool {
+	if created {
+		return true
+	}
+	if s == nil || s.entClient == nil || userID <= 0 || identity == nil || identity.UserID != userID {
 		return false
+	}
+	if emailAuthIdentitySource(identity.Metadata) != "auth_service_dual_write" {
+		return false
+	}
+
+	hasGrant, err := s.hasProviderGrantRecord(ctx, userID, "email", "first_bind")
+	if err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to inspect email first bind grant state: user_id=%d err=%v", userID, err)
+		return false
+	}
+	return !hasGrant
+}
+
+func emailAuthIdentitySource(metadata map[string]any) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	raw, ok := metadata["source"]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+func (s *AuthService) hasProviderGrantRecord(
+	ctx context.Context,
+	userID int64,
+	providerType string,
+	grantReason string,
+) (bool, error) {
+	if s == nil || s.entClient == nil || userID <= 0 {
+		return false, nil
+	}
+
+	rows, err := s.entClient.QueryContext(
+		ctx,
+		`SELECT 1 FROM user_provider_default_grants WHERE user_id = ? AND provider_type = ? AND grant_reason = ? LIMIT 1`,
+		userID,
+		strings.TrimSpace(providerType),
+		strings.TrimSpace(grantReason),
+	)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	return rows.Next(), rows.Err()
+}
+
+func (s *AuthService) ensureEmailAuthIdentity(ctx context.Context, user *User) (*dbent.AuthIdentity, bool) {
+	if s == nil || s.entClient == nil || user == nil || user.ID <= 0 {
+		return nil, false
 	}
 
 	email := strings.ToLower(strings.TrimSpace(user.Email))
 	if email == "" || isReservedEmail(email) {
-		return false
+		return nil, false
 	}
 
 	client := s.entClient
@@ -840,7 +897,7 @@ func (s *AuthService) ensureEmailAuthIdentity(ctx context.Context, user *User) b
 	existed, err := buildQuery().Exist(ctx)
 	if err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to inspect email auth identity: user_id=%d email=%s err=%v", user.ID, email, err)
-		return false
+		return nil, false
 	}
 
 	if !existed {
@@ -861,21 +918,21 @@ func (s *AuthService) ensureEmailAuthIdentity(ctx context.Context, user *User) b
 			DoNothing().
 			Exec(ctx); err != nil {
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to ensure email auth identity: user_id=%d email=%s err=%v", user.ID, email, err)
-			return false
+			return nil, false
 		}
 	}
 
 	identity, err := buildQuery().Only(ctx)
 	if err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to reload email auth identity: user_id=%d email=%s err=%v", user.ID, email, err)
-		return false
+		return nil, false
 	}
 	if identity.UserID != user.ID {
 		logger.LegacyPrintf("service.auth", "[Auth] Email auth identity ownership mismatch: user_id=%d email=%s owner_id=%d", user.ID, email, identity.UserID)
-		return false
+		return nil, false
 	}
 
-	return !existed
+	return identity, !existed
 }
 
 func inferLegacySignupSource(email string) string {
