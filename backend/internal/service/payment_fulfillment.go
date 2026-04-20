@@ -41,6 +41,19 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		slog.Error("order not found", "orderID", oid)
 		return nil
 	}
+	instanceProviderKey := ""
+	if inst, instErr := s.getOrderProviderInstance(ctx, o); instErr == nil && inst != nil {
+		instanceProviderKey = inst.ProviderKey
+	}
+	expectedProviderKey := expectedNotificationProviderKey(s.registry, o.PaymentType, instanceProviderKey)
+	if expectedProviderKey != "" && strings.TrimSpace(pk) != "" && !strings.EqualFold(expectedProviderKey, strings.TrimSpace(pk)) {
+		s.writeAuditLog(ctx, o.ID, "PAYMENT_PROVIDER_MISMATCH", pk, map[string]any{
+			"expectedProvider": expectedProviderKey,
+			"actualProvider":   pk,
+			"tradeNo":          tradeNo,
+		})
+		return fmt.Errorf("provider mismatch: expected %s, got %s", expectedProviderKey, pk)
+	}
 	// Skip amount check when paid=0 (e.g. QueryOrder doesn't return amount).
 	// Also skip if paid is NaN/Inf (malformed provider data).
 	if paid > 0 && !math.IsNaN(paid) && !math.IsInf(paid, 0) {
@@ -54,6 +67,18 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		paid = o.PayAmount
 	}
 	return s.toPaid(ctx, o, tradeNo, paid, pk)
+}
+
+func expectedNotificationProviderKey(registry *payment.Registry, orderPaymentType string, instanceProviderKey string) string {
+	if key := strings.TrimSpace(instanceProviderKey); key != "" {
+		return key
+	}
+	if registry != nil {
+		if key := strings.TrimSpace(registry.GetProviderKey(payment.PaymentType(orderPaymentType))); key != "" {
+			return key
+		}
+	}
+	return strings.TrimSpace(orderPaymentType)
 }
 
 func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, tradeNo string, paid float64, pk string) error {
