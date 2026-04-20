@@ -6,8 +6,8 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +19,7 @@ import (
 	"github.com/wechatpay-apiv3/wechatpay-go/core/option"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/h5"
+	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/jsapi"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/native"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/refunddomestic"
 	"github.com/wechatpay-apiv3/wechatpay-go/utils"
@@ -26,8 +27,16 @@ import (
 
 // WeChat Pay constants.
 const (
-	wxpayCurrency = "CNY"
-	wxpayH5Type   = "Wap"
+	wxpayCurrency   = "CNY"
+	wxpayH5Type     = "Wap"
+	wxpayResultPath = "/payment/result"
+)
+
+// WeChat Pay create-payment modes.
+const (
+	wxpayModeNative = "native"
+	wxpayModeH5     = "h5"
+	wxpayModeJSAPI  = "jsapi"
 )
 
 // WeChat Pay trade states.
@@ -46,6 +55,18 @@ const (
 // WeChat Pay error codes.
 const (
 	wxpayErrNoAuth = "NO_AUTH"
+)
+
+var (
+	wxpayNativePrepay = func(ctx context.Context, svc native.NativeApiService, req native.PrepayRequest) (*native.PrepayResponse, *core.APIResult, error) {
+		return svc.Prepay(ctx, req)
+	}
+	wxpayH5Prepay = func(ctx context.Context, svc h5.H5ApiService, req h5.PrepayRequest) (*h5.PrepayResponse, *core.APIResult, error) {
+		return svc.Prepay(ctx, req)
+	}
+	wxpayJSAPIPrepayWithRequestPayment = func(ctx context.Context, svc jsapi.JsapiApiService, req jsapi.PrepayRequest) (*jsapi.PrepayWithRequestPaymentResponse, *core.APIResult, error) {
+		return svc.PrepayWithRequestPayment(ctx, req)
+	}
 )
 
 type Wxpay struct {
@@ -73,6 +94,16 @@ func (w *Wxpay) Name() string        { return "Wxpay" }
 func (w *Wxpay) ProviderKey() string { return payment.TypeWxpay }
 func (w *Wxpay) SupportedTypes() []payment.PaymentType {
 	return []payment.PaymentType{payment.TypeWxpay}
+}
+
+// ResolveWxpayJSAPIAppID returns the AppID that JSAPI prepay will use for a
+// given provider config. A dedicated MP AppID takes precedence over the base
+// merchant AppID.
+func ResolveWxpayJSAPIAppID(config map[string]string) string {
+	if appID := strings.TrimSpace(config["mpAppId"]); appID != "" {
+		return appID
+	}
+	return strings.TrimSpace(config["appId"])
 }
 
 func formatPEM(key, keyType string) string {
@@ -139,30 +170,68 @@ func (w *Wxpay) CreatePayment(ctx context.Context, req payment.CreatePaymentRequ
 	if err != nil {
 		return nil, fmt.Errorf("wxpay create payment: %w", err)
 	}
-	if req.IsMobile && req.ClientIP != "" {
-		resp, err := w.createOrder(ctx, client, req, notifyURL, totalFen, true)
+
+	mode, err := resolveWxpayCreateMode(req)
+	if err != nil {
+		return nil, err
+	}
+	switch mode {
+	case wxpayModeJSAPI:
+		return w.prepayJSAPI(ctx, client, req, notifyURL, totalFen)
+	case wxpayModeH5:
+		resp, err := w.prepayH5(ctx, client, req, notifyURL, totalFen)
 		if err == nil {
 			return resp, nil
 		}
-		if !strings.Contains(err.Error(), wxpayErrNoAuth) {
-			return nil, err
+		if strings.Contains(err.Error(), wxpayErrNoAuth) {
+			return nil, fmt.Errorf("wxpay h5 payments are not authorized for this merchant: %w", err)
 		}
-		slog.Warn("wxpay H5 payment not authorized, falling back to native", "order", req.OrderID)
+		return nil, err
+	case wxpayModeNative:
+		return w.prepayNative(ctx, client, req, notifyURL, totalFen)
+	default:
+		return nil, fmt.Errorf("wxpay create payment: unsupported mode %q", mode)
 	}
-	return w.createOrder(ctx, client, req, notifyURL, totalFen, false)
 }
 
-func (w *Wxpay) createOrder(ctx context.Context, c *core.Client, req payment.CreatePaymentRequest, notifyURL string, totalFen int64, useH5 bool) (*payment.CreatePaymentResponse, error) {
-	if useH5 {
-		return w.prepayH5(ctx, c, req, notifyURL, totalFen)
+func (w *Wxpay) prepayJSAPI(ctx context.Context, c *core.Client, req payment.CreatePaymentRequest, notifyURL string, totalFen int64) (*payment.CreatePaymentResponse, error) {
+	svc := jsapi.JsapiApiService{Client: c}
+	cur := wxpayCurrency
+	appID := ResolveWxpayJSAPIAppID(w.config)
+	prepayReq := jsapi.PrepayRequest{
+		Appid:       core.String(appID),
+		Mchid:       core.String(w.config["mchId"]),
+		Description: core.String(req.Subject),
+		OutTradeNo:  core.String(req.OrderID),
+		NotifyUrl:   core.String(notifyURL),
+		Amount:      &jsapi.Amount{Total: core.Int64(totalFen), Currency: &cur},
+		Payer:       &jsapi.Payer{Openid: core.String(strings.TrimSpace(req.OpenID))},
 	}
-	return w.prepayNative(ctx, c, req, notifyURL, totalFen)
+	if clientIP := strings.TrimSpace(req.ClientIP); clientIP != "" {
+		prepayReq.SceneInfo = &jsapi.SceneInfo{PayerClientIp: core.String(clientIP)}
+	}
+	resp, _, err := wxpayJSAPIPrepayWithRequestPayment(ctx, svc, prepayReq)
+	if err != nil {
+		return nil, fmt.Errorf("wxpay jsapi prepay: %w", err)
+	}
+	return &payment.CreatePaymentResponse{
+		TradeNo:    req.OrderID,
+		ResultType: payment.CreatePaymentResultJSAPIReady,
+		JSAPI: &payment.WechatJSAPIPayload{
+			AppID:     wxSV(resp.Appid),
+			TimeStamp: wxSV(resp.TimeStamp),
+			NonceStr:  wxSV(resp.NonceStr),
+			Package:   wxSV(resp.Package),
+			SignType:  wxSV(resp.SignType),
+			PaySign:   wxSV(resp.PaySign),
+		},
+	}, nil
 }
 
 func (w *Wxpay) prepayNative(ctx context.Context, c *core.Client, req payment.CreatePaymentRequest, notifyURL string, totalFen int64) (*payment.CreatePaymentResponse, error) {
 	svc := native.NativeApiService{Client: c}
 	cur := wxpayCurrency
-	resp, _, err := svc.Prepay(ctx, native.PrepayRequest{
+	resp, _, err := wxpayNativePrepay(ctx, svc, native.PrepayRequest{
 		Appid: core.String(w.config["appId"]), Mchid: core.String(w.config["mchId"]),
 		Description: core.String(req.Subject), OutTradeNo: core.String(req.OrderID),
 		NotifyUrl: core.String(notifyURL),
@@ -182,7 +251,7 @@ func (w *Wxpay) prepayH5(ctx context.Context, c *core.Client, req payment.Create
 	svc := h5.H5ApiService{Client: c}
 	cur := wxpayCurrency
 	tp := wxpayH5Type
-	resp, _, err := svc.Prepay(ctx, h5.PrepayRequest{
+	resp, _, err := wxpayH5Prepay(ctx, svc, h5.PrepayRequest{
 		Appid: core.String(w.config["appId"]), Mchid: core.String(w.config["mchId"]),
 		Description: core.String(req.Subject), OutTradeNo: core.String(req.OrderID),
 		NotifyUrl: core.String(notifyURL),
@@ -196,7 +265,61 @@ func (w *Wxpay) prepayH5(ctx context.Context, c *core.Client, req payment.Create
 	if resp.H5Url != nil {
 		h5URL = *resp.H5Url
 	}
+	h5URL, err = appendWxpayRedirectURL(h5URL, req)
+	if err != nil {
+		return nil, err
+	}
 	return &payment.CreatePaymentResponse{TradeNo: req.OrderID, PayURL: h5URL}, nil
+}
+
+func resolveWxpayCreateMode(req payment.CreatePaymentRequest) (string, error) {
+	if strings.TrimSpace(req.OpenID) != "" {
+		return wxpayModeJSAPI, nil
+	}
+	if req.IsMobile {
+		if strings.TrimSpace(req.ClientIP) == "" {
+			return "", fmt.Errorf("wxpay H5 payment requires client IP")
+		}
+		return wxpayModeH5, nil
+	}
+	return wxpayModeNative, nil
+}
+
+func appendWxpayRedirectURL(h5URL string, req payment.CreatePaymentRequest) (string, error) {
+	h5URL = strings.TrimSpace(h5URL)
+	returnURL := strings.TrimSpace(req.ReturnURL)
+	if h5URL == "" || returnURL == "" {
+		return h5URL, nil
+	}
+
+	redirectURL, err := buildWxpayResultURL(returnURL, req)
+	if err != nil {
+		return "", err
+	}
+
+	sep := "&"
+	if !strings.Contains(h5URL, "?") {
+		sep = "?"
+	}
+	return h5URL + sep + "redirect_url=" + url.QueryEscape(redirectURL), nil
+}
+
+func buildWxpayResultURL(returnURL string, req payment.CreatePaymentRequest) (string, error) {
+	u, err := url.Parse(returnURL)
+	if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", fmt.Errorf("return URL must be an absolute http(s) URL")
+	}
+
+	values := url.Values{}
+	values.Set("out_trade_no", strings.TrimSpace(req.OrderID))
+	if paymentType := strings.TrimSpace(req.PaymentType); paymentType != "" {
+		values.Set("payment_type", paymentType)
+	}
+	u.Path = wxpayResultPath
+	u.RawPath = ""
+	u.RawQuery = values.Encode()
+	u.Fragment = ""
+	return u.String(), nil
 }
 
 func wxSV(s *string) string {
