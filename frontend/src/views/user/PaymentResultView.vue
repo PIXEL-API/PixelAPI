@@ -188,7 +188,8 @@ onMounted(async () => {
     }
   }
 
-  const hasLegacyFallbackContext = Boolean(route.query.trade_status || route.query.money || route.query.type)
+  const hasLegacyFallbackContext = typeof route.query.trade_status === 'string'
+    && route.query.trade_status.trim() !== ''
   if (!order.value && !resumeToken && !orderId && outTradeNo && hasLegacyFallbackContext) {
     returnInfo.value = {
       outTradeNo,

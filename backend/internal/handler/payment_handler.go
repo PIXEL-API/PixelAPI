@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -202,14 +205,15 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 
 // CreateOrderRequest is the request body for creating a payment order.
 type CreateOrderRequest struct {
-	Amount        float64 `json:"amount"`
-	PaymentType   string  `json:"payment_type" binding:"required"`
-	OpenID        string  `json:"openid"`
-	ReturnURL     string  `json:"return_url"`
-	PaymentSource string  `json:"payment_source"`
-	OrderType     string  `json:"order_type"`
-	PlanID        int64   `json:"plan_id"`
-	IsMobile      *bool   `json:"is_mobile,omitempty"`
+	Amount            float64 `json:"amount"`
+	PaymentType       string  `json:"payment_type" binding:"required"`
+	OpenID            string  `json:"openid"`
+	WechatResumeToken string  `json:"wechat_resume_token"`
+	ReturnURL         string  `json:"return_url"`
+	PaymentSource     string  `json:"payment_source"`
+	OrderType         string  `json:"order_type"`
+	PlanID            int64   `json:"plan_id"`
+	IsMobile          *bool   `json:"is_mobile,omitempty"`
 }
 
 // CreateOrder creates a new payment order.
@@ -224,6 +228,17 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
+	}
+	if strings.TrimSpace(req.WechatResumeToken) != "" {
+		claims, err := h.paymentService.ParseWeChatPaymentResumeToken(req.WechatResumeToken)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := applyWeChatPaymentResumeClaims(&req, claims); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	mobile := isMobile(c)
@@ -251,6 +266,44 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeChatPaymentResumeClaims) error {
+	if req == nil || claims == nil {
+		return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume context is missing")
+	}
+	openid := strings.TrimSpace(claims.OpenID)
+	if openid == "" {
+		return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token missing openid")
+	}
+
+	paymentType := service.NormalizeVisibleMethod(claims.PaymentType)
+	if paymentType == "" {
+		paymentType = payment.TypeWxpay
+	}
+	if req.PaymentType != "" {
+		requestPaymentType := service.NormalizeVisibleMethod(req.PaymentType)
+		if requestPaymentType != "" && requestPaymentType != paymentType {
+			return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token payment type mismatch")
+		}
+	}
+	req.PaymentType = paymentType
+	req.OpenID = openid
+
+	if strings.TrimSpace(claims.Amount) != "" {
+		amount, err := strconv.ParseFloat(strings.TrimSpace(claims.Amount), 64)
+		if err != nil || amount <= 0 {
+			return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", fmt.Sprintf("invalid resume amount: %s", claims.Amount))
+		}
+		req.Amount = amount
+	}
+	if claims.OrderType != "" {
+		req.OrderType = claims.OrderType
+	}
+	if claims.PlanID > 0 {
+		req.PlanID = claims.PlanID
+	}
+	return nil
 }
 
 // GetMyOrders returns the authenticated user's orders.

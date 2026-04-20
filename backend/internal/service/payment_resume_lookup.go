@@ -33,3 +33,7 @@ func (s *PaymentService) GetPublicOrderByResumeToken(ctx context.Context, token 
 
 	return order, nil
 }
+
+func (s *PaymentService) ParseWeChatPaymentResumeToken(token string) (*WeChatPaymentResumeClaims, error) {
+	return s.paymentResume().ParseWeChatPaymentResumeToken(strings.TrimSpace(token))
+}

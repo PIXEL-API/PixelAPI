@@ -31,6 +31,8 @@ const (
 	VisibleMethodSourceEasyPayAlipay  = "easypay_alipay"
 	VisibleMethodSourceOfficialWechat = "official_wxpay"
 	VisibleMethodSourceEasyPayWechat  = "easypay_wxpay"
+
+	wechatPaymentResumeTokenType = "wechat_payment_resume"
 )
 
 type ResumeTokenClaims struct {
@@ -41,6 +43,18 @@ type ResumeTokenClaims struct {
 	PaymentType        string `json:"pt,omitempty"`
 	CanonicalReturnURL string `json:"ru,omitempty"`
 	IssuedAt           int64  `json:"iat"`
+}
+
+type WeChatPaymentResumeClaims struct {
+	TokenType   string `json:"tk,omitempty"`
+	OpenID      string `json:"openid"`
+	PaymentType string `json:"pt,omitempty"`
+	Amount      string `json:"amt,omitempty"`
+	OrderType   string `json:"ot,omitempty"`
+	PlanID      int64  `json:"pid,omitempty"`
+	RedirectTo  string `json:"rd,omitempty"`
+	Scope       string `json:"scp,omitempty"`
+	IssuedAt    int64  `json:"iat"`
 }
 
 type PaymentResumeService struct {
@@ -232,6 +246,66 @@ func (s *PaymentResumeService) CreateToken(claims ResumeTokenClaims) (string, er
 	if claims.IssuedAt == 0 {
 		claims.IssuedAt = time.Now().Unix()
 	}
+	return s.createSignedToken(claims)
+}
+
+func (s *PaymentResumeService) ParseToken(token string) (*ResumeTokenClaims, error) {
+	var claims ResumeTokenClaims
+	if err := s.parseSignedToken(token, &claims); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token payload is invalid")
+	}
+	if claims.OrderID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token missing order id")
+	}
+	return &claims, nil
+}
+
+func (s *PaymentResumeService) CreateWeChatPaymentResumeToken(claims WeChatPaymentResumeClaims) (string, error) {
+	claims.OpenID = strings.TrimSpace(claims.OpenID)
+	if claims.OpenID == "" {
+		return "", fmt.Errorf("wechat payment resume token requires openid")
+	}
+	if claims.IssuedAt == 0 {
+		claims.IssuedAt = time.Now().Unix()
+	}
+	if normalized := NormalizeVisibleMethod(claims.PaymentType); normalized != "" {
+		claims.PaymentType = normalized
+	}
+	if claims.PaymentType == "" {
+		claims.PaymentType = payment.TypeWxpay
+	}
+	if claims.OrderType == "" {
+		claims.OrderType = payment.OrderTypeBalance
+	}
+	claims.TokenType = wechatPaymentResumeTokenType
+	return s.createSignedToken(claims)
+}
+
+func (s *PaymentResumeService) ParseWeChatPaymentResumeToken(token string) (*WeChatPaymentResumeClaims, error) {
+	var claims WeChatPaymentResumeClaims
+	if err := s.parseSignedToken(token, &claims); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token payload is invalid")
+	}
+	if claims.TokenType != wechatPaymentResumeTokenType {
+		return nil, infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token type mismatch")
+	}
+	claims.OpenID = strings.TrimSpace(claims.OpenID)
+	if claims.OpenID == "" {
+		return nil, infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token missing openid")
+	}
+	if normalized := NormalizeVisibleMethod(claims.PaymentType); normalized != "" {
+		claims.PaymentType = normalized
+	}
+	if claims.PaymentType == "" {
+		claims.PaymentType = payment.TypeWxpay
+	}
+	if claims.OrderType == "" {
+		claims.OrderType = payment.OrderTypeBalance
+	}
+	return &claims, nil
+}
+
+func (s *PaymentResumeService) createSignedToken(claims any) (string, error) {
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", fmt.Errorf("marshal resume claims: %w", err)
@@ -240,26 +314,19 @@ func (s *PaymentResumeService) CreateToken(claims ResumeTokenClaims) (string, er
 	return encodedPayload + "." + s.sign(encodedPayload), nil
 }
 
-func (s *PaymentResumeService) ParseToken(token string) (*ResumeTokenClaims, error) {
+func (s *PaymentResumeService) parseSignedToken(token string, dest any) error {
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token is malformed")
+		return infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token is malformed")
 	}
 	if !hmac.Equal([]byte(parts[1]), []byte(s.sign(parts[0]))) {
-		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token signature mismatch")
+		return infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token signature mismatch")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token payload is malformed")
+		return infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token payload is malformed")
 	}
-	var claims ResumeTokenClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token payload is invalid")
-	}
-	if claims.OrderID <= 0 {
-		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token missing order id")
-	}
-	return &claims, nil
+	return json.Unmarshal(payload, dest)
 }
 
 func (s *PaymentResumeService) sign(payload string) string {
