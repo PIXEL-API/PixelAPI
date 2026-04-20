@@ -44,12 +44,12 @@ const PAYMENT_VISIBLE_METHOD_SOURCE_OPTIONS: Record<
   PaymentVisibleMethodSourceOption[]
 > = {
   alipay: [
-    { value: '', labelZh: '自动路由', labelEn: 'Automatic routing' },
+    { value: '', labelZh: '未配置', labelEn: 'Not configured' },
     { value: 'official_alipay', labelZh: '支付宝官方', labelEn: 'Official Alipay' },
     { value: 'easypay_alipay', labelZh: '易支付支付宝', labelEn: 'EasyPay Alipay' },
   ],
   wxpay: [
-    { value: '', labelZh: '自动路由', labelEn: 'Automatic routing' },
+    { value: '', labelZh: '未配置', labelEn: 'Not configured' },
     { value: 'official_wxpay', labelZh: '微信官方', labelEn: 'Official WeChat Pay' },
     { value: 'easypay_wxpay', labelZh: '易支付微信', labelEn: 'EasyPay WeChat Pay' },
   ],
