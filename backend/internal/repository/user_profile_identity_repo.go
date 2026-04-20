@@ -211,6 +211,34 @@ func (r *userRepository) GetUserByChannelIdentity(ctx context.Context, key AuthI
 	}, nil
 }
 
+func (r *userRepository) ListUserAuthIdentities(ctx context.Context, userID int64) ([]service.UserAuthIdentityRecord, error) {
+	identities, err := clientFromContext(ctx, r.client).AuthIdentity.Query().
+		Where(authidentity.UserIDEQ(userID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]service.UserAuthIdentityRecord, 0, len(identities))
+	for _, identity := range identities {
+		if identity == nil {
+			continue
+		}
+		records = append(records, service.UserAuthIdentityRecord{
+			ProviderType:    strings.TrimSpace(identity.ProviderType),
+			ProviderKey:     strings.TrimSpace(identity.ProviderKey),
+			ProviderSubject: strings.TrimSpace(identity.ProviderSubject),
+			VerifiedAt:      identity.VerifiedAt,
+			Issuer:          identity.Issuer,
+			Metadata:        copyMetadata(identity.Metadata),
+			CreatedAt:       identity.CreatedAt,
+			UpdatedAt:       identity.UpdatedAt,
+		})
+	}
+
+	return records, nil
+}
+
 func (r *userRepository) BindAuthIdentityToUser(ctx context.Context, input BindAuthIdentityInput) (*CreateAuthIdentityResult, error) {
 	var result *CreateAuthIdentityResult
 	err := r.WithUserProfileIdentityTx(ctx, func(txCtx context.Context) error {

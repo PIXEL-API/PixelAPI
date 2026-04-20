@@ -145,7 +145,10 @@ import { useAuthStore, useAppStore } from '@/stores'
 import {
   completeOIDCOAuthRegistration,
   exchangePendingOAuthCompletion,
+  getOAuthCompletionKind,
   getPublicSettings,
+  isOAuthLoginCompletion,
+  persistOAuthTokenContext,
   type OAuthAdoptionDecision,
   type PendingOAuthExchangeResponse
 } from '@/api/auth'
@@ -172,6 +175,7 @@ const suggestedAvatarUrl = ref('')
 const adoptDisplayName = ref(true)
 const adoptAvatar = ref(true)
 const needsAdoptionConfirmation = ref(false)
+const bindSuccessMessage = t('profile.authBindings.bindSuccess')
 
 function parseFragmentParams(): URLSearchParams {
   const raw = typeof window !== 'undefined' ? window.location.hash : ''
@@ -231,18 +235,19 @@ function hasSuggestedProfile(completion: {
   return Boolean(completion.suggested_display_name || completion.suggested_avatar_url)
 }
 
-async function finalizeLogin(completion: PendingOAuthExchangeResponse, redirect: string) {
-  if (!completion.access_token) {
+async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redirect: string) {
+  if (getOAuthCompletionKind(completion) === 'bind') {
+    const bindRedirect = sanitizeRedirectPath(completion.redirect || '/profile')
+    appStore.showSuccess(bindSuccessMessage)
+    await router.replace(bindRedirect)
+    return
+  }
+
+  if (!isOAuthLoginCompletion(completion)) {
     throw new Error(t('auth.oidc.callbackMissingToken'))
   }
 
-  if (completion.refresh_token) {
-    localStorage.setItem('refresh_token', completion.refresh_token)
-  }
-  if (completion.expires_in) {
-    localStorage.setItem('token_expires_at', String(Date.now() + completion.expires_in * 1000))
-  }
-
+  persistOAuthTokenContext(completion)
   await authStore.setToken(completion.access_token)
   appStore.showSuccess(t('auth.loginSuccess'))
   await router.replace(redirect)
@@ -258,12 +263,7 @@ async function handleSubmitInvitation() {
       invitationCode.value.trim(),
       currentAdoptionDecision()
     )
-    if (tokenData.refresh_token) {
-      localStorage.setItem('refresh_token', tokenData.refresh_token)
-    }
-    if (tokenData.expires_in) {
-      localStorage.setItem('token_expires_at', String(Date.now() + tokenData.expires_in * 1000))
-    }
+    persistOAuthTokenContext(tokenData)
     await authStore.setToken(tokenData.access_token)
     appStore.showSuccess(t('auth.loginSuccess'))
     await router.replace(redirectTo.value)
@@ -280,7 +280,7 @@ async function handleContinueLogin() {
   isSubmitting.value = true
   try {
     const completion = await exchangePendingOAuthCompletion(currentAdoptionDecision())
-    await finalizeLogin(completion, redirectTo.value)
+    await finalizeCompletion(completion, redirectTo.value)
   } catch (e: unknown) {
     const err = e as { message?: string; response?: { data?: { detail?: string; message?: string } } }
     errorMessage.value =
@@ -329,7 +329,7 @@ onMounted(async () => {
       return
     }
 
-    await finalizeLogin(completion, redirect)
+    await finalizeCompletion(completion, redirect)
   } catch (e: unknown) {
     const err = e as { message?: string; response?: { data?: { detail?: string; message?: string } } }
     errorMessage.value =

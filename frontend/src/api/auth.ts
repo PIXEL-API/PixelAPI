@@ -186,17 +186,22 @@ export interface RefreshTokenResponse {
   token_type: string
 }
 
-export interface PendingOAuthExchangeResponse {
-  access_token?: string
+export interface OAuthTokenResponse {
+  access_token: string
   refresh_token?: string
   expires_in?: number
   token_type?: string
+}
+
+export interface PendingOAuthExchangeResponse extends Partial<OAuthTokenResponse> {
   redirect?: string
   error?: string
   adoption_required?: boolean
   suggested_display_name?: string
   suggested_avatar_url?: string
 }
+
+export type OAuthCompletionKind = 'login' | 'bind'
 
 export interface OAuthAdoptionDecision {
   adoptDisplayName?: boolean
@@ -216,6 +221,56 @@ function serializeOAuthAdoptionDecision(
   }
 
   return payload
+}
+
+export function isOAuthLoginCompletion(
+  completion: Partial<OAuthTokenResponse>
+): completion is OAuthTokenResponse {
+  return typeof completion.access_token === 'string' && completion.access_token.trim().length > 0
+}
+
+export function getOAuthCompletionKind(
+  completion: Partial<OAuthTokenResponse>
+): OAuthCompletionKind {
+  return isOAuthLoginCompletion(completion) ? 'login' : 'bind'
+}
+
+export function persistOAuthTokenContext(tokens: Partial<OAuthTokenResponse>): void {
+  if (tokens.refresh_token) {
+    setRefreshToken(tokens.refresh_token)
+  }
+  if (tokens.expires_in) {
+    setTokenExpiresAt(tokens.expires_in)
+  }
+}
+
+export function prepareOAuthBindAccessTokenCookie(): void {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    return
+  }
+
+  const token = getAuthToken()
+  if (!token) {
+    return
+  }
+
+  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+  const path = resolveOAuthBindCookiePath()
+  document.cookie =
+    `oauth_bind_access_token=${encodeURIComponent(token)}; Path=${path}/auth/oauth; Max-Age=600; SameSite=Lax${secure}`
+}
+
+function resolveOAuthBindCookiePath(): string {
+  const apiBase = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1').replace(/\/$/, '')
+
+  try {
+    return new URL(apiBase, window.location.origin).pathname.replace(/\/$/, '') || '/api/v1'
+  } catch {
+    if (apiBase.startsWith('/')) {
+      return apiBase
+    }
+    return '/api/v1'
+  }
 }
 
 /**
@@ -375,13 +430,8 @@ export async function resetPassword(request: ResetPasswordRequest): Promise<Rese
 export async function completeLinuxDoOAuthRegistration(
   invitationCode: string,
   decision?: OAuthAdoptionDecision
-): Promise<{ access_token: string; refresh_token: string; expires_in: number; token_type: string }> {
-  const { data } = await apiClient.post<{
-    access_token: string
-    refresh_token: string
-    expires_in: number
-    token_type: string
-  }>('/auth/oauth/linuxdo/complete-registration', {
+): Promise<OAuthTokenResponse> {
+  const { data } = await apiClient.post<OAuthTokenResponse>('/auth/oauth/linuxdo/complete-registration', {
     invitation_code: invitationCode,
     ...serializeOAuthAdoptionDecision(decision)
   })
@@ -396,13 +446,19 @@ export async function completeLinuxDoOAuthRegistration(
 export async function completeOIDCOAuthRegistration(
   invitationCode: string,
   decision?: OAuthAdoptionDecision
-): Promise<{ access_token: string; refresh_token: string; expires_in: number; token_type: string }> {
-  const { data } = await apiClient.post<{
-    access_token: string
-    refresh_token: string
-    expires_in: number
-    token_type: string
-  }>('/auth/oauth/oidc/complete-registration', {
+): Promise<OAuthTokenResponse> {
+  const { data } = await apiClient.post<OAuthTokenResponse>('/auth/oauth/oidc/complete-registration', {
+    invitation_code: invitationCode,
+    ...serializeOAuthAdoptionDecision(decision)
+  })
+  return data
+}
+
+export async function completeWeChatOAuthRegistration(
+  invitationCode: string,
+  decision?: OAuthAdoptionDecision
+): Promise<OAuthTokenResponse> {
+  const { data } = await apiClient.post<OAuthTokenResponse>('/auth/oauth/wechat/complete-registration', {
     invitation_code: invitationCode,
     ...serializeOAuthAdoptionDecision(decision)
   })
@@ -444,7 +500,8 @@ export const authAPI = {
   revokeAllSessions,
   exchangePendingOAuthCompletion,
   completeLinuxDoOAuthRegistration,
-  completeOIDCOAuthRegistration
+  completeOIDCOAuthRegistration,
+  completeWeChatOAuthRegistration
 }
 
 export default authAPI

@@ -4,7 +4,8 @@
  */
 
 import { apiClient } from './client'
-import type { User, ChangePasswordRequest, NotifyEmailEntry } from '@/types'
+import { prepareOAuthBindAccessTokenCookie } from './auth'
+import type { User, ChangePasswordRequest, NotifyEmailEntry, UserAuthProvider } from '@/types'
 
 /**
  * Get current user profile
@@ -83,6 +84,49 @@ export async function toggleNotifyEmail(email: string, disabled: boolean): Promi
   return data
 }
 
+export type BindableOAuthProvider = Exclude<UserAuthProvider, 'email'>
+
+interface BuildOAuthBindingStartURLOptions {
+  redirectTo?: string
+}
+
+export function resolveWeChatOAuthMode(): 'open' | 'mp' {
+  if (typeof navigator === 'undefined') {
+    return 'open'
+  }
+  return /MicroMessenger/i.test(navigator.userAgent) ? 'mp' : 'open'
+}
+
+export function buildOAuthBindingStartURL(
+  provider: BindableOAuthProvider,
+  options: BuildOAuthBindingStartURLOptions = {}
+): string {
+  const redirectTo = options.redirectTo?.trim() || '/profile'
+  const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
+  const normalized = apiBase.replace(/\/$/, '')
+  const params = new URLSearchParams({
+    redirect: redirectTo,
+    intent: 'bind_current_user'
+  })
+
+  if (provider === 'wechat') {
+    params.set('mode', resolveWeChatOAuthMode())
+  }
+
+  return `${normalized}/auth/oauth/${provider}/start?${params.toString()}`
+}
+
+export function startOAuthBinding(
+  provider: BindableOAuthProvider,
+  options: BuildOAuthBindingStartURLOptions = {}
+): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  prepareOAuthBindAccessTokenCookie()
+  window.location.href = buildOAuthBindingStartURL(provider, options)
+}
+
 export const userAPI = {
   getProfile,
   updateProfile,
@@ -90,7 +134,9 @@ export const userAPI = {
   sendNotifyEmailCode,
   verifyNotifyEmail,
   removeNotifyEmail,
-  toggleNotifyEmail
+  toggleNotifyEmail,
+  buildOAuthBindingStartURL,
+  startOAuthBinding
 }
 
 export default userAPI
