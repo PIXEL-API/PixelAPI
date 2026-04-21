@@ -239,6 +239,12 @@ func (_c *PaymentOrderCreate) SetNillableProviderKey(v *string) *PaymentOrderCre
 	return _c
 }
 
+// SetProviderSnapshot sets the "provider_snapshot" field.
+func (_c *PaymentOrderCreate) SetProviderSnapshot(v map[string]interface{}) *PaymentOrderCreate {
+	_c.mutation.SetProviderSnapshot(v)
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *PaymentOrderCreate) SetStatus(v string) *PaymentOrderCreate {
 	_c.mutation.SetStatus(v)
@@ -771,6 +777,10 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 		_spec.SetField(paymentorder.FieldProviderKey, field.TypeString, value)
 		_node.ProviderKey = &value
 	}
+	if value, ok := _c.mutation.ProviderSnapshot(); ok {
+		_spec.SetField(paymentorder.FieldProviderSnapshot, field.TypeJSON, value)
+		_node.ProviderSnapshot = value
+	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(paymentorder.FieldStatus, field.TypeString, value)
 		_node.Status = value
@@ -1239,6 +1249,24 @@ func (u *PaymentOrderUpsert) UpdateProviderKey() *PaymentOrderUpsert {
 // ClearProviderKey clears the value of the "provider_key" field.
 func (u *PaymentOrderUpsert) ClearProviderKey() *PaymentOrderUpsert {
 	u.SetNull(paymentorder.FieldProviderKey)
+	return u
+}
+
+// SetProviderSnapshot sets the "provider_snapshot" field.
+func (u *PaymentOrderUpsert) SetProviderSnapshot(v map[string]interface{}) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldProviderSnapshot, v)
+	return u
+}
+
+// UpdateProviderSnapshot sets the "provider_snapshot" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateProviderSnapshot() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldProviderSnapshot)
+	return u
+}
+
+// ClearProviderSnapshot clears the value of the "provider_snapshot" field.
+func (u *PaymentOrderUpsert) ClearProviderSnapshot() *PaymentOrderUpsert {
+	u.SetNull(paymentorder.FieldProviderSnapshot)
 	return u
 }
 
@@ -1939,6 +1967,27 @@ func (u *PaymentOrderUpsertOne) UpdateProviderKey() *PaymentOrderUpsertOne {
 func (u *PaymentOrderUpsertOne) ClearProviderKey() *PaymentOrderUpsertOne {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearProviderKey()
+	})
+}
+
+// SetProviderSnapshot sets the "provider_snapshot" field.
+func (u *PaymentOrderUpsertOne) SetProviderSnapshot(v map[string]interface{}) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetProviderSnapshot(v)
+	})
+}
+
+// UpdateProviderSnapshot sets the "provider_snapshot" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateProviderSnapshot() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateProviderSnapshot()
+	})
+}
+
+// ClearProviderSnapshot clears the value of the "provider_snapshot" field.
+func (u *PaymentOrderUpsertOne) ClearProviderSnapshot() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearProviderSnapshot()
 	})
 }
 
@@ -2850,6 +2899,27 @@ func (u *PaymentOrderUpsertBulk) UpdateProviderKey() *PaymentOrderUpsertBulk {
 func (u *PaymentOrderUpsertBulk) ClearProviderKey() *PaymentOrderUpsertBulk {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearProviderKey()
+	})
+}
+
+// SetProviderSnapshot sets the "provider_snapshot" field.
+func (u *PaymentOrderUpsertBulk) SetProviderSnapshot(v map[string]interface{}) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetProviderSnapshot(v)
+	})
+}
+
+// UpdateProviderSnapshot sets the "provider_snapshot" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateProviderSnapshot() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateProviderSnapshot()
+	})
+}
+
+// ClearProviderSnapshot clears the value of the "provider_snapshot" field.
+func (u *PaymentOrderUpsertBulk) ClearProviderSnapshot() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearProviderSnapshot()
 	})
 }
 
