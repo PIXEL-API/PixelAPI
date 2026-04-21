@@ -1,79 +1,76 @@
 <template>
   <AppLayout>
-    <div class="mx-auto max-w-4xl space-y-6">
-      <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
-        <StatCard
-          :title="t('profile.accountBalance')"
-          :value="formatCurrency(user?.balance || 0)"
-          :icon="WalletIcon"
-          icon-variant="success"
-        />
-        <StatCard
-          :title="t('profile.concurrencyLimit')"
-          :value="user?.concurrency || 0"
-          :icon="BoltIcon"
-          icon-variant="warning"
-        />
-        <StatCard
-          :title="t('profile.memberSince')"
-          :value="formatDate(user?.created_at || '', { year: 'numeric', month: 'long' })"
-          :icon="CalendarIcon"
-          icon-variant="primary"
-        />
-      </div>
-
-      <ProfileInfoCard
-        :user="user"
-        :linuxdo-enabled="linuxdoOAuthEnabled"
-        :oidc-enabled="oidcOAuthEnabled"
-        :oidc-provider-name="oidcOAuthProviderName"
-        :wechat-enabled="wechatOAuthEnabled"
-        :wechat-open-enabled="wechatOAuthOpenEnabled"
-        :wechat-mp-enabled="wechatOAuthMPEnabled"
-      />
-
-      <div
-        v-if="contactInfo"
-        class="card border-primary-200 bg-primary-50 p-6 dark:bg-primary-900/20"
-      >
-        <div class="flex items-center gap-4">
-          <div class="rounded-xl bg-primary-100 p-3 text-primary-600">
-            <Icon name="chat" size="lg" />
-          </div>
-          <div>
-            <h3 class="font-semibold text-primary-800 dark:text-primary-200">
-              {{ t('common.contactSupport') }}
-            </h3>
-            <p class="text-sm font-medium">{{ contactInfo }}</p>
-          </div>
+    <div
+      data-testid="profile-shell"
+      class="mx-auto max-w-6xl space-y-6"
+    >
+      <div class="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_360px]">
+        <div
+          data-testid="profile-primary-column"
+          class="space-y-6"
+        >
+          <ProfileInfoCard
+            :user="user"
+            :linuxdo-enabled="linuxdoOAuthEnabled"
+            :oidc-enabled="oidcOAuthEnabled"
+            :oidc-provider-name="oidcOAuthProviderName"
+            :wechat-enabled="wechatOAuthEnabled"
+            :wechat-open-enabled="wechatOAuthOpenEnabled"
+            :wechat-mp-enabled="wechatOAuthMPEnabled"
+          />
         </div>
+
+        <aside
+          data-testid="profile-secondary-column"
+          class="space-y-6"
+        >
+          <div
+            v-if="contactInfo"
+            class="card border-primary-200 bg-primary-50 p-6 dark:bg-primary-900/20"
+          >
+            <div class="flex items-center gap-4">
+              <div class="rounded-xl bg-primary-100 p-3 text-primary-600">
+                <Icon name="chat" size="lg" />
+              </div>
+              <div>
+                <h3 class="font-semibold text-primary-800 dark:text-primary-200">
+                  {{ t('common.contactSupport') }}
+                </h3>
+                <p class="text-sm font-medium">{{ contactInfo }}</p>
+              </div>
+            </div>
+          </div>
+
+          <ProfilePasswordForm />
+
+          <ProfileBalanceNotifyCard
+            v-if="user && balanceLowNotifyEnabled"
+            :enabled="user.balance_notify_enabled ?? true"
+            :threshold="user.balance_notify_threshold"
+            :extra-emails="user.balance_notify_extra_emails ?? []"
+            :system-default-threshold="systemDefaultThreshold"
+            :user-email="user.email"
+          />
+
+          <ProfileTotpCard />
+        </aside>
       </div>
-      <ProfileBalanceNotifyCard
-        v-if="user && balanceLowNotifyEnabled"
-        :enabled="user.balance_notify_enabled ?? true"
-        :threshold="user.balance_notify_threshold"
-        :extra-emails="user.balance_notify_extra_emails ?? []"
-        :system-default-threshold="systemDefaultThreshold"
-        :user-email="user.email"
-      />
-      <ProfileTotpCard />
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
-import StatCard from '@/components/common/StatCard.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ProfileBalanceNotifyCard from '@/components/user/profile/ProfileBalanceNotifyCard.vue'
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
+import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'
 import ProfileTotpCard from '@/components/user/profile/ProfileTotpCard.vue'
 import { isWeChatWebOAuthEnabled } from '@/api/auth'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate } from '@/utils/format'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -89,31 +86,6 @@ const wechatOAuthOpenEnabled = ref<boolean | undefined>(undefined)
 const wechatOAuthMPEnabled = ref<boolean | undefined>(undefined)
 const oidcOAuthEnabled = ref(false)
 const oidcOAuthProviderName = ref('OIDC')
-
-const WalletIcon = {
-  render: () =>
-    h(
-      'svg',
-      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
-      [h('path', { d: 'M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12' })]
-    )
-}
-const BoltIcon = {
-  render: () =>
-    h(
-      'svg',
-      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
-      [h('path', { d: 'm3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z' })]
-    )
-}
-const CalendarIcon = {
-  render: () =>
-    h(
-      'svg',
-      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
-      [h('path', { d: 'M6.75 3v2.25M17.25 3v2.25' })]
-    )
-}
 
 onMounted(async () => {
   const profileRefresh = authStore.refreshUser().catch((error) => {
@@ -145,6 +117,4 @@ onMounted(async () => {
 
   await Promise.all([profileRefresh, settingsLoad])
 })
-
-const formatCurrency = (value: number) => `$${value.toFixed(2)}`
 </script>

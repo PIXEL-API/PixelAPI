@@ -102,6 +102,11 @@ export async function bindEmailIdentity(payload: {
   return data
 }
 
+export async function unbindAuthIdentity(provider: BindableOAuthProvider): Promise<User> {
+  const { data } = await apiClient.delete<User>(`/user/account-bindings/${provider}`)
+  return data
+}
+
 export type BindableOAuthProvider = Exclude<UserAuthProvider, 'email'>
 
 interface BuildOAuthBindingStartURLOptions {
@@ -173,6 +178,7 @@ export const userAPI = {
   toggleNotifyEmail,
   sendEmailBindingCode,
   bindEmailIdentity,
+  unbindAuthIdentity,
   buildOAuthBindingStartURL,
   startOAuthBinding
 }

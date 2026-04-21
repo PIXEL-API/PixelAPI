@@ -73,19 +73,16 @@ describe('ProfileView', () => {
     })
   })
 
-  it('renders info, avatar, and account binding cards as separate sections', async () => {
+  it('renders the approved two-column profile shell without separate stat cards', async () => {
     const wrapper = mount(ProfileView, {
       global: {
         stubs: {
           AppLayout: { template: '<div><slot /></div>' },
           StatCard: { template: '<div class="stat-card" />' },
           ProfileInfoCard: { template: '<div data-testid="profile-info-card" />' },
-          ProfileAvatarCard: { template: '<div data-testid="profile-avatar-card" />' },
-          ProfileAccountBindingsCard: { template: '<div data-testid="profile-account-bindings-card" />' },
-          ProfileEditForm: true,
-          ProfileBalanceNotifyCard: true,
-          ProfilePasswordForm: true,
-          ProfileTotpCard: true,
+          ProfileBalanceNotifyCard: { template: '<div data-testid="profile-balance-notify-card" />' },
+          ProfilePasswordForm: { template: '<div data-testid="profile-password-form" />' },
+          ProfileTotpCard: { template: '<div data-testid="profile-totp-card" />' },
           Icon: true
         }
       }
@@ -93,9 +90,12 @@ describe('ProfileView', () => {
 
     await flushPromises()
 
-    const html = wrapper.html()
-    expect(html.indexOf('profile-info-card')).toBeGreaterThan(-1)
-    expect(html.indexOf('profile-avatar-card')).toBeGreaterThan(html.indexOf('profile-info-card'))
-    expect(html.indexOf('profile-account-bindings-card')).toBeGreaterThan(html.indexOf('profile-avatar-card'))
+    expect(wrapper.findAll('.stat-card')).toHaveLength(0)
+    expect(wrapper.get('[data-testid="profile-shell"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="profile-primary-column"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="profile-secondary-column"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="profile-primary-column"]').html()).toContain('profile-info-card')
+    expect(wrapper.get('[data-testid="profile-secondary-column"]').html()).toContain('profile-password-form')
+    expect(wrapper.get('[data-testid="profile-secondary-column"]').html()).toContain('profile-totp-card')
   })
 })
