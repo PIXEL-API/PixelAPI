@@ -90,6 +90,10 @@ func (s *balanceLoadUserRepoStub) ListUserAuthIdentities(context.Context, int64)
 	return nil, nil
 }
 
+func (s *balanceLoadUserRepoStub) UnbindUserAuthProvider(context.Context, int64, string) error {
+	return nil
+}
+
 func TestBillingCacheServiceGetUserBalance_Singleflight(t *testing.T) {
 	cache := &billingCacheMissStub{}
 	userRepo := &balanceLoadUserRepoStub{

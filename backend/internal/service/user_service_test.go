@@ -27,6 +27,9 @@ type mockUserRepo struct {
 	updateBalanceFn         func(ctx context.Context, id int64, amount float64) error
 	getByIDUser             *User
 	getByIDErr              error
+	identities              []UserAuthIdentityRecord
+	unbindIdentityErr       error
+	unboundProviders        []string
 	updateLastActiveErr     error
 	updateLastActiveUserIDs []int64
 	updateLastActiveAt      []time.Time
@@ -160,7 +163,9 @@ func (m *mockUserRepo) RemoveGroupFromAllowedGroups(context.Context, int64) (int
 }
 func (m *mockUserRepo) AddGroupToAllowedGroups(context.Context, int64, int64) error { return nil }
 func (m *mockUserRepo) ListUserAuthIdentities(context.Context, int64) ([]UserAuthIdentityRecord, error) {
-	return nil, nil
+	out := make([]UserAuthIdentityRecord, len(m.identities))
+	copy(out, m.identities)
+	return out, nil
 }
 func (m *mockUserRepo) GetLatestUsedAtByUserIDs(context.Context, []int64) (map[int64]*time.Time, error) {
 	return map[int64]*time.Time{}, nil
@@ -172,6 +177,21 @@ func (m *mockUserRepo) UpdateTotpSecret(context.Context, int64, *string) error {
 func (m *mockUserRepo) EnableTotp(context.Context, int64) error                { return nil }
 func (m *mockUserRepo) DisableTotp(context.Context, int64) error               { return nil }
 func (m *mockUserRepo) RemoveGroupFromUserAllowedGroups(context.Context, int64, int64) error {
+	return nil
+}
+func (m *mockUserRepo) UnbindUserAuthProvider(_ context.Context, _ int64, provider string) error {
+	if m.unbindIdentityErr != nil {
+		return m.unbindIdentityErr
+	}
+	m.unboundProviders = append(m.unboundProviders, provider)
+	filtered := m.identities[:0]
+	for _, identity := range m.identities {
+		if identity.ProviderType == provider {
+			continue
+		}
+		filtered = append(filtered, identity)
+	}
+	m.identities = append([]UserAuthIdentityRecord(nil), filtered...)
 	return nil
 }
 
@@ -272,6 +292,94 @@ func TestUpdateBalance_Success(t *testing.T) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	require.Equal(t, []int64{42}, cache.invalidatedUserIDs, "应对 userID=42 失效缓存")
+}
+
+func TestGetProfileIdentitySummaries_AllowsUnbindWhenAnotherLoginMethodRemains(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:    7,
+			Email: "alice@example.com",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "alice@example.com",
+			},
+			{
+				ProviderType:    "linuxdo",
+				ProviderKey:     "linuxdo",
+				ProviderSubject: "linuxdo-subject-123456",
+				Metadata: map[string]any{
+					"username": "linuxdo-handle",
+				},
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 7, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.True(t, summaries.LinuxDo.Bound)
+	require.True(t, summaries.LinuxDo.CanUnbind)
+	require.Equal(t, "linuxdo-handle", summaries.LinuxDo.DisplayName)
+	require.NotEmpty(t, summaries.LinuxDo.SubjectHint)
+}
+
+func TestUnbindUserAuthProviderRejectsLastRemainingLoginMethod(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:    9,
+			Email: "only-user@linuxdo-connect.invalid",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "linuxdo",
+				ProviderKey:     "linuxdo",
+				ProviderSubject: "linuxdo-only-subject",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	_, err := svc.UnbindUserAuthProvider(context.Background(), 9, "linuxdo")
+
+	require.ErrorIs(t, err, ErrIdentityUnbindLastMethod)
+	require.Empty(t, repo.unboundProviders)
+}
+
+func TestUnbindUserAuthProviderRemovesProviderAndReturnsUpdatedProfile(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:    12,
+			Email: "alice@example.com",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "alice@example.com",
+			},
+			{
+				ProviderType:    "linuxdo",
+				ProviderKey:     "linuxdo",
+				ProviderSubject: "linuxdo-subject-12",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	user, err := svc.UnbindUserAuthProvider(context.Background(), 12, "linuxdo")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"linuxdo"}, repo.unboundProviders)
+	require.Equal(t, int64(12), user.ID)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 12, user)
+	require.NoError(t, err)
+	require.False(t, summaries.LinuxDo.Bound)
+	require.True(t, summaries.LinuxDo.CanBind)
 }
 
 func TestUpdateBalance_NilBillingCache_NoPanic(t *testing.T) {

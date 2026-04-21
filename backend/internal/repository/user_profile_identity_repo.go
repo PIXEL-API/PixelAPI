@@ -249,6 +249,48 @@ func (r *userRepository) ListUserAuthIdentities(ctx context.Context, userID int6
 	return records, nil
 }
 
+func (r *userRepository) UnbindUserAuthProvider(ctx context.Context, userID int64, provider string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" || provider == "email" {
+		return service.ErrIdentityProviderInvalid
+	}
+
+	return r.WithUserProfileIdentityTx(ctx, func(txCtx context.Context) error {
+		client := clientFromContext(txCtx, r.client)
+		identityIDs, err := client.AuthIdentity.Query().
+			Where(
+				authidentity.UserIDEQ(userID),
+				authidentity.ProviderTypeEQ(provider),
+			).
+			IDs(txCtx)
+		if err != nil {
+			return err
+		}
+		if len(identityIDs) == 0 {
+			return nil
+		}
+
+		if _, err := client.IdentityAdoptionDecision.Update().
+			Where(identityadoptiondecision.IdentityIDIn(identityIDs...)).
+			ClearIdentityID().
+			Save(txCtx); err != nil {
+			return err
+		}
+		if _, err := client.AuthIdentityChannel.Delete().
+			Where(authidentitychannel.IdentityIDIn(identityIDs...)).
+			Exec(txCtx); err != nil {
+			return err
+		}
+		_, err = client.AuthIdentity.Delete().
+			Where(
+				authidentity.UserIDEQ(userID),
+				authidentity.ProviderTypeEQ(provider),
+			).
+			Exec(txCtx)
+		return err
+	})
+}
+
 func (r *userRepository) BindAuthIdentityToUser(ctx context.Context, input BindAuthIdentityInput) (*CreateAuthIdentityResult, error) {
 	if err := validateAuthIdentityChannelProviderMatch(input.Canonical, input.Channel); err != nil {
 		return nil, err
