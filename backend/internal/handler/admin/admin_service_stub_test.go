@@ -17,7 +17,6 @@ type stubAdminService struct {
 	proxies              []service.Proxy
 	proxyCounts          []service.ProxyWithAccountCount
 	redeems              []service.RedeemCode
-	migrationReports     []service.AuthIdentityMigrationReport
 	boundAuthIdentity    *service.AdminBindAuthIdentityInput
 	boundAuthIdentityFor int64
 	createdAccounts      []*service.CreateAccountInput
@@ -134,15 +133,6 @@ func newStubAdminService() *stubAdminService {
 		proxies:     []service.Proxy{proxy},
 		proxyCounts: []service.ProxyWithAccountCount{{Proxy: proxy, AccountCount: 1}},
 		redeems:     []service.RedeemCode{redeem},
-		migrationReports: []service.AuthIdentityMigrationReport{
-			{
-				ID:         1,
-				ReportType: "oidc_synthetic_email_requires_manual_recovery",
-				ReportKey:  "u-1",
-				Details:    map[string]any{"user_id": 1},
-				CreatedAt:  now,
-			},
-		},
 	}
 }
 
@@ -193,30 +183,6 @@ func (s *stubAdminService) GetUserUsageStats(ctx context.Context, userID int64, 
 	return map[string]any{"user_id": userID}, nil
 }
 
-func (s *stubAdminService) ListAuthIdentityMigrationReports(ctx context.Context, reportType string, page, pageSize int) ([]service.AuthIdentityMigrationReport, int64, error) {
-	if reportType == "" {
-		return s.migrationReports, int64(len(s.migrationReports)), nil
-	}
-	filtered := make([]service.AuthIdentityMigrationReport, 0, len(s.migrationReports))
-	for _, report := range s.migrationReports {
-		if strings.EqualFold(report.ReportType, reportType) {
-			filtered = append(filtered, report)
-		}
-	}
-	return filtered, int64(len(filtered)), nil
-}
-
-func (s *stubAdminService) GetAuthIdentityMigrationReportSummary(ctx context.Context) (*service.AuthIdentityMigrationReportSummary, error) {
-	summary := &service.AuthIdentityMigrationReportSummary{
-		ByType: map[string]int64{},
-	}
-	for _, report := range s.migrationReports {
-		summary.Total++
-		summary.ByType[report.ReportType]++
-	}
-	return summary, nil
-}
-
 func (s *stubAdminService) BindUserAuthIdentity(ctx context.Context, userID int64, input service.AdminBindAuthIdentityInput) (*service.AdminBoundAuthIdentity, error) {
 	s.boundAuthIdentityFor = userID
 	copied := input
@@ -261,20 +227,6 @@ func (s *stubAdminService) BindUserAuthIdentity(ctx context.Context, userID int6
 		}
 	}
 	return result, nil
-}
-
-func (s *stubAdminService) ResolveAuthIdentityMigrationReport(ctx context.Context, reportID, resolvedByUserID int64, resolutionNote string) (*service.AuthIdentityMigrationReport, error) {
-	now := time.Now().UTC()
-	for i := range s.migrationReports {
-		if s.migrationReports[i].ID != reportID {
-			continue
-		}
-		s.migrationReports[i].ResolvedAt = &now
-		s.migrationReports[i].ResolvedByUserID = &resolvedByUserID
-		s.migrationReports[i].ResolutionNote = resolutionNote
-		return &s.migrationReports[i], nil
-	}
-	return nil, nil
 }
 
 func (s *stubAdminService) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]service.Group, int64, error) {

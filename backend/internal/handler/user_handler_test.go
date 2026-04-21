@@ -99,6 +99,12 @@ func (s *userHandlerRepoStub) GetLatestUsedAtByUserIDs(context.Context, []int64)
 func (s *userHandlerRepoStub) GetLatestUsedAtByUserID(context.Context, int64) (*time.Time, error) {
 	return nil, nil
 }
+func (s *userHandlerRepoStub) UpdateUserLastActiveAt(_ context.Context, _ int64, activeAt time.Time) error {
+	if s.user != nil {
+		s.user.LastActiveAt = &activeAt
+	}
+	return nil
+}
 func (s *userHandlerRepoStub) RemoveGroupFromUserAllowedGroups(context.Context, int64, int64) error {
 	return nil
 }

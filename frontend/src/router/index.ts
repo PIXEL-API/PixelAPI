@@ -342,16 +342,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/admin/users/auth-identity-migration-reports',
-    name: 'AdminAuthIdentityMigrationReports',
-    component: () => import('@/views/admin/AuthIdentityMigrationReportsView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Auth Identity Migration Reports'
-    }
-  },
-  {
     path: '/admin/groups',
     name: 'AdminGroups',
     component: () => import('@/views/admin/GroupsView.vue'),
