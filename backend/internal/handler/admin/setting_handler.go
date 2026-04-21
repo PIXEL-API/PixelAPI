@@ -125,6 +125,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		WeChatConnectEnabled:                 settings.WeChatConnectEnabled,
 		WeChatConnectAppID:                   settings.WeChatConnectAppID,
 		WeChatConnectAppSecretConfigured:     settings.WeChatConnectAppSecretConfigured,
+		WeChatConnectOpenEnabled:             settings.WeChatConnectOpenEnabled,
+		WeChatConnectMPEnabled:               settings.WeChatConnectMPEnabled,
 		WeChatConnectMode:                    settings.WeChatConnectMode,
 		WeChatConnectScopes:                  settings.WeChatConnectScopes,
 		WeChatConnectRedirectURL:             settings.WeChatConnectRedirectURL,
@@ -257,6 +259,8 @@ type UpdateSettingsRequest struct {
 	WeChatConnectEnabled             bool   `json:"wechat_connect_enabled"`
 	WeChatConnectAppID               string `json:"wechat_connect_app_id"`
 	WeChatConnectAppSecret           string `json:"wechat_connect_app_secret"`
+	WeChatConnectOpenEnabled         bool   `json:"wechat_connect_open_enabled"`
+	WeChatConnectMPEnabled           bool   `json:"wechat_connect_mp_enabled"`
 	WeChatConnectMode                string `json:"wechat_connect_mode"`
 	WeChatConnectScopes              string `json:"wechat_connect_scopes"`
 	WeChatConnectRedirectURL         string `json:"wechat_connect_redirect_url"`
@@ -544,17 +548,35 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			req.WeChatConnectAppSecret = previousSettings.WeChatConnectAppSecret
 		}
-		if req.WeChatConnectMode == "" {
-			req.WeChatConnectMode = "open"
+		if req.WeChatConnectMode != "" {
+			switch req.WeChatConnectMode {
+			case "open", "mp":
+			default:
+				response.BadRequest(c, "WeChat mode must be open or mp")
+				return
+			}
 		}
-		switch req.WeChatConnectMode {
-		case "open", "mp":
-		default:
-			response.BadRequest(c, "WeChat mode must be open or mp")
-			return
+		if !req.WeChatConnectOpenEnabled && !req.WeChatConnectMPEnabled {
+			switch req.WeChatConnectMode {
+			case "mp":
+				req.WeChatConnectMPEnabled = true
+			default:
+				req.WeChatConnectOpenEnabled = true
+			}
+		}
+		if req.WeChatConnectMode == "" {
+			if req.WeChatConnectMPEnabled {
+				req.WeChatConnectMode = "mp"
+			} else {
+				req.WeChatConnectMode = "open"
+			}
 		}
 		if req.WeChatConnectScopes == "" {
-			req.WeChatConnectScopes = service.DefaultWeChatConnectScopesForMode(req.WeChatConnectMode)
+			if req.WeChatConnectMPEnabled {
+				req.WeChatConnectScopes = service.DefaultWeChatConnectScopesForMode("mp")
+			} else {
+				req.WeChatConnectScopes = service.DefaultWeChatConnectScopesForMode(req.WeChatConnectMode)
+			}
 		}
 		if req.WeChatConnectRedirectURL == "" {
 			response.BadRequest(c, "WeChat Redirect URL is required when enabled")
@@ -924,6 +946,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		WeChatConnectEnabled:             req.WeChatConnectEnabled,
 		WeChatConnectAppID:               req.WeChatConnectAppID,
 		WeChatConnectAppSecret:           req.WeChatConnectAppSecret,
+		WeChatConnectOpenEnabled:         req.WeChatConnectOpenEnabled,
+		WeChatConnectMPEnabled:           req.WeChatConnectMPEnabled,
 		WeChatConnectMode:                req.WeChatConnectMode,
 		WeChatConnectScopes:              req.WeChatConnectScopes,
 		WeChatConnectRedirectURL:         req.WeChatConnectRedirectURL,
@@ -1210,6 +1234,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		WeChatConnectEnabled:                 updatedSettings.WeChatConnectEnabled,
 		WeChatConnectAppID:                   updatedSettings.WeChatConnectAppID,
 		WeChatConnectAppSecretConfigured:     updatedSettings.WeChatConnectAppSecretConfigured,
+		WeChatConnectOpenEnabled:             updatedSettings.WeChatConnectOpenEnabled,
+		WeChatConnectMPEnabled:               updatedSettings.WeChatConnectMPEnabled,
 		WeChatConnectMode:                    updatedSettings.WeChatConnectMode,
 		WeChatConnectScopes:                  updatedSettings.WeChatConnectScopes,
 		WeChatConnectRedirectURL:             updatedSettings.WeChatConnectRedirectURL,
@@ -1415,6 +1441,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if req.WeChatConnectAppSecret != "" {
 		changed = append(changed, "wechat_connect_app_secret")
+	}
+	if before.WeChatConnectOpenEnabled != after.WeChatConnectOpenEnabled {
+		changed = append(changed, "wechat_connect_open_enabled")
+	}
+	if before.WeChatConnectMPEnabled != after.WeChatConnectMPEnabled {
+		changed = append(changed, "wechat_connect_mp_enabled")
 	}
 	if before.WeChatConnectMode != after.WeChatConnectMode {
 		changed = append(changed, "wechat_connect_mode")
