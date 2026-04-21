@@ -62,6 +62,8 @@ type wechatOAuthConfig struct {
 	scope            string
 	redirectURI      string
 	frontendCallback string
+	openEnabled      bool
+	mpEnabled        bool
 }
 
 type wechatOAuthTokenResponse struct {
@@ -209,11 +211,18 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 
 	unionid := strings.TrimSpace(firstNonEmpty(userInfo.UnionID, tokenResp.UnionID))
 	openid := strings.TrimSpace(firstNonEmpty(userInfo.OpenID, tokenResp.OpenID))
-	if unionid == "" {
+	providerSubject := unionid
+	if providerSubject == "" {
+		if cfg.requiresUnionID() {
+			redirectOAuthError(c, frontendCallback, "provider_error", "wechat_missing_unionid", "")
+			return
+		}
+		providerSubject = openid
+	}
+	if providerSubject == "" {
 		redirectOAuthError(c, frontendCallback, "provider_error", "wechat_missing_unionid", "")
 		return
 	}
-	providerSubject := unionid
 
 	username := firstNonEmpty(userInfo.Nickname, wechatFallbackUsername(providerSubject))
 	email := wechatSyntheticEmail(providerSubject)
@@ -284,7 +293,18 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 	}
 
 	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
-		if err := h.createOAuthEmailRequiredPendingSession(c, identityRef, redirectTo, browserSessionKey, upstreamClaims); err != nil {
+		if err := h.createWeChatChoicePendingSession(
+			c,
+			identityRef,
+			email,
+			email,
+			redirectTo,
+			browserSessionKey,
+			upstreamClaims,
+			"",
+			nil,
+			true,
+		); err != nil {
 			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
 			return
 		}
@@ -292,17 +312,18 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	tokenPair, _, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, "")
-	if err != nil {
-		if err := h.createWeChatPendingSession(c, normalizedIntent, providerSubject, email, redirectTo, browserSessionKey, upstreamClaims, tokenPair, err, nil); err != nil {
-			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
-			return
-		}
-		redirectToFrontendCallback(c, frontendCallback)
-		return
-	}
-
-	if err := h.createWeChatPendingSession(c, normalizedIntent, providerSubject, email, redirectTo, browserSessionKey, upstreamClaims, tokenPair, nil, nil); err != nil {
+	if err := h.createWeChatChoicePendingSession(
+		c,
+		identityRef,
+		email,
+		email,
+		redirectTo,
+		browserSessionKey,
+		upstreamClaims,
+		"",
+		nil,
+		false,
+	); err != nil {
 		redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
 		return
 	}
@@ -600,6 +621,65 @@ func (h *AuthHandler) createWeChatPendingSession(
 	})
 }
 
+func (h *AuthHandler) createWeChatChoicePendingSession(
+	c *gin.Context,
+	identity service.PendingAuthIdentityKey,
+	suggestedEmail string,
+	resolvedEmail string,
+	redirectTo string,
+	browserSessionKey string,
+	upstreamClaims map[string]any,
+	compatEmail string,
+	compatEmailUser *dbent.User,
+	forceEmailOnSignup bool,
+) error {
+	suggestionEmail := strings.TrimSpace(suggestedEmail)
+	canonicalEmail := strings.TrimSpace(resolvedEmail)
+	if suggestionEmail == "" {
+		suggestionEmail = canonicalEmail
+	}
+
+	completionResponse := map[string]any{
+		"step":                      oauthPendingChoiceStep,
+		"adoption_required":         true,
+		"redirect":                  strings.TrimSpace(redirectTo),
+		"email":                     suggestionEmail,
+		"resolved_email":            canonicalEmail,
+		"existing_account_email":    "",
+		"existing_account_bindable": false,
+		"create_account_allowed":    true,
+		"force_email_on_signup":     forceEmailOnSignup,
+		"choice_reason":             "third_party_signup",
+	}
+	if strings.TrimSpace(compatEmail) != "" {
+		completionResponse["compat_email"] = strings.TrimSpace(compatEmail)
+	}
+	if compatEmailUser != nil {
+		completionResponse["email"] = strings.TrimSpace(compatEmailUser.Email)
+		completionResponse["existing_account_email"] = strings.TrimSpace(compatEmailUser.Email)
+		completionResponse["existing_account_bindable"] = true
+		completionResponse["choice_reason"] = "compat_email_match"
+	}
+	if forceEmailOnSignup {
+		completionResponse["choice_reason"] = "force_email_on_signup"
+	}
+
+	resolvedChoiceEmail := suggestionEmail
+	if compatEmailUser != nil {
+		resolvedChoiceEmail = strings.TrimSpace(compatEmailUser.Email)
+	}
+
+	return h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+		Intent:                 oauthIntentLogin,
+		Identity:               identity,
+		ResolvedEmail:          resolvedChoiceEmail,
+		RedirectTo:             redirectTo,
+		BrowserSessionKey:      browserSessionKey,
+		UpstreamIdentityClaims: upstreamClaims,
+		CompletionResponse:     completionResponse,
+	})
+}
+
 func (h *AuthHandler) createWeChatBindPendingSession(
 	c *gin.Context,
 	cfg wechatOAuthConfig,
@@ -874,7 +954,7 @@ func (h *AuthHandler) getWeChatOAuthConfig(ctx context.Context, rawMode string, 
 	if err != nil {
 		return wechatOAuthConfig{}, err
 	}
-	if effective.Mode != mode {
+	if !effective.SupportsMode(mode) {
 		return wechatOAuthConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "wechat oauth is disabled")
 	}
 
@@ -884,7 +964,9 @@ func (h *AuthHandler) getWeChatOAuthConfig(ctx context.Context, rawMode string, 
 		appSecret:        strings.TrimSpace(effective.AppSecret),
 		redirectURI:      firstNonEmpty(strings.TrimSpace(effective.RedirectURL), resolveWeChatOAuthAbsoluteURL(apiBaseURL, c, "/api/v1/auth/oauth/wechat/callback")),
 		frontendCallback: firstNonEmpty(strings.TrimSpace(effective.FrontendRedirectURL), wechatOAuthDefaultFrontendCB),
-		scope:            firstNonEmpty(strings.TrimSpace(effective.Scopes), service.DefaultWeChatConnectScopesForMode(mode)),
+		scope:            effective.ScopeForMode(mode),
+		openEnabled:      effective.OpenEnabled,
+		mpEnabled:        effective.MPEnabled,
 	}
 
 	switch mode {
@@ -898,6 +980,10 @@ func (h *AuthHandler) getWeChatOAuthConfig(ctx context.Context, rawMode string, 
 	}
 
 	return cfg, nil
+}
+
+func (cfg wechatOAuthConfig) requiresUnionID() bool {
+	return cfg.openEnabled && cfg.mpEnabled
 }
 
 func (h *AuthHandler) wechatOAuthFrontendCallback(ctx context.Context) string {
