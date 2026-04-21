@@ -167,7 +167,7 @@ type StartIdentityBindingRequest struct {
 type BindEmailIdentityRequest struct {
 	Email      string `json:"email" binding:"required,email"`
 	VerifyCode string `json:"verify_code" binding:"required"`
-	Password   string `json:"password" binding:"required,min=6"`
+	Password   string `json:"password" binding:"required"`
 }
 
 type SendEmailBindingCodeRequest struct {
