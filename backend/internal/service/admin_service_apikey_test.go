@@ -88,6 +88,9 @@ func (s *userRepoStubForGroupUpdate) GetLatestUsedAtByUserIDs(context.Context, [
 func (s *userRepoStubForGroupUpdate) GetLatestUsedAtByUserID(context.Context, int64) (*time.Time, error) {
 	panic("unexpected")
 }
+func (s *userRepoStubForGroupUpdate) UpdateUserLastActiveAt(context.Context, int64, time.Time) error {
+	panic("unexpected")
+}
 func (s *userRepoStubForGroupUpdate) RemoveGroupFromUserAllowedGroups(context.Context, int64, int64) error {
 	panic("unexpected")
 }

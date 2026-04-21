@@ -97,6 +97,10 @@ func (s *emailSyncRepoStub) GetLatestUsedAtByUserID(context.Context, int64) (*ti
 	return nil, nil
 }
 
+func (s *emailSyncRepoStub) UpdateUserLastActiveAt(context.Context, int64, time.Time) error {
+	return nil
+}
+
 func (s *emailSyncRepoStub) UpdateBalance(context.Context, int64, float64) error { return nil }
 
 func (s *emailSyncRepoStub) DeductBalance(context.Context, int64, float64) error { return nil }
