@@ -392,6 +392,31 @@ func (s *UserProfileIdentityRepoSuite) TestUpsertIdentityAdoptionDecision_Reassi
 	s.Require().Nil(reloadedFirst.IdentityID)
 }
 
+func (s *UserProfileIdentityRepoSuite) TestWithUserProfileIdentityTx_AllowsAvatarOnlyProfileUpdate() {
+	user := s.mustCreateUser("avatar-only-update")
+
+	model, err := s.repo.GetByID(s.ctx, user.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(model)
+
+	err = s.repo.WithUserProfileIdentityTx(s.ctx, func(txCtx context.Context) error {
+		_, err := s.repo.UpsertUserAvatar(txCtx, user.ID, service.UpsertUserAvatarInput{
+			StorageProvider: "remote_url",
+			URL:             "https://cdn.example.com/avatar.png",
+		})
+		if err != nil {
+			return err
+		}
+		return s.repo.Update(txCtx, model)
+	})
+	s.Require().NoError(err)
+
+	avatar, err := s.repo.GetUserAvatar(s.ctx, user.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(avatar)
+	s.Require().Equal("https://cdn.example.com/avatar.png", avatar.URL)
+}
+
 func (s *UserProfileIdentityRepoSuite) TestUserAvatarCRUDAndUserLookup() {
 	user := s.mustCreateUser("avatar")
 
