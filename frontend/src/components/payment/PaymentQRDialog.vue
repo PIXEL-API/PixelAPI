@@ -78,8 +78,8 @@ import Icon from '@/components/icons/Icon.vue'
 import { usePaymentStore } from '@/stores/payment'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
-import { extractApiErrorMessage } from '@/utils/apiError'
-import { POPUP_WINDOW_FEATURES } from '@/components/payment/providerConfig'
+import { extractI18nErrorMessage } from '@/utils/apiError'
+import { getPaymentPopupFeatures } from '@/components/payment/providerConfig'
 import type { PaymentOrder } from '@/types/payment'
 import QRCode from 'qrcode'
 import alipayIcon from '@/assets/icons/alipay.svg'
@@ -147,7 +147,7 @@ function getLogoForType(): string | null {
 
 function reopenPopup() {
   if (props.payUrl) {
-    window.open(props.payUrl, 'paymentPopup', POPUP_WINDOW_FEATURES)
+    window.open(props.payUrl, 'paymentPopup', getPaymentPopupFeatures())
   }
 }
 
@@ -222,7 +222,7 @@ async function handleCancel() {
     cleanup()
     emit('close')
   } catch (err: unknown) {
-    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
     cancelling.value = false
   }

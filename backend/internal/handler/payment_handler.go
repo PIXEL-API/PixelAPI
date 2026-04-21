@@ -215,7 +215,10 @@ type CreateOrderRequest struct {
 	PaymentSource     string  `json:"payment_source"`
 	OrderType         string  `json:"order_type"`
 	PlanID            int64   `json:"plan_id"`
-	IsMobile          *bool   `json:"is_mobile,omitempty"`
+	// IsMobile lets the frontend declare its mobile status directly. When
+	// nil we fall back to User-Agent heuristics (which miss iPadOS / some
+	// embedded browsers that strip the "Mobile" keyword).
+	IsMobile *bool `json:"is_mobile,omitempty"`
 }
 
 // CreateOrder creates a new payment order.
@@ -247,7 +250,6 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 	if req.IsMobile != nil {
 		mobile = *req.IsMobile
 	}
-
 	result, err := h.paymentService.CreateOrder(c.Request.Context(), service.CreateOrderRequest{
 		UserID:          subject.UserID,
 		Amount:          req.Amount,
