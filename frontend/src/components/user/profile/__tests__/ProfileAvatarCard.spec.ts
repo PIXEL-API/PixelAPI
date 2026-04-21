@@ -208,6 +208,35 @@ describe('ProfileAvatarCard', () => {
     expect(showErrorMock).not.toHaveBeenCalled()
   })
 
+  it('shows a preview after selecting an avatar in embedded mode', async () => {
+    installAvatarCompressionMocks()
+    authStoreState.user = createUser()
+
+    const wrapper = mount(ProfileAvatarCard, {
+      props: {
+        user: authStoreState.user,
+        embedded: true
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    const fileInput = wrapper.get('[data-testid="profile-avatar-file-input"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      value: [new File([new Uint8Array(220 * 1024)], 'avatar.png', { type: 'image/png' })],
+      configurable: true
+    })
+
+    await fileInput.trigger('change')
+    await flushAsyncWork()
+
+    const preview = wrapper.get('[data-testid="profile-avatar-preview"]')
+    expect(preview.attributes('src')).toBe('data:image/webp;base64,Y29tcHJlc3NlZC1hdmF0YXI=')
+  })
+
   it('deletes the current avatar', async () => {
     const updatedUser = createUser({ avatar_url: null })
     updateProfileMock.mockResolvedValue(updatedUser)
