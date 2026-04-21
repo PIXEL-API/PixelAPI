@@ -14,6 +14,8 @@ const {
   getAuthTokenMock,
   replaceMock,
   setTokenMock,
+  setPendingAuthSessionMock,
+  clearPendingAuthSessionMock,
   showSuccessMock,
   showErrorMock,
   fetchPublicSettingsMock,
@@ -32,6 +34,8 @@ const {
   getAuthTokenMock: vi.fn(),
   replaceMock: vi.fn(),
   setTokenMock: vi.fn(),
+  setPendingAuthSessionMock: vi.fn(),
+  clearPendingAuthSessionMock: vi.fn(),
   showSuccessMock: vi.fn(),
   showErrorMock: vi.fn(),
   fetchPublicSettingsMock: vi.fn(),
@@ -111,6 +115,8 @@ vi.mock('vue-i18n', () => ({
 vi.mock('@/stores', () => ({
   useAuthStore: () => ({
     setToken: setTokenMock,
+    setPendingAuthSession: setPendingAuthSessionMock,
+    clearPendingAuthSession: clearPendingAuthSessionMock,
   }),
   useAppStore: () => ({
     ...appStoreState,
@@ -152,6 +158,8 @@ describe('WechatCallbackView', () => {
     getPublicSettingsMock.mockReset()
     replaceMock.mockReset()
     setTokenMock.mockReset()
+    setPendingAuthSessionMock.mockReset()
+    clearPendingAuthSessionMock.mockReset()
     showSuccessMock.mockReset()
     showErrorMock.mockReset()
     prepareOAuthBindAccessTokenCookieMock.mockReset()
@@ -269,6 +277,81 @@ describe('WechatCallbackView', () => {
     expect(locationState.current.href).toContain('mode=open')
   })
 
+  it('accepts the legacy fragment token success callback without pending-session exchange', async () => {
+    locationState.current.hash =
+      '#access_token=legacy-access-token&refresh_token=legacy-refresh-token&expires_in=3600&token_type=Bearer&redirect=%2Flegacy-dashboard'
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: locationState.current,
+    })
+    setTokenMock.mockResolvedValue({})
+
+    mount(WechatCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(exchangePendingOAuthCompletionMock).not.toHaveBeenCalled()
+    expect(setTokenMock).toHaveBeenCalledWith('legacy-access-token')
+    expect(localStorage.getItem('refresh_token')).toBe('legacy-refresh-token')
+    expect(localStorage.getItem('token_expires_at')).not.toBeNull()
+    expect(showSuccessMock).toHaveBeenCalledWith('Login success')
+    expect(replaceMock).toHaveBeenCalledWith('/legacy-dashboard')
+  })
+
+  it('accepts the legacy pending oauth invitation fragment without pending-session exchange', async () => {
+    locationState.current.hash =
+      '#error=invitation_required&pending_oauth_token=legacy-pending-token&redirect=%2Flegacy-invite'
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: locationState.current,
+    })
+    apiClientPostMock.mockResolvedValue({
+      data: {
+        access_token: 'legacy-access-token',
+        refresh_token: 'legacy-refresh-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      },
+    })
+    setTokenMock.mockResolvedValue({})
+
+    const wrapper = mount(WechatCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(exchangePendingOAuthCompletionMock).not.toHaveBeenCalled()
+    await wrapper.find('input[type="text"]').setValue('invite-code')
+    await wrapper.find('button').trigger('click')
+    await flushPromises()
+
+    expect(apiClientPostMock).toHaveBeenCalledWith('/auth/oauth/wechat/complete-registration', {
+      pending_oauth_token: 'legacy-pending-token',
+      invitation_code: 'invite-code',
+      adopt_display_name: true,
+      adopt_avatar: true,
+    })
+    expect(setTokenMock).toHaveBeenCalledWith('legacy-access-token')
+    expect(replaceMock).toHaveBeenCalledWith('/legacy-invite')
+  })
+
   it('does not send adoption decisions during the initial exchange', async () => {
     exchangePendingOAuthCompletionMock.mockResolvedValue({
       access_token: 'access-token',
@@ -382,6 +465,7 @@ describe('WechatCallbackView', () => {
       adoptAvatar: true,
     })
     expect(setTokenMock).not.toHaveBeenCalled()
+    expect(clearPendingAuthSessionMock).toHaveBeenCalledTimes(1)
     expect(showSuccessMock).toHaveBeenCalledWith('profile.authBindings.bindSuccess')
     expect(replaceMock).toHaveBeenCalledWith('/profile/connections')
   })
@@ -546,6 +630,33 @@ describe('WechatCallbackView', () => {
     })
     expect(setTokenMock).toHaveBeenCalledWith('new-access-token')
     expect(replaceMock).toHaveBeenCalledWith('/welcome')
+  })
+
+  it('persists a pending auth session when the oauth flow still needs account creation', async () => {
+    exchangePendingOAuthCompletionMock.mockResolvedValue({
+      error: 'email_required',
+      redirect: '/welcome',
+    })
+
+    mount(WechatCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(setPendingAuthSessionMock).toHaveBeenCalledWith({
+      token: '',
+      token_field: 'pending_oauth_token',
+      provider: 'wechat',
+      redirect: '/welcome',
+    })
   })
 
   it('switches to bind-login when create-account returns EMAIL_EXISTS', async () => {
