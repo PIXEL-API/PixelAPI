@@ -151,7 +151,19 @@ func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) s
 		return ""
 	}
 	if resp.Status == payment.ProviderStatusPaid {
-		if err := s.HandlePaymentNotification(ctx, &payment.PaymentNotification{TradeNo: o.PaymentTradeNo, OrderID: o.OutTradeNo, Amount: resp.Amount, Status: payment.ProviderStatusSuccess}, prov.ProviderKey()); err != nil {
+		notificationTradeNo := o.PaymentTradeNo
+		if upstreamTradeNo := resp.TradeNo; upstreamTradeNo != "" && upstreamTradeNo != notificationTradeNo {
+			if _, updateErr := s.entClient.PaymentOrder.Update().
+				Where(paymentorder.IDEQ(o.ID)).
+				SetPaymentTradeNo(upstreamTradeNo).
+				Save(ctx); updateErr != nil {
+				slog.Error("persist upstream trade no during checkPaid failed", "orderID", o.ID, "tradeNo", upstreamTradeNo, "error", updateErr)
+			} else {
+				o.PaymentTradeNo = upstreamTradeNo
+			}
+			notificationTradeNo = upstreamTradeNo
+		}
+		if err := s.HandlePaymentNotification(ctx, &payment.PaymentNotification{TradeNo: notificationTradeNo, OrderID: o.OutTradeNo, Amount: resp.Amount, Status: payment.ProviderStatusSuccess}, prov.ProviderKey()); err != nil {
 			slog.Error("fulfillment failed during checkPaid", "orderID", o.ID, "error", err)
 			// Still return already_paid — order was paid, fulfillment can be retried
 		}
