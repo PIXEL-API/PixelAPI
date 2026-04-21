@@ -321,3 +321,37 @@ func TestParseLegacyPaymentOrderID(t *testing.T) {
 	_, ok = parseLegacyPaymentOrderID("sub2_42", errors.New("db down"))
 	assert.False(t, ok)
 }
+
+func TestValidateProviderNotificationMetadataRejectsAlipaySnapshotMismatch(t *testing.T) {
+	t.Parallel()
+
+	order := &dbent.PaymentOrder{
+		PaymentType: payment.TypeAlipay,
+		ProviderSnapshot: map[string]any{
+			"schema_version":  2,
+			"merchant_app_id": "alipay-app-expected",
+		},
+	}
+
+	err := validateProviderNotificationMetadata(order, payment.TypeAlipay, map[string]string{
+		"app_id": "alipay-app-other",
+	})
+	assert.ErrorContains(t, err, "alipay app_id mismatch")
+}
+
+func TestValidateProviderNotificationMetadataRejectsEasyPaySnapshotMismatch(t *testing.T) {
+	t.Parallel()
+
+	order := &dbent.PaymentOrder{
+		PaymentType: payment.TypeAlipay,
+		ProviderSnapshot: map[string]any{
+			"schema_version": 2,
+			"merchant_id":    "pid-expected",
+		},
+	}
+
+	err := validateProviderNotificationMetadata(order, payment.TypeEasyPay, map[string]string{
+		"pid": "pid-other",
+	})
+	assert.ErrorContains(t, err, "easypay pid mismatch")
+}

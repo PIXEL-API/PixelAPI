@@ -240,6 +240,16 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 		}
 		snapshot["currency"] = "CNY"
 	}
+	if providerKey == payment.TypeAlipay {
+		if merchantAppID := strings.TrimSpace(sel.Config["appId"]); merchantAppID != "" {
+			snapshot["merchant_app_id"] = merchantAppID
+		}
+	}
+	if providerKey == payment.TypeEasyPay {
+		if merchantID := strings.TrimSpace(sel.Config["pid"]); merchantID != "" {
+			snapshot["merchant_id"] = merchantID
+		}
+	}
 
 	if len(snapshot) == 1 {
 		return nil

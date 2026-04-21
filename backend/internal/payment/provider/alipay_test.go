@@ -243,3 +243,18 @@ func TestCreateTradeUsesWapPayForMobile(t *testing.T) {
 		t.Fatalf("qr_code = %q, want empty", resp.QRCode)
 	}
 }
+
+func TestAlipayMerchantIdentityMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider := &Alipay{
+		config: map[string]string{
+			"appId": "2021001234567890",
+		},
+	}
+
+	metadata := provider.MerchantIdentityMetadata()
+	if metadata["app_id"] != "2021001234567890" {
+		t.Fatalf("app_id = %q, want %q", metadata["app_id"], "2021001234567890")
+	}
+}
