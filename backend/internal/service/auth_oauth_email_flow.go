@@ -7,6 +7,9 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 )
 
 func normalizeOAuthSignupSource(signupSource string) string {
@@ -50,7 +53,7 @@ func (s *AuthService) validateOAuthRegistrationInvitation(ctx context.Context, i
 	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
 		return nil, nil
 	}
-	if s.redeemRepo == nil {
+	if s.redeemRepo == nil && s.oauthEmailFlowClient(ctx) == nil {
 		return nil, ErrServiceUnavailable
 	}
 
@@ -59,7 +62,7 @@ func (s *AuthService) validateOAuthRegistrationInvitation(ctx context.Context, i
 		return nil, ErrInvitationCodeRequired
 	}
 
-	redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
+	redeemCode, err := s.loadOAuthRegistrationInvitation(ctx, invitationCode)
 	if err != nil {
 		return nil, ErrInvitationCodeInvalid
 	}
@@ -181,12 +184,12 @@ func (s *AuthService) FinalizeOAuthEmailAccount(
 		return err
 	}
 	if invitationRedeemCode != nil {
-		if err := s.redeemRepo.Use(ctx, invitationRedeemCode.ID, user.ID); err != nil {
+		if err := s.useOAuthRegistrationInvitation(ctx, invitationRedeemCode.ID, user.ID); err != nil {
 			return ErrInvitationCodeInvalid
 		}
 	}
 
-	s.postAuthUserBootstrap(ctx, user, signupSource, false)
+	s.updateOAuthSignupSource(ctx, user.ID, signupSource)
 	grantPlan := s.resolveSignupGrantPlan(ctx, signupSource)
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 	return nil
@@ -211,7 +214,7 @@ func (s *AuthService) restoreOAuthRegistrationInvitation(ctx context.Context, in
 	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
 		return nil
 	}
-	if s.redeemRepo == nil {
+	if s.redeemRepo == nil && s.oauthEmailFlowClient(ctx) == nil {
 		return ErrServiceUnavailable
 	}
 
@@ -220,7 +223,7 @@ func (s *AuthService) restoreOAuthRegistrationInvitation(ctx context.Context, in
 		return nil
 	}
 
-	redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
+	redeemCode, err := s.loadOAuthRegistrationInvitation(ctx, invitationCode)
 	if err != nil {
 		if errors.Is(err, ErrRedeemCodeNotFound) {
 			return nil
@@ -234,10 +237,113 @@ func (s *AuthService) restoreOAuthRegistrationInvitation(ctx context.Context, in
 	redeemCode.Status = StatusUnused
 	redeemCode.UsedBy = nil
 	redeemCode.UsedAt = nil
-	if err := s.redeemRepo.Update(ctx, redeemCode); err != nil {
+	if err := s.updateOAuthRegistrationInvitation(ctx, redeemCode); err != nil {
 		return fmt.Errorf("restore invitation code: %w", err)
 	}
 	return nil
+}
+
+func (s *AuthService) oauthEmailFlowClient(ctx context.Context) *dbent.Client {
+	if s == nil || s.entClient == nil {
+		return nil
+	}
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		return tx.Client()
+	}
+	return s.entClient
+}
+
+func (s *AuthService) loadOAuthRegistrationInvitation(ctx context.Context, invitationCode string) (*RedeemCode, error) {
+	if client := s.oauthEmailFlowClient(ctx); client != nil {
+		entity, err := client.RedeemCode.Query().Where(redeemcode.CodeEQ(invitationCode)).Only(ctx)
+		if err != nil {
+			if dbent.IsNotFound(err) {
+				return nil, ErrRedeemCodeNotFound
+			}
+			return nil, err
+		}
+		return &RedeemCode{
+			ID:           entity.ID,
+			Code:         entity.Code,
+			Type:         entity.Type,
+			Value:        entity.Value,
+			Status:       entity.Status,
+			UsedBy:       entity.UsedBy,
+			UsedAt:       entity.UsedAt,
+			Notes:        oauthEmailFlowStringValue(entity.Notes),
+			CreatedAt:    entity.CreatedAt,
+			GroupID:      entity.GroupID,
+			ValidityDays: entity.ValidityDays,
+		}, nil
+	}
+	return s.redeemRepo.GetByCode(ctx, invitationCode)
+}
+
+func (s *AuthService) useOAuthRegistrationInvitation(ctx context.Context, invitationID, userID int64) error {
+	if client := s.oauthEmailFlowClient(ctx); client != nil {
+		affected, err := client.RedeemCode.Update().
+			Where(redeemcode.IDEQ(invitationID), redeemcode.StatusEQ(StatusUnused)).
+			SetStatus(StatusUsed).
+			SetUsedBy(userID).
+			SetUsedAt(time.Now().UTC()).
+			Save(ctx)
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return ErrRedeemCodeUsed
+		}
+		return nil
+	}
+	return s.redeemRepo.Use(ctx, invitationID, userID)
+}
+
+func (s *AuthService) updateOAuthRegistrationInvitation(ctx context.Context, code *RedeemCode) error {
+	if code == nil {
+		return nil
+	}
+	if client := s.oauthEmailFlowClient(ctx); client != nil {
+		update := client.RedeemCode.UpdateOneID(code.ID).
+			SetCode(code.Code).
+			SetType(code.Type).
+			SetValue(code.Value).
+			SetStatus(code.Status).
+			SetNotes(code.Notes).
+			SetValidityDays(code.ValidityDays)
+		if code.UsedBy != nil {
+			update = update.SetUsedBy(*code.UsedBy)
+		} else {
+			update = update.ClearUsedBy()
+		}
+		if code.UsedAt != nil {
+			update = update.SetUsedAt(*code.UsedAt)
+		} else {
+			update = update.ClearUsedAt()
+		}
+		if code.GroupID != nil {
+			update = update.SetGroupID(*code.GroupID)
+		} else {
+			update = update.ClearGroupID()
+		}
+		_, err := update.Save(ctx)
+		return err
+	}
+	return s.redeemRepo.Update(ctx, code)
+}
+
+func (s *AuthService) updateOAuthSignupSource(ctx context.Context, userID int64, signupSource string) {
+	client := s.oauthEmailFlowClient(ctx)
+	if client == nil || userID <= 0 || strings.TrimSpace(signupSource) == "" {
+		return
+	}
+	_ = client.User.UpdateOneID(userID).SetSignupSource(signupSource).Exec(ctx)
+}
+
+func oauthEmailFlowStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // ValidatePasswordCredentials checks the local password without completing the
@@ -269,7 +375,7 @@ func (s *AuthService) ValidatePasswordCredentials(ctx context.Context, email, pa
 func (s *AuthService) RecordSuccessfulLogin(ctx context.Context, userID int64) {
 	if s != nil && s.userRepo != nil && userID > 0 {
 		user, err := s.userRepo.GetByID(ctx, userID)
-		if err == nil {
+		if err == nil && user != nil && !isReservedEmail(user.Email) {
 			s.backfillEmailIdentityOnSuccessfulLogin(ctx, user)
 		}
 	}
