@@ -11,8 +11,11 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
+	dbpredicate "github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+
+	entsql "entgo.io/ent/dialect/sql"
 )
 
 var (
@@ -269,6 +272,24 @@ func validatePendingSessionState(session *dbent.PendingAuthSession, browserSessi
 func (s *AuthPendingIdentityService) UpsertAdoptionDecision(ctx context.Context, input PendingIdentityAdoptionDecisionInput) (*dbent.IdentityAdoptionDecision, error) {
 	if s == nil || s.entClient == nil {
 		return nil, fmt.Errorf("pending auth ent client is not configured")
+	}
+
+	if input.IdentityID != nil && *input.IdentityID > 0 {
+		if _, err := s.entClient.IdentityAdoptionDecision.Update().
+			Where(
+				identityadoptiondecision.IdentityIDEQ(*input.IdentityID),
+				dbpredicate.IdentityAdoptionDecision(func(s *entsql.Selector) {
+					col := s.C(identityadoptiondecision.FieldPendingAuthSessionID)
+					s.Where(entsql.Or(
+						entsql.IsNull(col),
+						entsql.NEQ(col, input.PendingAuthSessionID),
+					))
+				}),
+			).
+			ClearIdentityID().
+			Save(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	existing, err := s.entClient.IdentityAdoptionDecision.Query().

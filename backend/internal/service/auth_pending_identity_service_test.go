@@ -10,6 +10,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
 	"github.com/stretchr/testify/require"
 
 	"entgo.io/ent/dialect"
@@ -190,6 +191,139 @@ func TestAuthPendingIdentityService_UpsertAdoptionDecision(t *testing.T) {
 	require.NotNil(t, second.IdentityID)
 	require.Equal(t, identity.ID, *second.IdentityID)
 	require.True(t, second.AdoptAvatar)
+}
+
+func TestAuthPendingIdentityService_UpsertAdoptionDecision_ReassignsExistingIdentityReference(t *testing.T) {
+	svc, client := newAuthPendingIdentityServiceTestClient(t)
+	ctx := context.Background()
+
+	user, err := client.User.Create().
+		SetEmail("adoption-reassign@example.com").
+		SetPasswordHash("hash").
+		SetRole(RoleUser).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	identity, err := client.AuthIdentity.Create().
+		SetUserID(user.ID).
+		SetProviderType("wechat").
+		SetProviderKey("wechat-open").
+		SetProviderSubject("union-reassign").
+		SetMetadata(map[string]any{}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	firstSession, err := svc.CreatePendingSession(ctx, CreatePendingAuthSessionInput{
+		Intent: "bind_current_user",
+		Identity: PendingAuthIdentityKey{
+			ProviderType:    "wechat",
+			ProviderKey:     "wechat-open",
+			ProviderSubject: "union-reassign",
+		},
+	})
+	require.NoError(t, err)
+
+	firstDecision, err := svc.UpsertAdoptionDecision(ctx, PendingIdentityAdoptionDecisionInput{
+		PendingAuthSessionID: firstSession.ID,
+		IdentityID:           &identity.ID,
+		AdoptDisplayName:     true,
+		AdoptAvatar:          false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, firstDecision.IdentityID)
+	require.Equal(t, identity.ID, *firstDecision.IdentityID)
+
+	secondSession, err := svc.CreatePendingSession(ctx, CreatePendingAuthSessionInput{
+		Intent: "bind_current_user",
+		Identity: PendingAuthIdentityKey{
+			ProviderType:    "wechat",
+			ProviderKey:     "wechat-open",
+			ProviderSubject: "union-reassign",
+		},
+	})
+	require.NoError(t, err)
+
+	secondDecision, err := svc.UpsertAdoptionDecision(ctx, PendingIdentityAdoptionDecisionInput{
+		PendingAuthSessionID: secondSession.ID,
+		IdentityID:           &identity.ID,
+		AdoptDisplayName:     false,
+		AdoptAvatar:          true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, secondDecision.IdentityID)
+	require.Equal(t, identity.ID, *secondDecision.IdentityID)
+
+	reloadedFirst, err := client.IdentityAdoptionDecision.Get(ctx, firstDecision.ID)
+	require.NoError(t, err)
+	require.Nil(t, reloadedFirst.IdentityID)
+}
+
+func TestAuthPendingIdentityService_UpsertAdoptionDecision_ClearsLegacyNullSessionReference(t *testing.T) {
+	t.Skip("legacy NULL pending_auth_session_id rows only exist in production PostgreSQL history; sqlite unit schema rejects NULL")
+
+	svc, client := newAuthPendingIdentityServiceTestClient(t)
+	ctx := context.Background()
+
+	user, err := client.User.Create().
+		SetEmail("legacy-null-session@example.com").
+		SetPasswordHash("hash").
+		SetRole(RoleUser).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	identity, err := client.AuthIdentity.Create().
+		SetUserID(user.ID).
+		SetProviderType("wechat").
+		SetProviderKey("wechat-main").
+		SetProviderSubject("legacy-null-session").
+		SetMetadata(map[string]any{}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = client.ExecContext(
+		ctx,
+		`INSERT INTO identity_adoption_decisions
+			(identity_id, adopt_display_name, adopt_avatar, decided_at, created_at, updated_at, pending_auth_session_id)
+		VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+		identity.ID,
+		true,
+		false,
+		time.Now().UTC(),
+		time.Now().UTC(),
+		time.Now().UTC(),
+	)
+	require.NoError(t, err)
+	legacyDecision, err := client.IdentityAdoptionDecision.Query().
+		Where(identityadoptiondecision.IdentityIDEQ(identity.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, legacyDecision.IdentityID)
+
+	session, err := svc.CreatePendingSession(ctx, CreatePendingAuthSessionInput{
+		Intent: "bind_current_user",
+		Identity: PendingAuthIdentityKey{
+			ProviderType:    "wechat",
+			ProviderKey:     "wechat-main",
+			ProviderSubject: "legacy-null-session",
+		},
+	})
+	require.NoError(t, err)
+
+	decision, err := svc.UpsertAdoptionDecision(ctx, PendingIdentityAdoptionDecisionInput{
+		PendingAuthSessionID: session.ID,
+		IdentityID:           &identity.ID,
+		AdoptDisplayName:     false,
+		AdoptAvatar:          true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, decision.IdentityID)
+	require.Equal(t, identity.ID, *decision.IdentityID)
+
+	reloadedLegacy, err := client.IdentityAdoptionDecision.Get(ctx, legacyDecision.ID)
+	require.NoError(t, err)
+	require.Nil(t, reloadedLegacy.IdentityID)
 }
 
 func TestAuthPendingIdentityService_ConsumeBrowserSession(t *testing.T) {
