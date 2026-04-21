@@ -146,6 +146,63 @@ func TestGetPublicOrderByResumeTokenRejectsSnapshotMismatch(t *testing.T) {
 	require.Contains(t, err.Error(), "resume token")
 }
 
+func TestGetPublicOrderByResumeTokenUsesSnapshotAuthorityWhenColumnsDiffer(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("resume-snapshot-authority@example.com").
+		SetPasswordHash("hash").
+		SetUsername("resume-snapshot-authority-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(88).
+		SetPayAmount(88).
+		SetFeeRate(0).
+		SetRechargeCode("RESUME-SNAPSHOT-AUTHORITY").
+		SetOutTradeNo("sub2_resume_snapshot_authority").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("trade-snapshot-authority").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetProviderInstanceID("legacy-column-instance").
+		SetProviderKey(payment.TypeAlipay).
+		SetProviderSnapshot(map[string]any{
+			"schema_version":       2,
+			"provider_instance_id": "snapshot-instance",
+			"provider_key":         payment.TypeEasyPay,
+		}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	resumeSvc := NewPaymentResumeService([]byte("0123456789abcdef0123456789abcdef"))
+	token, err := resumeSvc.CreateToken(ResumeTokenClaims{
+		OrderID:            order.ID,
+		UserID:             user.ID,
+		ProviderInstanceID: "snapshot-instance",
+		ProviderKey:        payment.TypeEasyPay,
+		PaymentType:        payment.TypeAlipay,
+		CanonicalReturnURL: "https://app.example.com/payment/result",
+	})
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		entClient:     client,
+		resumeService: resumeSvc,
+	}
+
+	got, err := svc.GetPublicOrderByResumeToken(ctx, token)
+	require.NoError(t, err)
+	require.Equal(t, order.ID, got.ID)
+}
+
 func TestGetPublicOrderByResumeTokenChecksUpstreamForPendingOrder(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)

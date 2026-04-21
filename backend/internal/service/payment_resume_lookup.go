@@ -21,10 +21,21 @@ func (s *PaymentService) GetPublicOrderByResumeToken(ctx context.Context, token 
 	if claims.UserID > 0 && order.UserID != claims.UserID {
 		return nil, fmt.Errorf("resume token user mismatch")
 	}
-	if claims.ProviderInstanceID != "" && strings.TrimSpace(psStringValue(order.ProviderInstanceID)) != claims.ProviderInstanceID {
+	snapshot := psOrderProviderSnapshot(order)
+	orderProviderInstanceID := strings.TrimSpace(psStringValue(order.ProviderInstanceID))
+	orderProviderKey := strings.TrimSpace(psStringValue(order.ProviderKey))
+	if snapshot != nil {
+		if snapshot.ProviderInstanceID != "" {
+			orderProviderInstanceID = snapshot.ProviderInstanceID
+		}
+		if snapshot.ProviderKey != "" {
+			orderProviderKey = snapshot.ProviderKey
+		}
+	}
+	if claims.ProviderInstanceID != "" && orderProviderInstanceID != claims.ProviderInstanceID {
 		return nil, fmt.Errorf("resume token provider instance mismatch")
 	}
-	if claims.ProviderKey != "" && strings.TrimSpace(psStringValue(order.ProviderKey)) != claims.ProviderKey {
+	if claims.ProviderKey != "" && orderProviderKey != claims.ProviderKey {
 		return nil, fmt.Errorf("resume token provider key mismatch")
 	}
 	if claims.PaymentType != "" && strings.TrimSpace(order.PaymentType) != claims.PaymentType {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -139,20 +140,18 @@ func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) s
 	if err != nil {
 		return ""
 	}
-	// Use OutTradeNo as fallback when PaymentTradeNo is empty
-	// (e.g. EasyPay popup mode where trade_no arrives only via notify callback)
-	tradeNo := o.PaymentTradeNo
-	if tradeNo == "" {
-		tradeNo = o.OutTradeNo
+	queryRef := paymentOrderQueryReference(o, prov)
+	if queryRef == "" {
+		return ""
 	}
-	resp, err := prov.QueryOrder(ctx, tradeNo)
+	resp, err := prov.QueryOrder(ctx, queryRef)
 	if err != nil {
 		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
 		return ""
 	}
 	if resp.Status == payment.ProviderStatusPaid {
 		notificationTradeNo := o.PaymentTradeNo
-		if upstreamTradeNo := resp.TradeNo; upstreamTradeNo != "" && upstreamTradeNo != notificationTradeNo {
+		if upstreamTradeNo := strings.TrimSpace(resp.TradeNo); paymentOrderShouldPersistUpstreamTradeNo(queryRef, upstreamTradeNo, notificationTradeNo) {
 			if _, updateErr := s.entClient.PaymentOrder.Update().
 				Where(paymentorder.IDEQ(o.ID)).
 				SetPaymentTradeNo(upstreamTradeNo).
@@ -170,9 +169,55 @@ func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) s
 		return checkPaidResultAlreadyPaid
 	}
 	if cp, ok := prov.(payment.CancelableProvider); ok {
-		_ = cp.CancelPayment(ctx, tradeNo)
+		_ = cp.CancelPayment(ctx, queryRef)
 	}
 	return ""
+}
+
+func paymentOrderQueryReference(order *dbent.PaymentOrder, prov payment.Provider) string {
+	if order == nil {
+		return ""
+	}
+
+	providerKey := ""
+	if prov != nil {
+		providerKey = strings.TrimSpace(prov.ProviderKey())
+	}
+	if providerKey == "" {
+		if snapshot := psOrderProviderSnapshot(order); snapshot != nil {
+			providerKey = strings.TrimSpace(snapshot.ProviderKey)
+		}
+	}
+	if providerKey == "" {
+		providerKey = strings.TrimSpace(psStringValue(order.ProviderKey))
+	}
+	if providerKey == "" {
+		providerKey = strings.TrimSpace(order.PaymentType)
+	}
+
+	switch payment.GetBasePaymentType(providerKey) {
+	case payment.TypeAlipay, payment.TypeEasyPay, payment.TypeWxpay:
+		return strings.TrimSpace(order.OutTradeNo)
+	default:
+		if tradeNo := strings.TrimSpace(order.PaymentTradeNo); tradeNo != "" {
+			return tradeNo
+		}
+		return strings.TrimSpace(order.OutTradeNo)
+	}
+}
+
+func paymentOrderShouldPersistUpstreamTradeNo(queryRef, upstreamTradeNo, currentTradeNo string) bool {
+	upstreamTradeNo = strings.TrimSpace(upstreamTradeNo)
+	if upstreamTradeNo == "" {
+		return false
+	}
+	if strings.EqualFold(upstreamTradeNo, strings.TrimSpace(currentTradeNo)) {
+		return false
+	}
+	if strings.EqualFold(upstreamTradeNo, strings.TrimSpace(queryRef)) {
+		return false
+	}
+	return true
 }
 
 // VerifyOrderByOutTradeNo actively queries the upstream provider to check
