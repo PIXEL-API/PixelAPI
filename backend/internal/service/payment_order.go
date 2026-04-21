@@ -139,7 +139,7 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		tm = defaultOrderTimeoutMin
 	}
 	exp := time.Now().Add(time.Duration(tm) * time.Minute)
-	providerSnapshot := buildPaymentOrderProviderSnapshot(sel)
+	providerSnapshot := buildPaymentOrderProviderSnapshot(sel, req)
 	selectedInstanceID := ""
 	selectedProviderKey := ""
 	if sel != nil {
@@ -208,13 +208,13 @@ func (s *PaymentService) checkPendingLimit(ctx context.Context, tx *dbent.Tx, us
 	return nil
 }
 
-func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection) map[string]any {
+func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req CreateOrderRequest) map[string]any {
 	if sel == nil {
 		return nil
 	}
 
 	snapshot := map[string]any{}
-	snapshot["schema_version"] = 1
+	snapshot["schema_version"] = 2
 
 	instanceID := strings.TrimSpace(sel.InstanceID)
 	if instanceID != "" {
@@ -231,10 +231,30 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection) map[strin
 		snapshot["payment_mode"] = paymentMode
 	}
 
+	if providerKey == payment.TypeWxpay {
+		if merchantAppID := paymentOrderSnapshotWxpayAppID(sel, req); merchantAppID != "" {
+			snapshot["merchant_app_id"] = merchantAppID
+		}
+		if merchantID := strings.TrimSpace(sel.Config["mchId"]); merchantID != "" {
+			snapshot["merchant_id"] = merchantID
+		}
+		snapshot["currency"] = "CNY"
+	}
+
 	if len(snapshot) == 1 {
 		return nil
 	}
 	return snapshot
+}
+
+func paymentOrderSnapshotWxpayAppID(sel *payment.InstanceSelection, req CreateOrderRequest) string {
+	if sel == nil || strings.TrimSpace(sel.ProviderKey) != payment.TypeWxpay {
+		return ""
+	}
+	if strings.TrimSpace(req.OpenID) != "" {
+		return strings.TrimSpace(provider.ResolveWxpayJSAPIAppID(sel.Config))
+	}
+	return strings.TrimSpace(sel.Config["appId"])
 }
 
 func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, userID int64, amount, limit float64) error {

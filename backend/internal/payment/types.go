@@ -149,19 +149,21 @@ type CreatePaymentResponse struct {
 
 // QueryOrderResponse describes the payment status from the upstream provider.
 type QueryOrderResponse struct {
-	TradeNo string
-	Status  string  // "pending", "paid", "failed", "refunded"
-	Amount  float64 // Amount in CNY
-	PaidAt  string  // RFC3339 timestamp or empty
+	TradeNo  string
+	Status   string  // "pending", "paid", "failed", "refunded"
+	Amount   float64 // Amount in CNY
+	PaidAt   string  // RFC3339 timestamp or empty
+	Metadata map[string]string
 }
 
 // PaymentNotification is the parsed result of a webhook/notify callback.
 type PaymentNotification struct {
-	TradeNo string
-	OrderID string
-	Amount  float64
-	Status  string // "success" or "failed"
-	RawData string // Raw notification body for audit
+	TradeNo  string
+	OrderID  string
+	Amount   float64
+	Status   string // "success" or "failed"
+	RawData  string // Raw notification body for audit
+	Metadata map[string]string
 }
 
 // RefundRequest contains the parameters for requesting a refund.

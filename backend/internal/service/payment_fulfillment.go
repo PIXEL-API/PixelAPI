@@ -28,14 +28,14 @@ func (s *PaymentService) HandlePaymentNotification(ctx context.Context, n *payme
 		// Fallback: try legacy format (sub2_N where N is DB ID)
 		trimmed := strings.TrimPrefix(n.OrderID, orderIDPrefix)
 		if oid, parseErr := strconv.ParseInt(trimmed, 10, 64); parseErr == nil {
-			return s.confirmPayment(ctx, oid, n.TradeNo, n.Amount, pk)
+			return s.confirmPayment(ctx, oid, n.TradeNo, n.Amount, pk, n.Metadata)
 		}
 		return fmt.Errorf("order not found for out_trade_no: %s", n.OrderID)
 	}
-	return s.confirmPayment(ctx, order.ID, n.TradeNo, n.Amount, pk)
+	return s.confirmPayment(ctx, order.ID, n.TradeNo, n.Amount, pk, n.Metadata)
 }
 
-func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo string, paid float64, pk string) error {
+func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo string, paid float64, pk string, metadata map[string]string) error {
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		slog.Error("order not found", "orderID", oid)
@@ -54,6 +54,13 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		})
 		return fmt.Errorf("provider mismatch: expected %s, got %s", expectedProviderKey, pk)
 	}
+	if err := validateProviderNotificationMetadata(o, pk, metadata); err != nil {
+		s.writeAuditLog(ctx, o.ID, "PAYMENT_PROVIDER_METADATA_MISMATCH", pk, map[string]any{
+			"detail":  err.Error(),
+			"tradeNo": tradeNo,
+		})
+		return err
+	}
 	// Skip amount check when paid=0 (e.g. QueryOrder doesn't return amount).
 	// Also skip if paid is NaN/Inf (malformed provider data).
 	if paid > 0 && !math.IsNaN(paid) && !math.IsInf(paid, 0) {
@@ -67,6 +74,50 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		paid = o.PayAmount
 	}
 	return s.toPaid(ctx, o, tradeNo, paid, pk)
+}
+
+func validateProviderNotificationMetadata(order *dbent.PaymentOrder, providerKey string, metadata map[string]string) error {
+	if order == nil || len(metadata) == 0 || !strings.EqualFold(strings.TrimSpace(providerKey), payment.TypeWxpay) {
+		return nil
+	}
+
+	snapshot := psOrderProviderSnapshot(order)
+	if snapshot == nil {
+		return nil
+	}
+
+	if expected := strings.TrimSpace(snapshot.MerchantAppID); expected != "" {
+		actual := strings.TrimSpace(metadata["appid"])
+		if actual == "" {
+			return fmt.Errorf("wxpay notification missing appid")
+		}
+		if !strings.EqualFold(expected, actual) {
+			return fmt.Errorf("wxpay appid mismatch: expected %s, got %s", expected, actual)
+		}
+	}
+	if expected := strings.TrimSpace(snapshot.MerchantID); expected != "" {
+		actual := strings.TrimSpace(metadata["mchid"])
+		if actual == "" {
+			return fmt.Errorf("wxpay notification missing mchid")
+		}
+		if !strings.EqualFold(expected, actual) {
+			return fmt.Errorf("wxpay mchid mismatch: expected %s, got %s", expected, actual)
+		}
+	}
+	if expected := strings.TrimSpace(snapshot.Currency); expected != "" {
+		actual := strings.ToUpper(strings.TrimSpace(metadata["currency"]))
+		if actual == "" {
+			return fmt.Errorf("wxpay notification missing currency")
+		}
+		if !strings.EqualFold(expected, actual) {
+			return fmt.Errorf("wxpay currency mismatch: expected %s, got %s", expected, actual)
+		}
+	}
+	if actual := strings.TrimSpace(metadata["trade_state"]); actual != "" && !strings.EqualFold(actual, "SUCCESS") {
+		return fmt.Errorf("wxpay trade_state mismatch: expected SUCCESS, got %s", actual)
+	}
+
+	return nil
 }
 
 func expectedNotificationProviderKey(registry *payment.Registry, orderPaymentType string, orderProviderKey string, instanceProviderKey string) string {

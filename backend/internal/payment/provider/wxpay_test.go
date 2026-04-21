@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/wechatpay-apiv3/wechatpay-go/core"
+	"github.com/wechatpay-apiv3/wechatpay-go/services/payments"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/h5"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/jsapi"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/native"
@@ -99,6 +100,33 @@ func TestWxSV(t *testing.T) {
 				t.Errorf("wxSV() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildWxpayTransactionMetadata(t *testing.T) {
+	t.Parallel()
+
+	tx := &payments.Transaction{
+		Appid:      strPtr("wx-app-id"),
+		Mchid:      strPtr("mch-id"),
+		TradeState: strPtr(wxpayTradeStateSuccess),
+		Amount: &payments.Amount{
+			Currency: strPtr(wxpayCurrency),
+		},
+	}
+
+	metadata := buildWxpayTransactionMetadata(tx)
+	if metadata[wxpayMetadataAppID] != "wx-app-id" {
+		t.Fatalf("appid = %q", metadata[wxpayMetadataAppID])
+	}
+	if metadata[wxpayMetadataMerchantID] != "mch-id" {
+		t.Fatalf("mchid = %q", metadata[wxpayMetadataMerchantID])
+	}
+	if metadata[wxpayMetadataCurrency] != wxpayCurrency {
+		t.Fatalf("currency = %q", metadata[wxpayMetadataCurrency])
+	}
+	if metadata[wxpayMetadataTradeState] != wxpayTradeStateSuccess {
+		t.Fatalf("trade_state = %q", metadata[wxpayMetadataTradeState])
 	}
 }
 
