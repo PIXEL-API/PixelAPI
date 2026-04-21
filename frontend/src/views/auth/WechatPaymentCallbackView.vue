@@ -20,9 +20,9 @@
 
         <div
           v-else
-          class="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-700/50 dark:bg-red-900/20"
+          class="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/80"
         >
-          <p class="text-sm text-red-700 dark:text-red-400">
+          <p class="text-sm text-gray-700 dark:text-gray-300">
             {{ errorMessage }}
           </p>
           <button
@@ -39,40 +39,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { useAppStore } from '@/stores'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const appStore = useAppStore()
 
 const errorMessage = ref('')
 
-function textWithFallback(key: string, zh: string, en: string): string {
-  const translated = t(key)
-  if (translated !== key) return translated
-  return String(locale.value).toLowerCase().startsWith('zh') ? zh : en
-}
+watch(errorMessage, (message) => {
+  if (message) {
+    appStore.showError(message)
+  }
+})
 
-const callbackProcessingText = computed(() =>
-  textWithFallback(
-    'auth.wechatPayment.callbackProcessing',
-    '正在恢复微信支付...',
-    'Resuming WeChat payment...',
-  ))
-const callbackTitleText = computed(() =>
-  textWithFallback(
-    'auth.wechatPayment.callbackTitle',
-    '正在恢复微信支付',
-    'Resuming WeChat payment',
-  ))
-const backToPaymentText = computed(() =>
-  textWithFallback(
-    'auth.wechatPayment.backToPayment',
-    '返回支付页',
-    'Back to payment',
-  ))
+const callbackProcessingText = computed(() => t('auth.wechatPayment.callbackProcessing'))
+const callbackTitleText = computed(() => t('auth.wechatPayment.callbackTitle'))
+const backToPaymentText = computed(() => t('auth.wechatPayment.backToPayment'))
 
 function readQueryString(key: string): string {
   const value = route.query[key]
@@ -121,11 +108,7 @@ onMounted(async () => {
   )
 
   if (!resumeToken) {
-    errorMessage.value = textWithFallback(
-      'auth.wechatPayment.callbackMissingResumeToken',
-      '微信支付回调缺少恢复令牌。',
-      'The WeChat payment callback is missing the resume token.',
-    )
+    errorMessage.value = t('auth.wechatPayment.callbackMissingResumeToken')
     return
   }
 

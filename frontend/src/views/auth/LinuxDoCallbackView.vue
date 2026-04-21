@@ -29,10 +29,10 @@
             <div class="space-y-3">
               <div class="space-y-1">
                 <p class="text-sm font-medium text-gray-900 dark:text-white">
-                  Use LinuxDo profile details
+                  {{ t('auth.oauthFlow.profileDetailsTitle', { providerName }) }}
                 </p>
                 <p class="text-xs text-gray-500 dark:text-dark-400">
-                  Choose whether to apply the nickname or avatar from LinuxDo to this account.
+                  {{ t('auth.oauthFlow.profileDetailsDescription', { providerName }) }}
                 </p>
               </div>
 
@@ -43,7 +43,7 @@
                 <input v-model="adoptDisplayName" type="checkbox" class="mt-1 h-4 w-4" />
                 <span class="space-y-1">
                   <span class="block font-medium text-gray-900 dark:text-white">
-                    Use display name
+                    {{ t('auth.oauthFlow.useDisplayName') }}
                   </span>
                   <span class="block text-gray-500 dark:text-dark-400">
                     {{ suggestedDisplayName }}
@@ -58,12 +58,12 @@
                 <input v-model="adoptAvatar" type="checkbox" class="mt-1 h-4 w-4" />
                 <img
                   :src="suggestedAvatarUrl"
-                  alt="LinuxDo avatar"
+                  :alt="t('auth.oauthFlow.avatarAlt', { providerName })"
                   class="h-10 w-10 rounded-full border border-gray-200 object-cover dark:border-dark-600"
                 />
                 <span class="space-y-1">
                   <span class="block font-medium text-gray-900 dark:text-white">
-                    Use avatar
+                    {{ t('auth.oauthFlow.useAvatar') }}
                   </span>
                   <span class="block break-all text-gray-500 dark:text-dark-400">
                     {{ suggestedAvatarUrl }}
@@ -87,11 +87,6 @@
                 @keyup.enter="handleSubmitInvitation"
               />
             </div>
-            <transition name="fade">
-              <p v-if="invitationError" class="text-sm text-red-600 dark:text-red-400">
-                {{ invitationError }}
-              </p>
-            </transition>
             <button
               class="btn btn-primary w-full"
               :disabled="isSubmitting || !invitationCode.trim()"
@@ -103,10 +98,10 @@
 
           <template v-else-if="needsAdoptionConfirmation">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Review the LinuxDo profile details before continuing.
+              {{ t('auth.oauthFlow.reviewProfileBeforeContinue', { providerName }) }}
             </p>
             <button class="btn btn-primary w-full" :disabled="isSubmitting" @click="handleContinueLogin">
-              {{ isSubmitting ? t('common.processing') : 'Continue' }}
+              {{ isSubmitting ? t('common.processing') : t('auth.continue') }}
             </button>
           </template>
 
@@ -115,13 +110,13 @@
               <div class="space-y-4">
                 <div class="space-y-1">
                   <p class="text-sm font-medium text-gray-900 dark:text-white">
-                    Choose how to continue
+                    {{ t('auth.oauthFlow.chooseHowToContinue') }}
                   </p>
                   <p class="text-xs text-gray-500 dark:text-dark-400">
                     {{
                       pendingAccountEmail
-                        ? `Suggested email: ${pendingAccountEmail}`
-                        : 'Choose whether to bind an existing account or create a new one.'
+                        ? t('auth.oauthFlow.suggestedEmail', { email: pendingAccountEmail })
+                        : t('auth.oauthFlow.chooseAccountActionHint')
                     }}
                   </p>
                 </div>
@@ -132,14 +127,14 @@
                     :disabled="isSubmitting"
                     @click="switchToBindLoginMode()"
                   >
-                    Bind existing account
+                    {{ t('auth.oauthFlow.bindExistingAccount') }}
                   </button>
                   <button
                     class="btn btn-primary w-full"
                     :disabled="isSubmitting"
                     @click="switchToCreateAccountMode"
                   >
-                    Create new account
+                    {{ t('auth.oauthFlow.createNewAccount') }}
                   </button>
                 </div>
               </div>
@@ -148,7 +143,7 @@
 
           <template v-else-if="needsCreateAccount">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Enter an email address to create your account and continue.
+              {{ t('auth.oauthFlow.createAccountHint') }}
             </p>
             <PendingOAuthCreateAccountForm
               test-id-prefix="linuxdo"
@@ -162,7 +157,7 @@
 
           <template v-else-if="needsBindLogin">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Log in to an existing account to bind this LinuxDo sign-in.
+              {{ t('auth.oauthFlow.bindLoginHint', { providerName }) }}
             </p>
             <div class="space-y-3">
               <input
@@ -170,7 +165,7 @@
                 data-testid="linuxdo-bind-login-email"
                 type="email"
                 class="input w-full"
-                placeholder="you@example.com"
+                :placeholder="t('auth.emailPlaceholder')"
                 :disabled="isSubmitting"
                 @keyup.enter="handleBindLogin"
               />
@@ -179,7 +174,7 @@
                 data-testid="linuxdo-bind-login-password"
                 type="password"
                 class="input w-full"
-                placeholder="Password"
+                :placeholder="t('auth.passwordPlaceholder')"
                 :disabled="isSubmitting"
                 @keyup.enter="handleBindLogin"
               />
@@ -189,7 +184,7 @@
                 :disabled="isSubmitting || !bindLoginEmail.trim() || !bindLoginPassword"
                 @click="handleBindLogin"
               >
-                {{ isSubmitting ? t('common.processing') : 'Log in and bind' }}
+                {{ isSubmitting ? t('common.processing') : t('auth.oauthFlow.logInAndBind') }}
               </button>
               <button
                 v-if="canReturnToCreateAccount"
@@ -197,21 +192,19 @@
                 :disabled="isSubmitting"
                 @click="switchToCreateAccountMode"
               >
-                Use a different email
+                {{ t('auth.oauthFlow.useDifferentEmail') }}
               </button>
             </div>
-            <transition name="fade">
-              <p v-if="accountActionError" class="text-sm text-red-600 dark:text-red-400">
-                {{ accountActionError }}
-              </p>
-            </transition>
           </template>
 
           <template v-else-if="needsTotpChallenge">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Enter the 6-digit verification code for
-              <span class="font-medium">{{ totpUserEmailMasked || 'your account' }}</span>
-              to finish binding this LinuxDo sign-in.
+              {{
+                t('auth.oauthFlow.totpHint', {
+                  providerName,
+                  account: totpUserEmailMasked || t('auth.oauthFlow.yourAccount')
+                })
+              }}
             </p>
             <div class="space-y-3">
               <input
@@ -231,36 +224,10 @@
                 :disabled="isSubmitting || totpCode.trim().length !== 6"
                 @click="handleSubmitTotpChallenge"
               >
-                {{ isSubmitting ? t('common.processing') : 'Verify and continue' }}
+                {{ isSubmitting ? t('common.processing') : t('auth.oauthFlow.verifyAndContinue') }}
               </button>
             </div>
-            <transition name="fade">
-              <p v-if="totpError" class="text-sm text-red-600 dark:text-red-400">
-                {{ totpError }}
-              </p>
-            </transition>
           </template>
-        </div>
-      </transition>
-
-      <transition name="fade">
-        <div
-          v-if="errorMessage"
-          class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800/50 dark:bg-red-900/20"
-        >
-          <div class="flex items-start gap-3">
-            <div class="flex-shrink-0">
-              <Icon name="exclamationCircle" size="md" class="text-red-500" />
-            </div>
-            <div class="space-y-2">
-              <p class="text-sm text-red-700 dark:text-red-400">
-                {{ errorMessage }}
-              </p>
-              <router-link to="/login" class="btn btn-primary">
-                {{ t('auth.linuxdo.backToLogin') }}
-              </router-link>
-            </div>
-          </div>
         </div>
       </transition>
     </div>
@@ -268,14 +235,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
 import PendingOAuthCreateAccountForm, {
   type PendingOAuthCreateAccountPayload
 } from '@/components/auth/PendingOAuthCreateAccountForm.vue'
-import Icon from '@/components/icons/Icon.vue'
 import { apiClient } from '@/api/client'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
@@ -325,10 +291,35 @@ const totpTempToken = ref('')
 const totpCode = ref('')
 const totpError = ref('')
 const totpUserEmailMasked = ref('')
+const providerName = 'LinuxDo'
 
 const needsCreateAccount = computed(() => pendingAccountAction.value === 'create_account')
 const needsChooser = computed(() => pendingAccountAction.value === 'choose_account_action')
 const needsBindLogin = computed(() => pendingAccountAction.value === 'bind_login')
+
+watch(invitationError, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
+
+watch(accountActionError, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
+
+watch(totpError, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
+
+watch(errorMessage, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
 
 type LinuxDoPendingActionResponse = PendingOAuthExchangeResponse & {
   step?: string
@@ -542,6 +533,30 @@ function getRequestErrorMessage(error: unknown, fallback: string): string {
   return err.response?.data?.detail || err.response?.data?.message || err.message || fallback
 }
 
+function isCreateAccountRecoveryError(error: unknown): boolean {
+  const data = (error as {
+    response?: {
+      data?: {
+        reason?: string
+        error?: string
+        code?: string
+        step?: string
+        intent?: string
+      }
+    }
+  }).response?.data
+  const states = [data?.reason, data?.error, data?.code, data?.step, data?.intent]
+    .map(value => value?.trim().toLowerCase())
+    .filter((value): value is string => Boolean(value))
+
+  return states.includes('email_exists') ||
+    states.includes('bind_login_required') ||
+    states.includes('bind_login') ||
+    states.includes('adopt_existing_user_by_email') ||
+    states.includes('existing_account_required') ||
+    states.includes('existing_account_binding_required')
+}
+
 async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redirect: string) {
   if (getOAuthCompletionKind(completion) === 'bind') {
     const bindRedirect = sanitizeRedirectPath(completion.redirect || '/profile')
@@ -629,7 +644,6 @@ async function handleContinueLogin() {
     await finalizePendingAccountResponse(completion)
   } catch (e: unknown) {
     errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
-    appStore.showError(errorMessage.value)
     needsAdoptionConfirmation.value = false
   } finally {
     isSubmitting.value = false
@@ -651,6 +665,10 @@ async function handleCreateAccount(payload: PendingOAuthCreateAccountPayload) {
     })
     await finalizePendingAccountResponse(data)
   } catch (e: unknown) {
+    if (isCreateAccountRecoveryError(e)) {
+      switchToBindLoginMode(payload.email.trim())
+      return
+    }
     accountActionError.value = getRequestErrorMessage(e, t('auth.loginFailed'))
   } finally {
     isSubmitting.value = false
@@ -728,7 +746,6 @@ onMounted(async () => {
 
     if (error) {
       errorMessage.value = errorDesc || error
-      appStore.showError(errorMessage.value)
       isProcessing.value = false
       return
     }
@@ -770,7 +787,6 @@ onMounted(async () => {
   } catch (e: unknown) {
     clearPendingAuthSession()
     errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
-    appStore.showError(errorMessage.value)
     isProcessing.value = false
   }
 })

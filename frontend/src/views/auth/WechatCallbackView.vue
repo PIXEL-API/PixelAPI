@@ -33,10 +33,10 @@
             <div class="space-y-3">
               <div class="space-y-1">
                 <p class="text-sm font-medium text-gray-900 dark:text-white">
-                  Use {{ providerName }} profile details
+                  {{ t('auth.oauthFlow.profileDetailsTitle', { providerName }) }}
                 </p>
                 <p class="text-xs text-gray-500 dark:text-dark-400">
-                  Choose whether to apply the nickname or avatar from {{ providerName }} to this account.
+                  {{ t('auth.oauthFlow.profileDetailsDescription', { providerName }) }}
                 </p>
               </div>
 
@@ -47,7 +47,7 @@
                 <input v-model="adoptDisplayName" type="checkbox" class="mt-1 h-4 w-4" />
                 <span class="space-y-1">
                   <span class="block font-medium text-gray-900 dark:text-white">
-                    Use display name
+                    {{ t('auth.oauthFlow.useDisplayName') }}
                   </span>
                   <span class="block text-gray-500 dark:text-dark-400">
                     {{ suggestedDisplayName }}
@@ -62,12 +62,12 @@
                 <input v-model="adoptAvatar" type="checkbox" class="mt-1 h-4 w-4" />
                 <img
                   :src="suggestedAvatarUrl"
-                  :alt="`${providerName} avatar`"
+                  :alt="t('auth.oauthFlow.avatarAlt', { providerName })"
                   class="h-10 w-10 rounded-full border border-gray-200 object-cover dark:border-dark-600"
                 />
                 <span class="space-y-1">
                   <span class="block font-medium text-gray-900 dark:text-white">
-                    Use avatar
+                    {{ t('auth.oauthFlow.useAvatar') }}
                   </span>
                   <span class="block break-all text-gray-500 dark:text-dark-400">
                     {{ suggestedAvatarUrl }}
@@ -91,11 +91,6 @@
                 @keyup.enter="handleSubmitInvitation"
               />
             </div>
-            <transition name="fade">
-              <p v-if="invitationError" class="text-sm text-red-600 dark:text-red-400">
-                {{ invitationError }}
-              </p>
-            </transition>
             <button
               class="btn btn-primary w-full"
               :disabled="isSubmitting || !invitationCode.trim()"
@@ -119,8 +114,8 @@
                   <p class="text-xs text-gray-500 dark:text-dark-400">
                     {{
                       hasCurrentAuthToken
-                        ? 'Bind this WeChat identity to the account currently signed in on this browser.'
-                        : 'Sign in to an existing account, then bind this WeChat identity to it.'
+                        ? t('auth.oauthFlow.bindCurrentAccountDescription', { providerName })
+                        : t('auth.oauthFlow.signInThenBindDescription', { providerName })
                     }}
                   </p>
                 </div>
@@ -142,7 +137,7 @@
                   :disabled="isSubmitting"
                   @click="handleExistingAccountBinding"
                 >
-                  {{ hasCurrentAuthToken ? 'Bind current account' : t('auth.signIn') }}
+                  {{ hasCurrentAuthToken ? t('auth.oauthFlow.bindCurrentAccount') : t('auth.signIn') }}
                 </button>
               </div>
             </div>
@@ -155,10 +150,10 @@
               <div class="space-y-4">
                 <div class="space-y-1">
                   <p class="text-sm font-medium text-gray-900 dark:text-white">
-                    Choose how to continue
+                    {{ t('auth.oauthFlow.chooseHowToContinue') }}
                   </p>
                   <p class="text-xs text-gray-500 dark:text-dark-400">
-                    Pick whether to bind an existing account or create a new one.
+                    {{ t('auth.oauthFlow.chooseAccountActionHint') }}
                   </p>
                 </div>
 
@@ -169,7 +164,7 @@
                   :disabled="isSubmitting"
                   @click="switchToBindLoginMode()"
                 >
-                  Bind existing account
+                  {{ t('auth.oauthFlow.bindExistingAccount') }}
                 </button>
 
                 <button
@@ -179,7 +174,7 @@
                   :disabled="isSubmitting"
                   @click="switchToCreateAccountMode()"
                 >
-                  Create new account
+                  {{ t('auth.oauthFlow.createNewAccount') }}
                 </button>
               </div>
             </div>
@@ -187,16 +182,16 @@
 
           <template v-else-if="needsAdoptionConfirmation">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Review the {{ providerName }} profile details before continuing.
+              {{ t('auth.oauthFlow.reviewProfileBeforeContinue', { providerName }) }}
             </p>
             <button class="btn btn-primary w-full" :disabled="isSubmitting" @click="handleContinueLogin">
-              {{ isSubmitting ? t('common.processing') : 'Continue' }}
+              {{ isSubmitting ? t('common.processing') : t('auth.continue') }}
             </button>
           </template>
 
           <template v-else-if="needsCreateAccount">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Enter an email address to create your account and continue.
+              {{ t('auth.oauthFlow.createAccountHint') }}
             </p>
             <PendingOAuthCreateAccountForm
               test-id-prefix="wechat"
@@ -210,15 +205,15 @@
               v-if="showBackToChooser"
               class="btn btn-secondary w-full"
               :disabled="isSubmitting"
-              @click="switchToChoiceMode"
+              @click="switchToCreateAccountMode()"
             >
-              Back to options
+              {{ t('auth.oauthFlow.createNewAccount') }}
             </button>
           </template>
 
           <template v-else-if="needsBindLogin">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Bind this {{ providerName }} sign-in to an existing account.
+              {{ t('auth.oauthFlow.bindSignInToExistingAccount', { providerName }) }}
             </p>
             <div
               v-if="hasCurrentAuthToken"
@@ -227,10 +222,10 @@
               <div class="space-y-3">
                 <div class="space-y-1">
                   <p class="text-sm font-medium text-gray-900 dark:text-white">
-                    Bind the current account
+                    {{ t('auth.oauthFlow.bindCurrentAccountTitle') }}
                   </p>
                   <p class="text-xs text-gray-500 dark:text-dark-400">
-                    Bind this WeChat identity to the account currently signed in on this browser.
+                    {{ t('auth.oauthFlow.bindCurrentAccountDescription', { providerName }) }}
                   </p>
                 </div>
 
@@ -241,7 +236,7 @@
                   :disabled="isSubmitting"
                   @click="handleBindCurrentAccount"
                 >
-                  {{ isSubmitting ? t('common.processing') : 'Bind current account' }}
+                  {{ isSubmitting ? t('common.processing') : t('auth.oauthFlow.bindCurrentAccount') }}
                 </button>
               </div>
             </div>
@@ -251,7 +246,7 @@
                 data-testid="wechat-bind-login-email"
                 type="email"
                 class="input w-full"
-                placeholder="you@example.com"
+                :placeholder="t('auth.emailPlaceholder')"
                 :disabled="isSubmitting"
                 @keyup.enter="handleBindLogin"
               />
@@ -260,7 +255,7 @@
                 data-testid="wechat-bind-login-password"
                 type="password"
                 class="input w-full"
-                placeholder="Password"
+                :placeholder="t('auth.passwordPlaceholder')"
                 :disabled="isSubmitting"
                 @keyup.enter="handleBindLogin"
               />
@@ -270,24 +265,27 @@
                 :disabled="isSubmitting || !bindLoginEmail.trim() || !bindLoginPassword"
                 @click="handleBindLogin"
               >
-                {{ isSubmitting ? t('common.processing') : 'Log in and bind' }}
+                {{ isSubmitting ? t('common.processing') : t('auth.oauthFlow.logInAndBind') }}
               </button>
             </div>
             <button
               v-if="showBackToChooser"
               class="btn btn-secondary w-full"
               :disabled="isSubmitting"
-              @click="switchToChoiceMode"
+              @click="switchToCreateAccountMode()"
             >
-              Back to options
+              {{ t('auth.oauthFlow.createNewAccount') }}
             </button>
           </template>
 
           <template v-else-if="needsTotpChallenge">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              Enter the 6-digit verification code for
-              <span class="font-medium">{{ totpUserEmailMasked || 'your account' }}</span>
-              to finish binding this {{ providerName }} sign-in.
+              {{
+                t('auth.oauthFlow.totpHint', {
+                  providerName,
+                  account: totpUserEmailMasked || t('auth.oauthFlow.yourAccount')
+                })
+              }}
             </p>
             <div class="space-y-3">
               <input
@@ -307,42 +305,10 @@
                 :disabled="isSubmitting || totpCode.trim().length !== 6"
                 @click="handleSubmitTotpChallenge"
               >
-                {{ isSubmitting ? t('common.processing') : 'Verify and continue' }}
+                {{ isSubmitting ? t('common.processing') : t('auth.oauthFlow.verifyAndContinue') }}
               </button>
             </div>
-            <transition name="fade">
-              <p v-if="totpError" class="text-sm text-red-600 dark:text-red-400">
-                {{ totpError }}
-              </p>
-            </transition>
           </template>
-        </div>
-      </transition>
-
-      <transition name="fade">
-        <p v-if="accountActionError" class="text-sm text-red-600 dark:text-red-400">
-          {{ accountActionError }}
-        </p>
-      </transition>
-
-      <transition name="fade">
-        <div
-          v-if="errorMessage"
-          class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800/50 dark:bg-red-900/20"
-        >
-          <div class="flex items-start gap-3">
-            <div class="flex-shrink-0">
-              <Icon name="exclamationCircle" size="md" class="text-red-500" />
-            </div>
-            <div class="space-y-2">
-              <p class="text-sm text-red-700 dark:text-red-400">
-                {{ errorMessage }}
-              </p>
-              <router-link to="/login" class="btn btn-primary">
-                {{ t('auth.oidc.backToLogin') }}
-              </router-link>
-            </div>
-          </div>
         </div>
       </transition>
     </div>
@@ -350,14 +316,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
 import PendingOAuthCreateAccountForm, {
   type PendingOAuthCreateAccountPayload
 } from '@/components/auth/PendingOAuthCreateAccountForm.vue'
-import Icon from '@/components/icons/Icon.vue'
 import { apiClient } from '@/api/client'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
@@ -411,13 +376,37 @@ const totpError = ref('')
 const totpUserEmailMasked = ref('')
 const bindSuccessMessage = t('profile.authBindings.bindSuccess')
 
-const providerName = 'WeChat'
+const providerName = t('auth.wechatProviderName')
 const showBackToChooser = computed(
   () => pendingAccountAction.value === 'create_account' || pendingAccountAction.value === 'bind_login'
 )
 const needsCreateAccount = computed(() => pendingAccountAction.value === 'create_account')
 const needsBindLogin = computed(() => pendingAccountAction.value === 'bind_login')
 const hasCurrentAuthToken = computed(() => Boolean(getAuthToken()))
+
+watch(invitationError, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
+
+watch(accountActionError, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
+
+watch(totpError, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
+
+watch(errorMessage, value => {
+  if (value) {
+    appStore.showError(value)
+  }
+})
 
 type PendingWeChatCompletion = PendingOAuthExchangeResponse & {
   step?: string
@@ -510,13 +499,13 @@ function resolveWeChatOAuthUnavailableMessage(): string {
 
   switch (resolved.unavailableReason) {
     case 'capability_unknown':
-      return 'WeChat sign-in availability could not be confirmed. Refresh and retry.'
+      return t('auth.oauthFlow.wechatAvailabilityUnknown')
     case 'external_browser_required':
-      return 'This WeChat sign-in flow is only available in your system browser.'
+      return t('auth.oauthFlow.wechatSystemBrowserOnly')
     case 'wechat_browser_required':
-      return 'This WeChat sign-in flow is only available inside the WeChat browser.'
+      return t('auth.oauthFlow.wechatBrowserOnly')
     case 'not_configured':
-      return 'WeChat sign-in is not configured yet.'
+      return t('auth.oauthFlow.wechatNotConfigured')
     default:
       return t('auth.loginFailed')
   }
@@ -619,7 +608,6 @@ async function handleBindCurrentAccount() {
   const startURL = resolveWeChatStartURL('bind_current_user')
   if (!startURL) {
     errorMessage.value = unavailableMessage || resolveWeChatOAuthUnavailableMessage()
-    appStore.showError(errorMessage.value)
     return
   }
 
@@ -636,7 +624,6 @@ async function handleExistingAccountBinding() {
   const resumePath = buildExistingAccountResumePath()
   if (!resumePath) {
     errorMessage.value = resolveWeChatOAuthUnavailableMessage()
-    appStore.showError(errorMessage.value)
     return
   }
 
@@ -693,11 +680,7 @@ function resolvePendingAccountAction(
     raw === 'choose_account_action_required' ||
     raw === 'choose_account_action' ||
     raw === 'choose_account' ||
-    raw === 'choose' ||
-    raw === 'existing_account' ||
-    raw === 'existing_account_required' ||
-    raw === 'existing_account_binding_required' ||
-    raw === 'adopt_existing_user_by_email'
+    raw === 'choose'
   ) {
     return 'choice'
   }
@@ -705,6 +688,10 @@ function resolvePendingAccountAction(
     return 'create_account'
   }
   if (
+    raw === 'existing_account' ||
+    raw === 'existing_account_required' ||
+    raw === 'existing_account_binding_required' ||
+    raw === 'adopt_existing_user_by_email' ||
     raw === 'bind_login_required' ||
     raw === 'bind_login'
   ) {
@@ -773,13 +760,6 @@ function switchToCreateAccountMode() {
   pendingAccountAction.value = 'create_account'
   needsChooser.value = false
   pendingAccountEmail.value = pendingAccountEmail.value.trim() || bindLoginEmail.value.trim()
-  accountActionError.value = ''
-}
-
-function switchToChoiceMode() {
-  pendingAccountAction.value = 'choice'
-  needsChooser.value = true
-  bindLoginPassword.value = ''
   accountActionError.value = ''
 }
 
@@ -899,7 +879,6 @@ async function handleContinueLogin() {
     await finalizePendingAccountResponse(completion)
   } catch (e: unknown) {
     errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
-    appStore.showError(errorMessage.value)
     needsAdoptionConfirmation.value = false
   } finally {
     isSubmitting.value = false
@@ -922,10 +901,7 @@ async function handleCreateAccount(payload: PendingOAuthCreateAccountPayload) {
     await finalizePendingAccountResponse(data)
   } catch (e: unknown) {
     if (isCreateAccountRecoveryError(e)) {
-      switchToChoiceMode()
-      pendingAccountEmail.value = payload.email.trim()
-      bindLoginEmail.value = payload.email.trim()
-      accountActionError.value = getRequestErrorMessage(e, t('auth.loginFailed'))
+      switchToBindLoginMode(payload.email.trim())
       return
     }
     accountActionError.value = getRequestErrorMessage(e, t('auth.loginFailed'))
@@ -1000,7 +976,6 @@ onMounted(async () => {
     const resumePath = buildExistingAccountResumePath()
     if (!resumePath) {
       errorMessage.value = resolveWeChatOAuthUnavailableMessage()
-      appStore.showError(errorMessage.value)
       isProcessing.value = false
       return
     }
@@ -1044,7 +1019,6 @@ onMounted(async () => {
 
     if (error) {
       errorMessage.value = errorDesc || error
-      appStore.showError(errorMessage.value)
       isProcessing.value = false
       return
     }
@@ -1086,7 +1060,6 @@ onMounted(async () => {
   } catch (e: unknown) {
     clearPendingAuthSession()
     errorMessage.value = getRequestErrorMessage(e, t('auth.loginFailed'))
-    appStore.showError(errorMessage.value)
     isProcessing.value = false
   }
 })
