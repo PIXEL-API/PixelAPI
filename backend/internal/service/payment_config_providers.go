@@ -108,6 +108,9 @@ func (s *PaymentConfigService) CreateProviderInstance(ctx context.Context, req C
 	if err := validateProviderRequest(req.ProviderKey, req.Name, typesStr); err != nil {
 		return nil, err
 	}
+	if err := s.validateVisibleMethodEnablementConflicts(ctx, 0, req.ProviderKey, typesStr, req.Enabled); err != nil {
+		return nil, err
+	}
 	enc, err := s.encryptConfig(req.Config)
 	if err != nil {
 		return nil, err
@@ -136,6 +139,21 @@ func validateProviderRequest(providerKey, name, supportedTypes string) error {
 // NOTE: This function exceeds 30 lines due to per-field nil-check patch update
 // boilerplate and pending-order safety checks.
 func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id int64, req UpdateProviderInstanceRequest) (*dbent.PaymentProviderInstance, error) {
+	current, err := s.entClient.PaymentProviderInstance.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	nextEnabled := current.Enabled
+	if req.Enabled != nil {
+		nextEnabled = *req.Enabled
+	}
+	nextSupportedTypes := current.SupportedTypes
+	if req.SupportedTypes != nil {
+		nextSupportedTypes = joinTypes(req.SupportedTypes)
+	}
+	if err := s.validateVisibleMethodEnablementConflicts(ctx, id, current.ProviderKey, nextSupportedTypes, nextEnabled); err != nil {
+		return nil, err
+	}
 	if req.Config != nil {
 		hasSensitive := false
 		for k := range req.Config {
@@ -188,11 +206,7 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 		}
 		if count > 0 {
 			// Load current instance to compare types
-			inst, err := s.entClient.PaymentProviderInstance.Get(ctx, id)
-			if err != nil {
-				return nil, fmt.Errorf("load provider instance: %w", err)
-			}
-			oldTypes := strings.Split(inst.SupportedTypes, ",")
+			oldTypes := strings.Split(current.SupportedTypes, ",")
 			newTypes := req.SupportedTypes
 			for _, ot := range oldTypes {
 				ot = strings.TrimSpace(ot)
@@ -237,10 +251,7 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 			if req.RefundEnabled != nil {
 				refundEnabled = *req.RefundEnabled
 			} else {
-				inst, err := s.entClient.PaymentProviderInstance.Get(ctx, id)
-				if err == nil {
-					refundEnabled = inst.RefundEnabled
-				}
+				refundEnabled = current.RefundEnabled
 			}
 			if refundEnabled {
 				u.SetAllowUserRefund(true)

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"testing"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -302,7 +304,7 @@ func TestBuildVisibleMethodSourceAvailability(t *testing.T) {
 	}
 }
 
-func TestGetPaymentConfigAppliesVisibleMethodRouting(t *testing.T) {
+func TestGetPaymentConfigKeepsStoredEnabledTypes(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 
@@ -321,11 +323,7 @@ func TestGetPaymentConfigAppliesVisibleMethodRouting(t *testing.T) {
 		entClient: client,
 		settingRepo: &paymentConfigSettingRepoStub{
 			values: map[string]string{
-				SettingEnabledPaymentTypes:               "alipay,wxpay,stripe",
-				SettingPaymentVisibleMethodAlipayEnabled: "true",
-				SettingPaymentVisibleMethodAlipaySource:  "easypay",
-				SettingPaymentVisibleMethodWxpayEnabled:  "true",
-				SettingPaymentVisibleMethodWxpaySource:   "wxpay",
+				SettingEnabledPaymentTypes: "alipay,wxpay,stripe",
 			},
 		},
 	}
@@ -335,7 +333,7 @@ func TestGetPaymentConfigAppliesVisibleMethodRouting(t *testing.T) {
 		t.Fatalf("GetPaymentConfig returned error: %v", err)
 	}
 
-	want := []string{payment.TypeAlipay, payment.TypeStripe}
+	want := []string{payment.TypeAlipay, payment.TypeWxpay, payment.TypeStripe}
 	if len(cfg.EnabledTypes) != len(want) {
 		t.Fatalf("EnabledTypes len = %d, want %d (%v)", len(cfg.EnabledTypes), len(want), cfg.EnabledTypes)
 	}
@@ -349,7 +347,11 @@ func TestGetPaymentConfigAppliesVisibleMethodRouting(t *testing.T) {
 func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", "file:payment_config_service?mode=memory&cache=shared")
+	dbName := fmt.Sprintf(
+		"file:%s?mode=memory&cache=shared",
+		strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()),
+	)
+	db, err := sql.Open("sqlite", dbName)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

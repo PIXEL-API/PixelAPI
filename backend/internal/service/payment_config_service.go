@@ -209,17 +209,6 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		return nil, fmt.Errorf("get payment config settings: %w", err)
 	}
 	cfg := s.parsePaymentConfig(vals)
-	if s.entClient != nil {
-		instances, err := s.entClient.PaymentProviderInstance.Query().
-			Where(paymentproviderinstance.EnabledEQ(true)).
-			All(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list enabled provider instances: %w", err)
-		}
-		cfg.EnabledTypes = applyVisibleMethodRoutingToEnabledTypes(cfg.EnabledTypes, vals, buildVisibleMethodSourceAvailability(instances))
-	} else {
-		cfg.EnabledTypes = applyVisibleMethodRoutingToEnabledTypes(cfg.EnabledTypes, vals, nil)
-	}
 	// Load Stripe publishable key from the first enabled Stripe provider instance
 	cfg.StripePublishableKey = s.getStripePublishableKey(ctx)
 	return cfg, nil
@@ -305,25 +294,25 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 		}
 	}
 	m := map[string]string{
-		SettingPaymentEnabled:      formatBoolOrEmpty(req.Enabled),
-		SettingMinRechargeAmount:   formatPositiveFloat(req.MinAmount),
-		SettingMaxRechargeAmount:   formatPositiveFloat(req.MaxAmount),
-		SettingDailyRechargeLimit:  formatPositiveFloat(req.DailyLimit),
-		SettingOrderTimeoutMinutes: formatPositiveInt(req.OrderTimeoutMin),
-		SettingMaxPendingOrders:    formatPositiveInt(req.MaxPendingOrders),
-		SettingBalancePayDisabled:  formatBoolOrEmpty(req.BalanceDisabled),
-		SettingBalanceRechargeMult: formatPositiveFloat(req.BalanceRechargeMultiplier),
-		SettingRechargeFeeRate:     formatNonNegativeFloat(req.RechargeFeeRate),
-		SettingLoadBalanceStrategy: derefStr(req.LoadBalanceStrategy),
-		SettingProductNamePrefix:   derefStr(req.ProductNamePrefix),
-		SettingProductNameSuffix:   derefStr(req.ProductNameSuffix),
-		SettingHelpImageURL:        derefStr(req.HelpImageURL),
-		SettingHelpText:            derefStr(req.HelpText),
-		SettingCancelRateLimitOn:   formatBoolOrEmpty(req.CancelRateLimitEnabled),
-		SettingCancelRateLimitMax:  formatPositiveInt(req.CancelRateLimitMax),
-		SettingCancelWindowSize:    formatPositiveInt(req.CancelRateLimitWindow),
-		SettingCancelWindowUnit:    derefStr(req.CancelRateLimitUnit),
-		SettingCancelWindowMode:    derefStr(req.CancelRateLimitMode),
+		SettingPaymentEnabled:                    formatBoolOrEmpty(req.Enabled),
+		SettingMinRechargeAmount:                 formatPositiveFloat(req.MinAmount),
+		SettingMaxRechargeAmount:                 formatPositiveFloat(req.MaxAmount),
+		SettingDailyRechargeLimit:                formatPositiveFloat(req.DailyLimit),
+		SettingOrderTimeoutMinutes:               formatPositiveInt(req.OrderTimeoutMin),
+		SettingMaxPendingOrders:                  formatPositiveInt(req.MaxPendingOrders),
+		SettingBalancePayDisabled:                formatBoolOrEmpty(req.BalanceDisabled),
+		SettingBalanceRechargeMult:               formatPositiveFloat(req.BalanceRechargeMultiplier),
+		SettingRechargeFeeRate:                   formatNonNegativeFloat(req.RechargeFeeRate),
+		SettingLoadBalanceStrategy:               derefStr(req.LoadBalanceStrategy),
+		SettingProductNamePrefix:                 derefStr(req.ProductNamePrefix),
+		SettingProductNameSuffix:                 derefStr(req.ProductNameSuffix),
+		SettingHelpImageURL:                      derefStr(req.HelpImageURL),
+		SettingHelpText:                          derefStr(req.HelpText),
+		SettingCancelRateLimitOn:                 formatBoolOrEmpty(req.CancelRateLimitEnabled),
+		SettingCancelRateLimitMax:                formatPositiveInt(req.CancelRateLimitMax),
+		SettingCancelWindowSize:                  formatPositiveInt(req.CancelRateLimitWindow),
+		SettingCancelWindowUnit:                  derefStr(req.CancelRateLimitUnit),
+		SettingCancelWindowMode:                  derefStr(req.CancelRateLimitMode),
 		SettingPaymentVisibleMethodAlipaySource:  derefStr(req.VisibleMethodAlipaySource),
 		SettingPaymentVisibleMethodWxpaySource:   derefStr(req.VisibleMethodWxpaySource),
 		SettingPaymentVisibleMethodAlipayEnabled: formatBoolOrEmpty(req.VisibleMethodAlipayEnabled),
