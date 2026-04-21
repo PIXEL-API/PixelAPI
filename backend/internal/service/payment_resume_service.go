@@ -36,6 +36,9 @@ const (
 
 	paymentResumeNotConfiguredCode    = "PAYMENT_RESUME_NOT_CONFIGURED"
 	paymentResumeNotConfiguredMessage = "payment resume tokens require a configured signing key"
+
+	paymentResumeTokenTTL        = 24 * time.Hour
+	wechatPaymentResumeTokenTTL  = 15 * time.Minute
 )
 
 type ResumeTokenClaims struct {
@@ -46,6 +49,7 @@ type ResumeTokenClaims struct {
 	PaymentType        string `json:"pt,omitempty"`
 	CanonicalReturnURL string `json:"ru,omitempty"`
 	IssuedAt           int64  `json:"iat"`
+	ExpiresAt          int64  `json:"exp,omitempty"`
 }
 
 type WeChatPaymentResumeClaims struct {
@@ -58,6 +62,7 @@ type WeChatPaymentResumeClaims struct {
 	RedirectTo  string `json:"rd,omitempty"`
 	Scope       string `json:"scp,omitempty"`
 	IssuedAt    int64  `json:"iat"`
+	ExpiresAt   int64  `json:"exp,omitempty"`
 }
 
 type PaymentResumeService struct {
@@ -263,6 +268,9 @@ func (s *PaymentResumeService) CreateToken(claims ResumeTokenClaims) (string, er
 	if claims.IssuedAt == 0 {
 		claims.IssuedAt = time.Now().Unix()
 	}
+	if claims.ExpiresAt == 0 {
+		claims.ExpiresAt = time.Now().Add(paymentResumeTokenTTL).Unix()
+	}
 	return s.createSignedToken(claims)
 }
 
@@ -277,6 +285,9 @@ func (s *PaymentResumeService) ParseToken(token string) (*ResumeTokenClaims, err
 	if claims.OrderID <= 0 {
 		return nil, infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token missing order id")
 	}
+	if err := validatePaymentResumeExpiry(claims.ExpiresAt, "INVALID_RESUME_TOKEN", "resume token has expired"); err != nil {
+		return nil, err
+	}
 	return &claims, nil
 }
 
@@ -290,6 +301,9 @@ func (s *PaymentResumeService) CreateWeChatPaymentResumeToken(claims WeChatPayme
 	}
 	if claims.IssuedAt == 0 {
 		claims.IssuedAt = time.Now().Unix()
+	}
+	if claims.ExpiresAt == 0 {
+		claims.ExpiresAt = time.Now().Add(wechatPaymentResumeTokenTTL).Unix()
 	}
 	if normalized := NormalizeVisibleMethod(claims.PaymentType); normalized != "" {
 		claims.PaymentType = normalized
@@ -318,6 +332,9 @@ func (s *PaymentResumeService) ParseWeChatPaymentResumeToken(token string) (*WeC
 	claims.OpenID = strings.TrimSpace(claims.OpenID)
 	if claims.OpenID == "" {
 		return nil, infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token missing openid")
+	}
+	if err := validatePaymentResumeExpiry(claims.ExpiresAt, "INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token has expired"); err != nil {
+		return nil, err
 	}
 	if normalized := NormalizeVisibleMethod(claims.PaymentType); normalized != "" {
 		claims.PaymentType = normalized
@@ -353,6 +370,16 @@ func (s *PaymentResumeService) parseSignedToken(token string, dest any) error {
 		return infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token payload is malformed")
 	}
 	return json.Unmarshal(payload, dest)
+}
+
+func validatePaymentResumeExpiry(expiresAt int64, code, message string) error {
+	if expiresAt <= 0 {
+		return nil
+	}
+	if time.Now().Unix() > expiresAt {
+		return infraerrors.BadRequest(code, message)
+	}
+	return nil
 }
 
 func (s *PaymentResumeService) sign(payload string) string {

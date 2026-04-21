@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 )
@@ -175,6 +176,26 @@ func TestParseTokenRejectsFallbackSignedTokenWhenSigningKeyMissing(t *testing.T)
 	}
 }
 
+func TestParseTokenRejectsExpiredToken(t *testing.T) {
+	t.Parallel()
+
+	svc := NewPaymentResumeService([]byte("0123456789abcdef0123456789abcdef"))
+	token, err := svc.CreateToken(ResumeTokenClaims{
+		OrderID:   42,
+		UserID:    7,
+		IssuedAt:  time.Now().Add(-25 * time.Hour).Unix(),
+		ExpiresAt: time.Now().Add(-1 * time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("CreateToken returned error: %v", err)
+	}
+
+	_, err = svc.ParseToken(token)
+	if err == nil {
+		t.Fatal("ParseToken should reject expired tokens")
+	}
+}
+
 func TestWeChatPaymentResumeTokenRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -230,6 +251,26 @@ func TestParseWeChatPaymentResumeTokenRejectsFallbackSignedTokenWhenSigningKeyMi
 	_, err := svc.ParseWeChatPaymentResumeToken(token)
 	if err == nil {
 		t.Fatal("ParseWeChatPaymentResumeToken should reject tokens when signing key is missing")
+	}
+}
+
+func TestParseWeChatPaymentResumeTokenRejectsExpiredToken(t *testing.T) {
+	t.Parallel()
+
+	svc := NewPaymentResumeService([]byte("0123456789abcdef0123456789abcdef"))
+	token, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:      "openid-123",
+		PaymentType: payment.TypeWxpay,
+		IssuedAt:    time.Now().Add(-30 * time.Minute).Unix(),
+		ExpiresAt:   time.Now().Add(-1 * time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+
+	_, err = svc.ParseWeChatPaymentResumeToken(token)
+	if err == nil {
+		t.Fatal("ParseWeChatPaymentResumeToken should reject expired tokens")
 	}
 }
 

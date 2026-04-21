@@ -1350,10 +1350,24 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		return
 	}
 	if !adoptionDecision.hasDecision() {
-		response.Success(c, payload)
-		return
+		adoptionRequired, _ := payload["adoption_required"].(bool)
+		if adoptionRequired {
+			response.Success(c, payload)
+			return
+		}
 	}
-	decision, err := h.upsertPendingOAuthAdoptionDecision(c, session.ID, adoptionDecision)
+
+	decisionReq := adoptionDecision
+	if !decisionReq.hasDecision() {
+		adoptDisplayName := false
+		adoptAvatar := false
+		decisionReq = oauthAdoptionDecisionRequest{
+			AdoptDisplayName: &adoptDisplayName,
+			AdoptAvatar:      &adoptAvatar,
+		}
+	}
+
+	decision, err := h.ensurePendingOAuthAdoptionDecision(c, session.ID, decisionReq)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
