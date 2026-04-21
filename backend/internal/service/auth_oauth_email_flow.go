@@ -4,8 +4,70 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
+	"time"
 )
+
+func normalizeOAuthSignupSource(signupSource string) string {
+	signupSource = strings.TrimSpace(strings.ToLower(signupSource))
+	if signupSource == "" {
+		return "email"
+	}
+	return signupSource
+}
+
+// SendPendingOAuthVerifyCode sends a local verification code for pending OAuth
+// account-creation flows without relying on the public registration gate.
+func (s *AuthService) SendPendingOAuthVerifyCode(ctx context.Context, email string) (*SendVerifyCodeResult, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return nil, ErrEmailVerifyRequired
+	}
+	if _, err := mail.ParseAddress(email); err != nil {
+		return nil, ErrEmailVerifyRequired
+	}
+	if isReservedEmail(email) {
+		return nil, ErrEmailReserved
+	}
+	if s == nil || s.emailService == nil {
+		return nil, ErrServiceUnavailable
+	}
+
+	siteName := "Sub2API"
+	if s.settingService != nil {
+		siteName = s.settingService.GetSiteName(ctx)
+	}
+	if err := s.emailService.SendVerifyCode(ctx, email, siteName); err != nil {
+		return nil, err
+	}
+	return &SendVerifyCodeResult{
+		Countdown: int(verifyCodeCooldown / time.Second),
+	}, nil
+}
+
+func (s *AuthService) validateOAuthRegistrationInvitation(ctx context.Context, invitationCode string) (*RedeemCode, error) {
+	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
+		return nil, nil
+	}
+	if s.redeemRepo == nil {
+		return nil, ErrServiceUnavailable
+	}
+
+	invitationCode = strings.TrimSpace(invitationCode)
+	if invitationCode == "" {
+		return nil, ErrInvitationCodeRequired
+	}
+
+	redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
+	if err != nil {
+		return nil, ErrInvitationCodeInvalid
+	}
+	if redeemCode.Type != RedeemTypeInvitation || redeemCode.Status != StatusUnused {
+		return nil, ErrInvitationCodeInvalid
+	}
+	return redeemCode, nil
+}
 
 // VerifyOAuthEmailCode verifies the locally entered email verification code for
 // third-party signup and binding flows. This is intentionally independent from
@@ -54,19 +116,8 @@ func (s *AuthService) RegisterOAuthEmailAccount(
 		return nil, nil, err
 	}
 
-	var invitationRedeemCode *RedeemCode
-	if s.settingService.IsInvitationCodeEnabled(ctx) {
-		if invitationCode == "" {
-			return nil, nil, ErrInvitationCodeRequired
-		}
-		redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
-		if err != nil {
-			return nil, nil, ErrInvitationCodeInvalid
-		}
-		if redeemCode.Type != RedeemTypeInvitation || redeemCode.Status != StatusUnused {
-			return nil, nil, ErrInvitationCodeInvalid
-		}
-		invitationRedeemCode = redeemCode
+	if _, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode); err != nil {
+		return nil, nil, err
 	}
 
 	existsEmail, err := s.userRepo.ExistsByEmail(ctx, email)
@@ -104,20 +155,89 @@ func (s *AuthService) RegisterOAuthEmailAccount(
 		return nil, nil, ErrServiceUnavailable
 	}
 
-	s.postAuthUserBootstrap(ctx, user, signupSource, false)
-	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
-
-	if invitationRedeemCode != nil {
-		if err := s.redeemRepo.Use(ctx, invitationRedeemCode.ID, user.ID); err != nil {
-			return nil, nil, ErrInvitationCodeInvalid
-		}
-	}
-
 	tokenPair, err := s.GenerateTokenPair(ctx, user, "")
 	if err != nil {
+		_ = s.RollbackOAuthEmailAccountCreation(ctx, user.ID, "")
 		return nil, nil, fmt.Errorf("generate token pair: %w", err)
 	}
 	return tokenPair, user, nil
+}
+
+// FinalizeOAuthEmailAccount applies invitation usage and normal signup bootstrap
+// only after the pending OAuth flow has fully reached its last reversible step.
+func (s *AuthService) FinalizeOAuthEmailAccount(
+	ctx context.Context,
+	user *User,
+	invitationCode string,
+	signupSource string,
+) error {
+	if s == nil || user == nil || user.ID <= 0 {
+		return ErrServiceUnavailable
+	}
+
+	signupSource = normalizeOAuthSignupSource(signupSource)
+	invitationRedeemCode, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode)
+	if err != nil {
+		return err
+	}
+	if invitationRedeemCode != nil {
+		if err := s.redeemRepo.Use(ctx, invitationRedeemCode.ID, user.ID); err != nil {
+			return ErrInvitationCodeInvalid
+		}
+	}
+
+	s.postAuthUserBootstrap(ctx, user, signupSource, false)
+	grantPlan := s.resolveSignupGrantPlan(ctx, signupSource)
+	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
+	return nil
+}
+
+// RollbackOAuthEmailAccountCreation removes a partially-created local account
+// and restores any invitation code already consumed by that account.
+func (s *AuthService) RollbackOAuthEmailAccountCreation(ctx context.Context, userID int64, invitationCode string) error {
+	if s == nil || s.userRepo == nil || userID <= 0 {
+		return ErrServiceUnavailable
+	}
+	if err := s.restoreOAuthRegistrationInvitation(ctx, invitationCode, userID); err != nil {
+		return err
+	}
+	if err := s.userRepo.Delete(ctx, userID); err != nil {
+		return fmt.Errorf("delete created oauth user: %w", err)
+	}
+	return nil
+}
+
+func (s *AuthService) restoreOAuthRegistrationInvitation(ctx context.Context, invitationCode string, userID int64) error {
+	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
+		return nil
+	}
+	if s.redeemRepo == nil {
+		return ErrServiceUnavailable
+	}
+
+	invitationCode = strings.TrimSpace(invitationCode)
+	if invitationCode == "" || userID <= 0 {
+		return nil
+	}
+
+	redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
+	if err != nil {
+		if errors.Is(err, ErrRedeemCodeNotFound) {
+			return nil
+		}
+		return fmt.Errorf("load invitation code: %w", err)
+	}
+	if redeemCode.Type != RedeemTypeInvitation || redeemCode.Status != StatusUsed || redeemCode.UsedBy == nil || *redeemCode.UsedBy != userID {
+		return nil
+	}
+
+	redeemCode.Status = StatusUnused
+	redeemCode.UsedBy = nil
+	redeemCode.UsedAt = nil
+	if err := s.redeemRepo.Update(ctx, redeemCode); err != nil {
+		return fmt.Errorf("restore invitation code: %w", err)
+	}
+	return nil
 }
 
 // ValidatePasswordCredentials checks the local password without completing the

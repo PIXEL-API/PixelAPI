@@ -58,11 +58,20 @@
     <p v-else class="text-xs text-gray-500 dark:text-dark-400">
       {{ t('auth.verificationCodeHint') }}
     </p>
+    <input
+      v-if="invitationCodeEnabled"
+      v-model="invitationCode"
+      :data-testid="`${testIdPrefix}-create-account-invitation-code`"
+      type="text"
+      class="input w-full"
+      :placeholder="t('auth.invitationCodePlaceholder')"
+      :disabled="isSubmitting"
+    />
     <button
       :data-testid="`${testIdPrefix}-create-account-submit`"
       type="button"
       class="btn btn-primary w-full"
-      :disabled="isSubmitting || !email.trim() || password.length < 6"
+      :disabled="isSubmitting || !email.trim() || password.length < 6 || (invitationCodeEnabled && !invitationCode.trim())"
       @click="handleSubmit"
     >
       {{ isSubmitting ? t('common.processing') : 'Create account' }}
@@ -92,12 +101,13 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
-import { getPublicSettings, sendVerifyCode } from '@/api/auth'
+import { getPublicSettings, sendPendingOAuthVerifyCode } from '@/api/auth'
 
 export type PendingOAuthCreateAccountPayload = {
   email: string
   password: string
   verifyCode: string
+  invitationCode?: string
 }
 
 const props = defineProps<{
@@ -117,10 +127,12 @@ const { t } = useI18n()
 const email = ref('')
 const password = ref('')
 const verifyCode = ref('')
+const invitationCode = ref('')
 const isSendingCode = ref(false)
 const sendCodeError = ref('')
 const sendCodeSuccess = ref(false)
 const countdown = ref(0)
+const invitationCodeEnabled = ref(false)
 const turnstileEnabled = ref(false)
 const turnstileSiteKey = ref('')
 const turnstileToken = ref('')
@@ -203,7 +215,7 @@ async function handleSendCode() {
   sendCodeSuccess.value = false
 
   try {
-    const response = await sendVerifyCode({
+    const response = await sendPendingOAuthVerifyCode({
       email: trimmedEmail,
       turnstile_token: turnstileEnabled.value ? turnstileToken.value : undefined
     })
@@ -228,7 +240,8 @@ function handleSubmit() {
   emit('submit', {
     email: trimmedEmail,
     password: password.value,
-    verifyCode: verifyCode.value.trim()
+    verifyCode: verifyCode.value.trim(),
+    invitationCode: invitationCode.value.trim() || undefined
   })
 }
 
@@ -239,9 +252,11 @@ function emitSwitchToBind() {
 onMounted(async () => {
   try {
     const settings = await getPublicSettings()
+    invitationCodeEnabled.value = settings.invitation_code_enabled === true
     turnstileEnabled.value = settings.turnstile_enabled === true
     turnstileSiteKey.value = settings.turnstile_site_key || ''
   } catch {
+    invitationCodeEnabled.value = false
     turnstileEnabled.value = false
     turnstileSiteKey.value = ''
   }

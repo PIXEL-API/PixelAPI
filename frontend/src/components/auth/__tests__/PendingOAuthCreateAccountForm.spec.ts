@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import PendingOAuthCreateAccountForm from '../PendingOAuthCreateAccountForm.vue'
 
 const sendVerifyCode = vi.fn()
+const sendPendingOAuthVerifyCode = vi.fn()
 const getPublicSettings = vi.fn()
 
 vi.mock('vue-i18n', async () => {
@@ -21,6 +22,7 @@ vi.mock('@/api/auth', async () => {
   return {
     ...actual,
     sendVerifyCode: (...args: any[]) => sendVerifyCode(...args),
+    sendPendingOAuthVerifyCode: (...args: any[]) => sendPendingOAuthVerifyCode(...args),
     getPublicSettings: (...args: any[]) => getPublicSettings(...args)
   }
 })
@@ -28,6 +30,7 @@ vi.mock('@/api/auth', async () => {
 describe('PendingOAuthCreateAccountForm', () => {
   beforeEach(() => {
     sendVerifyCode.mockReset()
+    sendPendingOAuthVerifyCode.mockReset()
     getPublicSettings.mockReset()
     getPublicSettings.mockResolvedValue({
       turnstile_enabled: false,
@@ -61,8 +64,42 @@ describe('PendingOAuthCreateAccountForm', () => {
     ])
   })
 
+  it('shows and emits invitation code when invitation-only signup is enabled', async () => {
+    getPublicSettings.mockResolvedValue({
+      invitation_code_enabled: true,
+      turnstile_enabled: false,
+      turnstile_site_key: ''
+    })
+
+    const wrapper = mount(PendingOAuthCreateAccountForm, {
+      props: {
+        providerName: 'LinuxDo',
+        testIdPrefix: 'linuxdo',
+        initialEmail: 'prefill@example.com',
+        isSubmitting: false
+      }
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="linuxdo-create-account-password"]').setValue('secret-123')
+    await wrapper.get('[data-testid="linuxdo-create-account-verify-code"]').setValue('246810')
+    await wrapper.get('[data-testid="linuxdo-create-account-invitation-code"]').setValue(' INVITE123 ')
+    await wrapper.get('form').trigger('submit.prevent')
+
+    expect(wrapper.emitted('submit')).toEqual([
+      [
+        {
+          email: 'prefill@example.com',
+          password: 'secret-123',
+          verifyCode: '246810',
+          invitationCode: 'INVITE123'
+        }
+      ]
+    ])
+  })
+
   it('sends a verify code for the trimmed email value', async () => {
-    sendVerifyCode.mockResolvedValue({
+    sendPendingOAuthVerifyCode.mockResolvedValue({
       message: 'sent',
       countdown: 60
     })
@@ -80,7 +117,7 @@ describe('PendingOAuthCreateAccountForm', () => {
     await wrapper.get('[data-testid="linuxdo-create-account-send-code"]').trigger('click')
     await flushPromises()
 
-    expect(sendVerifyCode).toHaveBeenCalledWith({
+    expect(sendPendingOAuthVerifyCode).toHaveBeenCalledWith({
       email: 'user@example.com'
     })
   })
@@ -90,7 +127,7 @@ describe('PendingOAuthCreateAccountForm', () => {
       turnstile_enabled: true,
       turnstile_site_key: 'site-key'
     })
-    sendVerifyCode.mockResolvedValue({
+    sendPendingOAuthVerifyCode.mockResolvedValue({
       message: 'sent',
       countdown: 60
     })
@@ -120,7 +157,7 @@ describe('PendingOAuthCreateAccountForm', () => {
     await wrapper.get('[data-testid="linuxdo-create-account-send-code"]').trigger('click')
     await flushPromises()
 
-    expect(sendVerifyCode).toHaveBeenCalledWith({
+    expect(sendPendingOAuthVerifyCode).toHaveBeenCalledWith({
       email: 'user@example.com',
       turnstile_token: 'turnstile-token'
     })

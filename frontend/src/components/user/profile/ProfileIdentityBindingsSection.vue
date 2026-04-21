@@ -13,35 +13,96 @@
       <div
         v-for="item in providerItems"
         :key="item.provider"
-        class="flex items-center justify-between gap-3 rounded-xl bg-white/80 px-3 py-2.5 dark:bg-dark-800/70"
+        class="rounded-xl bg-white/80 px-3 py-3 dark:bg-dark-800/70"
       >
-        <div class="min-w-0">
-          <div class="text-sm font-medium text-gray-900 dark:text-white">
-            {{ item.label }}
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <div class="text-sm font-medium text-gray-900 dark:text-white">
+                {{ item.label }}
+              </div>
+              <span
+                :data-testid="`profile-binding-${item.provider}-status`"
+                :class="['badge', item.bound ? 'badge-success' : 'badge-gray']"
+              >
+                {{
+                  item.bound
+                    ? t('profile.authBindings.status.bound')
+                    : t('profile.authBindings.status.notBound')
+                }}
+              </span>
+            </div>
+
+            <div
+              v-if="item.provider === 'email' && !item.bound"
+              class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_auto]"
+            >
+              <input
+                v-model.trim="emailBindingForm.email"
+                data-testid="profile-binding-email-input"
+                type="email"
+                class="input"
+                :placeholder="t('profile.authBindings.emailPlaceholder')"
+                :disabled="isSendingEmailCode || isBindingEmail"
+              />
+              <button
+                data-testid="profile-binding-email-send-code"
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="isSendingEmailCode || isBindingEmail"
+                @click="sendEmailCode"
+              >
+                {{
+                  isSendingEmailCode
+                    ? t('common.loading')
+                    : t('profile.authBindings.sendCodeAction')
+                }}
+              </button>
+              <input
+                v-model.trim="emailBindingForm.verifyCode"
+                data-testid="profile-binding-email-code-input"
+                type="text"
+                inputmode="numeric"
+                maxlength="6"
+                class="input"
+                :placeholder="t('profile.authBindings.codePlaceholder')"
+                :disabled="isBindingEmail"
+              />
+              <input
+                v-model="emailBindingForm.password"
+                data-testid="profile-binding-email-password-input"
+                type="password"
+                class="input"
+                :placeholder="t('profile.authBindings.passwordPlaceholder')"
+                :disabled="isBindingEmail"
+              />
+              <button
+                data-testid="profile-binding-email-submit"
+                type="button"
+                class="btn btn-primary btn-sm sm:col-span-2"
+                :disabled="isBindingEmail"
+                @click="bindEmail"
+              >
+                {{
+                  isBindingEmail
+                    ? t('common.loading')
+                    : t('profile.authBindings.confirmEmailBindAction')
+                }}
+              </button>
+            </div>
           </div>
-        </div>
 
-        <div class="flex shrink-0 items-center gap-2">
-          <span
-            :data-testid="`profile-binding-${item.provider}-status`"
-            :class="['badge', item.bound ? 'badge-success' : 'badge-gray']"
-          >
-            {{
-              item.bound
-                ? t('profile.authBindings.status.bound')
-                : t('profile.authBindings.status.notBound')
-            }}
-          </span>
-
-          <button
-            v-if="item.canBind"
-            :data-testid="`profile-binding-${item.provider}-action`"
-            type="button"
-            class="btn btn-secondary btn-sm"
-            @click="startBinding(item.provider)"
-          >
-            {{ t('profile.authBindings.bindAction', { providerName: item.label }) }}
-          </button>
+          <div class="flex shrink-0 items-center gap-2">
+            <button
+              v-if="item.canBind"
+              :data-testid="`profile-binding-${item.provider}-action`"
+              type="button"
+              class="btn btn-secondary btn-sm"
+              @click="startBinding(item.provider)"
+            >
+              {{ t('profile.authBindings.bindAction', { providerName: item.label }) }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -49,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import {
@@ -57,8 +118,8 @@ import {
   resolveWeChatOAuthStartStrict,
   type WeChatOAuthPublicSettings,
 } from '@/api/auth'
-import { startOAuthBinding } from '@/api/user'
-import { useAppStore } from '@/stores'
+import { bindEmailIdentity, sendEmailBindingCode, startOAuthBinding } from '@/api/user'
+import { useAppStore, useAuthStore } from '@/stores'
 import type { User, UserAuthBindingStatus, UserAuthProvider } from '@/types'
 
 const props = withDefaults(
@@ -84,6 +145,32 @@ const props = withDefaults(
 const { t } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
+const authStore = useAuthStore()
+
+const localUser = ref<User | null>(null)
+const isSendingEmailCode = ref(false)
+const isBindingEmail = ref(false)
+const emailBindingForm = reactive({
+  email: '',
+  verifyCode: '',
+  password: '',
+})
+
+watch(
+  () => props.user,
+  (user) => {
+    localUser.value = null
+    if (!user || getBindingStatusForUser(user, 'email')) {
+      return
+    }
+    if (typeof user.email === 'string' && !user.email.endsWith('.invalid')) {
+      emailBindingForm.email = user.email
+    }
+  },
+  { immediate: true }
+)
+
+const currentUser = computed(() => localUser.value ?? props.user)
 
 const wechatOAuthSettings = computed<WeChatOAuthPublicSettings | null>(() => {
   if (hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings)) {
@@ -117,20 +204,20 @@ function normalizeBindingStatus(binding: boolean | UserAuthBindingStatus | undef
 }
 
 function getBindingStatus(provider: UserAuthProvider): boolean {
-  const currentUser = props.user
+  return getBindingStatusForUser(currentUser.value, provider)
+}
 
+function getBindingStatusForUser(user: User | null | undefined, provider: UserAuthProvider): boolean {
   if (provider === 'email') {
-    return typeof currentUser?.email_bound === 'boolean'
-      ? currentUser.email_bound
-      : Boolean(currentUser?.email)
+    return typeof user?.email_bound === 'boolean' ? user.email_bound : Boolean(user?.email)
   }
 
-  const directFlag = currentUser?.[`${provider}_bound` as keyof User]
+  const directFlag = user?.[`${provider}_bound` as keyof User]
   if (typeof directFlag === 'boolean') {
     return directFlag
   }
 
-  const nested = currentUser?.auth_bindings?.[provider] ?? currentUser?.identity_bindings?.[provider]
+  const nested = user?.auth_bindings?.[provider] ?? user?.identity_bindings?.[provider]
   const normalized = normalizeBindingStatus(nested)
   return normalized ?? false
 }
@@ -170,5 +257,73 @@ function startBinding(provider: UserAuthProvider): void {
     redirectTo: route.fullPath || '/profile',
     wechatOAuthSettings: provider === 'wechat' ? wechatOAuthSettings.value : null,
   })
+}
+
+function applyUpdatedUser(user: User): void {
+  localUser.value = user
+  authStore.user = user
+}
+
+function validateEmailBindingForm(requireCode: boolean): boolean {
+  if (!emailBindingForm.email) {
+    appStore.showError(t('auth.emailRequired'))
+    return false
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailBindingForm.email)) {
+    appStore.showError(t('auth.invalidEmail'))
+    return false
+  }
+  if (requireCode && !emailBindingForm.verifyCode) {
+    appStore.showError(t('auth.codeRequired'))
+    return false
+  }
+  if (requireCode && !emailBindingForm.password) {
+    appStore.showError(t('auth.passwordRequired'))
+    return false
+  }
+  if (requireCode && emailBindingForm.password.length < 6) {
+    appStore.showError(t('auth.passwordMinLength'))
+    return false
+  }
+  return true
+}
+
+async function sendEmailCode(): Promise<void> {
+  if (!validateEmailBindingForm(false)) {
+    return
+  }
+
+  isSendingEmailCode.value = true
+  try {
+    await sendEmailBindingCode(emailBindingForm.email)
+    appStore.showSuccess(t('profile.authBindings.codeSentTo', { email: emailBindingForm.email }))
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || t('auth.sendCodeFailed'))
+  } finally {
+    isSendingEmailCode.value = false
+  }
+}
+
+async function bindEmail(): Promise<void> {
+  if (!validateEmailBindingForm(true)) {
+    return
+  }
+
+  isBindingEmail.value = true
+  try {
+    const user = await bindEmailIdentity({
+      email: emailBindingForm.email,
+      verify_code: emailBindingForm.verifyCode,
+      password: emailBindingForm.password,
+    })
+    applyUpdatedUser(user)
+    emailBindingForm.verifyCode = ''
+    emailBindingForm.password = ''
+    appStore.showSuccess(t('profile.authBindings.bindSuccess'))
+  } catch (error) {
+    appStore.showError((error as { message?: string }).message || t('common.tryAgain'))
+  } finally {
+    isBindingEmail.value = false
+  }
 }
 </script>

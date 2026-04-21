@@ -2,7 +2,7 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProfileIdentityBindingsSection from '@/components/user/profile/ProfileIdentityBindingsSection.vue'
-import { useAppStore } from '@/stores'
+import { useAppStore, useAuthStore } from '@/stores'
 import type { User } from '@/types'
 
 const routeState = vi.hoisted(() => ({
@@ -15,9 +15,23 @@ const locationState = vi.hoisted(() => ({
 
 let pinia: ReturnType<typeof createPinia>
 
+const userApiMocks = vi.hoisted(() => ({
+  sendEmailBindingCode: vi.fn(),
+  bindEmailIdentity: vi.fn(),
+}))
+
 vi.mock('vue-router', () => ({
   useRoute: () => routeState,
 }))
+
+vi.mock('@/api/user', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/user')>()
+  return {
+    ...actual,
+    sendEmailBindingCode: (...args: any[]) => userApiMocks.sendEmailBindingCode(...args),
+    bindEmailIdentity: (...args: any[]) => userApiMocks.bindEmailIdentity(...args),
+  }
+})
 
 vi.mock('vue-i18n', async (importOriginal) => {
   const actual = await importOriginal<typeof import('vue-i18n')>()
@@ -34,6 +48,13 @@ vi.mock('vue-i18n', async (importOriginal) => {
         if (key === 'profile.authBindings.providers.wechat') return 'WeChat'
         if (key === 'profile.authBindings.providers.oidc') return params?.providerName || 'OIDC'
         if (key === 'profile.authBindings.bindAction') return `Bind ${params?.providerName || ''}`.trim()
+        if (key === 'profile.authBindings.emailPlaceholder') return 'Email address'
+        if (key === 'profile.authBindings.codePlaceholder') return 'Verification code'
+        if (key === 'profile.authBindings.passwordPlaceholder') return 'Set password'
+        if (key === 'profile.authBindings.sendCodeAction') return 'Send code'
+        if (key === 'profile.authBindings.confirmEmailBindAction') return 'Bind email'
+        if (key === 'profile.authBindings.codeSentTo') return `Code sent to ${params?.email || ''}`.trim()
+        if (key === 'profile.authBindings.bindSuccess') return 'Bind success'
         return key
       },
     }),
@@ -76,6 +97,8 @@ describe('ProfileIdentityBindingsSection', () => {
     const appStore = useAppStore()
     appStore.cachedPublicSettings = null
     appStore.publicSettingsLoaded = false
+    userApiMocks.sendEmailBindingCode.mockReset()
+    userApiMocks.bindEmailIdentity.mockReset()
   })
 
   afterEach(() => {
@@ -223,5 +246,59 @@ describe('ProfileIdentityBindingsSection', () => {
     })
 
     expect(wrapper.find('[data-testid="profile-binding-wechat-action"]').exists()).toBe(true)
+  })
+
+  it('sends email verification code and binds email from the profile card', async () => {
+    userApiMocks.sendEmailBindingCode.mockResolvedValue(undefined)
+    userApiMocks.bindEmailIdentity.mockResolvedValue(
+      createUser({
+        email: 'bound@example.com',
+        email_bound: true,
+        auth_bindings: {
+          email: { bound: true },
+        },
+      })
+    )
+
+    const appStore = useAppStore()
+    const authStore = useAuthStore()
+    authStore.user = createUser({
+      email: 'legacy-user@linuxdo-connect.invalid',
+      email_bound: false,
+      auth_bindings: {
+        email: { bound: false },
+      },
+    })
+    const showSuccessSpy = vi.spyOn(appStore, 'showSuccess')
+
+    const wrapper = mount(ProfileIdentityBindingsSection, {
+      global: {
+        plugins: [pinia],
+      },
+      props: {
+        user: authStore.user,
+        linuxdoEnabled: false,
+        oidcEnabled: false,
+        wechatEnabled: false,
+      },
+    })
+
+    await wrapper.get('[data-testid="profile-binding-email-input"]').setValue('bound@example.com')
+    await wrapper.get('[data-testid="profile-binding-email-send-code"]').trigger('click')
+
+    expect(userApiMocks.sendEmailBindingCode).toHaveBeenCalledWith('bound@example.com')
+    expect(showSuccessSpy).toHaveBeenCalledWith('Code sent to bound@example.com')
+
+    await wrapper.get('[data-testid="profile-binding-email-code-input"]').setValue('123456')
+    await wrapper.get('[data-testid="profile-binding-email-password-input"]').setValue('new-password')
+    await wrapper.get('[data-testid="profile-binding-email-submit"]').trigger('click')
+
+    expect(userApiMocks.bindEmailIdentity).toHaveBeenCalledWith({
+      email: 'bound@example.com',
+      verify_code: '123456',
+      password: 'new-password',
+    })
+    expect(wrapper.get('[data-testid="profile-binding-email-status"]').text()).toBe('Bound')
+    expect(authStore.user?.email).toBe('bound@example.com')
   })
 })

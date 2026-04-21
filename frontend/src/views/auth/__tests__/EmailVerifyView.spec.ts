@@ -11,6 +11,7 @@ const {
   clearPendingAuthSessionMock,
   getPublicSettingsMock,
   sendVerifyCodeMock,
+  sendPendingOAuthVerifyCodeMock,
   persistOAuthTokenContextMock,
   apiClientPostMock,
   authStoreState,
@@ -23,6 +24,7 @@ const {
   clearPendingAuthSessionMock: vi.fn(),
   getPublicSettingsMock: vi.fn(),
   sendVerifyCodeMock: vi.fn(),
+  sendPendingOAuthVerifyCodeMock: vi.fn(),
   persistOAuthTokenContextMock: vi.fn(),
   apiClientPostMock: vi.fn(),
   authStoreState: {
@@ -80,6 +82,7 @@ vi.mock('@/api/auth', async () => {
     ...actual,
     getPublicSettings: (...args: any[]) => getPublicSettingsMock(...args),
     sendVerifyCode: (...args: any[]) => sendVerifyCodeMock(...args),
+    sendPendingOAuthVerifyCode: (...args: any[]) => sendPendingOAuthVerifyCodeMock(...args),
     persistOAuthTokenContext: (...args: any[]) => persistOAuthTokenContextMock(...args),
   }
 })
@@ -100,6 +103,7 @@ describe('EmailVerifyView', () => {
     clearPendingAuthSessionMock.mockReset()
     getPublicSettingsMock.mockReset()
     sendVerifyCodeMock.mockReset()
+    sendPendingOAuthVerifyCodeMock.mockReset()
     persistOAuthTokenContextMock.mockReset()
     apiClientPostMock.mockReset()
     authStoreState.pendingAuthSession = null
@@ -112,7 +116,84 @@ describe('EmailVerifyView', () => {
       registration_email_suffix_whitelist: [],
     })
     sendVerifyCodeMock.mockResolvedValue({ countdown: 60 })
+    sendPendingOAuthVerifyCodeMock.mockResolvedValue({ countdown: 60 })
     setTokenMock.mockResolvedValue({})
+  })
+
+  it('uses the pending oauth verify-code endpoint when register data carries a pending auth session', async () => {
+    authStoreState.pendingAuthSession = {
+      token: 'pending-token-1',
+      token_field: 'pending_auth_token',
+      provider: 'wechat',
+      redirect: '/profile',
+    }
+    sessionStorage.setItem(
+      'register_data',
+      JSON.stringify({
+        email: 'fresh@example.com',
+        password: 'secret-123',
+      })
+    )
+
+    mount(EmailVerifyView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: true,
+          TurnstileWidget: true,
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(sendPendingOAuthVerifyCodeMock).toHaveBeenCalledWith({
+      email: 'fresh@example.com',
+      pending_auth_token: 'pending-token-1',
+    })
+    expect(sendVerifyCodeMock).not.toHaveBeenCalled()
+  })
+
+  it('skips the registration email suffix whitelist for pending oauth verification', async () => {
+    authStoreState.pendingAuthSession = {
+      token: 'pending-token-2',
+      token_field: 'pending_auth_token',
+      provider: 'oidc',
+      redirect: '/profile',
+    }
+    getPublicSettingsMock.mockResolvedValue({
+      turnstile_enabled: false,
+      turnstile_site_key: '',
+      site_name: 'Sub2API',
+      registration_email_suffix_whitelist: ['allowed.com'],
+    })
+    sessionStorage.setItem(
+      'register_data',
+      JSON.stringify({
+        email: 'fresh@example.com',
+        password: 'secret-123',
+      })
+    )
+
+    mount(EmailVerifyView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: true,
+          TurnstileWidget: true,
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(sendPendingOAuthVerifyCodeMock).toHaveBeenCalledWith({
+      email: 'fresh@example.com',
+      pending_auth_token: 'pending-token-2',
+    })
+    expect(showErrorMock).not.toHaveBeenCalled()
   })
 
   it('submits pending auth account creation when session storage has no pending metadata but auth store does', async () => {
