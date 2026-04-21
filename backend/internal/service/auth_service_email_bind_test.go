@@ -5,6 +5,7 @@ package service_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -32,6 +33,20 @@ func (s *emailBindDefaultSubAssignerStub) AssignOrExtendSubscription(
 	cloned := *input
 	s.calls = append(s.calls, &cloned)
 	return &service.UserSubscription{UserID: input.UserID, GroupID: input.GroupID}, false, nil
+}
+
+type flakyEmailBindDefaultSubAssignerStub struct {
+	err   error
+	calls []*service.AssignSubscriptionInput
+}
+
+func (s *flakyEmailBindDefaultSubAssignerStub) AssignOrExtendSubscription(
+	_ context.Context,
+	input *service.AssignSubscriptionInput,
+) (*service.UserSubscription, bool, error) {
+	cloned := *input
+	s.calls = append(s.calls, &cloned)
+	return nil, false, s.err
 }
 
 func newAuthServiceForEmailBind(
@@ -185,6 +200,62 @@ func TestAuthServiceBindEmailIdentity_RejectsExistingEmailOnAnotherUser(t *testi
 	require.NoError(t, err)
 	require.Equal(t, "source-user"+service.OIDCConnectSyntheticEmailDomain, storedUser.Email)
 	require.Equal(t, 0, countProviderGrantRecords(t, client, sourceUser.ID, "email", "first_bind"))
+}
+
+func TestAuthServiceBindEmailIdentity_RollsBackWhenFirstBindDefaultsFail(t *testing.T) {
+	assigner := &flakyEmailBindDefaultSubAssignerStub{err: errors.New("temporary assign failure")}
+	cache := &emailBindCacheStub{
+		data: &service.VerificationCodeData{
+			Code:      "123456",
+			CreatedAt: time.Now().UTC(),
+			ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
+		},
+	}
+	svc, _, client := newAuthServiceForEmailBind(t, map[string]string{
+		service.SettingKeyAuthSourceDefaultEmailBalance:          "8.5",
+		service.SettingKeyAuthSourceDefaultEmailConcurrency:      "4",
+		service.SettingKeyAuthSourceDefaultEmailSubscriptions:    `[{"group_id":11,"validity_days":30}]`,
+		service.SettingKeyAuthSourceDefaultEmailGrantOnFirstBind: "true",
+	}, cache, assigner)
+
+	ctx := context.Background()
+	originalEmail := "legacy-rollback" + service.LinuxDoConnectSyntheticEmailDomain
+	user, err := client.User.Create().
+		SetEmail(originalEmail).
+		SetUsername("legacy-rollback").
+		SetPasswordHash("old-hash").
+		SetBalance(2.5).
+		SetConcurrency(1).
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	updatedUser, err := svc.BindEmailIdentity(ctx, user.ID, "rollback@example.com", "123456", "new-password")
+	require.ErrorContains(t, err, "apply email first bind defaults")
+	require.ErrorContains(t, err, "temporary assign failure")
+	require.Nil(t, updatedUser)
+
+	storedUser, err := client.User.Get(ctx, user.ID)
+	require.NoError(t, err)
+	require.Equal(t, originalEmail, storedUser.Email)
+	require.Equal(t, "old-hash", storedUser.PasswordHash)
+	require.Equal(t, 2.5, storedUser.Balance)
+	require.Equal(t, 1, storedUser.Concurrency)
+
+	identityCount, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.UserIDEQ(user.ID),
+			authidentity.ProviderTypeEQ("email"),
+			authidentity.ProviderKeyEQ("email"),
+			authidentity.ProviderSubjectEQ("rollback@example.com"),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, identityCount)
+
+	require.Len(t, assigner.calls, 1)
+	require.Equal(t, 0, countProviderGrantRecords(t, client, user.ID, "email", "first_bind"))
 }
 
 func TestAuthServiceBindEmailIdentity_RejectsReservedEmail(t *testing.T) {

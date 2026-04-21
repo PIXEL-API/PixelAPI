@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
@@ -323,18 +324,13 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	if emailVerified == nil {
 		emailVerified = idClaims.EmailVerified
 	}
-	if cfg.RequireEmailVerified {
-		if emailVerified == nil || !*emailVerified {
-			redirectOAuthError(c, frontendCallback, "email_not_verified", "email is not verified", "")
-			return
-		}
-	}
 	if userInfoClaims.Subject != "" && idClaims.Subject != "" && strings.TrimSpace(userInfoClaims.Subject) != strings.TrimSpace(idClaims.Subject) {
 		redirectOAuthError(c, frontendCallback, "subject_mismatch", "userinfo subject does not match id_token", "")
 		return
 	}
 
 	identityKey := oidcIdentityKey(issuer, subject)
+	compatEmail := strings.TrimSpace(firstNonEmpty(userInfoClaims.Email, idClaims.Email))
 	email := oidcSyntheticEmailFromIdentityKey(identityKey)
 	username := firstNonEmpty(
 		userInfoClaims.Username,
@@ -356,6 +352,9 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		"provider_fallback":      strings.TrimSpace(cfg.ProviderName),
 		"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, idClaims.Name, username),
 		"suggested_avatar_url":   userInfoClaims.AvatarURL,
+	}
+	if compatEmail != "" && !strings.EqualFold(strings.TrimSpace(compatEmail), strings.TrimSpace(email)) {
+		upstreamClaims["compat_email"] = compatEmail
 	}
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, oidcOAuthBindUserCookieName)
@@ -416,6 +415,40 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
+	compatEmailUser, err := h.findOIDCCompatEmailUser(c.Request.Context(), compatEmail)
+	if err != nil {
+		redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
+		return
+	}
+	if compatEmailUser != nil {
+		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+			Intent:                 "adopt_existing_user_by_email",
+			Identity:               identityRef,
+			TargetUserID:           &compatEmailUser.ID,
+			ResolvedEmail:          compatEmailUser.Email,
+			RedirectTo:             redirectTo,
+			BrowserSessionKey:      browserSessionKey,
+			UpstreamIdentityClaims: upstreamClaims,
+			CompletionResponse: map[string]any{
+				"redirect": redirectTo,
+				"step":     "bind_login_required",
+				"email":    compatEmailUser.Email,
+			},
+		}); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
+	if cfg.RequireEmailVerified {
+		if emailVerified == nil || !*emailVerified {
+			redirectOAuthError(c, frontendCallback, "email_not_verified", "email is not verified", "")
+			return
+		}
+	}
+
 	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
 		if err := h.createOAuthEmailRequiredPendingSession(c, identityRef, redirectTo, browserSessionKey, upstreamClaims); err != nil {
 			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
@@ -471,6 +504,30 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 	redirectToFrontendCallback(c, frontendCallback)
+}
+
+func (h *AuthHandler) findOIDCCompatEmailUser(ctx context.Context, email string) (*dbent.User, error) {
+	client := h.entClient()
+	if client == nil {
+		return nil, infraerrors.ServiceUnavailable("PENDING_AUTH_NOT_READY", "pending auth service is not ready")
+	}
+
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" ||
+		strings.HasSuffix(email, service.LinuxDoConnectSyntheticEmailDomain) ||
+		strings.HasSuffix(email, service.OIDCConnectSyntheticEmailDomain) ||
+		strings.HasSuffix(email, service.WeChatConnectSyntheticEmailDomain) {
+		return nil, nil
+	}
+
+	userEntity, err := findUserByNormalizedEmail(ctx, client, email)
+	if err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			return nil, nil
+		}
+		return nil, infraerrors.InternalServer("COMPAT_EMAIL_LOOKUP_FAILED", "failed to look up compat email user").WithCause(err)
+	}
+	return userEntity, nil
 }
 
 type completeOIDCOAuthRequest struct {
