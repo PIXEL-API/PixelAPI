@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -205,6 +206,72 @@ func TestGetOrderProviderInstanceLeavesProviderKeyMatchUnresolvedWhenTypeNotSupp
 	require.Nil(t, got)
 }
 
+func TestGetOrderProviderInstanceUsesProviderSnapshotWhenPinnedColumnMissing(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	inst, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("stripe-snapshot").
+		SetConfig(encryptWebhookProviderConfig(t, map[string]string{"secretKey": "sk_snapshot"})).
+		SetSupportedTypes("stripe").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	order := &dbent.PaymentOrder{
+		ID:          42,
+		PaymentType: payment.TypeStripe,
+		ProviderSnapshot: map[string]any{
+			"schema_version":       1,
+			"provider_instance_id": strconv.FormatInt(inst.ID, 10),
+			"provider_key":         payment.TypeStripe,
+		},
+	}
+
+	svc := &PaymentService{
+		entClient:    client,
+		loadBalancer: newWebhookProviderTestLoadBalancer(client),
+	}
+
+	got, err := svc.getOrderProviderInstance(ctx, order)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, inst.ID, got.ID)
+}
+
+func TestGetOrderProviderInstanceRejectsMissingSnapshotInstanceWithoutLegacyFallback(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("stripe-legacy-fallback").
+		SetConfig(encryptWebhookProviderConfig(t, map[string]string{"secretKey": "sk_legacy"})).
+		SetSupportedTypes("stripe").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	order := &dbent.PaymentOrder{
+		ID:          43,
+		PaymentType: payment.TypeStripe,
+		ProviderSnapshot: map[string]any{
+			"schema_version":       1,
+			"provider_instance_id": "999999",
+			"provider_key":         payment.TypeStripe,
+		},
+	}
+
+	svc := &PaymentService{
+		entClient:    client,
+		loadBalancer: newWebhookProviderTestLoadBalancer(client),
+	}
+
+	got, err := svc.getOrderProviderInstance(ctx, order)
+	require.Nil(t, got)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "provider snapshot instance 999999 is missing")
+}
+
 func TestGetWebhookProviderRejectsAmbiguousRegistryFallback(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
@@ -363,4 +430,87 @@ func TestGetWebhookProviderRejectsRegistryFallbackForPinnedOrder(t *testing.T) {
 	_, err = svc.GetWebhookProviders(ctx, payment.TypeWxpay, "sub2_test_pinned_order")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "provider instance")
+}
+
+func TestGetWebhookProviderUsesProviderSnapshotBeforeWxpayFallback(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("snapshot-webhook@example.com").
+		SetPasswordHash("hash").
+		SetUsername("snapshot-webhook").
+		Save(ctx)
+	require.NoError(t, err)
+
+	wxpayConfigA := encryptWebhookProviderConfig(t, map[string]string{
+		"appId":       "wx-app-snapshot-a",
+		"mchId":       "mch-snapshot-a",
+		"privateKey":  "private-key-snapshot-a",
+		"apiV3Key":    webhookProviderTestEncryptionKey,
+		"publicKey":   "public-key-snapshot-a",
+		"publicKeyId": "public-key-id-snapshot-a",
+		"certSerial":  "cert-serial-snapshot-a",
+	})
+	wxpayConfigB := encryptWebhookProviderConfig(t, map[string]string{
+		"appId":       "wx-app-snapshot-b",
+		"mchId":       "mch-snapshot-b",
+		"privateKey":  "private-key-snapshot-b",
+		"apiV3Key":    webhookProviderTestEncryptionKey,
+		"publicKey":   "public-key-snapshot-b",
+		"publicKeyId": "public-key-id-snapshot-b",
+		"certSerial":  "cert-serial-snapshot-b",
+	})
+	instA, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeWxpay).
+		SetName("wxpay-snapshot-a").
+		SetConfig(wxpayConfigA).
+		SetSupportedTypes("wxpay").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeWxpay).
+		SetName("wxpay-snapshot-b").
+		SetConfig(wxpayConfigB).
+		SetSupportedTypes("wxpay").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(66).
+		SetPayAmount(66).
+		SetFeeRate(0).
+		SetRechargeCode("SNAPSHOT-WEBHOOK").
+		SetOutTradeNo("sub2_test_snapshot_webhook_order").
+		SetPaymentType(payment.TypeWxpay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetProviderSnapshot(map[string]any{
+			"schema_version":       1,
+			"provider_instance_id": strconv.FormatInt(instA.ID, 10),
+			"provider_key":         payment.TypeWxpay,
+			"payment_mode":         "native",
+		}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		entClient:       client,
+		loadBalancer:    newWebhookProviderTestLoadBalancer(client),
+		registry:        payment.NewRegistry(),
+		providersLoaded: true,
+	}
+
+	providers, err := svc.GetWebhookProviders(ctx, payment.TypeWxpay, "sub2_test_snapshot_webhook_order")
+	require.NoError(t, err)
+	require.Len(t, providers, 1)
+	require.Equal(t, payment.TypeWxpay, providers[0].ProviderKey())
 }

@@ -27,6 +27,10 @@ func (s *PaymentService) getOrderProviderInstance(ctx context.Context, o *dbent.
 		return nil, nil
 	}
 
+	if snapshot := psOrderProviderSnapshot(o); snapshot != nil {
+		return s.resolveSnapshotOrderProviderInstance(ctx, o, snapshot)
+	}
+
 	instIDStr := strings.TrimSpace(psStringValue(o.ProviderInstanceID))
 	if instIDStr == "" {
 		return s.resolveUniqueLegacyOrderProviderInstance(ctx, o)
