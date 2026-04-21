@@ -700,7 +700,7 @@ const getAttributeValue = (userId: number, attrId: number): string => {
 // All possible columns (for column settings)
 const allColumns = computed<Column[]>(() => [
   { key: 'email', label: t('admin.users.columns.user'), sortable: true },
-  { key: 'id', label: 'ID', sortable: true },
+  { key: 'id', label: t('admin.users.columns.id'), sortable: true },
   { key: 'username', label: t('admin.users.columns.username'), sortable: true },
   { key: 'notes', label: t('admin.users.columns.notes'), sortable: false },
   // Dynamic attribute columns
