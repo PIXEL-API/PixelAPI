@@ -186,7 +186,7 @@ func TestOIDCOAuthBindStartRedirectsAndSetsBindCookies(t *testing.T) {
 	require.Equal(t, int64(84), userID)
 }
 
-func TestOIDCOAuthCallbackCreatesLoginPendingSessionForExistingUser(t *testing.T) {
+func TestOIDCOAuthCallbackCreatesLoginPendingSessionForExistingIdentityUser(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-subject-login",
 		PreferredUsername: "oidc_login",
@@ -198,7 +198,7 @@ func TestOIDCOAuthCallbackCreatesLoginPendingSessionForExistingUser(t *testing.T
 	defer cleanup()
 
 	handler, client := newOIDCOAuthHandlerAndClient(t, false, cfg)
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 
 	ctx := context.Background()
 	existingUser, err := client.User.Create().
@@ -207,6 +207,14 @@ func TestOIDCOAuthCallbackCreatesLoginPendingSessionForExistingUser(t *testing.T
 		SetPasswordHash("hash").
 		SetRole(service.RoleUser).
 		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.AuthIdentity.Create().
+		SetUserID(existingUser.ID).
+		SetProviderType("oidc").
+		SetProviderKey(cfg.IssuerURL).
+		SetProviderSubject("oidc-subject-login").
+		SetMetadata(map[string]any{"username": "legacy-user"}).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -239,7 +247,8 @@ func TestOIDCOAuthCallbackCreatesLoginPendingSessionForExistingUser(t *testing.T
 	require.Equal(t, cfg.IssuerURL, session.ProviderKey)
 	require.Equal(t, "OIDC Login Display", session.UpstreamIdentityClaims["suggested_display_name"])
 
-	completion := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, "/dashboard", completion["redirect"])
 	require.NotEmpty(t, completion["access_token"])
 	require.Nil(t, completion["error"])
@@ -257,7 +266,7 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *testing
 	defer cleanup()
 
 	handler, client := newOIDCOAuthHandlerAndClient(t, false, cfg)
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 
 	ctx := context.Background()
 	existingUser, err := client.User.Create().
@@ -292,16 +301,19 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *testing
 		Where(pendingauthsession.SessionTokenEQ(decodeCookieValueForTest(t, sessionCookie.Value))).
 		Only(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "adopt_existing_user_by_email", session.Intent)
-	require.NotNil(t, session.TargetUserID)
-	require.Equal(t, existingUser.ID, *session.TargetUserID)
+	require.Equal(t, oauthIntentLogin, session.Intent)
+	require.Nil(t, session.TargetUserID)
 	require.Equal(t, existingUser.Email, session.ResolvedEmail)
 	require.Equal(t, "legacy@example.com", session.UpstreamIdentityClaims["compat_email"])
 
-	completion := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, "/dashboard", completion["redirect"])
-	require.Equal(t, "bind_login_required", completion["step"])
+	require.Equal(t, oauthPendingChoiceStep, completion["step"])
 	require.Equal(t, existingUser.Email, completion["email"])
+	require.Equal(t, existingUser.Email, completion["existing_account_email"])
+	require.Equal(t, true, completion["existing_account_bindable"])
+	require.Equal(t, "compat_email_match", completion["choice_reason"])
 	_, hasAccessToken := completion["access_token"]
 	require.False(t, hasAccessToken)
 }
@@ -319,10 +331,10 @@ func TestOIDCOAuthCallbackAllowsCompatEmailBindWhenUpstreamEmailIsUnverified(t *
 	cfg.RequireEmailVerified = true
 
 	handler, client := newOIDCOAuthHandlerAndClient(t, false, cfg)
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 
 	ctx := context.Background()
-	existingUser, err := client.User.Create().
+	_, err := client.User.Create().
 		SetEmail("owner@example.com").
 		SetUsername("owner-user").
 		SetPasswordHash("hash").
@@ -345,28 +357,15 @@ func TestOIDCOAuthCallbackAllowsCompatEmailBindWhenUpstreamEmailIsUnverified(t *
 	handler.OIDCOAuthCallback(c)
 
 	require.Equal(t, http.StatusFound, recorder.Code)
-	require.Equal(t, "/auth/oidc/callback", recorder.Header().Get("Location"))
+	require.Equal(t, "/auth/oidc/callback#error=email_not_verified&error_message=email+is+not+verified", recorder.Header().Get("Location"))
+	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
 
-	sessionCookie := findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName)
-	require.NotNil(t, sessionCookie)
-
-	session, err := client.PendingAuthSession.Query().
-		Where(pendingauthsession.SessionTokenEQ(decodeCookieValueForTest(t, sessionCookie.Value))).
-		Only(ctx)
+	count, err := client.PendingAuthSession.Query().Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "adopt_existing_user_by_email", session.Intent)
-	require.NotNil(t, session.TargetUserID)
-	require.Equal(t, existingUser.ID, *session.TargetUserID)
-	require.Equal(t, existingUser.Email, session.ResolvedEmail)
-	require.Equal(t, "owner@example.com", session.UpstreamIdentityClaims["compat_email"])
-
-	completion := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
-	require.Equal(t, "/settings/connections", completion["redirect"])
-	require.Equal(t, "bind_login_required", completion["step"])
-	require.Equal(t, existingUser.Email, completion["email"])
+	require.Zero(t, count)
 }
 
-func TestOIDCOAuthCallbackCreatesInvitationPendingSessionWhenSignupRequiresInvite(t *testing.T) {
+func TestOIDCOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-subject-invite",
 		PreferredUsername: "oidc_invite",
@@ -378,7 +377,7 @@ func TestOIDCOAuthCallbackCreatesInvitationPendingSessionWhenSignupRequiresInvit
 	defer cleanup()
 
 	handler, client := newOIDCOAuthHandlerAndClient(t, true, cfg)
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -407,9 +406,11 @@ func TestOIDCOAuthCallbackCreatesInvitationPendingSessionWhenSignupRequiresInvit
 	require.Equal(t, oauthIntentLogin, session.Intent)
 	require.Nil(t, session.TargetUserID)
 
-	completion := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
-	require.Equal(t, "invitation_required", completion["error"])
+	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, oauthPendingChoiceStep, completion["step"])
 	require.Equal(t, "/dashboard", completion["redirect"])
+	require.Equal(t, "third_party_signup", completion["choice_reason"])
 }
 
 func TestOIDCOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) {
@@ -424,7 +425,7 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) 
 	defer cleanup()
 
 	handler, client := newOIDCOAuthHandlerAndClient(t, false, cfg)
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 
 	ctx := context.Background()
 	currentUser, err := client.User.Create().
@@ -466,7 +467,8 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) 
 	require.Equal(t, cfg.IssuerURL, session.ProviderKey)
 	require.Equal(t, "OIDC Bind Display", session.UpstreamIdentityClaims["suggested_display_name"])
 
-	completion := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, "/settings/connections", completion["redirect"])
 	require.Empty(t, completion["access_token"])
 

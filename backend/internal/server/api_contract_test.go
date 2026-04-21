@@ -50,6 +50,7 @@ func TestAPIContracts(t *testing.T) {
 				"data": {
 					"id": 1,
 					"email": "alice@example.com",
+					"email_bound": true,
 					"username": "alice",
 					"role": "user",
 					"balance": 12.5,
@@ -63,6 +64,120 @@ func TestAPIContracts(t *testing.T) {
 					"balance_notify_threshold": null,
 					"balance_notify_extra_emails": null,
 					"total_recharged": 0,
+					"linuxdo_bound": false,
+					"oidc_bound": false,
+					"wechat_bound": false,
+					"identities": {
+						"email": {
+							"provider": "email",
+							"provider_key": "email",
+							"bound": true,
+							"bound_count": 1,
+							"can_bind": false,
+							"can_unbind": false,
+							"display_name": "alice@example.com",
+							"subject_hint": "a***e@example.com",
+							"note": "Primary account email is managed from the profile form."
+						},
+						"linuxdo": {
+							"provider": "linuxdo",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/linuxdo/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						},
+						"oidc": {
+							"provider": "oidc",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/oidc/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						},
+						"wechat": {
+							"provider": "wechat",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/wechat/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						}
+					},
+					"identity_bindings": {
+						"email": {
+							"provider": "email",
+							"provider_key": "email",
+							"bound": true,
+							"bound_count": 1,
+							"can_bind": false,
+							"can_unbind": false,
+							"display_name": "alice@example.com",
+							"subject_hint": "a***e@example.com",
+							"note": "Primary account email is managed from the profile form."
+						},
+						"linuxdo": {
+							"provider": "linuxdo",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/linuxdo/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						},
+						"oidc": {
+							"provider": "oidc",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/oidc/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						},
+						"wechat": {
+							"provider": "wechat",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/wechat/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						}
+					},
+					"auth_bindings": {
+						"email": {
+							"provider": "email",
+							"provider_key": "email",
+							"bound": true,
+							"bound_count": 1,
+							"can_bind": false,
+							"can_unbind": false,
+							"display_name": "alice@example.com",
+							"subject_hint": "a***e@example.com",
+							"note": "Primary account email is managed from the profile form."
+						},
+						"linuxdo": {
+							"provider": "linuxdo",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/linuxdo/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						},
+						"oidc": {
+							"provider": "oidc",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/oidc/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						},
+						"wechat": {
+							"provider": "wechat",
+							"bound": false,
+							"bound_count": 0,
+							"can_bind": true,
+							"can_unbind": false,
+							"bind_start_path": "/api/v1/auth/oauth/wechat/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+						}
+					},
 					"run_mode": "standard"
 				}
 			}`,
@@ -649,7 +764,23 @@ func TestAPIContracts(t *testing.T) {
 					"account_quota_notify_enabled": false,
 					"balance_low_notify_threshold": 0,
 					"balance_low_notify_recharge_url": "",
-					"account_quota_notify_emails": []
+					"account_quota_notify_emails": [],
+					"wechat_connect_enabled": false,
+					"wechat_connect_app_id": "",
+					"wechat_connect_app_secret_configured": false,
+					"wechat_connect_mode": "open",
+					"wechat_connect_open_enabled": false,
+					"wechat_connect_open_app_id": "",
+					"wechat_connect_open_app_secret_configured": false,
+					"wechat_connect_mp_enabled": false,
+					"wechat_connect_mp_app_id": "",
+					"wechat_connect_mp_app_secret_configured": false,
+					"wechat_connect_mobile_enabled": false,
+					"wechat_connect_mobile_app_id": "",
+					"wechat_connect_mobile_app_secret_configured": false,
+					"wechat_connect_redirect_url": "",
+					"wechat_connect_frontend_redirect_url": "/auth/wechat/callback",
+					"wechat_connect_scopes": "snsapi_login"
 				}
 			}`,
 		},
@@ -938,7 +1069,7 @@ func (r *stubUserRepo) AddGroupToAllowedGroups(ctx context.Context, userID int64
 }
 
 func (r *stubUserRepo) ListUserAuthIdentities(ctx context.Context, userID int64) ([]service.UserAuthIdentityRecord, error) {
-	return nil, errors.New("not implemented")
+	return nil, nil
 }
 
 func (r *stubUserRepo) UnbindUserAuthProvider(context.Context, int64, string) error {
@@ -951,6 +1082,10 @@ func (r *stubUserRepo) GetLatestUsedAtByUserIDs(ctx context.Context, userIDs []i
 
 func (r *stubUserRepo) GetLatestUsedAtByUserID(ctx context.Context, userID int64) (*time.Time, error) {
 	return nil, nil
+}
+
+func (r *stubUserRepo) UpdateUserLastActiveAt(ctx context.Context, userID int64, activeAt time.Time) error {
+	return nil
 }
 
 func (r *stubUserRepo) UpdateTotpSecret(ctx context.Context, userID int64, encryptedSecret *string) error {

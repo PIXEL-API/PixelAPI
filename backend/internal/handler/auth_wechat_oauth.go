@@ -1129,7 +1129,7 @@ func exchangeWeChatOAuthCode(ctx context.Context, cfg wechatOAuthConfig, code st
 	if err != nil {
 		return nil, fmt.Errorf("request wechat access token: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1177,7 +1177,7 @@ func fetchWeChatUserInfo(ctx context.Context, tokenResp *wechatOAuthTokenRespons
 	if err != nil {
 		return nil, fmt.Errorf("request wechat userinfo: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

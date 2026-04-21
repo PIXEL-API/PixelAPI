@@ -210,9 +210,15 @@ func TestCreateProviderInstanceRejectsConflictingVisibleMethodEnablement(t *test
 	}
 
 	_, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
-		ProviderKey:    "easypay",
-		Name:           "EasyPay Alipay",
-		Config:         map[string]string{"pid": "1001"},
+		ProviderKey: "easypay",
+		Name:        "EasyPay Alipay",
+		Config: map[string]string{
+			"pid":       "1001",
+			"pkey":      "pkey-1001",
+			"apiBase":   "https://pay.example.com",
+			"notifyUrl": "https://merchant.example.com/notify",
+			"returnUrl": "https://merchant.example.com/return",
+		},
 		SupportedTypes: []string{"alipay"},
 		Enabled:        true,
 	})
@@ -240,9 +246,15 @@ func TestUpdateProviderInstanceRejectsEnablingConflictingVisibleMethodProvider(t
 	}
 
 	existing, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
-		ProviderKey:    "easypay",
-		Name:           "EasyPay WeChat",
-		Config:         map[string]string{"pid": "2001"},
+		ProviderKey: "easypay",
+		Name:        "EasyPay WeChat",
+		Config: map[string]string{
+			"pid":       "2001",
+			"pkey":      "pkey-2001",
+			"apiBase":   "https://pay.example.com",
+			"notifyUrl": "https://merchant.example.com/notify",
+			"returnUrl": "https://merchant.example.com/return",
+		},
 		SupportedTypes: []string{"wxpay"},
 		Enabled:        true,
 	})
@@ -276,9 +288,15 @@ func TestUpdateProviderInstancePersistsEnabledAndSupportedTypes(t *testing.T) {
 	}
 
 	instance, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
-		ProviderKey:    "easypay",
-		Name:           "EasyPay",
-		Config:         map[string]string{"pid": "3001"},
+		ProviderKey: "easypay",
+		Name:        "EasyPay",
+		Config: map[string]string{
+			"pid":       "3001",
+			"pkey":      "pkey-3001",
+			"apiBase":   "https://pay.example.com",
+			"notifyUrl": "https://merchant.example.com/notify",
+			"returnUrl": "https://merchant.example.com/return",
+		},
 		SupportedTypes: []string{"alipay"},
 		Enabled:        false,
 	})

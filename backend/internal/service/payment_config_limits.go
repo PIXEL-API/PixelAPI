@@ -53,40 +53,6 @@ func pcApplyEnabledVisibleMethodInstances(typeInstances map[string][]*dbent.Paym
 	return filtered
 }
 
-func pcApplyVisibleMethodRouting(typeInstances map[string][]*dbent.PaymentProviderInstance, vals map[string]string, available map[string]bool) map[string][]*dbent.PaymentProviderInstance {
-	if len(typeInstances) == 0 {
-		return typeInstances
-	}
-
-	filtered := make(map[string][]*dbent.PaymentProviderInstance, len(typeInstances))
-	for paymentType, instances := range typeInstances {
-		visibleMethod := NormalizeVisibleMethod(paymentType)
-		switch visibleMethod {
-		case payment.TypeAlipay, payment.TypeWxpay:
-			if !visibleMethodShouldBeExposed(visibleMethod, vals, available) {
-				continue
-			}
-			targetProviderKey, ok := VisibleMethodProviderKeyForSource(visibleMethod, vals[visibleMethodSourceSettingKey(visibleMethod)])
-			if !ok {
-				continue
-			}
-			matching := make([]*dbent.PaymentProviderInstance, 0, len(instances))
-			for _, inst := range instances {
-				if inst.ProviderKey == targetProviderKey {
-					matching = append(matching, inst)
-				}
-			}
-			if len(matching) == 0 {
-				continue
-			}
-			filtered[paymentType] = matching
-		default:
-			filtered[paymentType] = instances
-		}
-	}
-	return filtered
-}
-
 // GetMethodLimits returns per-payment-type limits from enabled provider instances.
 func (s *PaymentConfigService) GetMethodLimits(ctx context.Context, types []string) ([]MethodLimits, error) {
 	instances, err := s.entClient.PaymentProviderInstance.Query().

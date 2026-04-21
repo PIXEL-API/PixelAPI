@@ -573,27 +573,6 @@ func (r *userRepository) DeleteUserAvatar(ctx context.Context, userID int64) err
 	return err
 }
 
-func (r *userRepository) attachUserAvatar(ctx context.Context, user *service.User) error {
-	if user == nil {
-		return nil
-	}
-
-	avatar, err := r.GetUserAvatar(ctx, user.ID)
-	if err != nil {
-		return err
-	}
-	if avatar == nil {
-		return nil
-	}
-
-	user.AvatarURL = avatar.URL
-	user.AvatarSource = avatar.StorageProvider
-	user.AvatarMIME = avatar.ContentType
-	user.AvatarByteSize = avatar.ByteSize
-	user.AvatarSHA256 = avatar.SHA256
-	return nil
-}
-
 func copyMetadata(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return map[string]any{}

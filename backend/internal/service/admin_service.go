@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,8 +19,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/util/httputil"
-
-	entsql "entgo.io/ent/dialect/sql"
 )
 
 // AdminService interface defines admin management operations
@@ -997,17 +994,6 @@ func (s *adminServiceImpl) BindUserAuthIdentity(ctx context.Context, userID int6
 		return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_BIND_COMMIT_FAILED", "failed to commit auth identity bind").WithCause(err)
 	}
 	return buildAdminBoundAuthIdentity(identity, channel), nil
-}
-
-func (s *adminServiceImpl) adminSQLDB() (*sql.DB, error) {
-	if s == nil || s.entClient == nil {
-		return nil, infraerrors.ServiceUnavailable("ADMIN_SQL_NOT_READY", "admin sql access is not ready")
-	}
-	driver, ok := s.entClient.Driver().(*entsql.Driver)
-	if !ok || driver.DB() == nil {
-		return nil, infraerrors.ServiceUnavailable("ADMIN_SQL_NOT_READY", "admin sql access is not ready")
-	}
-	return driver.DB(), nil
 }
 
 func normalizeAdminBindChannelInput(input *AdminBindAuthIdentityChannelInput) *AdminBindAuthIdentityChannelInput {

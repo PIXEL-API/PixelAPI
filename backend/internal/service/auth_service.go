@@ -679,13 +679,6 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 	return tokenPair, user, nil
 }
 
-func (s *AuthService) assignDefaultSubscriptions(ctx context.Context, userID int64) {
-	if s.settingService == nil {
-		return
-	}
-	s.assignSubscriptions(ctx, userID, s.settingService.GetDefaultSubscriptions(ctx), "auto assigned by default user subscriptions setting")
-}
-
 func (s *AuthService) assignSubscriptions(ctx context.Context, userID int64, items []DefaultSubscriptionSetting, notes string) {
 	if s.settingService == nil || s.defaultSubAssigner == nil || userID <= 0 {
 		return
@@ -863,7 +856,7 @@ func (s *AuthService) hasProviderGrantRecord(
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return rows.Next(), rows.Err()
 }
 
@@ -917,7 +910,7 @@ func (s *AuthService) ensureEmailAuthIdentity(ctx context.Context, user *User, s
 			DoNothing().
 			Exec(ctx); err != nil {
 			if isSQLNoRowsError(err) {
-				err = nil
+				return nil, false
 			}
 		}
 		if err != nil {

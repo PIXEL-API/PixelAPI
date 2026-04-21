@@ -965,11 +965,11 @@ func TestCreateOIDCOAuthAccountCreatesUserBindsIdentityAndConsumesSession(t *tes
 	require.NotNil(t, storedSession.ConsumedAt)
 }
 
-func TestCreateOIDCOAuthAccountExistingEmailReturnsAdoptExistingUserByEmailState(t *testing.T) {
+func TestCreateOIDCOAuthAccountExistingEmailReturnsChoicePendingSessionState(t *testing.T) {
 	handler, client := newOAuthPendingFlowTestHandlerWithEmailVerification(t, false, "owner@example.com", "135790")
 	ctx := context.Background()
 
-	existingUser, err := client.User.Create().
+	_, err := client.User.Create().
 		SetEmail("owner@example.com").
 		SetUsername("owner-user").
 		SetPasswordHash("hash").
@@ -1011,18 +1011,19 @@ func TestCreateOIDCOAuthAccountExistingEmailReturnsAdoptExistingUserByEmailState
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
 	require.Equal(t, "pending_session", payload["auth_result"])
-	require.Equal(t, "adopt_existing_user_by_email", payload["intent"])
+	require.Equal(t, oauthIntentLogin, payload["intent"])
 	require.Equal(t, "oidc", payload["provider"])
 	require.Equal(t, "/dashboard", payload["redirect"])
 	require.Equal(t, true, payload["adoption_required"])
+	require.Equal(t, oauthPendingChoiceStep, payload["step"])
+	require.Equal(t, "owner@example.com", payload["email"])
 	require.Equal(t, "Existing OIDC User", payload["suggested_display_name"])
 	require.Equal(t, "https://cdn.example/existing.png", payload["suggested_avatar_url"])
 
 	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
 	require.NoError(t, err)
-	require.Equal(t, "adopt_existing_user_by_email", storedSession.Intent)
-	require.NotNil(t, storedSession.TargetUserID)
-	require.Equal(t, existingUser.ID, *storedSession.TargetUserID)
+	require.Equal(t, oauthIntentLogin, storedSession.Intent)
+	require.Nil(t, storedSession.TargetUserID)
 	require.Equal(t, "owner@example.com", storedSession.ResolvedEmail)
 	require.Nil(t, storedSession.ConsumedAt)
 
@@ -1041,7 +1042,7 @@ func TestCreateOIDCOAuthAccountExistingEmailNormalizesLegacySpacingAndCase(t *te
 	handler, client := newOAuthPendingFlowTestHandlerWithEmailVerification(t, false, "owner@example.com", "135790")
 	ctx := context.Background()
 
-	existingUser, err := client.User.Create().
+	_, err := client.User.Create().
 		SetEmail(" Owner@Example.com ").
 		SetUsername("owner-user").
 		SetPasswordHash("hash").
@@ -1082,12 +1083,12 @@ func TestCreateOIDCOAuthAccountExistingEmailNormalizesLegacySpacingAndCase(t *te
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
-	require.Equal(t, "adopt_existing_user_by_email", payload["intent"])
+	require.Equal(t, oauthIntentLogin, payload["intent"])
+	require.Equal(t, oauthPendingChoiceStep, payload["step"])
 
 	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
 	require.NoError(t, err)
-	require.NotNil(t, storedSession.TargetUserID)
-	require.Equal(t, existingUser.ID, *storedSession.TargetUserID)
+	require.Nil(t, storedSession.TargetUserID)
 	require.Equal(t, "owner@example.com", storedSession.ResolvedEmail)
 }
 
@@ -1095,7 +1096,7 @@ func TestSendPendingOAuthVerifyCodeExistingEmailReturnsBindLoginState(t *testing
 	handler, client := newOAuthPendingFlowTestHandlerWithEmailVerification(t, false, "owner@example.com", "135790")
 	ctx := context.Background()
 
-	existingUser, err := client.User.Create().
+	_, err := client.User.Create().
 		SetEmail("owner@example.com").
 		SetUsername("owner-user").
 		SetPasswordHash("hash").
@@ -1137,14 +1138,13 @@ func TestSendPendingOAuthVerifyCodeExistingEmailReturnsBindLoginState(t *testing
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
 	require.Equal(t, "pending_session", payload["auth_result"])
-	require.Equal(t, "bind_login_required", payload["step"])
+	require.Equal(t, oauthPendingChoiceStep, payload["step"])
 	require.Equal(t, "owner@example.com", payload["email"])
 
 	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
 	require.NoError(t, err)
-	require.Equal(t, "adopt_existing_user_by_email", storedSession.Intent)
-	require.NotNil(t, storedSession.TargetUserID)
-	require.Equal(t, existingUser.ID, *storedSession.TargetUserID)
+	require.Equal(t, oauthIntentLogin, storedSession.Intent)
+	require.Nil(t, storedSession.TargetUserID)
 	require.Equal(t, "owner@example.com", storedSession.ResolvedEmail)
 }
 
@@ -1260,7 +1260,7 @@ func TestCreateOIDCOAuthAccountRollsBackCreatedUserWhenBindingFails(t *testing.T
 
 	handler.CreateOIDCOAuthAccount(ginCtx)
 
-	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+	require.Equal(t, http.StatusConflict, recorder.Code)
 
 	userCount, err := client.User.Query().Where(dbuser.EmailEQ("fresh@example.com")).Count(ctx)
 	require.NoError(t, err)
@@ -2429,7 +2429,7 @@ func loadUserAvatarRecord(t *testing.T, client *dbent.Client, userID int64) *oau
 		&rows,
 	)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
 		require.NoError(t, rows.Err())
@@ -2459,7 +2459,7 @@ func countProviderGrantRecords(
 		&rows,
 	)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	require.True(t, rows.Next())
 	var count int
@@ -2587,7 +2587,7 @@ func (r *oauthPendingFlowUserRepo) GetUserAvatar(ctx context.Context, userID int
 	); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
 		return nil, rows.Err()
