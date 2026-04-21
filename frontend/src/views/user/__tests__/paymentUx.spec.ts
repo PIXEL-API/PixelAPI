@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildPaymentErrorToastMessage,
   describePaymentScenarioError,
   normalizePaymentMethodForDisplay,
 } from '../paymentUx'
@@ -37,6 +38,16 @@ describe('describePaymentScenarioError', () => {
     })
   })
 
+  it('maps the internal JSAPI unavailable marker to the same prompt', () => {
+    expect(describePaymentScenarioError(
+      new Error('WECHAT_JSAPI_UNAVAILABLE'),
+      { paymentMethod: 'wxpay', isMobile: true, isWechatBrowser: true },
+    )).toEqual({
+      messageKey: 'payment.errors.wechatJsapiUnavailable',
+      hintKey: 'payment.errors.wechatOpenInWeChatHint',
+    })
+  })
+
   it('maps generic desktop Alipay failures to QR guidance', () => {
     expect(describePaymentScenarioError(
       { reason: 'PAYMENT_GATEWAY_ERROR' },
@@ -45,5 +56,17 @@ describe('describePaymentScenarioError', () => {
       messageKey: 'payment.errors.alipayDesktopUnavailable',
       hintKey: 'payment.errors.alipayDesktopQrHint',
     })
+  })
+})
+
+describe('buildPaymentErrorToastMessage', () => {
+  it('returns the main message when no hint is present', () => {
+    expect(buildPaymentErrorToastMessage('Payment failed')).toBe('Payment failed')
+  })
+
+  it('appends the hint to the toast body when present', () => {
+    expect(buildPaymentErrorToastMessage('Payment failed', 'Open WeChat to continue.')).toBe(
+      'Payment failed Open WeChat to continue.'
+    )
   })
 })

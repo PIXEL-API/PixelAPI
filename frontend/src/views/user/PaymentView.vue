@@ -86,10 +86,6 @@
               </span>
               <span v-else>{{ t('payment.createOrder') }} ¥{{ totalAmount.toFixed(2) }}</span>
             </button>
-            <div v-if="errorMessage" class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800/50 dark:bg-red-900/20">
-              <p class="text-sm text-red-700 dark:text-red-400">{{ errorMessage }}</p>
-              <p v-if="errorHintMessage" class="mt-2 text-xs text-red-600 dark:text-red-300">{{ errorHintMessage }}</p>
-            </div>
             </template>
           </template>
           <!-- Subscribe Tab -->
@@ -173,10 +169,6 @@
                 <span v-else>{{ t('payment.createOrder') }} ¥{{ (feeRate > 0 ? subTotalAmount : selectedPlan.price).toFixed(2) }}</span>
               </button>
               <button class="btn btn-secondary w-full" @click="selectedPlan = null">{{ t('common.cancel') }}</button>
-              <div v-if="errorMessage" class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800/50 dark:bg-red-900/20">
-                <p class="text-sm text-red-700 dark:text-red-400">{{ errorMessage }}</p>
-                <p v-if="errorHintMessage" class="mt-2 text-xs text-red-600 dark:text-red-300">{{ errorHintMessage }}</p>
-              </div>
             </template>
             <!-- Plan list -->
             <template v-else>
@@ -196,7 +188,7 @@
                     <div :class="['h-6 w-1 shrink-0 rounded-full', platformAccentBarClass(sub.group?.platform || '')]" />
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
-                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ sub.group?.name || `Group #${sub.group_id}` }}</span>
+                        <span class="truncate text-xs font-semibold text-gray-900 dark:text-white">{{ sub.group?.name || t('payment.groupFallback', { id: sub.group_id }) }}</span>
                         <span :class="['shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium', platformBadgeLightClass(sub.group?.platform || '')]">{{ platformLabel(sub.group?.platform || '') }}</span>
                       </div>
                       <div class="flex flex-wrap gap-x-3 text-[11px] text-gray-400 dark:text-gray-500">
@@ -283,7 +275,7 @@ import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
-import { describePaymentScenarioError } from './paymentUx'
+import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
 import { parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
 
 const { t } = useI18n()
@@ -374,7 +366,7 @@ function waitForWeixinJSBridge(timeoutMs = 4000): Promise<WeixinJSBridgeLike | n
 async function invokeWechatJsapiPayment(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const bridge = await waitForWeixinJSBridge()
   if (!bridge) {
-    throw new Error('WeixinJSBridge is unavailable')
+    throw new Error('WECHAT_JSAPI_UNAVAILABLE')
   }
   return new Promise((resolve) => {
     bridge.invoke('getBrandWCPayRequest', payload, (result) => resolve(result || {}))
@@ -714,19 +706,25 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       errorMessage.value = t('payment.errors.cancelRateLimited')
       errorHintMessage.value = ''
     } else {
-      applyScenarioError(err, normalizeVisibleMethod(options.paymentType || selectedMethod.value) || selectedMethod.value)
+      const handled = applyScenarioError(
+        err,
+        normalizeVisibleMethod(options.paymentType || selectedMethod.value) || selectedMethod.value,
+      )
       if (!errorMessage.value) {
         errorMessage.value = extractApiErrorMessage(err, t('payment.result.failed'))
         errorHintMessage.value = ''
       }
+      if (handled) {
+        return
+      }
     }
-    appStore.showError(errorMessage.value)
+    appStore.showError(buildPaymentErrorToastMessage(errorMessage.value, errorHintMessage.value))
   } finally {
     submitting.value = false
   }
 }
 
-function applyScenarioError(err: unknown, paymentMethod: string) {
+function applyScenarioError(err: unknown, paymentMethod: string): boolean {
   const descriptor = describePaymentScenarioError(err, {
     paymentMethod,
     isMobile: isMobileDevice(),
@@ -735,10 +733,12 @@ function applyScenarioError(err: unknown, paymentMethod: string) {
   if (!descriptor) {
     errorMessage.value = ''
     errorHintMessage.value = ''
-    return
+    return false
   }
   errorMessage.value = t(descriptor.messageKey)
   errorHintMessage.value = descriptor.hintKey ? t(descriptor.hintKey) : ''
+  appStore.showError(buildPaymentErrorToastMessage(errorMessage.value, errorHintMessage.value))
+  return true
 }
 
 async function resumeWechatPaymentFromQuery() {
