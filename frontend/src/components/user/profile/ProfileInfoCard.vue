@@ -185,7 +185,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ProfileAvatarCard from '@/components/user/profile/ProfileAvatarCard.vue'
 import ProfileEditForm from '@/components/user/profile/ProfileEditForm.vue'
 import ProfileIdentityBindingsSection from '@/components/user/profile/ProfileIdentityBindingsSection.vue'
-import type { User, UserAuthProvider, UserProfileSourceContext } from '@/types'
+import type { User, UserAuthBindingStatus, UserAuthProvider, UserProfileSourceContext } from '@/types'
 
 const props = withDefaults(defineProps<{
   user: User | null
@@ -206,6 +206,29 @@ const props = withDefaults(defineProps<{
 
 const { t } = useI18n()
 
+function normalizeBindingStatus(binding: boolean | UserAuthBindingStatus | undefined): boolean | null {
+  if (typeof binding === 'boolean') {
+    return binding
+  }
+  if (!binding) {
+    return null
+  }
+  if (typeof binding.bound === 'boolean') {
+    return binding.bound
+  }
+  return Boolean(binding.provider_subject || binding.issuer || binding.provider_key)
+}
+
+function isEmailBound(user: User | null | undefined): boolean {
+  if (typeof user?.email_bound === 'boolean') {
+    return user.email_bound
+  }
+
+  const nested = user?.auth_bindings?.email ?? user?.identity_bindings?.email
+  const normalized = normalizeBindingStatus(nested)
+  return normalized ?? false
+}
+
 const avatarUrl = computed(() => props.user?.avatar_url?.trim() || '')
 const displayName = computed(() => props.user?.username?.trim() || props.user?.email?.trim() || t('profile.user'))
 const primaryEmailDisplay = computed(() => {
@@ -213,7 +236,7 @@ const primaryEmailDisplay = computed(() => {
   if (!email) {
     return ''
   }
-  if (props.user?.email_bound === false && email.endsWith('.invalid')) {
+  if (email.endsWith('.invalid') && !isEmailBound(props.user)) {
     return ''
   }
   return email

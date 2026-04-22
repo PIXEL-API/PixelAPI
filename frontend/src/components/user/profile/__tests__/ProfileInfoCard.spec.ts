@@ -152,6 +152,26 @@ describe('ProfileInfoCard', () => {
     expect(wrapper.text()).not.toContain('legacy-user@oidc-connect.invalid')
   })
 
+  it('does not display synthetic oauth-only emails when only legacy identity bindings mark email as unbound', () => {
+    const wrapper = mount(ProfileInfoCard, {
+      props: {
+        user: createUser({
+          email: 'legacy-user@wechat-connect.invalid',
+          identity_bindings: {
+            email: { bound: false }
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).not.toContain('legacy-user@wechat-connect.invalid')
+  })
+
   it('renders the approved overview hero and two-column content shell', () => {
     const wrapper = mount(ProfileInfoCard, {
       props: {

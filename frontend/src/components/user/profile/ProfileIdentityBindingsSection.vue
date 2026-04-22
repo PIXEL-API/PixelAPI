@@ -299,20 +299,42 @@ const emailSubmitActionLabel = computed(() =>
     : t('profile.authBindings.confirmEmailBindAction')
 )
 
+function resolveLegacyCompatibleWeChatSettings(
+  settings: WeChatOAuthPublicSettings | null | undefined
+): (WeChatOAuthPublicSettings & {
+  wechat_oauth_open_enabled: boolean
+  wechat_oauth_mp_enabled: boolean
+}) | null {
+  if (!settings) {
+    return null
+  }
+
+  if (hasExplicitWeChatOAuthCapabilities(settings)) {
+    return settings
+  }
+
+  if (typeof settings.wechat_oauth_enabled !== 'boolean') {
+    return null
+  }
+
+  return {
+    ...settings,
+    wechat_oauth_open_enabled: settings.wechat_oauth_enabled,
+    wechat_oauth_mp_enabled: settings.wechat_oauth_enabled,
+  }
+}
+
 const wechatOAuthSettings = computed<WeChatOAuthPublicSettings | null>(() => {
-  if (hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings)) {
-    return appStore.cachedPublicSettings
+  const cachedSettings = resolveLegacyCompatibleWeChatSettings(appStore.cachedPublicSettings)
+  if (cachedSettings) {
+    return cachedSettings
   }
 
-  if (typeof props.wechatOpenEnabled === 'boolean' && typeof props.wechatMpEnabled === 'boolean') {
-    return {
-      wechat_oauth_enabled: props.wechatEnabled,
-      wechat_oauth_open_enabled: props.wechatOpenEnabled,
-      wechat_oauth_mp_enabled: props.wechatMpEnabled,
-    }
-  }
-
-  return null
+  return resolveLegacyCompatibleWeChatSettings({
+    wechat_oauth_enabled: props.wechatEnabled,
+    wechat_oauth_open_enabled: props.wechatOpenEnabled,
+    wechat_oauth_mp_enabled: props.wechatMpEnabled,
+  })
 })
 
 const resolvedWeChatBinding = computed(() => resolveWeChatOAuthStartStrict(wechatOAuthSettings.value))
@@ -360,6 +382,17 @@ function getBindingDetails(provider: UserAuthProvider): UserAuthBindingStatus | 
     return null
   }
   return binding
+}
+
+function getDisplayableEmail(user: User | null | undefined): string {
+  const email = user?.email?.trim() || ''
+  if (!email) {
+    return ''
+  }
+  if (email.endsWith('.invalid') && !getBindingStatusForUser(user, 'email')) {
+    return ''
+  }
+  return email
 }
 
 function isProviderEnabledForBinding(provider: BindableProvider): boolean {
@@ -444,14 +477,7 @@ function providerIconClass(provider: UserAuthProvider): string {
 
 function providerSummary(provider: UserAuthProvider): string {
   if (provider === 'email') {
-    const email = currentUser.value?.email?.trim() || ''
-    if (!email) {
-      return ''
-    }
-    if (currentUser.value?.email_bound === false && email.endsWith('.invalid')) {
-      return ''
-    }
-    return email
+    return getDisplayableEmail(currentUser.value)
   }
   return ''
 }

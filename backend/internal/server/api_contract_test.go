@@ -85,7 +85,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/linuxdo/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						},
 						"oidc": {
 							"provider": "oidc",
@@ -93,7 +93,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/oidc/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						},
 						"wechat": {
 							"provider": "wechat",
@@ -101,7 +101,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/wechat/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						}
 					},
 					"identity_bindings": {
@@ -122,7 +122,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/linuxdo/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						},
 						"oidc": {
 							"provider": "oidc",
@@ -130,7 +130,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/oidc/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						},
 						"wechat": {
 							"provider": "wechat",
@@ -138,7 +138,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/wechat/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						}
 					},
 					"auth_bindings": {
@@ -159,7 +159,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/linuxdo/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						},
 						"oidc": {
 							"provider": "oidc",
@@ -167,7 +167,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/oidc/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						},
 						"wechat": {
 							"provider": "wechat",
@@ -175,7 +175,7 @@ func TestAPIContracts(t *testing.T) {
 							"bound_count": 0,
 							"can_bind": true,
 							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/wechat/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
+							"bind_start_path": "/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
 						}
 					},
 					"run_mode": "standard"

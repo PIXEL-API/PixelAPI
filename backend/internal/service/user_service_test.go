@@ -387,6 +387,70 @@ func TestUnbindUserAuthProviderRejectsLastRemainingLoginMethod(t *testing.T) {
 	require.Empty(t, repo.unboundProviders)
 }
 
+func TestGetProfileIdentitySummaries_DoesNotTreatOAuthOnlyCompatEmailAsAlternativeLoginMethod(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:           10,
+			Email:        "oauth-only@example.com",
+			SignupSource: "oidc",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "oidc",
+				ProviderKey:     "https://issuer.example.com",
+				ProviderSubject: "oidc-only-subject",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 10, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.False(t, summaries.OIDC.CanUnbind)
+
+	_, err = svc.UnbindUserAuthProvider(context.Background(), 10, "oidc")
+	require.ErrorIs(t, err, ErrIdentityUnbindLastMethod)
+	require.Empty(t, repo.unboundProviders)
+}
+
+func TestGetProfileIdentitySummaries_DoesNotTreatCompatBackfilledEmailIdentityAsAlternativeLoginMethod(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:           11,
+			Email:        "oauth-only@example.com",
+			SignupSource: "wechat",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "oauth-only@example.com",
+				Metadata: map[string]any{
+					"backfill_source": "users.email",
+					"migration":       "109_auth_identity_compat_backfill",
+				},
+			},
+			{
+				ProviderType:    "wechat",
+				ProviderKey:     "wechat",
+				ProviderSubject: "wechat-only-subject",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 11, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.True(t, summaries.Email.Bound)
+	require.False(t, summaries.WeChat.CanUnbind)
+
+	_, err = svc.UnbindUserAuthProvider(context.Background(), 11, "wechat")
+	require.ErrorIs(t, err, ErrIdentityUnbindLastMethod)
+	require.Empty(t, repo.unboundProviders)
+}
+
 func TestUnbindUserAuthProviderRemovesProviderAndReturnsUpdatedProfile(t *testing.T) {
 	repo := &mockUserRepo{
 		getByIDUser: &User{
@@ -449,6 +513,42 @@ func TestGetProfileIdentitySummaries_HidesBindActionWhenProviderExplicitlyDisabl
 	require.False(t, summaries.LinuxDo.Bound)
 	require.False(t, summaries.LinuxDo.CanBind)
 	require.Empty(t, summaries.LinuxDo.BindStartPath)
+}
+
+func TestGetProfileIdentitySummaries_UsesBindStartRoute(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:    16,
+			Email: "alice@example.com",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "alice@example.com",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 16, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile",
+		summaries.LinuxDo.BindStartPath,
+	)
+	require.Equal(
+		t,
+		"/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile",
+		summaries.OIDC.BindStartPath,
+	)
+	require.Equal(
+		t,
+		"/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile",
+		summaries.WeChat.BindStartPath,
+	)
 }
 
 func TestUpdateBalance_NilBillingCache_NoPanic(t *testing.T) {

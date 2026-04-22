@@ -150,7 +150,7 @@ export function buildOAuthBindingStartURL(
     params.set('mode', mode)
   }
 
-  return `${normalized}/auth/oauth/${provider}/start?${params.toString()}`
+  return `${normalized}/auth/oauth/${provider}/bind/start?${params.toString()}`
 }
 
 export async function startOAuthBinding(
