@@ -831,8 +831,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, fmt.Errorf("openai image conversation request failed: %w", err)
 	}
 	defer func() {
-		if resp.Response != nil && resp.Response.Body != nil {
-			_ = resp.Response.Body.Close()
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
 		}
 	}()
 	if resp.StatusCode >= 400 {
@@ -969,9 +969,9 @@ func bootstrapOpenAIBackendAPI(ctx context.Context, client *req.Client, headers 
 	if err != nil {
 		return err
 	}
-	if resp.Response != nil && resp.Response.Body != nil {
-		_, _ = io.Copy(io.Discard, resp.Response.Body)
-		_ = resp.Response.Body.Close()
+	if resp != nil && resp.Body != nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1118,8 +1118,9 @@ func uploadOpenAIImageFiles(ctx context.Context, client *req.Client, headers htt
 	results := make([]openAIUploadedImage, 0, len(uploads))
 	for i := range uploads {
 		item := uploads[i]
+		fileName := coalesceOpenAIFileName(item.FileName, "image.png")
 		payload := map[string]any{
-			"file_name": coalesceOpenAIFileName(item.FileName, "image.png"),
+			"file_name": fileName,
 			"file_size": len(item.Data),
 			"use_case":  "multimodal",
 		}
@@ -1178,7 +1179,7 @@ func uploadOpenAIImageFiles(ctx context.Context, client *req.Client, headers htt
 
 		results = append(results, openAIUploadedImage{
 			FileID:   created.FileID,
-			FileName: payload["file_name"].(string),
+			FileName: fileName,
 			FileSize: len(item.Data),
 			MimeType: coalesceOpenAIFileName(item.ContentType, "application/octet-stream"),
 			Width:    item.Width,
@@ -1230,6 +1231,15 @@ func buildOpenAIImageConversationRequest(parsed *OpenAIImagesRequest, parentMess
 	if len(uploads) > 0 {
 		contentType = "multimodal_text"
 	}
+	metadata := map[string]any{
+		"developer_mode_connector_ids": []any{},
+		"selected_github_repos":        []any{},
+		"selected_all_github_repos":    false,
+		"system_hints":                 []string{"picture_v2"},
+		"serialization_metadata": map[string]any{
+			"custom_symbol_offsets": []any{},
+		},
+	}
 	message := map[string]any{
 		"id":     uuid.NewString(),
 		"author": map[string]any{"role": "user"},
@@ -1237,20 +1247,11 @@ func buildOpenAIImageConversationRequest(parsed *OpenAIImagesRequest, parentMess
 			"content_type": contentType,
 			"parts":        parts,
 		},
-		"metadata": map[string]any{
-			"developer_mode_connector_ids": []any{},
-			"selected_github_repos":        []any{},
-			"selected_all_github_repos":    false,
-			"system_hints":                 []string{"picture_v2"},
-			"serialization_metadata": map[string]any{
-				"custom_symbol_offsets": []any{},
-			},
-		},
+		"metadata":    metadata,
 		"create_time": float64(time.Now().UnixMilli()) / 1000,
 	}
 	if len(attachments) > 0 {
-		messageMetadata := message["metadata"].(map[string]any)
-		messageMetadata["attachments"] = attachments
+		metadata["attachments"] = attachments
 	}
 
 	return map[string]any{
@@ -1371,7 +1372,10 @@ func openAIImagePointerMatches(body []byte) []string {
 			end := idx + len(prefix)
 			for end < len(raw) {
 				ch := raw[end]
-				if !(ch == '-' || ch == '_' || ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z') {
+				if ch != '-' && ch != '_' &&
+					(ch < '0' || ch > '9') &&
+					(ch < 'a' || ch > 'z') &&
+					(ch < 'A' || ch > 'Z') {
 					break
 				}
 				end++
@@ -1695,14 +1699,14 @@ func downloadOpenAIImageBytes(ctx context.Context, client *req.Client, headers h
 		return nil, err
 	}
 	defer func() {
-		if resp.Response != nil && resp.Response.Body != nil {
-			_ = resp.Response.Body.Close()
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
 		}
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, newOpenAIImageStatusError(resp, "download image bytes failed")
 	}
-	return io.ReadAll(resp.Response.Body)
+	return io.ReadAll(resp.Body)
 }
 
 func handleOpenAIImageBackendError(resp *req.Response) error {
@@ -1936,16 +1940,8 @@ func generateOpenAIChallengeAnswer(seed string, difficulty string, config []any)
 	seedBytes := []byte(seed)
 
 	for i := 0; i < 100000; i++ {
-		var builder bytes.Buffer
-		builder.Write(p1)
-		builder.WriteString(strconv.Itoa(i))
-		builder.WriteString(",")
-		builder.Write(p2)
-		builder.WriteString(",")
-		builder.WriteString(strconv.Itoa(i >> 1))
-		builder.WriteString(",")
-		builder.Write(p3)
-		encoded := base64.StdEncoding.EncodeToString(builder.Bytes())
+		payload := fmt.Sprintf("%s%d,%s,%d,%s", p1, i, p2, i>>1, p3)
+		encoded := base64.StdEncoding.EncodeToString([]byte(payload))
 		sum := sha3.Sum512(append(seedBytes, []byte(encoded)...))
 		if bytes.Compare(sum[:len(diffBytes)], diffBytes) <= 0 {
 			return encoded, true
