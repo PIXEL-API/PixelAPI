@@ -653,20 +653,22 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				req.WeChatConnectScopes = service.DefaultWeChatConnectScopesForMode(req.WeChatConnectMode)
 			}
 		}
-		if req.WeChatConnectRedirectURL == "" {
-			response.BadRequest(c, "WeChat Redirect URL is required when enabled")
-			return
-		}
-		if err := config.ValidateAbsoluteHTTPURL(req.WeChatConnectRedirectURL); err != nil {
-			response.BadRequest(c, "WeChat Redirect URL must be an absolute http(s) URL")
-			return
-		}
-		if req.WeChatConnectFrontendRedirectURL == "" {
-			req.WeChatConnectFrontendRedirectURL = "/auth/wechat/callback"
-		}
-		if err := config.ValidateFrontendRedirectURL(req.WeChatConnectFrontendRedirectURL); err != nil {
-			response.BadRequest(c, "WeChat Frontend Redirect URL is invalid")
-			return
+		if req.WeChatConnectOpenEnabled || req.WeChatConnectMPEnabled {
+			if req.WeChatConnectRedirectURL == "" {
+				response.BadRequest(c, "WeChat Redirect URL is required when web oauth is enabled")
+				return
+			}
+			if err := config.ValidateAbsoluteHTTPURL(req.WeChatConnectRedirectURL); err != nil {
+				response.BadRequest(c, "WeChat Redirect URL must be an absolute http(s) URL")
+				return
+			}
+			if req.WeChatConnectFrontendRedirectURL == "" {
+				req.WeChatConnectFrontendRedirectURL = "/auth/wechat/callback"
+			}
+			if err := config.ValidateFrontendRedirectURL(req.WeChatConnectFrontendRedirectURL); err != nil {
+				response.BadRequest(c, "WeChat Frontend Redirect URL is invalid")
+				return
+			}
 		}
 	}
 
@@ -749,14 +751,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			response.BadRequest(c, "OIDC scopes must contain openid")
 			return
 		}
-		if !req.OIDCConnectUsePKCE {
-			response.BadRequest(c, "OIDC PKCE must be enabled")
-			return
-		}
-		if !req.OIDCConnectValidateIDToken {
-			response.BadRequest(c, "OIDC ID Token validation must be enabled")
-			return
-		}
 		switch req.OIDCConnectTokenAuthMethod {
 		case "", "client_secret_post", "client_secret_basic", "none":
 		default:
@@ -767,7 +761,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			response.BadRequest(c, "OIDC clock skew seconds must be between 0 and 600")
 			return
 		}
-		if req.OIDCConnectAllowedSigningAlgs == "" {
+		if req.OIDCConnectValidateIDToken && req.OIDCConnectAllowedSigningAlgs == "" {
 			response.BadRequest(c, "OIDC Allowed Signing Algs is required when validate_id_token=true")
 			return
 		}

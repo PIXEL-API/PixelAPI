@@ -631,7 +631,7 @@ func (s *SettingService) weChatOAuthCapabilitiesFromSettings(settings map[string
 	mpReady := mpEnabled && webRedirectReady && mpAppID != "" && mpAppSecret != ""
 	mobileReady := mobileEnabled && mobileAppID != "" && mobileAppSecret != ""
 
-	return openReady || mpReady || mobileReady, openReady, mpReady, mobileReady
+	return openReady || mpReady, openReady, mpReady, mobileReady
 }
 
 // filterUserVisibleMenuItems filters out admin-only menu items from a raw JSON
@@ -1693,8 +1693,6 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else {
 		result.OIDCConnectValidateIDToken = oidcBase.ValidateIDToken
 	}
-	result.OIDCConnectUsePKCE = true
-	result.OIDCConnectValidateIDToken = true
 	if v, ok := settings[SettingKeyOIDCConnectAllowedSigningAlgs]; ok && strings.TrimSpace(v) != "" {
 		result.OIDCConnectAllowedSigningAlgs = strings.TrimSpace(v)
 	} else {
@@ -2196,8 +2194,6 @@ func (s *SettingService) GetLinuxDoConnectOAuthConfig(ctx context.Context) (conf
 	if v, ok := settings[SettingKeyLinuxDoConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
 		effective.RedirectURL = strings.TrimSpace(v)
 	}
-	effective.UsePKCE = true
-
 	if !effective.Enabled {
 		return config.LinuxDoConnectConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "oauth login is disabled")
 	}
@@ -2421,8 +2417,6 @@ func (s *SettingService) GetOIDCConnectOAuthConfig(ctx context.Context) (config.
 	if raw, ok := settings[SettingKeyOIDCConnectValidateIDToken]; ok {
 		effective.ValidateIDToken = raw == "true"
 	}
-	effective.UsePKCE = true
-	effective.ValidateIDToken = true
 	if v, ok := settings[SettingKeyOIDCConnectAllowedSigningAlgs]; ok && strings.TrimSpace(v) != "" {
 		effective.AllowedSigningAlgs = strings.TrimSpace(v)
 	}

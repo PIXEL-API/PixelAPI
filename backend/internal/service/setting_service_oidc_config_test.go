@@ -101,3 +101,47 @@ func TestGetOIDCConnectOAuthConfig_ResolvesEndpointsFromIssuerDiscovery(t *testi
 	require.Equal(t, srv.URL+"/issuer/protocol/openid-connect/userinfo", got.UserInfoURL)
 	require.Equal(t, srv.URL+"/issuer/protocol/openid-connect/certs", got.JWKSURL)
 }
+
+func TestSettingService_ParseSettings_PreservesOptionalOIDCCompatibilityFlags(t *testing.T) {
+	svc := NewSettingService(&settingOIDCRepoStub{values: map[string]string{}}, &config.Config{})
+
+	got := svc.parseSettings(map[string]string{
+		SettingKeyOIDCConnectEnabled:         "true",
+		SettingKeyOIDCConnectUsePKCE:         "false",
+		SettingKeyOIDCConnectValidateIDToken: "false",
+	})
+
+	require.False(t, got.OIDCConnectUsePKCE)
+	require.False(t, got.OIDCConnectValidateIDToken)
+}
+
+func TestGetOIDCConnectOAuthConfig_AllowsCompatibilityFlagsToDisablePKCEAndIDTokenValidation(t *testing.T) {
+	cfg := &config.Config{
+		OIDC: config.OIDCConnectConfig{
+			Enabled:             true,
+			ProviderName:        "OIDC",
+			ClientID:            "oidc-client",
+			ClientSecret:        "oidc-secret",
+			IssuerURL:           "https://issuer.example.com",
+			AuthorizeURL:        "https://issuer.example.com/auth",
+			TokenURL:            "https://issuer.example.com/token",
+			UserInfoURL:         "https://issuer.example.com/userinfo",
+			RedirectURL:         "https://example.com/api/v1/auth/oauth/oidc/callback",
+			FrontendRedirectURL: "/auth/oidc/callback",
+			Scopes:              "openid email profile",
+			TokenAuthMethod:     "client_secret_post",
+		},
+	}
+
+	repo := &settingOIDCRepoStub{values: map[string]string{
+		SettingKeyOIDCConnectEnabled:         "true",
+		SettingKeyOIDCConnectUsePKCE:         "false",
+		SettingKeyOIDCConnectValidateIDToken: "false",
+	}}
+	svc := NewSettingService(repo, cfg)
+
+	got, err := svc.GetOIDCConnectOAuthConfig(context.Background())
+	require.NoError(t, err)
+	require.False(t, got.UsePKCE)
+	require.False(t, got.ValidateIDToken)
+}

@@ -123,13 +123,16 @@ func (h *AuthHandler) LinuxDoOAuthStart(c *gin.Context) {
 		clearCookie(c, linuxDoOAuthBindUserCookieName, secureCookie)
 	}
 
-	verifier, err := oauth.GenerateCodeVerifier()
-	if err != nil {
-		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_PKCE_GEN_FAILED", "failed to generate pkce verifier").WithCause(err))
-		return
+	codeChallenge := ""
+	if cfg.UsePKCE {
+		verifier, err := oauth.GenerateCodeVerifier()
+		if err != nil {
+			response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_PKCE_GEN_FAILED", "failed to generate pkce verifier").WithCause(err))
+			return
+		}
+		codeChallenge = oauth.GenerateCodeChallenge(verifier)
+		setCookie(c, linuxDoOAuthVerifierCookie, encodeCookieValue(verifier), linuxDoOAuthCookieMaxAgeSec, secureCookie)
 	}
-	codeChallenge := oauth.GenerateCodeChallenge(verifier)
-	setCookie(c, linuxDoOAuthVerifierCookie, encodeCookieValue(verifier), linuxDoOAuthCookieMaxAgeSec, secureCookie)
 
 	redirectURI := strings.TrimSpace(cfg.RedirectURL)
 	if redirectURI == "" {
@@ -200,10 +203,13 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 	intent, _ := readCookieDecoded(c, linuxDoOAuthIntentCookieName)
 	intent = normalizeOAuthIntent(intent)
 
-	codeVerifier, _ := readCookieDecoded(c, linuxDoOAuthVerifierCookie)
-	if codeVerifier == "" {
-		redirectOAuthError(c, frontendCallback, "missing_verifier", "missing pkce verifier", "")
-		return
+	codeVerifier := ""
+	if cfg.UsePKCE {
+		codeVerifier, _ = readCookieDecoded(c, linuxDoOAuthVerifierCookie)
+		if codeVerifier == "" {
+			redirectOAuthError(c, frontendCallback, "missing_verifier", "missing pkce verifier", "")
+			return
+		}
 	}
 
 	redirectURI := strings.TrimSpace(cfg.RedirectURL)
@@ -292,25 +298,16 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		return
 	}
 	if existingIdentityUser != nil {
-		tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), existingIdentityUser.Email, username, "")
-		if err != nil {
-			redirectOAuthError(c, frontendCallback, "login_failed", infraerrors.Reason(err), infraerrors.Message(err))
-			return
-		}
 		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
 			Intent:                 oauthIntentLogin,
 			Identity:               identityKey,
-			TargetUserID:           &user.ID,
+			TargetUserID:           &existingIdentityUser.ID,
 			ResolvedEmail:          existingIdentityUser.Email,
 			RedirectTo:             redirectTo,
 			BrowserSessionKey:      browserSessionKey,
 			UpstreamIdentityClaims: upstreamClaims,
 			CompletionResponse: map[string]any{
-				"access_token":  tokenPair.AccessToken,
-				"refresh_token": tokenPair.RefreshToken,
-				"expires_in":    tokenPair.ExpiresIn,
-				"token_type":    "Bearer",
-				"redirect":      redirectTo,
+				"redirect": redirectTo,
 			},
 		}); err != nil {
 			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
@@ -546,7 +543,9 @@ func linuxDoExchangeCode(
 	form.Set("client_id", cfg.ClientID)
 	form.Set("code", code)
 	form.Set("redirect_uri", redirectURI)
-	form.Set("code_verifier", codeVerifier)
+	if strings.TrimSpace(codeVerifier) != "" {
+		form.Set("code_verifier", codeVerifier)
+	}
 
 	r := client.R().
 		SetContext(ctx).
@@ -699,8 +698,10 @@ func buildLinuxDoAuthorizeURL(cfg config.LinuxDoConnectConfig, state string, cod
 		q.Set("scope", cfg.Scopes)
 	}
 	q.Set("state", state)
-	q.Set("code_challenge", codeChallenge)
-	q.Set("code_challenge_method", "S256")
+	if strings.TrimSpace(codeChallenge) != "" {
+		q.Set("code_challenge", codeChallenge)
+		q.Set("code_challenge_method", "S256")
+	}
 
 	u.RawQuery = q.Encode()
 	return u.String(), nil

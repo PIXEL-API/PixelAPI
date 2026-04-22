@@ -51,6 +51,44 @@ type mockUserRepoTxState struct {
 	deleteAvatarIDs  []int64
 }
 
+type mockUserSettingRepo struct {
+	values map[string]string
+}
+
+func (m *mockUserSettingRepo) Get(context.Context, string) (*Setting, error) {
+	panic("unexpected Get call")
+}
+
+func (m *mockUserSettingRepo) GetValue(context.Context, string) (string, error) {
+	panic("unexpected GetValue call")
+}
+
+func (m *mockUserSettingRepo) Set(context.Context, string, string) error {
+	panic("unexpected Set call")
+}
+
+func (m *mockUserSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := m.values[key]; ok {
+			out[key] = value
+		}
+	}
+	return out, nil
+}
+
+func (m *mockUserSettingRepo) SetMultiple(context.Context, map[string]string) error {
+	panic("unexpected SetMultiple call")
+}
+
+func (m *mockUserSettingRepo) GetAll(context.Context) (map[string]string, error) {
+	panic("unexpected GetAll call")
+}
+
+func (m *mockUserSettingRepo) Delete(context.Context, string) error {
+	panic("unexpected Delete call")
+}
+
 func (m *mockUserRepo) Create(context.Context, *User) error { return nil }
 func (m *mockUserRepo) GetByID(ctx context.Context, _ int64) (*User, error) {
 	if m.getByIDErr != nil {
@@ -380,6 +418,35 @@ func TestUnbindUserAuthProviderRemovesProviderAndReturnsUpdatedProfile(t *testin
 	require.NoError(t, err)
 	require.False(t, summaries.LinuxDo.Bound)
 	require.True(t, summaries.LinuxDo.CanBind)
+}
+
+func TestGetProfileIdentitySummaries_HidesBindActionWhenProviderExplicitlyDisabled(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:    15,
+			Email: "alice@example.com",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "alice@example.com",
+			},
+		},
+	}
+	settingRepo := &mockUserSettingRepo{
+		values: map[string]string{
+			SettingKeyLinuxDoConnectEnabled: "false",
+		},
+	}
+	svc := NewUserService(repo, settingRepo, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 15, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.False(t, summaries.LinuxDo.Bound)
+	require.False(t, summaries.LinuxDo.CanBind)
+	require.Empty(t, summaries.LinuxDo.BindStartPath)
 }
 
 func TestUpdateBalance_NilBillingCache_NoPanic(t *testing.T) {

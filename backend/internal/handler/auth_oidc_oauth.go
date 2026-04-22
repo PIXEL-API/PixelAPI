@@ -157,21 +157,25 @@ func (h *AuthHandler) OIDCOAuthStart(c *gin.Context) {
 	}
 
 	codeChallenge := ""
-	verifier, genErr := oauth.GenerateCodeVerifier()
-	if genErr != nil {
-		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_PKCE_GEN_FAILED", "failed to generate pkce verifier").WithCause(genErr))
-		return
+	if cfg.UsePKCE {
+		verifier, genErr := oauth.GenerateCodeVerifier()
+		if genErr != nil {
+			response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_PKCE_GEN_FAILED", "failed to generate pkce verifier").WithCause(genErr))
+			return
+		}
+		codeChallenge = oauth.GenerateCodeChallenge(verifier)
+		oidcSetCookie(c, oidcOAuthVerifierCookie, encodeCookieValue(verifier), oidcOAuthCookieMaxAgeSec, secureCookie)
 	}
-	codeChallenge = oauth.GenerateCodeChallenge(verifier)
-	oidcSetCookie(c, oidcOAuthVerifierCookie, encodeCookieValue(verifier), oidcOAuthCookieMaxAgeSec, secureCookie)
 
 	nonce := ""
-	nonce, err = oauth.GenerateState()
-	if err != nil {
-		response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_NONCE_GEN_FAILED", "failed to generate oauth nonce").WithCause(err))
-		return
+	if cfg.ValidateIDToken {
+		nonce, err = oauth.GenerateState()
+		if err != nil {
+			response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_NONCE_GEN_FAILED", "failed to generate oauth nonce").WithCause(err))
+			return
+		}
+		oidcSetCookie(c, oidcOAuthNonceCookie, encodeCookieValue(nonce), oidcOAuthCookieMaxAgeSec, secureCookie)
 	}
-	oidcSetCookie(c, oidcOAuthNonceCookie, encodeCookieValue(nonce), oidcOAuthCookieMaxAgeSec, secureCookie)
 
 	redirectURI := strings.TrimSpace(cfg.RedirectURL)
 	if redirectURI == "" {
@@ -244,17 +248,21 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	intent = normalizeOAuthIntent(intent)
 
 	codeVerifier := ""
-	codeVerifier, _ = readCookieDecoded(c, oidcOAuthVerifierCookie)
-	if codeVerifier == "" {
-		redirectOAuthError(c, frontendCallback, "missing_verifier", "missing pkce verifier", "")
-		return
+	if cfg.UsePKCE {
+		codeVerifier, _ = readCookieDecoded(c, oidcOAuthVerifierCookie)
+		if codeVerifier == "" {
+			redirectOAuthError(c, frontendCallback, "missing_verifier", "missing pkce verifier", "")
+			return
+		}
 	}
 
 	expectedNonce := ""
-	expectedNonce, _ = readCookieDecoded(c, oidcOAuthNonceCookie)
-	if expectedNonce == "" {
-		redirectOAuthError(c, frontendCallback, "missing_nonce", "missing oauth nonce", "")
-		return
+	if cfg.ValidateIDToken {
+		expectedNonce, _ = readCookieDecoded(c, oidcOAuthNonceCookie)
+		if expectedNonce == "" {
+			redirectOAuthError(c, frontendCallback, "missing_nonce", "missing oauth nonce", "")
+			return
+		}
 	}
 
 	redirectURI := strings.TrimSpace(cfg.RedirectURL)
@@ -284,16 +292,19 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	if strings.TrimSpace(tokenResp.IDToken) == "" {
-		redirectOAuthError(c, frontendCallback, "missing_id_token", "missing id_token", "")
-		return
-	}
+	var idClaims *oidcIDTokenClaims
+	if cfg.ValidateIDToken {
+		if strings.TrimSpace(tokenResp.IDToken) == "" {
+			redirectOAuthError(c, frontendCallback, "missing_id_token", "missing id_token", "")
+			return
+		}
 
-	idClaims, err := oidcParseAndValidateIDToken(c.Request.Context(), cfg, tokenResp.IDToken, expectedNonce)
-	if err != nil {
-		log.Printf("[OIDC OAuth] id_token validation failed: %v", err)
-		redirectOAuthError(c, frontendCallback, "invalid_id_token", "failed to validate id_token", "")
-		return
+		idClaims, err = oidcParseAndValidateIDToken(c.Request.Context(), cfg, tokenResp.IDToken, expectedNonce)
+		if err != nil {
+			log.Printf("[OIDC OAuth] id_token validation failed: %v", err)
+			redirectOAuthError(c, frontendCallback, "invalid_id_token", "failed to validate id_token", "")
+			return
+		}
 	}
 
 	userInfoClaims, err := oidcFetchUserInfo(c.Request.Context(), cfg, tokenResp)
@@ -303,7 +314,10 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	subject := strings.TrimSpace(idClaims.Subject)
+	subject := ""
+	if idClaims != nil {
+		subject = strings.TrimSpace(idClaims.Subject)
+	}
 	if subject == "" {
 		subject = strings.TrimSpace(userInfoClaims.Subject)
 	}
@@ -311,7 +325,10 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		redirectOAuthError(c, frontendCallback, "missing_subject", "missing subject claim", "")
 		return
 	}
-	issuer := strings.TrimSpace(idClaims.Issuer)
+	issuer := ""
+	if idClaims != nil {
+		issuer = strings.TrimSpace(idClaims.Issuer)
+	}
 	if issuer == "" {
 		issuer = strings.TrimSpace(cfg.IssuerURL)
 	}
@@ -321,21 +338,34 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	}
 
 	emailVerified := userInfoClaims.EmailVerified
-	if emailVerified == nil {
+	if emailVerified == nil && idClaims != nil {
 		emailVerified = idClaims.EmailVerified
 	}
-	if userInfoClaims.Subject != "" && idClaims.Subject != "" && strings.TrimSpace(userInfoClaims.Subject) != strings.TrimSpace(idClaims.Subject) {
+	if idClaims != nil && userInfoClaims.Subject != "" && idClaims.Subject != "" && strings.TrimSpace(userInfoClaims.Subject) != strings.TrimSpace(idClaims.Subject) {
 		redirectOAuthError(c, frontendCallback, "subject_mismatch", "userinfo subject does not match id_token", "")
 		return
 	}
 
 	identityKey := oidcIdentityKey(issuer, subject)
-	compatEmail := strings.TrimSpace(firstNonEmpty(userInfoClaims.Email, idClaims.Email))
+	compatEmail := strings.TrimSpace(userInfoClaims.Email)
+	if compatEmail == "" && idClaims != nil {
+		compatEmail = strings.TrimSpace(idClaims.Email)
+	}
 	email := oidcSyntheticEmailFromIdentityKey(identityKey)
 	username := firstNonEmpty(
 		userInfoClaims.Username,
-		idClaims.PreferredUsername,
-		idClaims.Name,
+		func() string {
+			if idClaims != nil {
+				return idClaims.PreferredUsername
+			}
+			return ""
+		}(),
+		func() string {
+			if idClaims != nil {
+				return idClaims.Name
+			}
+			return ""
+		}(),
 		oidcFallbackUsername(subject),
 	)
 	identityRef := service.PendingAuthIdentityKey{
@@ -350,7 +380,12 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		"issuer":                 issuer,
 		"email_verified":         emailVerified != nil && *emailVerified,
 		"provider_fallback":      strings.TrimSpace(cfg.ProviderName),
-		"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, idClaims.Name, username),
+		"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, func() string {
+			if idClaims != nil {
+				return idClaims.Name
+			}
+			return ""
+		}(), username),
 		"suggested_avatar_url":   userInfoClaims.AvatarURL,
 	}
 	if compatEmail != "" && !strings.EqualFold(strings.TrimSpace(compatEmail), strings.TrimSpace(email)) {
@@ -387,25 +422,16 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 	if existingIdentityUser != nil {
-		tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), existingIdentityUser.Email, username, "")
-		if err != nil {
-			redirectOAuthError(c, frontendCallback, "login_failed", infraerrors.Reason(err), infraerrors.Message(err))
-			return
-		}
 		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
 			Intent:                 oauthIntentLogin,
 			Identity:               identityRef,
-			TargetUserID:           &user.ID,
+			TargetUserID:           &existingIdentityUser.ID,
 			ResolvedEmail:          existingIdentityUser.Email,
 			RedirectTo:             redirectTo,
 			BrowserSessionKey:      browserSessionKey,
 			UpstreamIdentityClaims: upstreamClaims,
 			CompletionResponse: map[string]any{
-				"access_token":  tokenPair.AccessToken,
-				"refresh_token": tokenPair.RefreshToken,
-				"expires_in":    tokenPair.ExpiresIn,
-				"token_type":    "Bearer",
-				"redirect":      redirectTo,
+				"redirect": redirectTo,
 			},
 		}); err != nil {
 			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
@@ -670,7 +696,9 @@ func oidcExchangeCode(
 	form.Set("client_id", cfg.ClientID)
 	form.Set("code", code)
 	form.Set("redirect_uri", redirectURI)
-	form.Set("code_verifier", codeVerifier)
+	if strings.TrimSpace(codeVerifier) != "" {
+		form.Set("code_verifier", codeVerifier)
+	}
 
 	r := client.R().
 		SetContext(ctx).
@@ -872,9 +900,13 @@ func buildOIDCAuthorizeURL(cfg config.OIDCConnectConfig, state, nonce, codeChall
 		q.Set("scope", cfg.Scopes)
 	}
 	q.Set("state", state)
-	q.Set("nonce", nonce)
-	q.Set("code_challenge", codeChallenge)
-	q.Set("code_challenge_method", "S256")
+	if strings.TrimSpace(nonce) != "" {
+		q.Set("nonce", nonce)
+	}
+	if strings.TrimSpace(codeChallenge) != "" {
+		q.Set("code_challenge", codeChallenge)
+		q.Set("code_challenge_method", "S256")
+	}
 
 	u.RawQuery = q.Encode()
 	return u.String(), nil
