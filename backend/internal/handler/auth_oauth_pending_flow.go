@@ -519,7 +519,7 @@ func (h *AuthHandler) SendPendingOAuthVerifyCode(c *gin.Context) {
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if existingUser, err := findUserByNormalizedEmail(c.Request.Context(), client, email); err == nil && existingUser != nil {
-		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, email)
+		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, existingUser, email)
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return
@@ -702,6 +702,38 @@ func findUserByNormalizedEmail(ctx context.Context, client *dbent.Client, email 
 		return nil, infraerrors.Conflict("USER_EMAIL_CONFLICT", "normalized email matched multiple users")
 	}
 	return matches[0], nil
+}
+
+func ensurePendingOAuthRegistrationIdentityAvailable(ctx context.Context, client *dbent.Client, session *dbent.PendingAuthSession) error {
+	if client == nil || session == nil {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ(strings.TrimSpace(session.ProviderType)),
+			authidentity.ProviderKeyEQ(strings.TrimSpace(session.ProviderKey)),
+			authidentity.ProviderSubjectEQ(strings.TrimSpace(session.ProviderSubject)),
+		).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if identity == nil || identity.UserID <= 0 {
+		return nil
+	}
+
+	activeOwner, err := findActiveUserByID(ctx, client, identity.UserID)
+	if err != nil {
+		return err
+	}
+	if activeOwner != nil {
+		return infraerrors.Conflict("AUTH_IDENTITY_OWNERSHIP_CONFLICT", "auth identity already belongs to another user")
+	}
+	return nil
 }
 
 func oauthIdentityIssuer(session *dbent.PendingAuthSession) *string {
@@ -1206,6 +1238,38 @@ func consumePendingOAuthBrowserSessionTx(
 	return nil
 }
 
+func applyPendingOAuthAdoptionAndConsumeSession(
+	ctx context.Context,
+	client *dbent.Client,
+	authService *service.AuthService,
+	userService *service.UserService,
+	session *dbent.PendingAuthSession,
+	decision *dbent.IdentityAdoptionDecision,
+	userID int64,
+) error {
+	if client == nil {
+		return infraerrors.ServiceUnavailable("PENDING_AUTH_NOT_READY", "pending auth service is not ready")
+	}
+	if session == nil || userID <= 0 {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+
+	tx, err := client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := applyPendingOAuthAdoption(txCtx, client, authService, userService, session, decision, &userID); err != nil {
+		return err
+	}
+	if err := consumePendingOAuthBrowserSessionTx(txCtx, tx, session); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func applyPendingOAuthAdoption(
 	ctx context.Context,
 	client *dbent.Client,
@@ -1448,16 +1512,21 @@ func (h *AuthHandler) transitionPendingOAuthAccountToChoiceState(
 	c *gin.Context,
 	client *dbent.Client,
 	session *dbent.PendingAuthSession,
+	targetUser *dbent.User,
 	email string,
 ) (*dbent.PendingAuthSession, error) {
 	completionResponse := pendingOAuthChoiceCompletionResponse(session, email)
+	var targetUserID *int64
+	if targetUser != nil && targetUser.ID > 0 {
+		targetUserID = &targetUser.ID
+	}
 	session, err := updatePendingOAuthSessionProgress(
 		c.Request.Context(),
 		client,
 		session,
 		strings.TrimSpace(session.Intent),
 		email,
-		nil,
+		targetUserID,
 		completionResponse,
 	)
 	if err != nil {
@@ -1601,7 +1670,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		}
 	}
 	if existingUser != nil {
-		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, email)
+		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, existingUser, email)
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return
@@ -1624,7 +1693,12 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 	)
 	if err != nil {
 		if errors.Is(err, service.ErrEmailExists) {
-			session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, email)
+			existingUser, lookupErr := findUserByNormalizedEmail(c.Request.Context(), client, email)
+			if lookupErr != nil {
+				response.ErrorFrom(c, lookupErr)
+				return
+			}
+			session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, existingUser, email)
 			if err != nil {
 				response.ErrorFrom(c, err)
 				return
