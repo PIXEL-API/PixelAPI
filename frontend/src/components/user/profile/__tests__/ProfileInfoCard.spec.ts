@@ -111,6 +111,47 @@ describe('ProfileInfoCard', () => {
     expect(wrapper.text()).toContain('Username synced from LinuxDo')
   })
 
+  it('uses the configured OIDC provider name in source hints', () => {
+    const wrapper = mount(ProfileInfoCard, {
+      props: {
+        user: createUser({
+          profile_sources: {
+            username: { provider: 'oidc', source: 'oidc' }
+          }
+        }),
+        oidcProviderName: 'ExampleID'
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('Username synced from ExampleID')
+  })
+
+  it('does not display synthetic oauth-only emails as a real bound email', () => {
+    const wrapper = mount(ProfileInfoCard, {
+      props: {
+        user: createUser({
+          email: 'legacy-user@oidc-connect.invalid',
+          email_bound: false,
+          auth_bindings: {
+            email: { bound: false }
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).not.toContain('legacy-user@oidc-connect.invalid')
+  })
+
   it('renders the approved overview hero and two-column content shell', () => {
     const wrapper = mount(ProfileInfoCard, {
       props: {

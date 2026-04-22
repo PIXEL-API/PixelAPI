@@ -258,6 +258,12 @@ func (h *UserHandler) UnbindIdentity(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if h.authService != nil {
+		if err := h.authService.RevokeAllUserSessions(c.Request.Context(), subject.UserID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
 
 	profileResp, err := h.buildUserProfileResponse(c.Request.Context(), subject.UserID, updatedUser)
 	if err != nil {
@@ -504,8 +510,12 @@ func inferUserProfileSources(user *service.User, identities service.UserIdentity
 
 	thirdParty := thirdPartyIdentityProviders(identities)
 	var avatarSource *userProfileSourceContext
-	if strings.TrimSpace(user.AvatarURL) != "" && len(thirdParty) == 1 {
-		avatarSource = buildUserProfileSourceContext(thirdParty[0].Provider)
+	avatarValue := strings.TrimSpace(user.AvatarURL)
+	for _, summary := range thirdParty {
+		if avatarValue != "" && avatarValue == strings.TrimSpace(summary.DisplayName) {
+			avatarSource = buildUserProfileSourceContext(summary.Provider)
+			break
+		}
 	}
 
 	usernameValue := strings.TrimSpace(user.Username)
@@ -515,9 +525,6 @@ func inferUserProfileSources(user *service.User, identities service.UserIdentity
 			usernameSource = buildUserProfileSourceContext(summary.Provider)
 			break
 		}
-	}
-	if usernameSource == nil && usernameValue != "" && len(thirdParty) == 1 {
-		usernameSource = buildUserProfileSourceContext(thirdParty[0].Provider)
 	}
 
 	profileSources := map[string]*userProfileSourceContext{}

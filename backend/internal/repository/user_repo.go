@@ -43,6 +43,9 @@ func (r *userRepository) Create(ctx context.Context, userIn *service.User) error
 	if userIn == nil {
 		return nil
 	}
+	if err := r.ensureNormalizedEmailAvailable(ctx, 0, userIn.Email); err != nil {
+		return err
+	}
 
 	// 统一使用 ent 的事务：保证用户与允许分组的更新原子化，
 	// 并避免基于 *sql.Tx 手动构造 ent client 导致的 ExecQuerier 断言错误。
@@ -145,6 +148,9 @@ func (r *userRepository) GetByEmail(ctx context.Context, email string) (*service
 func (r *userRepository) Update(ctx context.Context, userIn *service.User) error {
 	if userIn == nil {
 		return nil
+	}
+	if err := r.ensureNormalizedEmailAvailable(ctx, userIn.ID, userIn.Email); err != nil {
+		return err
 	}
 
 	// 使用 ent 事务包裹用户更新与 allowed_groups 同步，避免跨层事务不一致。
@@ -702,6 +708,21 @@ func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount
 
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	return r.client.User.Query().Where(userEmailLookupPredicate(email)).Exist(ctx)
+}
+
+func (r *userRepository) ensureNormalizedEmailAvailable(ctx context.Context, userID int64, email string) error {
+	matches, err := r.client.User.Query().
+		Where(userEmailLookupPredicate(email)).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, match := range matches {
+		if match.ID != userID {
+			return service.ErrEmailExists
+		}
+	}
+	return nil
 }
 
 func userEmailLookupPredicate(email string) predicate.User {

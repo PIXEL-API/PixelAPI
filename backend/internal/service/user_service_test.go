@@ -406,13 +406,15 @@ func TestUnbindUserAuthProviderRemovesProviderAndReturnsUpdatedProfile(t *testin
 			},
 		},
 	}
-	svc := NewUserService(repo, nil, nil, nil)
+	invalidator := &mockAuthCacheInvalidator{}
+	svc := NewUserService(repo, nil, invalidator, nil)
 
 	user, err := svc.UnbindUserAuthProvider(context.Background(), 12, "linuxdo")
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"linuxdo"}, repo.unboundProviders)
 	require.Equal(t, int64(12), user.ID)
+	require.Equal(t, []int64{12}, invalidator.invalidatedUserIDs)
 
 	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 12, user)
 	require.NoError(t, err)
