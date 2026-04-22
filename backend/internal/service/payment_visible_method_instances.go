@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -166,14 +167,20 @@ func (s *PaymentConfigService) resolveVisibleMethodSourceProviderKey(ctx context
 	if s != nil && s.settingRepo != nil && sourceKey != "" {
 		value, err := s.settingRepo.GetValue(ctx, sourceKey)
 		if err != nil {
-			return "", fmt.Errorf("get %s: %w", sourceKey, err)
+			if !errors.Is(err, ErrSettingNotFound) {
+				return "", fmt.Errorf("get %s: %w", sourceKey, err)
+			}
+		} else {
+			rawSource = value
 		}
-		rawSource = value
 	}
 
 	normalizedSource, err := normalizeVisibleMethodSettingSource(method, rawSource, true)
 	if err != nil {
 		return "", err
+	}
+	if normalizedSource == "" {
+		return "", nil
 	}
 	providerKey, ok := VisibleMethodProviderKeyForSource(method, normalizedSource)
 	if !ok {
@@ -199,6 +206,9 @@ func (s *PaymentConfigService) resolveVisibleMethodProviderKey(
 		providerKey, err := s.resolveVisibleMethodSourceProviderKey(ctx, method)
 		if err != nil {
 			return "", err
+		}
+		if providerKey == "" {
+			return "", nil
 		}
 		selected := selectVisibleMethodInstanceByProviderKey(matching, providerKey)
 		if selected == nil {
@@ -236,6 +246,12 @@ func (s *PaymentConfigService) resolveEnabledVisibleMethodInstance(
 	providerKey, err := s.resolveVisibleMethodProviderKey(ctx, method, matching)
 	if err != nil {
 		return nil, err
+	}
+	if providerKey == "" {
+		if len(matching) == 0 {
+			return nil, nil
+		}
+		return &dbent.PaymentProviderInstance{ProviderKey: ""}, nil
 	}
 	return selectVisibleMethodInstanceByProviderKey(matching, providerKey), nil
 }
