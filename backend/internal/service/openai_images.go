@@ -1157,9 +1157,9 @@ func uploadOpenAIImageFiles(ctx context.Context, client *req.Client, headers htt
 		if err != nil {
 			return nil, err
 		}
-		if putResp.Response != nil && putResp.Response.Body != nil {
-			_, _ = io.Copy(io.Discard, putResp.Response.Body)
-			_ = putResp.Response.Body.Close()
+		if putResp.Response != nil && putResp.Body != nil {
+			_, _ = io.Copy(io.Discard, putResp.Body)
+			_ = putResp.Body.Close()
 		}
 		if putResp.StatusCode < 200 || putResp.StatusCode >= 300 {
 			return nil, newOpenAIImageStatusError(putResp, "upload image bytes failed")
@@ -1294,10 +1294,10 @@ type openAIImageToolMessage struct {
 }
 
 func readOpenAIImageConversationStream(resp *req.Response, startTime time.Time) (string, []openAIImagePointerInfo, OpenAIUsage, *int, error) {
-	if resp == nil || resp.Response == nil || resp.Response.Body == nil {
+	if resp == nil || resp.Body == nil {
 		return "", nil, OpenAIUsage{}, nil, fmt.Errorf("empty conversation response")
 	}
-	reader := bufio.NewReader(resp.Response.Body)
+	reader := bufio.NewReader(resp.Body)
 	var (
 		conversationID string
 		firstTokenMs   *int
@@ -1529,8 +1529,8 @@ func pollOpenAIImageConversation(ctx context.Context, client *req.Client, header
 			lastErr = err
 		} else {
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				body, readErr := io.ReadAll(resp.Response.Body)
-				_ = resp.Response.Body.Close()
+				body, readErr := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
 				if readErr != nil {
 					lastErr = readErr
 					goto waitNextPoll
@@ -1750,14 +1750,14 @@ func newOpenAIImageStatusError(resp *req.Response, fallback string) error {
 	body := []byte(nil)
 
 	if resp.Response != nil {
-		headers = resp.Response.Header.Clone()
-		requestID = strings.TrimSpace(resp.Response.Header.Get("x-request-id"))
-		if resp.Response.Request != nil && resp.Response.Request.URL != nil {
-			requestURL = resp.Response.Request.URL.String()
+		headers = resp.Header.Clone()
+		requestID = strings.TrimSpace(resp.Header.Get("x-request-id"))
+		if resp.Request != nil && resp.Request.URL != nil {
+			requestURL = resp.Request.URL.String()
 		}
-		if resp.Response.Body != nil {
-			body, _ = io.ReadAll(io.LimitReader(resp.Response.Body, 2<<20))
-			_ = resp.Response.Body.Close()
+		if resp.Body != nil {
+			body, _ = io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			_ = resp.Body.Close()
 		}
 	}
 
