@@ -4,9 +4,12 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"testing"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -199,7 +202,7 @@ func TestJoinTypes(t *testing.T) {
 	}
 }
 
-func TestCreateProviderInstanceRejectsConflictingVisibleMethodEnablement(t *testing.T) {
+func TestCreateProviderInstanceAllowsVisibleMethodProvidersFromDifferentSources(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -227,15 +230,14 @@ func TestCreateProviderInstanceRejectsConflictingVisibleMethodEnablement(t *test
 	_, err = svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
 		ProviderKey:    "alipay",
 		Name:           "Official Alipay",
-		Config:         map[string]string{"appId": "app-1"},
+		Config:         map[string]string{"appId": "app-1", "privateKey": "private-key"},
 		SupportedTypes: []string{"alipay"},
 		Enabled:        true,
 	})
-	require.Error(t, err)
-	require.Equal(t, "PAYMENT_PROVIDER_CONFLICT", infraerrors.Reason(err))
+	require.NoError(t, err)
 }
 
-func TestUpdateProviderInstanceRejectsEnablingConflictingVisibleMethodProvider(t *testing.T) {
+func TestUpdateProviderInstanceAllowsEnablingVisibleMethodProviderFromDifferentSource(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -264,7 +266,7 @@ func TestUpdateProviderInstanceRejectsEnablingConflictingVisibleMethodProvider(t
 	candidate, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
 		ProviderKey:    "wxpay",
 		Name:           "Official WeChat",
-		Config:         map[string]string{"appId": "wx-app"},
+		Config:         validWxpayProviderConfig(t),
 		SupportedTypes: []string{"wxpay"},
 		Enabled:        false,
 	})
@@ -273,8 +275,7 @@ func TestUpdateProviderInstanceRejectsEnablingConflictingVisibleMethodProvider(t
 	_, err = svc.UpdateProviderInstance(ctx, candidate.ID, UpdateProviderInstanceRequest{
 		Enabled: boolPtrValue(true),
 	})
-	require.Error(t, err)
-	require.Equal(t, "PAYMENT_PROVIDER_CONFLICT", infraerrors.Reason(err))
+	require.NoError(t, err)
 }
 
 func TestUpdateProviderInstancePersistsEnabledAndSupportedTypes(t *testing.T) {
@@ -316,4 +317,26 @@ func TestUpdateProviderInstancePersistsEnabledAndSupportedTypes(t *testing.T) {
 
 func boolPtrValue(v bool) *bool {
 	return &v
+}
+
+func validWxpayProviderConfig(t *testing.T) map[string]string {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	privDER, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	require.NoError(t, err)
+
+	return map[string]string{
+		"appId":       "wx-app-test",
+		"mchId":       "mch-test",
+		"privateKey":  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER})),
+		"apiV3Key":    "12345678901234567890123456789012",
+		"publicKey":   string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})),
+		"publicKeyId": "public-key-id-test",
+		"certSerial":  "cert-serial-test",
+	}
 }

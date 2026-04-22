@@ -334,6 +334,59 @@ func TestParseWeChatPaymentResumeTokenRejectsExpiredToken(t *testing.T) {
 	}
 }
 
+func TestPaymentServiceParseWeChatPaymentResumeTokenUsesExplicitSigningKey(t *testing.T) {
+	t.Setenv("PAYMENT_RESUME_SIGNING_KEY", "explicit-payment-resume-signing-key")
+
+	token, err := NewPaymentResumeService([]byte("explicit-payment-resume-signing-key")).CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:      "openid-explicit-key",
+		PaymentType: payment.TypeWxpay,
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+
+	svc := &PaymentService{
+		configService: &PaymentConfigService{
+			encryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+		},
+	}
+
+	claims, err := svc.ParseWeChatPaymentResumeToken(token)
+	if err != nil {
+		t.Fatalf("ParseWeChatPaymentResumeToken returned error: %v", err)
+	}
+	if claims.OpenID != "openid-explicit-key" {
+		t.Fatalf("openid = %q, want %q", claims.OpenID, "openid-explicit-key")
+	}
+}
+
+func TestPaymentServiceParseWeChatPaymentResumeTokenAcceptsLegacyEncryptionKeyDuringMigration(t *testing.T) {
+	t.Setenv("PAYMENT_RESUME_SIGNING_KEY", "explicit-payment-resume-signing-key")
+
+	legacyKey := []byte("0123456789abcdef0123456789abcdef")
+	token, err := NewPaymentResumeService(legacyKey).CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:      "openid-legacy-key",
+		PaymentType: payment.TypeWxpay,
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+
+	svc := &PaymentService{
+		configService: &PaymentConfigService{
+			encryptionKey: legacyKey,
+		},
+	}
+
+	claims, err := svc.ParseWeChatPaymentResumeToken(token)
+	if err != nil {
+		t.Fatalf("ParseWeChatPaymentResumeToken returned error: %v", err)
+	}
+	if claims.OpenID != "openid-legacy-key" {
+		t.Fatalf("openid = %q, want %q", claims.OpenID, "openid-legacy-key")
+	}
+}
+
 func TestNormalizeVisibleMethodSource(t *testing.T) {
 	t.Parallel()
 
@@ -424,14 +477,14 @@ func TestVisibleMethodLoadBalancerUsesConfiguredSourceWhenMultipleProvidersEnabl
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		method         payment.PaymentType
-		officialName   string
-		officialTypes  string
-		easyPayName    string
-		easyPayTypes   string
-		sourceSetting  string
-		wantProvider   string
+		name          string
+		method        payment.PaymentType
+		officialName  string
+		officialTypes string
+		easyPayName   string
+		easyPayTypes  string
+		sourceSetting string
+		wantProvider  string
 	}{
 		{
 			name:          "alipay uses official source",
@@ -487,7 +540,7 @@ func TestVisibleMethodLoadBalancerUsesConfiguredSourceWhenMultipleProvidersEnabl
 				officialProviderKey = payment.TypeWxpay
 			}
 
-			_, err = client.PaymentProviderInstance.Create().
+			_, err := client.PaymentProviderInstance.Create().
 				SetProviderKey(officialProviderKey).
 				SetName(tt.officialName).
 				SetConfig("{}").

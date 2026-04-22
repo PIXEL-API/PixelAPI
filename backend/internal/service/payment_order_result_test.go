@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,8 @@ func TestBuildCreateOrderResponseCopiesJSAPIPayload(t *testing.T) {
 }
 
 func TestMaybeBuildWeChatOAuthRequiredResponse(t *testing.T) {
+	t.Setenv("PAYMENT_RESUME_SIGNING_KEY", "0123456789abcdef0123456789abcdef")
+
 	svc := newWeChatPaymentOAuthTestService(map[string]string{
 		SettingKeyWeChatConnectEnabled:             "true",
 		SettingKeyWeChatConnectAppID:               "wx123456",
@@ -195,6 +198,44 @@ func TestMaybeBuildWeChatOAuthRequiredResponseRequiresResumeSigningKey(t *testin
 	appErr := infraerrors.FromError(err)
 	if appErr.Reason != "PAYMENT_RESUME_NOT_CONFIGURED" {
 		t.Fatalf("reason = %q, want %q", appErr.Reason, "PAYMENT_RESUME_NOT_CONFIGURED")
+	}
+}
+
+func TestMaybeBuildWeChatOAuthRequiredResponseFallsBackToConfiguredLegacySigningKey(t *testing.T) {
+	svc := &PaymentService{
+		configService: &PaymentConfigService{
+			settingRepo: &paymentConfigSettingRepoStub{values: map[string]string{
+				SettingKeyWeChatConnectEnabled:             "true",
+				SettingKeyWeChatConnectAppID:               "wx123456",
+				SettingKeyWeChatConnectAppSecret:           "wechat-secret",
+				SettingKeyWeChatConnectMode:                "mp",
+				SettingKeyWeChatConnectScopes:              "snsapi_base",
+				SettingKeyWeChatConnectRedirectURL:         "https://api.example.com/api/v1/auth/oauth/wechat/callback",
+				SettingKeyWeChatConnectFrontendRedirectURL: "/auth/wechat/callback",
+			}},
+			// Legacy stable signing key remains available for no-config upgrade compatibility.
+			encryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+		},
+	}
+
+	resp, err := svc.maybeBuildWeChatOAuthRequiredResponse(context.Background(), CreateOrderRequest{
+		Amount:          12.5,
+		PaymentType:     payment.TypeWxpay,
+		IsWeChatBrowser: true,
+		SrcURL:          "https://merchant.example/payment?from=wechat",
+		OrderType:       payment.OrderTypeBalance,
+	}, 12.5, 12.88, 0.03)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected oauth-required response, got nil")
+	}
+	if resp.ResultType != payment.CreatePaymentResultOAuthRequired {
+		t.Fatalf("result type = %q, want %q", resp.ResultType, payment.CreatePaymentResultOAuthRequired)
+	}
+	if resp.OAuth == nil || strings.TrimSpace(resp.OAuth.AuthorizeURL) == "" {
+		t.Fatalf("expected oauth redirect payload, got %+v", resp.OAuth)
 	}
 }
 

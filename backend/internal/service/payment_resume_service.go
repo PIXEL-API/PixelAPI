@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -68,6 +69,7 @@ type WeChatPaymentResumeClaims struct {
 
 type PaymentResumeService struct {
 	signingKey []byte
+	verifyKeys [][]byte
 }
 
 type visibleMethodLoadBalancer struct {
@@ -75,8 +77,29 @@ type visibleMethodLoadBalancer struct {
 	configService *PaymentConfigService
 }
 
-func NewPaymentResumeService(signingKey []byte) *PaymentResumeService {
-	return &PaymentResumeService{signingKey: signingKey}
+func NewPaymentResumeService(signingKey []byte, verifyFallbacks ...[]byte) *PaymentResumeService {
+	svc := &PaymentResumeService{}
+	if len(signingKey) > 0 {
+		svc.signingKey = append([]byte(nil), signingKey...)
+		svc.verifyKeys = append(svc.verifyKeys, svc.signingKey)
+	}
+	for _, fallback := range verifyFallbacks {
+		if len(fallback) == 0 {
+			continue
+		}
+		cloned := append([]byte(nil), fallback...)
+		duplicate := false
+		for _, existing := range svc.verifyKeys {
+			if bytes.Equal(existing, cloned) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			svc.verifyKeys = append(svc.verifyKeys, cloned)
+		}
+	}
+	return svc
 }
 
 func (s *PaymentResumeService) isSigningConfigured() bool {
@@ -410,7 +433,7 @@ func (s *PaymentResumeService) parseSignedToken(token string, dest any) error {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token is malformed")
 	}
-	if !hmac.Equal([]byte(parts[1]), []byte(s.sign(parts[0]))) {
+	if !s.verifySignature(parts[0], parts[1]) {
 		return infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token signature mismatch")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
@@ -418,6 +441,18 @@ func (s *PaymentResumeService) parseSignedToken(token string, dest any) error {
 		return infraerrors.BadRequest("INVALID_RESUME_TOKEN", "resume token payload is malformed")
 	}
 	return json.Unmarshal(payload, dest)
+}
+
+func (s *PaymentResumeService) verifySignature(payload string, signature string) bool {
+	if s == nil {
+		return false
+	}
+	for _, key := range s.verifyKeys {
+		if hmac.Equal([]byte(signature), []byte(signPaymentResumePayload(payload, key))) {
+			return true
+		}
+	}
+	return false
 }
 
 func validatePaymentResumeExpiry(expiresAt int64, code, message string) error {
@@ -431,7 +466,11 @@ func validatePaymentResumeExpiry(expiresAt int64, code, message string) error {
 }
 
 func (s *PaymentResumeService) sign(payload string) string {
-	mac := hmac.New(sha256.New, s.signingKey)
+	return signPaymentResumePayload(payload, s.signingKey)
+}
+
+func signPaymentResumePayload(payload string, key []byte) string {
+	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(payload))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
