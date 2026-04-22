@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -33,6 +36,7 @@ type AdminService interface {
 	// codeType is optional - pass empty string to return all types.
 	// Also returns totalRecharged (sum of all positive balance top-ups).
 	GetUserBalanceHistory(ctx context.Context, userID int64, page, pageSize int, codeType string) ([]RedeemCode, int64, float64, error)
+	BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error)
 
 	// Group management
 	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error)
@@ -125,6 +129,44 @@ type UpdateUserInput struct {
 	// GroupRates 用户专属分组倍率配置
 	// map[groupID]*rate，nil 表示删除该分组的专属倍率
 	GroupRates map[int64]*float64
+}
+
+type AdminBindAuthIdentityInput struct {
+	ProviderType    string
+	ProviderKey     string
+	ProviderSubject string
+	Issuer          *string
+	Metadata        map[string]any
+	Channel         *AdminBindAuthIdentityChannelInput
+}
+
+type AdminBindAuthIdentityChannelInput struct {
+	Channel        string
+	ChannelAppID   string
+	ChannelSubject string
+	Metadata       map[string]any
+}
+
+type AdminBoundAuthIdentity struct {
+	UserID          int64                          `json:"user_id"`
+	ProviderType    string                         `json:"provider_type"`
+	ProviderKey     string                         `json:"provider_key"`
+	ProviderSubject string                         `json:"provider_subject"`
+	VerifiedAt      *time.Time                     `json:"verified_at,omitempty"`
+	Issuer          *string                        `json:"issuer,omitempty"`
+	Metadata        map[string]any                 `json:"metadata"`
+	CreatedAt       time.Time                      `json:"created_at"`
+	UpdatedAt       time.Time                      `json:"updated_at"`
+	Channel         *AdminBoundAuthIdentityChannel `json:"channel,omitempty"`
+}
+
+type AdminBoundAuthIdentityChannel struct {
+	Channel        string         `json:"channel"`
+	ChannelAppID   string         `json:"channel_app_id"`
+	ChannelSubject string         `json:"channel_subject"`
+	Metadata       map[string]any `json:"metadata"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 type CreateGroupInput struct {
@@ -491,6 +533,20 @@ func (s *adminServiceImpl) ListUsers(ctx context.Context, page, pageSize int, fi
 	if err != nil {
 		return nil, 0, err
 	}
+	if len(users) > 0 {
+		userIDs := make([]int64, 0, len(users))
+		for i := range users {
+			userIDs = append(userIDs, users[i].ID)
+		}
+		lastUsedByUserID, latestErr := s.userRepo.GetLatestUsedAtByUserIDs(ctx, userIDs)
+		if latestErr != nil {
+			logger.LegacyPrintf("service.admin", "failed to load user last_used_at in batch: err=%v", latestErr)
+		} else {
+			for i := range users {
+				users[i].LastUsedAt = lastUsedByUserID[users[i].ID]
+			}
+		}
+	}
 	// 批量加载用户专属分组倍率
 	if s.userGroupRateRepo != nil && len(users) > 0 {
 		if batchRepo, ok := s.userGroupRateRepo.(userGroupRateBatchReader); ok {
@@ -534,6 +590,12 @@ func (s *adminServiceImpl) GetUser(ctx context.Context, id int64) (*User, error)
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	lastUsedAt, latestErr := s.userRepo.GetLatestUsedAtByUserID(ctx, id)
+	if latestErr != nil {
+		logger.LegacyPrintf("service.admin", "failed to load user last_used_at: user_id=%d err=%v", id, latestErr)
+	} else {
+		user.LastUsedAt = lastUsedAt
 	}
 	// 加载用户专属分组倍率
 	if s.userGroupRateRepo != nil {
@@ -795,6 +857,227 @@ func (s *adminServiceImpl) GetUserBalanceHistory(ctx context.Context, userID int
 		return nil, 0, 0, err
 	}
 	return codes, result.Total, totalRecharged, nil
+}
+
+func (s *adminServiceImpl) BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error) {
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "user_id must be greater than 0")
+	}
+	if s == nil || s.entClient == nil || s.userRepo == nil {
+		return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_BIND_UNAVAILABLE", "auth identity binding service is unavailable")
+	}
+	if _, err := s.userRepo.GetByID(ctx, userID); err != nil {
+		return nil, err
+	}
+
+	providerType := normalizeAdminAuthIdentityProviderType(input.ProviderType)
+	providerKey := strings.TrimSpace(input.ProviderKey)
+	providerSubject := strings.TrimSpace(input.ProviderSubject)
+	if providerType == "" {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "provider_type must be one of email, linuxdo, oidc, or wechat")
+	}
+	if providerKey == "" || providerSubject == "" {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "provider_type, provider_key, and provider_subject are required")
+	}
+
+	var issuer *string
+	if input.Issuer != nil {
+		trimmed := strings.TrimSpace(*input.Issuer)
+		if trimmed != "" {
+			issuer = &trimmed
+		}
+	}
+
+	channelInput := normalizeAdminBindChannelInput(input.Channel)
+	if input.Channel != nil && channelInput == nil {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "channel, channel_app_id, and channel_subject are required when channel binding is provided")
+	}
+
+	verifiedAt := time.Now().UTC()
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_BIND_TX_FAILED", "failed to start auth identity bind transaction").WithCause(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	identity, err := tx.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ(providerType),
+			authidentity.ProviderKeyEQ(providerKey),
+			authidentity.ProviderSubjectEQ(providerSubject),
+		).
+		Only(ctx)
+	if err != nil && !dbent.IsNotFound(err) {
+		return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_BIND_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
+	}
+	if identity != nil && identity.UserID != userID {
+		return nil, infraerrors.Conflict("AUTH_IDENTITY_OWNERSHIP_CONFLICT", "auth identity already belongs to another user")
+	}
+
+	if identity == nil {
+		create := tx.AuthIdentity.Create().
+			SetUserID(userID).
+			SetProviderType(providerType).
+			SetProviderKey(providerKey).
+			SetProviderSubject(providerSubject).
+			SetVerifiedAt(verifiedAt)
+		if issuer != nil {
+			create = create.SetIssuer(*issuer)
+		}
+		if input.Metadata != nil {
+			create = create.SetMetadata(cloneAdminAuthIdentityMetadata(input.Metadata))
+		}
+		identity, err = create.Save(ctx)
+		if err != nil {
+			return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_BIND_SAVE_FAILED", "failed to save auth identity").WithCause(err)
+		}
+	} else {
+		update := tx.AuthIdentity.UpdateOneID(identity.ID).SetVerifiedAt(verifiedAt)
+		if issuer != nil {
+			update = update.SetIssuer(*issuer)
+		}
+		if input.Metadata != nil {
+			update = update.SetMetadata(cloneAdminAuthIdentityMetadata(input.Metadata))
+		}
+		identity, err = update.Save(ctx)
+		if err != nil {
+			return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_BIND_SAVE_FAILED", "failed to save auth identity").WithCause(err)
+		}
+	}
+
+	var channel *dbent.AuthIdentityChannel
+	if channelInput != nil {
+		channel, err = tx.AuthIdentityChannel.Query().
+			Where(
+				authidentitychannel.ProviderTypeEQ(providerType),
+				authidentitychannel.ProviderKeyEQ(providerKey),
+				authidentitychannel.ChannelEQ(channelInput.Channel),
+				authidentitychannel.ChannelAppIDEQ(channelInput.ChannelAppID),
+				authidentitychannel.ChannelSubjectEQ(channelInput.ChannelSubject),
+			).
+			WithIdentity().
+			Only(ctx)
+		if err != nil && !dbent.IsNotFound(err) {
+			return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_CHANNEL_LOOKUP_FAILED", "failed to inspect auth identity channel ownership").WithCause(err)
+		}
+		if channel != nil && channel.Edges.Identity != nil && channel.Edges.Identity.UserID != userID {
+			return nil, infraerrors.Conflict("AUTH_IDENTITY_CHANNEL_OWNERSHIP_CONFLICT", "auth identity channel already belongs to another user")
+		}
+		if channel == nil {
+			create := tx.AuthIdentityChannel.Create().
+				SetIdentityID(identity.ID).
+				SetProviderType(providerType).
+				SetProviderKey(providerKey).
+				SetChannel(channelInput.Channel).
+				SetChannelAppID(channelInput.ChannelAppID).
+				SetChannelSubject(channelInput.ChannelSubject)
+			if channelInput.Metadata != nil {
+				create = create.SetMetadata(cloneAdminAuthIdentityMetadata(channelInput.Metadata))
+			}
+			channel, err = create.Save(ctx)
+			if err != nil {
+				return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_CHANNEL_SAVE_FAILED", "failed to save auth identity channel").WithCause(err)
+			}
+		} else {
+			update := tx.AuthIdentityChannel.UpdateOneID(channel.ID).SetIdentityID(identity.ID)
+			if channelInput.Metadata != nil {
+				update = update.SetMetadata(cloneAdminAuthIdentityMetadata(channelInput.Metadata))
+			}
+			channel, err = update.Save(ctx)
+			if err != nil {
+				return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_CHANNEL_SAVE_FAILED", "failed to save auth identity channel").WithCause(err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, infraerrors.InternalServer("ADMIN_AUTH_IDENTITY_BIND_COMMIT_FAILED", "failed to commit auth identity bind").WithCause(err)
+	}
+	return buildAdminBoundAuthIdentity(identity, channel), nil
+}
+
+func normalizeAdminBindChannelInput(input *AdminBindAuthIdentityChannelInput) *AdminBindAuthIdentityChannelInput {
+	if input == nil {
+		return nil
+	}
+	channel := &AdminBindAuthIdentityChannelInput{
+		Channel:        strings.TrimSpace(input.Channel),
+		ChannelAppID:   strings.TrimSpace(input.ChannelAppID),
+		ChannelSubject: strings.TrimSpace(input.ChannelSubject),
+		Metadata:       cloneAdminAuthIdentityMetadata(input.Metadata),
+	}
+	if channel.Channel == "" || channel.ChannelAppID == "" || channel.ChannelSubject == "" {
+		return nil
+	}
+	return channel
+}
+
+func normalizeAdminAuthIdentityProviderType(input string) string {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "email":
+		return "email"
+	case "linuxdo":
+		return "linuxdo"
+	case "oidc":
+		return "oidc"
+	case "wechat":
+		return "wechat"
+	default:
+		return ""
+	}
+}
+
+func buildAdminBoundAuthIdentity(identity *dbent.AuthIdentity, channel *dbent.AuthIdentityChannel) *AdminBoundAuthIdentity {
+	if identity == nil {
+		return nil
+	}
+	result := &AdminBoundAuthIdentity{
+		UserID:          identity.UserID,
+		ProviderType:    strings.TrimSpace(identity.ProviderType),
+		ProviderKey:     strings.TrimSpace(identity.ProviderKey),
+		ProviderSubject: strings.TrimSpace(identity.ProviderSubject),
+		VerifiedAt:      identity.VerifiedAt,
+		Issuer:          identity.Issuer,
+		Metadata:        cloneAdminAuthIdentityMetadata(identity.Metadata),
+		CreatedAt:       identity.CreatedAt,
+		UpdatedAt:       identity.UpdatedAt,
+	}
+	if channel != nil {
+		result.Channel = &AdminBoundAuthIdentityChannel{
+			Channel:        strings.TrimSpace(channel.Channel),
+			ChannelAppID:   strings.TrimSpace(channel.ChannelAppID),
+			ChannelSubject: strings.TrimSpace(channel.ChannelSubject),
+			Metadata:       cloneAdminAuthIdentityMetadata(channel.Metadata),
+			CreatedAt:      channel.CreatedAt,
+			UpdatedAt:      channel.UpdatedAt,
+		}
+	}
+	return result
+}
+
+func cloneAdminAuthIdentityMetadata(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	if len(input) == 0 {
+		return map[string]any{}
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		out := make(map[string]any, len(input))
+		for key, value := range input {
+			out[key] = value
+		}
+		return out
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		out = make(map[string]any, len(input))
+		for key, value := range input {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 // Group management implementations

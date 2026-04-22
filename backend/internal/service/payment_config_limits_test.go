@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -298,4 +299,67 @@ func TestPcInstanceTypeLimits(t *testing.T) {
 			t.Fatal("expected ok=false for invalid JSON")
 		}
 	})
+}
+
+func TestGetAvailableMethodLimitsHidesConflictingVisibleMethodProviders(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeAlipay).
+		SetName("Official Alipay").
+		SetConfig("{}").
+		SetSupportedTypes("alipay").
+		SetLimits(`{"alipay":{"singleMin":10,"singleMax":100}}`).
+		SetEnabled(true).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create official alipay instance: %v", err)
+	}
+	_, err = client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeEasyPay).
+		SetName("EasyPay Alipay").
+		SetConfig("{}").
+		SetSupportedTypes("alipay").
+		SetLimits(`{"alipay":{"singleMin":20,"singleMax":200}}`).
+		SetEnabled(true).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create easypay alipay instance: %v", err)
+	}
+	_, err = client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeWxpay).
+		SetName("Official WeChat").
+		SetConfig("{}").
+		SetSupportedTypes("wxpay").
+		SetLimits(`{"wxpay":{"singleMin":30,"singleMax":300}}`).
+		SetEnabled(true).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create official wxpay instance: %v", err)
+	}
+
+	svc := &PaymentConfigService{
+		entClient: client,
+	}
+
+	resp, err := svc.GetAvailableMethodLimits(ctx)
+	if err != nil {
+		t.Fatalf("GetAvailableMethodLimits returned error: %v", err)
+	}
+
+	if _, ok := resp.Methods[payment.TypeAlipay]; ok {
+		t.Fatalf("alipay should be hidden when multiple enabled providers claim it, got %v", resp.Methods[payment.TypeAlipay])
+	}
+
+	wxpayLimits, ok := resp.Methods[payment.TypeWxpay]
+	if !ok {
+		t.Fatalf("expected wxpay limits to remain visible, got %v", resp.Methods)
+	}
+	if wxpayLimits.SingleMin != 30 || wxpayLimits.SingleMax != 300 {
+		t.Fatalf("wxpay limits = %+v, want official-only min=30 max=300", wxpayLimits)
+	}
+	if resp.GlobalMin != 30 || resp.GlobalMax != 300 {
+		t.Fatalf("global range = (%v, %v), want (30, 300)", resp.GlobalMin, resp.GlobalMax)
+	}
 }

@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -104,6 +106,34 @@ func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User) {
 	})
 }
 
+func (h *AuthHandler) ensureBackendModeAllowsUser(ctx context.Context, user *service.User) error {
+	if user == nil {
+		return infraerrors.Unauthorized("INVALID_USER", "user not found")
+	}
+	if h == nil || !h.isBackendModeEnabled(ctx) || user.IsAdmin() {
+		return nil
+	}
+	return infraerrors.Forbidden("BACKEND_MODE_ADMIN_ONLY", "Backend mode is active. Only admin login is allowed.")
+}
+
+func (h *AuthHandler) ensureBackendModeAllowsNewUserLogin(ctx context.Context) error {
+	if h == nil || !h.isBackendModeEnabled(ctx) {
+		return nil
+	}
+	return infraerrors.Forbidden("BACKEND_MODE_ADMIN_ONLY", "Backend mode is active. Only admin login is allowed.")
+}
+
+func (h *AuthHandler) isBackendModeEnabled(ctx context.Context) bool {
+	if h == nil || h.settingSvc == nil {
+		return false
+	}
+	settings, err := h.settingSvc.GetPublicSettings(ctx)
+	if err == nil && settings != nil {
+		return settings.BackendModeEnabled
+	}
+	return h.settingSvc.IsBackendModeEnabled(ctx)
+}
+
 // Register handles user registration
 // POST /api/v1/auth/register
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -177,6 +207,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	_ = token // token 由 authService.Login 返回但此处由 respondWithTokenPair 重新生成
 
+	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
 	// Check if TOTP 2FA is enabled for this user
 	if h.totpService != nil && h.settingSvc.IsTotpEnabled(c.Request.Context()) && user.TotpEnabled {
 		// Create a temporary login session for 2FA
@@ -194,11 +229,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Backend mode: only admin can login
-	if h.settingSvc.IsBackendModeEnabled(c.Request.Context()) && !user.IsAdmin() {
-		response.Forbidden(c, "Backend mode is active. Only admin login is allowed.")
-		return
-	}
+	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 
 	h.respondWithTokenPair(c, user)
 }
@@ -263,14 +294,74 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 		return
 	}
 
-	// Backend mode: only admin can login (check BEFORE deleting session)
-	if h.settingSvc.IsBackendModeEnabled(c.Request.Context()) && !user.IsAdmin() {
-		response.Forbidden(c, "Backend mode is active. Only admin login is allowed.")
+	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
+		response.ErrorFrom(c, err)
 		return
+	}
+
+	if session.PendingOAuthBind != nil {
+		pendingSvc, err := h.pendingIdentityService()
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+
+		pendingSession, err := pendingSvc.GetBrowserSession(
+			c.Request.Context(),
+			session.PendingOAuthBind.PendingSessionToken,
+			session.PendingOAuthBind.BrowserSessionKey,
+		)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+
+		decision, err := h.ensurePendingOAuthAdoptionDecision(c, pendingSession.ID, oauthAdoptionDecisionRequest{})
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := applyPendingOAuthBinding(
+			c.Request.Context(),
+			h.entClient(),
+			h.authService,
+			h.userService,
+			pendingSession,
+			decision,
+			&user.ID,
+			true,
+			true,
+		); err != nil {
+			response.ErrorFrom(c, infraerrors.InternalServer("PENDING_AUTH_BIND_APPLY_FAILED", "failed to bind pending oauth identity").WithCause(err))
+			return
+		}
+		if _, err := pendingSvc.ConsumeBrowserSession(
+			c.Request.Context(),
+			pendingSession.SessionToken,
+			pendingSession.BrowserSessionKey,
+		); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+
+		secureCookie := isRequestHTTPS(c)
+		clearOAuthPendingSessionCookie(c, secureCookie)
+		clearOAuthPendingBrowserCookie(c, secureCookie)
+		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+
+		user, err = h.userService.GetByID(c.Request.Context(), session.UserID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	// Delete the login session (only after all checks pass)
 	_ = h.totpService.DeleteLoginSession(c.Request.Context(), req.TempToken)
+
+	if session.PendingOAuthBind == nil {
+		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	}
 
 	h.respondWithTokenPair(c, user)
 }
@@ -290,8 +381,14 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
+	identities, err := h.userService.GetProfileIdentitySummaries(c.Request.Context(), subject.UserID, user)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
 	type UserResponse struct {
-		*dto.User
+		userProfileResponse
 		RunMode string `json:"run_mode"`
 	}
 
@@ -300,7 +397,10 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		runMode = h.cfg.RunMode
 	}
 
-	response.Success(c, UserResponse{User: dto.UserFromService(user), RunMode: runMode})
+	response.Success(c, UserResponse{
+		userProfileResponse: userProfileResponseFromService(user, identities),
+		RunMode:             runMode,
+	})
 }
 
 // ValidatePromoCodeRequest 验证优惠码请求
