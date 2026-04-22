@@ -682,8 +682,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	// Generic OIDC 参数验证
-	oidcUsePKCE := previousSettings.OIDCConnectUsePKCE
-	oidcValidateIDToken := previousSettings.OIDCConnectValidateIDToken
+	oidcUsePKCE, oidcValidateIDToken, err := h.settingService.OIDCSecurityWriteDefaults(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	if req.OIDCConnectEnabled {
 		req.OIDCConnectProviderName = strings.TrimSpace(req.OIDCConnectProviderName)
 		req.OIDCConnectClientID = strings.TrimSpace(req.OIDCConnectClientID)
