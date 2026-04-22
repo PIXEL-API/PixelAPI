@@ -374,19 +374,19 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		ProviderSubject: subject,
 	}
 	upstreamClaims := map[string]any{
-		"email":                  email,
-		"username":               username,
-		"subject":                subject,
-		"issuer":                 issuer,
-		"email_verified":         emailVerified != nil && *emailVerified,
-		"provider_fallback":      strings.TrimSpace(cfg.ProviderName),
+		"email":             email,
+		"username":          username,
+		"subject":           subject,
+		"issuer":            issuer,
+		"email_verified":    emailVerified != nil && *emailVerified,
+		"provider_fallback": strings.TrimSpace(cfg.ProviderName),
 		"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, func() string {
 			if idClaims != nil {
 				return idClaims.Name
 			}
 			return ""
 		}(), username),
-		"suggested_avatar_url":   userInfoClaims.AvatarURL,
+		"suggested_avatar_url": userInfoClaims.AvatarURL,
 	}
 	if compatEmail != "" && !strings.EqualFold(strings.TrimSpace(compatEmail), strings.TrimSpace(email)) {
 		upstreamClaims["compat_email"] = compatEmail
@@ -621,6 +621,15 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 	if err := ensurePendingOAuthCompleteRegistrationSession(session); err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if updatedSession, handled, err := h.legacyCompleteRegistrationSessionStatus(c, session); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	} else if handled {
+		c.JSON(http.StatusOK, buildPendingOAuthSessionStatusPayload(updatedSession))
+		return
+	} else {
+		session = updatedSession
 	}
 	if err := h.ensureBackendModeAllowsNewUserLogin(c.Request.Context()); err != nil {
 		response.ErrorFrom(c, err)

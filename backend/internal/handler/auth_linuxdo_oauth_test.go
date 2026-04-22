@@ -757,6 +757,61 @@ func TestCompleteLinuxDoOAuthRegistrationRejectsAdoptExistingUserSession(t *test
 	require.Nil(t, storedSession.ConsumedAt)
 }
 
+func TestCompleteLinuxDoOAuthRegistrationReturnsPendingSessionWhenChoiceStillRequired(t *testing.T) {
+	handler, client := newOAuthPendingFlowTestHandler(t, false)
+	ctx := context.Background()
+
+	session, err := client.PendingAuthSession.Create().
+		SetSessionToken("linuxdo-complete-choice-session").
+		SetIntent("login").
+		SetProviderType("linuxdo").
+		SetProviderKey("linuxdo").
+		SetProviderSubject("linuxdo-choice-subject-1").
+		SetResolvedEmail("linuxdo-choice-subject-1@linuxdo-connect.invalid").
+		SetBrowserSessionKey("linuxdo-choice-browser").
+		SetUpstreamIdentityClaims(map[string]any{
+			"username": "linuxdo_user",
+		}).
+		SetLocalFlowState(map[string]any{
+			oauthCompletionResponseKey: map[string]any{
+				"step":                  oauthPendingChoiceStep,
+				"redirect":              "/dashboard",
+				"email":                 "fresh@example.com",
+				"resolved_email":        "fresh@example.com",
+				"force_email_on_signup": true,
+			},
+		}).
+		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1"}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/linuxdo/complete-registration", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("linuxdo-choice-browser")})
+	c.Request = req
+
+	handler.CompleteLinuxDoOAuthRegistration(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	responseData := decodeJSONBody(t, recorder)
+	require.Equal(t, "pending_session", responseData["auth_result"])
+	require.Equal(t, oauthPendingChoiceStep, responseData["step"])
+	require.Equal(t, true, responseData["force_email_on_signup"])
+	require.Empty(t, responseData["access_token"])
+
+	userCount, err := client.User.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, userCount)
+
+	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
+	require.NoError(t, err)
+	require.Nil(t, storedSession.ConsumedAt)
+}
+
 func newLinuxDoOAuthTestHandler(t *testing.T, invitationEnabled bool, oauthCfg config.LinuxDoConnectConfig) *AuthHandler {
 	t.Helper()
 	handler, _ := newLinuxDoOAuthHandlerAndClient(t, invitationEnabled, oauthCfg)

@@ -692,6 +692,62 @@ func TestCompleteOIDCOAuthRegistrationRejectsAdoptExistingUserSession(t *testing
 	require.Nil(t, storedSession.ConsumedAt)
 }
 
+func TestCompleteOIDCOAuthRegistrationReturnsPendingSessionWhenChoiceStillRequired(t *testing.T) {
+	handler, client := newOAuthPendingFlowTestHandler(t, false)
+	ctx := context.Background()
+
+	session, err := client.PendingAuthSession.Create().
+		SetSessionToken("oidc-complete-choice-session").
+		SetIntent("login").
+		SetProviderType("oidc").
+		SetProviderKey("https://issuer.example.com").
+		SetProviderSubject("oidc-choice-subject-1").
+		SetResolvedEmail("oidc-choice-subject-1@oidc-connect.invalid").
+		SetBrowserSessionKey("oidc-choice-browser").
+		SetUpstreamIdentityClaims(map[string]any{
+			"username": "oidc_user",
+			"issuer":   "https://issuer.example.com",
+		}).
+		SetLocalFlowState(map[string]any{
+			oauthCompletionResponseKey: map[string]any{
+				"step":                  oauthPendingChoiceStep,
+				"redirect":              "/dashboard",
+				"email":                 "fresh@example.com",
+				"resolved_email":        "fresh@example.com",
+				"force_email_on_signup": true,
+			},
+		}).
+		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1"}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/complete-registration", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("oidc-choice-browser")})
+	c.Request = req
+
+	handler.CompleteOIDCOAuthRegistration(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	responseData := decodeJSONBody(t, recorder)
+	require.Equal(t, "pending_session", responseData["auth_result"])
+	require.Equal(t, oauthPendingChoiceStep, responseData["step"])
+	require.Equal(t, true, responseData["force_email_on_signup"])
+	require.Empty(t, responseData["access_token"])
+
+	userCount, err := client.User.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, userCount)
+
+	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
+	require.NoError(t, err)
+	require.Nil(t, storedSession.ConsumedAt)
+}
+
 type oidcProviderFixture struct {
 	Subject           string
 	PreferredUsername string

@@ -525,6 +525,15 @@ func (h *AuthHandler) CompleteWeChatOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if updatedSession, handled, err := h.legacyCompleteRegistrationSessionStatus(c, session); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	} else if handled {
+		c.JSON(http.StatusOK, buildPendingOAuthSessionStatusPayload(updatedSession))
+		return
+	} else {
+		session = updatedSession
+	}
 	if err := h.ensureBackendModeAllowsNewUserLogin(c.Request.Context()); err != nil {
 		response.ErrorFrom(c, err)
 		return
