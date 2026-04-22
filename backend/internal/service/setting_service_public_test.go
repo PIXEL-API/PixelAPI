@@ -132,3 +132,22 @@ func TestSettingService_GetPublicSettings_DoesNotExposeMobileOnlyWeChatAsWebOAut
 	require.False(t, settings.WeChatOAuthMPEnabled)
 	require.True(t, settings.WeChatOAuthMobileEnabled)
 }
+
+func TestSettingService_GetPublicSettings_FallsBackToConfigForWeChatOAuthCapabilities(t *testing.T) {
+	svc := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{
+		WeChat: config.WeChatConnectConfig{
+			Enabled:             true,
+			OpenEnabled:         true,
+			OpenAppID:           "wx-open-config",
+			OpenAppSecret:       "wx-open-secret",
+			FrontendRedirectURL: "/auth/wechat/config-callback",
+		},
+	})
+
+	settings, err := svc.GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.True(t, settings.WeChatOAuthEnabled)
+	require.True(t, settings.WeChatOAuthOpenEnabled)
+	require.False(t, settings.WeChatOAuthMPEnabled)
+	require.False(t, settings.WeChatOAuthMobileEnabled)
+}
