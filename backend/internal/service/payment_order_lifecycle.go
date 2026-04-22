@@ -158,7 +158,11 @@ func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) s
 				"queryRef": queryRef,
 			})
 			slog.Warn("query upstream returned invalid paid amount", "orderID", o.ID, "queryRef", queryRef, "paid", resp.Amount)
-			return ""
+			retriedResp, retryOK := requeryPaidOrderOnce(ctx, prov, queryRef)
+			if !retryOK {
+				return ""
+			}
+			resp = retriedResp
 		}
 		notificationTradeNo := o.PaymentTradeNo
 		if upstreamTradeNo := strings.TrimSpace(resp.TradeNo); paymentOrderShouldPersistUpstreamTradeNo(queryRef, upstreamTradeNo, notificationTradeNo) {
@@ -182,6 +186,21 @@ func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) s
 		_ = cp.CancelPayment(ctx, queryRef)
 	}
 	return ""
+}
+
+func requeryPaidOrderOnce(ctx context.Context, prov payment.Provider, queryRef string) (*payment.QueryOrderResponse, bool) {
+	if prov == nil || strings.TrimSpace(queryRef) == "" {
+		return nil, false
+	}
+	resp, err := prov.QueryOrder(ctx, queryRef)
+	if err != nil {
+		slog.Warn("query upstream retry failed", "queryRef", queryRef, "error", err)
+		return nil, false
+	}
+	if resp == nil || resp.Status != payment.ProviderStatusPaid || !isValidProviderAmount(resp.Amount) {
+		return nil, false
+	}
+	return resp, true
 }
 
 func paymentOrderQueryReference(order *dbent.PaymentOrder, prov payment.Provider) string {
