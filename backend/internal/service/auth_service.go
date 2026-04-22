@@ -1500,6 +1500,9 @@ func resolvedTokenVersion(user *User) int64 {
 	if user == nil {
 		return 0
 	}
+	if user.TokenVersionResolved {
+		return user.TokenVersion
+	}
 
 	material := strings.ToLower(strings.TrimSpace(user.Email)) + "\n" + user.PasswordHash
 	sum := sha256.Sum256([]byte(material))

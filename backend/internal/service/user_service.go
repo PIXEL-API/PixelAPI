@@ -943,10 +943,11 @@ func (s *UserService) GetByID(ctx context.Context, id int64) (*User, error) {
 }
 
 func normalizeLoadedUserTokenVersion(user *User) {
-	if user == nil {
+	if user == nil || user.TokenVersionResolved {
 		return
 	}
 	user.TokenVersion = resolvedTokenVersion(user)
+	user.TokenVersionResolved = true
 }
 
 // TouchLastActive 通过防抖更新 users.last_active_at，减少鉴权热路径写放大。
