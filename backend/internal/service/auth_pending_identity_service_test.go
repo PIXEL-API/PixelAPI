@@ -356,3 +356,69 @@ func TestAuthPendingIdentityService_ConsumeBrowserSession(t *testing.T) {
 	_, err = svc.ConsumeBrowserSession(ctx, session.SessionToken, "browser-session")
 	require.ErrorIs(t, err, ErrPendingAuthSessionConsumed)
 }
+
+func TestAuthPendingIdentityService_ConsumeBrowserSessionRejectsStaleLoadedSessionReplay(t *testing.T) {
+	svc, _ := newAuthPendingIdentityServiceTestClient(t)
+	ctx := context.Background()
+
+	session, err := svc.CreatePendingSession(ctx, CreatePendingAuthSessionInput{
+		Intent: "login",
+		Identity: PendingAuthIdentityKey{
+			ProviderType:    "linuxdo",
+			ProviderKey:     "linuxdo",
+			ProviderSubject: "stale-replay-subject",
+		},
+		BrowserSessionKey: "browser-session",
+	})
+	require.NoError(t, err)
+
+	loaded, err := svc.getBrowserSession(ctx, session.SessionToken)
+	require.NoError(t, err)
+
+	consumed, err := svc.consumeSession(ctx, loaded, "browser-session", ErrPendingAuthSessionExpired, ErrPendingAuthSessionConsumed)
+	require.NoError(t, err)
+	require.NotNil(t, consumed.ConsumedAt)
+
+	_, err = svc.consumeSession(ctx, loaded, "browser-session", ErrPendingAuthSessionExpired, ErrPendingAuthSessionConsumed)
+	require.ErrorIs(t, err, ErrPendingAuthSessionConsumed)
+}
+
+func TestAuthPendingIdentityService_ConsumeBrowserSessionScrubsLegacyCompletionTokens(t *testing.T) {
+	svc, client := newAuthPendingIdentityServiceTestClient(t)
+	ctx := context.Background()
+
+	session, err := svc.CreatePendingSession(ctx, CreatePendingAuthSessionInput{
+		Intent: "login",
+		Identity: PendingAuthIdentityKey{
+			ProviderType:    "linuxdo",
+			ProviderKey:     "linuxdo",
+			ProviderSubject: "legacy-token-subject",
+		},
+		BrowserSessionKey: "browser-session",
+		LocalFlowState: map[string]any{
+			"completion_response": map[string]any{
+				"access_token":  "legacy-access-token",
+				"refresh_token": "legacy-refresh-token",
+				"expires_in":    float64(3600),
+				"token_type":    "Bearer",
+				"redirect":      "/dashboard",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	consumed, err := svc.ConsumeBrowserSession(ctx, session.SessionToken, "browser-session")
+	require.NoError(t, err)
+	require.NotNil(t, consumed.ConsumedAt)
+
+	stored, err := client.PendingAuthSession.Get(ctx, session.ID)
+	require.NoError(t, err)
+
+	completion, ok := stored.LocalFlowState["completion_response"].(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, completion, "access_token")
+	require.NotContains(t, completion, "refresh_token")
+	require.NotContains(t, completion, "expires_in")
+	require.NotContains(t, completion, "token_type")
+	require.Equal(t, "/dashboard", completion["redirect"])
+}

@@ -237,15 +237,40 @@ func (s *AuthPendingIdentityService) consumeSession(
 	}
 
 	now := time.Now().UTC()
-	updated, err := s.entClient.PendingAuthSession.UpdateOneID(session.ID).
+	update := s.entClient.PendingAuthSession.UpdateOneID(session.ID).
+		Where(
+			pendingauthsession.ConsumedAtIsNil(),
+			pendingauthsession.ExpiresAtGTE(now),
+			pendingauthsession.Or(
+				pendingauthsession.CompletionCodeExpiresAtIsNil(),
+				pendingauthsession.CompletionCodeExpiresAtGTE(now),
+			),
+		).
 		SetConsumedAt(now).
 		SetCompletionCodeHash("").
-		ClearCompletionCodeExpiresAt().
-		Save(ctx)
-	if err != nil {
+		ClearCompletionCodeExpiresAt()
+	if expectedBrowserSessionKey := strings.TrimSpace(session.BrowserSessionKey); expectedBrowserSessionKey != "" {
+		update = update.Where(pendingauthsession.BrowserSessionKeyEQ(expectedBrowserSessionKey))
+	}
+	updated, err := update.Save(ctx)
+	if err == nil {
+		return updated, nil
+	}
+	if !dbent.IsNotFound(err) {
 		return nil, err
 	}
-	return updated, nil
+
+	current, currentErr := s.entClient.PendingAuthSession.Get(ctx, session.ID)
+	if currentErr != nil {
+		if dbent.IsNotFound(currentErr) {
+			return nil, ErrPendingAuthSessionNotFound
+		}
+		return nil, currentErr
+	}
+	if err := validatePendingSessionState(current, browserSessionKey, expiredErr, consumedErr); err != nil {
+		return nil, err
+	}
+	return nil, consumedErr
 }
 
 func validatePendingSessionState(session *dbent.PendingAuthSession, browserSessionKey string, expiredErr error, consumedErr error) error {

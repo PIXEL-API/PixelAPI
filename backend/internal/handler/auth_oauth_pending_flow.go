@@ -277,6 +277,22 @@ func pendingOAuthCompletionIncludesTokenPayload(payload map[string]any) bool {
 	return false
 }
 
+func pendingOAuthCompletionCanIssueTokenPair(session *dbent.PendingAuthSession, payload map[string]any) bool {
+	if session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.Intent), oauthIntentLogin) {
+		return false
+	}
+	if session.TargetUserID == nil || *session.TargetUserID <= 0 {
+		return false
+	}
+	if pendingSessionWantsInvitation(payload) {
+		return false
+	}
+	return strings.TrimSpace(pendingSessionStringValue(payload, "step")) == ""
+}
+
 func ensurePendingOAuthCompleteRegistrationSession(session *dbent.PendingAuthSession) error {
 	if session == nil {
 		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
@@ -1212,13 +1228,7 @@ func (h *AuthHandler) shouldSkipPendingOAuthAdoptionPrompt(
 	if session == nil || len(payload) == 0 {
 		return false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(session.Intent), oauthIntentLogin) {
-		return false, nil
-	}
-	if !pendingOAuthCompletionIncludesTokenPayload(payload) {
-		return false, nil
-	}
-	if session.TargetUserID == nil || *session.TargetUserID <= 0 {
+	if !pendingOAuthCompletionCanIssueTokenPair(session, payload) {
 		return false, nil
 	}
 	if pendingSessionStringValue(session.UpstreamIdentityClaims, "suggested_display_name") == "" &&
@@ -1649,6 +1659,22 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		}
 	}
 	applySuggestedProfileToCompletionResponse(payload, session.UpstreamIdentityClaims)
+
+	canIssueTokenPair := pendingOAuthCompletionCanIssueTokenPair(session, payload)
+	var loginUser *service.User
+	if canIssueTokenPair {
+		loginUser, err = h.userService.GetByID(c.Request.Context(), *session.TargetUserID)
+		if err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := h.ensureBackendModeAllowsUser(c.Request.Context(), loginUser); err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
 	skipAdoptionPrompt, err := h.shouldSkipPendingOAuthAdoptionPrompt(c.Request.Context(), session, payload)
 	if err != nil {
 		clearCookies()
@@ -1657,25 +1683,6 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 	}
 	if skipAdoptionPrompt {
 		delete(payload, "adoption_required")
-	}
-	if pendingOAuthCompletionIncludesTokenPayload(payload) {
-		if session.TargetUserID == nil || *session.TargetUserID <= 0 {
-			clearCookies()
-			response.ErrorFrom(c, infraerrors.InternalServer("PENDING_AUTH_COMPLETION_INVALID", "pending auth completion payload is invalid"))
-			return
-		}
-		user, err := h.userService.GetByID(c.Request.Context(), *session.TargetUserID)
-		if err != nil {
-			clearCookies()
-			response.ErrorFrom(c, err)
-			return
-		}
-		if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
-			clearCookies()
-			response.ErrorFrom(c, err)
-			return
-		}
-		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	}
 
 	if pendingSessionWantsInvitation(payload) {
@@ -1722,6 +1729,20 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		clearCookies()
 		response.ErrorFrom(c, err)
 		return
+	}
+
+	if canIssueTokenPair {
+		tokenPair, err := h.authService.GenerateTokenPair(c.Request.Context(), loginUser, "")
+		if err != nil {
+			clearCookies()
+			response.InternalError(c, "Failed to generate token pair")
+			return
+		}
+		h.authService.RecordSuccessfulLogin(c.Request.Context(), loginUser.ID)
+		payload["access_token"] = tokenPair.AccessToken
+		payload["refresh_token"] = tokenPair.RefreshToken
+		payload["expires_in"] = tokenPair.ExpiresIn
+		payload["token_type"] = "Bearer"
 	}
 
 	clearCookies()
