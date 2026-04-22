@@ -1346,18 +1346,6 @@ func newWeChatOAuthTestHandlerWithSettings(t *testing.T, invitationEnabled bool,
 	}, client
 }
 
-func assertOAuthRedirectError(t *testing.T, location string, errorCode string, errorMessage string) {
-	t.Helper()
-
-	parsed, err := url.Parse(location)
-	require.NoError(t, err)
-
-	fragment, err := url.ParseQuery(parsed.Fragment)
-	require.NoError(t, err)
-	require.Equal(t, errorCode, fragment.Get("error"))
-	require.Equal(t, errorMessage, fragment.Get("error_message"))
-}
-
 type wechatOAuthSettingRepoStub struct {
 	values map[string]string
 }
