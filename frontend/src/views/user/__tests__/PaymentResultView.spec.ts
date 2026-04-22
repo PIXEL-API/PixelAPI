@@ -220,6 +220,41 @@ describe('PaymentResultView', () => {
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
   })
 
+  it('falls back to order_id polling when resume-token recovery fails', async () => {
+    routeState.query = {
+      resume_token: 'resume-fail',
+      order_id: '77',
+    }
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify({
+        ...recoverySnapshotFactory('resume-fail'),
+        orderId: 42,
+      }),
+    )
+    resolveOrderPublicByResumeToken.mockRejectedValueOnce(new Error('resume failed'))
+    pollOrderStatus.mockResolvedValueOnce({
+      ...orderFactory('PAID'),
+      id: 77,
+    })
+
+    const wrapper = mount(PaymentResultView, {
+      global: {
+        stubs: {
+          OrderStatusBadge: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledWith('resume-fail')
+    expect(pollOrderStatus).toHaveBeenCalledWith(77)
+    expect(verifyOrderPublic).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.result.success')
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+  })
+
   it('does not fall back to public out_trade_no verification when resume_token recovery fails', async () => {
     routeState.query = {
       resume_token: 'resume-fail',
@@ -239,6 +274,32 @@ describe('PaymentResultView', () => {
 
     expect(resolveOrderPublicByResumeToken).toHaveBeenCalledWith('resume-fail')
     expect(verifyOrderPublic).not.toHaveBeenCalled()
+  })
+
+  it('ignores a stale global recovery snapshot when legacy return markers do not identify the order', async () => {
+    routeState.query = {
+      trade_status: 'TRADE_SUCCESS',
+    }
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(recoverySnapshotFactory('resume-stale')),
+    )
+
+    const wrapper = mount(PaymentResultView, {
+      global: {
+        stubs: {
+          OrderStatusBadge: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(resolveOrderPublicByResumeToken).not.toHaveBeenCalled()
+    expect(verifyOrderPublic).not.toHaveBeenCalled()
+    expect(pollOrderStatus).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.result.failed')
+    expect(wrapper.text()).not.toContain('sub2_20260420abcd1234')
   })
 
   it('uses public out_trade_no verification when no signed resume context is available', async () => {

@@ -109,6 +109,35 @@ function checkoutInfoFixture() {
   }
 }
 
+function checkoutInfoWithPlansFixture() {
+  return {
+    data: {
+      ...checkoutInfoFixture().data,
+      plans: [
+        {
+          id: 7,
+          group_id: 3,
+          name: 'Starter',
+          description: '',
+          price: 128,
+          original_price: 0,
+          validity_days: 30,
+          validity_unit: 'day',
+          rate_multiplier: 1,
+          daily_limit_usd: null,
+          weekly_limit_usd: null,
+          monthly_limit_usd: null,
+          features: [],
+          group_platform: 'openai',
+          sort_order: 1,
+          for_sale: true,
+          group_name: 'OpenAI',
+        },
+      ],
+    },
+  }
+}
+
 function jsapiOrderFixture(resumeToken: string) {
   return {
     order_id: 123,
@@ -127,6 +156,24 @@ function jsapiOrderFixture(resumeToken: string) {
       package: 'prepay_id=wx123',
       signType: 'RSA',
       paySign: 'signed',
+    },
+  }
+}
+
+function oauthOrderFixture() {
+  return {
+    order_id: 456,
+    amount: 128,
+    pay_amount: 128,
+    fee_rate: 0,
+    expires_at: '2099-01-01T00:10:00.000Z',
+    payment_type: 'wxpay',
+    result_type: 'oauth_required' as const,
+    oauth: {
+      authorize_url: '/api/v1/auth/oauth/wechat/payment/start?payment_type=wxpay&redirect=%2Fpurchase%3Ffrom%3Dwechat',
+      appid: 'wx123',
+      scope: 'snsapi_base',
+      redirect_url: '/auth/wechat/payment/callback',
     },
   }
 }
@@ -238,5 +285,79 @@ describe('PaymentView WeChat JSAPI flow', () => {
       wechat_resume_token: 'resume-token-123',
     }))
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+  })
+
+  it('keeps subscription resume context for token-only WeChat callbacks', async () => {
+    routeState.query = {
+      wechat_resume: '1',
+      wechat_resume_token: 'resume-subscription-7',
+      payment_type: 'wxpay_direct',
+      order_type: 'subscription',
+      plan_id: '7',
+    }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    createOrder.mockResolvedValue(oauthOrderFixture())
+
+    const originalLocation = window.location
+    const locationState = {
+      href: 'http://localhost/purchase',
+      origin: 'http://localhost',
+    }
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: locationState,
+    })
+
+    shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(routerReplace).toHaveBeenCalledWith({ path: '/purchase', query: {} })
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      payment_type: 'wxpay',
+      order_type: 'subscription',
+      plan_id: 7,
+      wechat_resume_token: 'resume-subscription-7',
+    }))
+    expect(locationState.href).toContain('/api/v1/auth/oauth/wechat/payment/start?')
+    expect(new URL(locationState.href, 'http://localhost').searchParams.get('redirect')).toBe(
+      '/purchase?from=wechat&payment_type=wxpay&order_type=subscription&plan_id=7',
+    )
+
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: originalLocation,
+    })
+  })
+
+  it('shows explicit H5 authorization guidance instead of failing silently', async () => {
+    routeState.query = {
+      wechat_resume: '1',
+      wechat_resume_token: 'resume-token-h5',
+      payment_type: 'wxpay_direct',
+    }
+    createOrder.mockRejectedValueOnce({ reason: 'WECHAT_H5_NOT_AUTHORIZED' })
+
+    shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith(
+      'payment.errors.wechatH5NotAuthorized payment.errors.wechatOpenInWeChatHint',
+    )
   })
 })
