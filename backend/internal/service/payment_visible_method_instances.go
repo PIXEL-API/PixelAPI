@@ -82,6 +82,19 @@ func filterEnabledVisibleMethodInstances(instances []*dbent.PaymentProviderInsta
 	return filtered
 }
 
+func selectVisibleMethodInstanceByProviderKey(instances []*dbent.PaymentProviderInstance, providerKey string) *dbent.PaymentProviderInstance {
+	providerKey = strings.TrimSpace(providerKey)
+	if providerKey == "" {
+		return nil
+	}
+	for _, inst := range instances {
+		if strings.EqualFold(strings.TrimSpace(inst.ProviderKey), providerKey) {
+			return inst
+		}
+	}
+	return nil
+}
+
 func buildPaymentProviderConflictError(method string, conflicting *dbent.PaymentProviderInstance) error {
 	metadata := map[string]string{
 		"payment_method": NormalizeVisibleMethod(method),
@@ -133,6 +146,32 @@ func (s *PaymentConfigService) validateVisibleMethodEnablementConflicts(
 	return nil
 }
 
+func (s *PaymentConfigService) resolveVisibleMethodSourceProviderKey(ctx context.Context, method string) (string, error) {
+	method = NormalizeVisibleMethod(method)
+	sourceKey := visibleMethodSourceSettingKey(method)
+	rawSource := ""
+	if s != nil && s.settingRepo != nil && sourceKey != "" {
+		value, err := s.settingRepo.GetValue(ctx, sourceKey)
+		if err != nil {
+			return "", fmt.Errorf("get %s: %w", sourceKey, err)
+		}
+		rawSource = value
+	}
+
+	normalizedSource, err := normalizeVisibleMethodSettingSource(method, rawSource, true)
+	if err != nil {
+		return "", err
+	}
+	providerKey, ok := VisibleMethodProviderKeyForSource(method, normalizedSource)
+	if !ok {
+		return "", infraerrors.BadRequest(
+			"INVALID_PAYMENT_VISIBLE_METHOD_SOURCE",
+			fmt.Sprintf("%s source must be one of the supported payment providers", method),
+		)
+	}
+	return providerKey, nil
+}
+
 func (s *PaymentConfigService) resolveEnabledVisibleMethodInstance(
 	ctx context.Context,
 	method string,
@@ -161,6 +200,17 @@ func (s *PaymentConfigService) resolveEnabledVisibleMethodInstance(
 	case 1:
 		return matching[0], nil
 	default:
-		return nil, buildPaymentProviderConflictError(method, matching[0])
+		providerKey, err := s.resolveVisibleMethodSourceProviderKey(ctx, method)
+		if err != nil {
+			return nil, err
+		}
+		selected := selectVisibleMethodInstanceByProviderKey(matching, providerKey)
+		if selected == nil {
+			return nil, infraerrors.BadRequest(
+				"INVALID_PAYMENT_VISIBLE_METHOD_SOURCE",
+				fmt.Sprintf("%s source has no enabled provider instance", method),
+			)
+		}
+		return selected, nil
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 func TestNormalizeVisibleMethods(t *testing.T) {
@@ -416,6 +417,211 @@ func TestVisibleMethodLoadBalancerUsesEnabledProviderInstance(t *testing.T) {
 	}
 	if inner.lastProviderKey != payment.TypeAlipay {
 		t.Fatalf("lastProviderKey = %q, want %q", inner.lastProviderKey, payment.TypeAlipay)
+	}
+}
+
+func TestVisibleMethodLoadBalancerUsesConfiguredSourceWhenMultipleProvidersEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		method         payment.PaymentType
+		officialName   string
+		officialTypes  string
+		easyPayName    string
+		easyPayTypes   string
+		sourceSetting  string
+		wantProvider   string
+	}{
+		{
+			name:          "alipay uses official source",
+			method:        payment.TypeAlipay,
+			officialName:  "Official Alipay",
+			officialTypes: "alipay",
+			easyPayName:   "EasyPay Alipay",
+			easyPayTypes:  "alipay",
+			sourceSetting: VisibleMethodSourceOfficialAlipay,
+			wantProvider:  payment.TypeAlipay,
+		},
+		{
+			name:          "alipay uses easypay source",
+			method:        payment.TypeAlipay,
+			officialName:  "Official Alipay",
+			officialTypes: "alipay",
+			easyPayName:   "EasyPay Alipay",
+			easyPayTypes:  "alipay",
+			sourceSetting: VisibleMethodSourceEasyPayAlipay,
+			wantProvider:  payment.TypeEasyPay,
+		},
+		{
+			name:          "wxpay uses official source",
+			method:        payment.TypeWxpay,
+			officialName:  "Official WeChat",
+			officialTypes: "wxpay",
+			easyPayName:   "EasyPay WeChat",
+			easyPayTypes:  "wxpay",
+			sourceSetting: VisibleMethodSourceOfficialWechat,
+			wantProvider:  payment.TypeWxpay,
+		},
+		{
+			name:          "wxpay uses easypay source",
+			method:        payment.TypeWxpay,
+			officialName:  "Official WeChat",
+			officialTypes: "wxpay",
+			easyPayName:   "EasyPay WeChat",
+			easyPayTypes:  "wxpay",
+			sourceSetting: VisibleMethodSourceEasyPayWechat,
+			wantProvider:  payment.TypeEasyPay,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+
+			officialProviderKey := payment.TypeAlipay
+			if tt.method == payment.TypeWxpay {
+				officialProviderKey = payment.TypeWxpay
+			}
+
+			_, err = client.PaymentProviderInstance.Create().
+				SetProviderKey(officialProviderKey).
+				SetName(tt.officialName).
+				SetConfig("{}").
+				SetSupportedTypes(tt.officialTypes).
+				SetEnabled(true).
+				SetSortOrder(1).
+				Save(ctx)
+			if err != nil {
+				t.Fatalf("create official provider: %v", err)
+			}
+
+			_, err = client.PaymentProviderInstance.Create().
+				SetProviderKey(payment.TypeEasyPay).
+				SetName(tt.easyPayName).
+				SetConfig("{}").
+				SetSupportedTypes(tt.easyPayTypes).
+				SetEnabled(true).
+				SetSortOrder(2).
+				Save(ctx)
+			if err != nil {
+				t.Fatalf("create easypay provider: %v", err)
+			}
+
+			inner := &captureLoadBalancer{}
+			configService := &PaymentConfigService{
+				entClient: client,
+				settingRepo: &paymentConfigSettingRepoStub{
+					values: map[string]string{
+						visibleMethodSourceSettingKey(tt.method): tt.sourceSetting,
+					},
+				},
+			}
+			lb := newVisibleMethodLoadBalancer(inner, configService)
+
+			_, err = lb.SelectInstance(ctx, "", tt.method, payment.StrategyRoundRobin, 12.5)
+			if err != nil {
+				t.Fatalf("SelectInstance returned error: %v", err)
+			}
+			if inner.lastProviderKey != tt.wantProvider {
+				t.Fatalf("lastProviderKey = %q, want %q", inner.lastProviderKey, tt.wantProvider)
+			}
+		})
+	}
+}
+
+func TestVisibleMethodLoadBalancerRejectsMissingOrInvalidSourceWhenMultipleProvidersEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		method      payment.PaymentType
+		sourceValue string
+		wantMessage string
+	}{
+		{
+			name:        "missing alipay source",
+			method:      payment.TypeAlipay,
+			sourceValue: "",
+			wantMessage: "alipay source is required when the visible method is enabled",
+		},
+		{
+			name:        "invalid wxpay source",
+			method:      payment.TypeWxpay,
+			sourceValue: "stripe",
+			wantMessage: "wxpay source must be one of the supported payment providers",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+
+			officialProviderKey := payment.TypeAlipay
+			officialSupportedTypes := "alipay"
+			officialName := "Official Alipay"
+			easyPaySupportedTypes := "alipay"
+			easyPayName := "EasyPay Alipay"
+			if tt.method == payment.TypeWxpay {
+				officialProviderKey = payment.TypeWxpay
+				officialSupportedTypes = "wxpay"
+				officialName = "Official WeChat"
+				easyPaySupportedTypes = "wxpay"
+				easyPayName = "EasyPay WeChat"
+			}
+
+			_, err := client.PaymentProviderInstance.Create().
+				SetProviderKey(officialProviderKey).
+				SetName(officialName).
+				SetConfig("{}").
+				SetSupportedTypes(officialSupportedTypes).
+				SetEnabled(true).
+				SetSortOrder(1).
+				Save(ctx)
+			if err != nil {
+				t.Fatalf("create official provider: %v", err)
+			}
+
+			_, err = client.PaymentProviderInstance.Create().
+				SetProviderKey(payment.TypeEasyPay).
+				SetName(easyPayName).
+				SetConfig("{}").
+				SetSupportedTypes(easyPaySupportedTypes).
+				SetEnabled(true).
+				SetSortOrder(2).
+				Save(ctx)
+			if err != nil {
+				t.Fatalf("create easypay provider: %v", err)
+			}
+
+			inner := &captureLoadBalancer{}
+			configService := &PaymentConfigService{
+				entClient: client,
+				settingRepo: &paymentConfigSettingRepoStub{
+					values: map[string]string{
+						visibleMethodSourceSettingKey(tt.method): tt.sourceValue,
+					},
+				},
+			}
+			lb := newVisibleMethodLoadBalancer(inner, configService)
+
+			_, err = lb.SelectInstance(ctx, "", tt.method, payment.StrategyRoundRobin, 9.9)
+			if err == nil {
+				t.Fatal("SelectInstance should reject invalid visible method source configuration")
+			}
+			if infraerrors.Reason(err) != "INVALID_PAYMENT_VISIBLE_METHOD_SOURCE" {
+				t.Fatalf("Reason(err) = %q, want %q", infraerrors.Reason(err), "INVALID_PAYMENT_VISIBLE_METHOD_SOURCE")
+			}
+			if infraerrors.Message(err) != tt.wantMessage {
+				t.Fatalf("Message(err) = %q, want %q", infraerrors.Message(err), tt.wantMessage)
+			}
+		})
 	}
 }
 
