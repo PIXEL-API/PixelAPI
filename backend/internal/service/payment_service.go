@@ -281,15 +281,6 @@ func newLegacyAwarePaymentResumeService(legacyKey []byte) *PaymentResumeService 
 	return NewPaymentResumeService(signingKey, verifyFallbacks...)
 }
 
-func psResumeSigningKey(configService *PaymentConfigService) []byte {
-	signingKey, _ := psResumeSigningKeys(configService)
-	return signingKey
-}
-
-func psResumeSigningKeys(configService *PaymentConfigService) ([]byte, [][]byte) {
-	return resolvePaymentResumeSigningKeys(psResumeLegacyVerificationKey(configService))
-}
-
 func psResumeLegacyVerificationKey(configService *PaymentConfigService) []byte {
 	if configService == nil {
 		return nil
