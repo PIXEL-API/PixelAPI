@@ -1290,6 +1290,9 @@ func buildPendingOAuthSessionStatusPayload(session *dbent.PendingAuthSession) gi
 
 func normalizePendingOAuthCompletionResponse(payload map[string]any) map[string]any {
 	normalized := clonePendingMap(payload)
+	for _, key := range []string{"access_token", "refresh_token", "expires_in", "token_type"} {
+		delete(normalized, key)
+	}
 	step := strings.ToLower(strings.TrimSpace(pendingSessionStringValue(normalized, "step")))
 	switch step {
 	case "choice", "choose_account_action", "choose_account", "choose", "email_required", "bind_login_required":
