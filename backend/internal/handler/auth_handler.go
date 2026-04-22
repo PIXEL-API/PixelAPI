@@ -78,9 +78,24 @@ type AuthResponse struct {
 	User         *dto.User `json:"user"`
 }
 
+func ensureLoginUserActive(user *service.User) error {
+	if user == nil {
+		return infraerrors.Unauthorized("INVALID_USER", "user not found")
+	}
+	if !user.IsActive() {
+		return service.ErrUserNotActive
+	}
+	return nil
+}
+
 // respondWithTokenPair 生成 Token 对并返回认证响应
 // 如果 Token 对生成失败，回退到只返回 Access Token（向后兼容）
 func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User) {
+	if err := ensureLoginUserActive(user); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
 	tokenPair, err := h.authService.GenerateTokenPair(c.Request.Context(), user, "")
 	if err != nil {
 		slog.Error("failed to generate token pair", "error", err, "user_id", user.ID)
@@ -290,6 +305,10 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 	// Get the user (before session deletion so we can check backend mode)
 	user, err := h.userService.GetByID(c.Request.Context(), session.UserID)
 	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := ensureLoginUserActive(user); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -678,6 +697,8 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 			// 不影响登出流程
 		}
 	}
+	h.consumePendingOAuthSessionOnLogout(c)
+	clearOAuthLogoutCookies(c)
 
 	response.Success(c, LogoutResponse{
 		Message: "Logged out successfully",
@@ -698,7 +719,7 @@ func (h *AuthHandler) RevokeAllSessions(c *gin.Context) {
 		return
 	}
 
-	if err := h.authService.RevokeAllUserSessions(c.Request.Context(), subject.UserID); err != nil {
+	if err := h.authService.RevokeAllUserTokens(c.Request.Context(), subject.UserID); err != nil {
 		slog.Error("failed to revoke all sessions", "user_id", subject.UserID, "error", err)
 		response.InternalError(c, "Failed to revoke sessions")
 		return

@@ -265,16 +265,20 @@ func pendingSessionWantsInvitation(payload map[string]any) bool {
 	return strings.EqualFold(strings.TrimSpace(pendingSessionStringValue(payload, "error")), "invitation_required")
 }
 
-func pendingOAuthCompletionIncludesTokenPayload(payload map[string]any) bool {
-	if len(payload) == 0 {
+func pendingOAuthCompletionCanIssueTokenPair(session *dbent.PendingAuthSession, payload map[string]any) bool {
+	if session == nil {
 		return false
 	}
-	for _, key := range []string{"access_token", "refresh_token"} {
-		if value := pendingSessionStringValue(payload, key); value != "" {
-			return true
-		}
+	if !strings.EqualFold(strings.TrimSpace(session.Intent), oauthIntentLogin) {
+		return false
 	}
-	return false
+	if session.TargetUserID == nil || *session.TargetUserID <= 0 {
+		return false
+	}
+	if pendingSessionWantsInvitation(payload) {
+		return false
+	}
+	return strings.TrimSpace(pendingSessionStringValue(payload, "step")) == ""
 }
 
 func ensurePendingOAuthCompleteRegistrationSession(session *dbent.PendingAuthSession) error {
@@ -292,6 +296,78 @@ func ensurePendingOAuthCompleteRegistrationSession(session *dbent.PendingAuthSes
 		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
 	}
 	return nil
+}
+
+func buildLegacyCompleteRegistrationPendingResponse(
+	session *dbent.PendingAuthSession,
+	forceEmailOnSignup bool,
+	emailVerificationRequired bool,
+) map[string]any {
+	completionResponse := normalizePendingOAuthCompletionResponse(mergePendingCompletionResponse(session, map[string]any{
+		"step":                   oauthPendingChoiceStep,
+		"adoption_required":      true,
+		"create_account_allowed": true,
+		"force_email_on_signup":  forceEmailOnSignup,
+	}))
+
+	if email := strings.TrimSpace(session.ResolvedEmail); email != "" {
+		if _, exists := completionResponse["email"]; !exists {
+			completionResponse["email"] = email
+		}
+		if _, exists := completionResponse["resolved_email"]; !exists {
+			completionResponse["resolved_email"] = email
+		}
+	}
+	if _, exists := completionResponse["choice_reason"]; !exists {
+		switch {
+		case forceEmailOnSignup:
+			completionResponse["choice_reason"] = "force_email_on_signup"
+		case emailVerificationRequired:
+			completionResponse["choice_reason"] = "email_verification_required"
+		default:
+			completionResponse["choice_reason"] = "third_party_signup"
+		}
+	}
+	return completionResponse
+}
+
+func (h *AuthHandler) legacyCompleteRegistrationSessionStatus(
+	c *gin.Context,
+	session *dbent.PendingAuthSession,
+) (*dbent.PendingAuthSession, bool, error) {
+	if session == nil {
+		return nil, false, infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+
+	payload := normalizePendingOAuthCompletionResponse(mergePendingCompletionResponse(session, nil))
+	if step := pendingSessionStringValue(payload, "step"); step != "" {
+		return session, true, nil
+	}
+
+	emailVerificationRequired := h != nil && h.authService != nil && h.authService.IsEmailVerifyEnabled(c.Request.Context())
+	forceEmailOnSignup := h.isForceEmailOnThirdPartySignup(c.Request.Context())
+	if !emailVerificationRequired && !forceEmailOnSignup {
+		return session, false, nil
+	}
+
+	client := h.entClient()
+	if client == nil {
+		return nil, false, infraerrors.ServiceUnavailable("PENDING_AUTH_NOT_READY", "pending auth service is not ready")
+	}
+
+	updatedSession, err := updatePendingOAuthSessionProgress(
+		c.Request.Context(),
+		client,
+		session,
+		strings.TrimSpace(session.Intent),
+		strings.TrimSpace(session.ResolvedEmail),
+		nil,
+		buildLegacyCompleteRegistrationPendingResponse(session, forceEmailOnSignup, emailVerificationRequired),
+	)
+	if err != nil {
+		return nil, false, infraerrors.InternalServer("PENDING_AUTH_SESSION_UPDATE_FAILED", "failed to update pending oauth session").WithCause(err)
+	}
+	return updatedSession, true, nil
 }
 
 func (r oauthAdoptionDecisionRequest) hasDecision() bool {
@@ -376,15 +452,7 @@ func (h *AuthHandler) findOAuthIdentityUser(ctx context.Context, identity servic
 		}
 		return nil, infraerrors.InternalServer("AUTH_IDENTITY_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
 	}
-
-	userEntity, err := client.User.Get(ctx, record.UserID)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, infraerrors.InternalServer("AUTH_IDENTITY_USER_LOOKUP_FAILED", "failed to load auth identity user").WithCause(err)
-	}
-	return userEntity, nil
+	return findActiveUserByID(ctx, client, record.UserID)
 }
 
 func (h *AuthHandler) BindLinuxDoOAuthLogin(c *gin.Context) { h.bindPendingOAuthLogin(c, "linuxdo") }
@@ -439,7 +507,7 @@ func (h *AuthHandler) SendPendingOAuthVerifyCode(c *gin.Context) {
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if existingUser, err := findUserByNormalizedEmail(c.Request.Context(), client, email); err == nil && existingUser != nil {
-		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, email)
+		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, existingUser, email)
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return
@@ -622,6 +690,38 @@ func findUserByNormalizedEmail(ctx context.Context, client *dbent.Client, email 
 		return nil, infraerrors.Conflict("USER_EMAIL_CONFLICT", "normalized email matched multiple users")
 	}
 	return matches[0], nil
+}
+
+func ensurePendingOAuthRegistrationIdentityAvailable(ctx context.Context, client *dbent.Client, session *dbent.PendingAuthSession) error {
+	if client == nil || session == nil {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ(strings.TrimSpace(session.ProviderType)),
+			authidentity.ProviderKeyEQ(strings.TrimSpace(session.ProviderKey)),
+			authidentity.ProviderSubjectEQ(strings.TrimSpace(session.ProviderSubject)),
+		).
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if identity == nil || identity.UserID <= 0 {
+		return nil
+	}
+
+	activeOwner, err := findActiveUserByID(ctx, client, identity.UserID)
+	if err != nil {
+		return err
+	}
+	if activeOwner != nil {
+		return infraerrors.Conflict("AUTH_IDENTITY_OWNERSHIP_CONFLICT", "auth identity already belongs to another user")
+	}
+	return nil
 }
 
 func oauthIdentityIssuer(session *dbent.PendingAuthSession) *string {
@@ -910,6 +1010,9 @@ func findActiveUserByID(ctx context.Context, client *dbent.Client, userID int64)
 		}
 		return nil, infraerrors.InternalServer("AUTH_IDENTITY_USER_LOOKUP_FAILED", "failed to load auth identity user").WithCause(err)
 	}
+	if !strings.EqualFold(strings.TrimSpace(userEntity.Status), service.StatusActive) {
+		return nil, service.ErrUserNotActive
+	}
 	return userEntity, nil
 }
 
@@ -1123,6 +1226,38 @@ func consumePendingOAuthBrowserSessionTx(
 	return nil
 }
 
+func applyPendingOAuthAdoptionAndConsumeSession(
+	ctx context.Context,
+	client *dbent.Client,
+	authService *service.AuthService,
+	userService *service.UserService,
+	session *dbent.PendingAuthSession,
+	decision *dbent.IdentityAdoptionDecision,
+	userID int64,
+) error {
+	if client == nil {
+		return infraerrors.ServiceUnavailable("PENDING_AUTH_NOT_READY", "pending auth service is not ready")
+	}
+	if session == nil || userID <= 0 {
+		return infraerrors.BadRequest("PENDING_AUTH_SESSION_INVALID", "pending auth registration context is invalid")
+	}
+
+	tx, err := client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := applyPendingOAuthAdoption(txCtx, client, authService, userService, session, decision, &userID); err != nil {
+		return err
+	}
+	if err := consumePendingOAuthBrowserSessionTx(txCtx, tx, session); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func applyPendingOAuthAdoption(
 	ctx context.Context,
 	client *dbent.Client,
@@ -1212,13 +1347,7 @@ func (h *AuthHandler) shouldSkipPendingOAuthAdoptionPrompt(
 	if session == nil || len(payload) == 0 {
 		return false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(session.Intent), oauthIntentLogin) {
-		return false, nil
-	}
-	if !pendingOAuthCompletionIncludesTokenPayload(payload) {
-		return false, nil
-	}
-	if session.TargetUserID == nil || *session.TargetUserID <= 0 {
+	if !pendingOAuthCompletionCanIssueTokenPair(session, payload) {
 		return false, nil
 	}
 	if pendingSessionStringValue(session.UpstreamIdentityClaims, "suggested_display_name") == "" &&
@@ -1262,6 +1391,59 @@ func readPendingOAuthBrowserSession(c *gin.Context, h *AuthHandler) (*service.Au
 	return svc, session, clearCookies, nil
 }
 
+func (h *AuthHandler) consumePendingOAuthSessionOnLogout(c *gin.Context) {
+	if c == nil || c.Request == nil {
+		return
+	}
+
+	sessionToken, err := readOAuthPendingSessionCookie(c)
+	if err != nil || strings.TrimSpace(sessionToken) == "" {
+		return
+	}
+	browserSessionKey, err := readOAuthPendingBrowserCookie(c)
+	if err != nil || strings.TrimSpace(browserSessionKey) == "" {
+		return
+	}
+
+	svc, err := h.pendingIdentityService()
+	if err != nil {
+		return
+	}
+	_, _ = svc.ConsumeBrowserSession(c.Request.Context(), sessionToken, browserSessionKey)
+}
+
+func clearOAuthLogoutCookies(c *gin.Context) {
+	secureCookie := isRequestHTTPS(c)
+
+	clearOAuthPendingSessionCookie(c, secureCookie)
+	clearOAuthPendingBrowserCookie(c, secureCookie)
+	clearOAuthBindAccessTokenCookie(c, secureCookie)
+
+	clearCookie(c, linuxDoOAuthStateCookieName, secureCookie)
+	clearCookie(c, linuxDoOAuthVerifierCookie, secureCookie)
+	clearCookie(c, linuxDoOAuthRedirectCookie, secureCookie)
+	clearCookie(c, linuxDoOAuthIntentCookieName, secureCookie)
+	clearCookie(c, linuxDoOAuthBindUserCookieName, secureCookie)
+
+	oidcClearCookie(c, oidcOAuthStateCookieName, secureCookie)
+	oidcClearCookie(c, oidcOAuthVerifierCookie, secureCookie)
+	oidcClearCookie(c, oidcOAuthRedirectCookie, secureCookie)
+	oidcClearCookie(c, oidcOAuthNonceCookie, secureCookie)
+	oidcClearCookie(c, oidcOAuthIntentCookieName, secureCookie)
+	oidcClearCookie(c, oidcOAuthBindUserCookieName, secureCookie)
+
+	wechatClearCookie(c, wechatOAuthStateCookieName, secureCookie)
+	wechatClearCookie(c, wechatOAuthRedirectCookieName, secureCookie)
+	wechatClearCookie(c, wechatOAuthIntentCookieName, secureCookie)
+	wechatClearCookie(c, wechatOAuthModeCookieName, secureCookie)
+	wechatClearCookie(c, wechatOAuthBindUserCookieName, secureCookie)
+
+	wechatPaymentClearCookie(c, wechatPaymentOAuthStateName, secureCookie)
+	wechatPaymentClearCookie(c, wechatPaymentOAuthRedirect, secureCookie)
+	wechatPaymentClearCookie(c, wechatPaymentOAuthContextName, secureCookie)
+	wechatPaymentClearCookie(c, wechatPaymentOAuthScope, secureCookie)
+}
+
 func buildPendingOAuthSessionStatusPayload(session *dbent.PendingAuthSession) gin.H {
 	completionResponse := normalizePendingOAuthCompletionResponse(mergePendingCompletionResponse(session, nil))
 	payload := gin.H{
@@ -1280,6 +1462,9 @@ func buildPendingOAuthSessionStatusPayload(session *dbent.PendingAuthSession) gi
 
 func normalizePendingOAuthCompletionResponse(payload map[string]any) map[string]any {
 	normalized := clonePendingMap(payload)
+	for _, key := range []string{"access_token", "refresh_token", "expires_in", "token_type"} {
+		delete(normalized, key)
+	}
 	step := strings.ToLower(strings.TrimSpace(pendingSessionStringValue(normalized, "step")))
 	switch step {
 	case "choice", "choose_account_action", "choose_account", "choose", "email_required", "bind_login_required":
@@ -1315,16 +1500,21 @@ func (h *AuthHandler) transitionPendingOAuthAccountToChoiceState(
 	c *gin.Context,
 	client *dbent.Client,
 	session *dbent.PendingAuthSession,
+	targetUser *dbent.User,
 	email string,
 ) (*dbent.PendingAuthSession, error) {
 	completionResponse := pendingOAuthChoiceCompletionResponse(session, email)
+	var targetUserID *int64
+	if targetUser != nil && targetUser.ID > 0 {
+		targetUserID = &targetUser.ID
+	}
 	session, err := updatePendingOAuthSessionProgress(
 		c.Request.Context(),
 		client,
 		session,
 		strings.TrimSpace(session.Intent),
 		email,
-		nil,
+		targetUserID,
 		completionResponse,
 	)
 	if err != nil {
@@ -1438,6 +1628,10 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := ensurePendingOAuthCompleteRegistrationSession(session); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	if strings.TrimSpace(provider) != "" && !strings.EqualFold(strings.TrimSpace(session.ProviderType), provider) {
 		response.BadRequest(c, "Pending oauth session provider mismatch")
 		return
@@ -1464,7 +1658,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		}
 	}
 	if existingUser != nil {
-		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, email)
+		session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, existingUser, email)
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return
@@ -1487,7 +1681,12 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 	)
 	if err != nil {
 		if errors.Is(err, service.ErrEmailExists) {
-			session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, email)
+			existingUser, lookupErr := findUserByNormalizedEmail(c.Request.Context(), client, email)
+			if lookupErr != nil {
+				response.ErrorFrom(c, lookupErr)
+				return
+			}
+			session, err = h.transitionPendingOAuthAccountToChoiceState(c, client, session, existingUser, email)
 			if err != nil {
 				response.ErrorFrom(c, err)
 				return
@@ -1649,6 +1848,27 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		}
 	}
 	applySuggestedProfileToCompletionResponse(payload, session.UpstreamIdentityClaims)
+
+	canIssueTokenPair := pendingOAuthCompletionCanIssueTokenPair(session, payload)
+	var loginUser *service.User
+	if canIssueTokenPair {
+		loginUser, err = h.userService.GetByID(c.Request.Context(), *session.TargetUserID)
+		if err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := ensureLoginUserActive(loginUser); err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := h.ensureBackendModeAllowsUser(c.Request.Context(), loginUser); err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
 	skipAdoptionPrompt, err := h.shouldSkipPendingOAuthAdoptionPrompt(c.Request.Context(), session, payload)
 	if err != nil {
 		clearCookies()
@@ -1657,25 +1877,6 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 	}
 	if skipAdoptionPrompt {
 		delete(payload, "adoption_required")
-	}
-	if pendingOAuthCompletionIncludesTokenPayload(payload) {
-		if session.TargetUserID == nil || *session.TargetUserID <= 0 {
-			clearCookies()
-			response.ErrorFrom(c, infraerrors.InternalServer("PENDING_AUTH_COMPLETION_INVALID", "pending auth completion payload is invalid"))
-			return
-		}
-		user, err := h.userService.GetByID(c.Request.Context(), *session.TargetUserID)
-		if err != nil {
-			clearCookies()
-			response.ErrorFrom(c, err)
-			return
-		}
-		if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
-			clearCookies()
-			response.ErrorFrom(c, err)
-			return
-		}
-		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	}
 
 	if pendingSessionWantsInvitation(payload) {
@@ -1722,6 +1923,20 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		clearCookies()
 		response.ErrorFrom(c, err)
 		return
+	}
+
+	if canIssueTokenPair {
+		tokenPair, err := h.authService.GenerateTokenPair(c.Request.Context(), loginUser, "")
+		if err != nil {
+			clearCookies()
+			response.InternalError(c, "Failed to generate token pair")
+			return
+		}
+		h.authService.RecordSuccessfulLogin(c.Request.Context(), loginUser.ID)
+		payload["access_token"] = tokenPair.AccessToken
+		payload["refresh_token"] = tokenPair.RefreshToken
+		payload["expires_in"] = tokenPair.ExpiresIn
+		payload["token_type"] = "Bearer"
 	}
 
 	clearCookies()

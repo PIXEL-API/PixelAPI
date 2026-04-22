@@ -14,8 +14,9 @@ describe('parseWechatResumeRoute', () => {
     }, [], 88)).toEqual({
       wechatResumeToken: 'resume-token-123',
       paymentType: 'wxpay',
-      orderType: 'balance',
+      orderType: 'subscription',
       orderAmount: 0,
+      planId: 7,
     })
   })
 

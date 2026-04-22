@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -639,5 +640,70 @@ func TestCreatePaymentMobileH5IncludesConfiguredSceneInfo(t *testing.T) {
 	}
 	if !strings.Contains(resp.PayURL, "redirect_url=") {
 		t.Fatalf("pay_url = %q, want redirect_url query appended", resp.PayURL)
+	}
+}
+
+func TestCreatePaymentMobileH5ReturnsNoAuthErrorWithoutNativeFallback(t *testing.T) {
+	origJSAPIPrepay := wxpayJSAPIPrepayWithRequestPayment
+	origNativePrepay := wxpayNativePrepay
+	origH5Prepay := wxpayH5Prepay
+	t.Cleanup(func() {
+		wxpayJSAPIPrepayWithRequestPayment = origJSAPIPrepay
+		wxpayNativePrepay = origNativePrepay
+		wxpayH5Prepay = origH5Prepay
+	})
+
+	jsapiCalls := 0
+	nativeCalls := 0
+	h5Calls := 0
+	wxpayJSAPIPrepayWithRequestPayment = func(ctx context.Context, svc jsapi.JsapiApiService, req jsapi.PrepayRequest) (*jsapi.PrepayWithRequestPaymentResponse, *core.APIResult, error) {
+		jsapiCalls++
+		return &jsapi.PrepayWithRequestPaymentResponse{}, nil, nil
+	}
+	wxpayH5Prepay = func(ctx context.Context, svc h5.H5ApiService, req h5.PrepayRequest) (*h5.PrepayResponse, *core.APIResult, error) {
+		h5Calls++
+		return nil, nil, errors.New("NO_AUTH")
+	}
+	wxpayNativePrepay = func(ctx context.Context, svc native.NativeApiService, req native.PrepayRequest) (*native.PrepayResponse, *core.APIResult, error) {
+		nativeCalls++
+		return &native.PrepayResponse{
+			CodeUrl: core.String("weixin://wxpay/bizpayurl?pr=fallback-native"),
+		}, nil, nil
+	}
+
+	provider := &Wxpay{
+		config: map[string]string{
+			"appId": "wx123",
+			"mchId": "mch123",
+		},
+		coreClient: &core.Client{},
+	}
+
+	resp, err := provider.CreatePayment(context.Background(), payment.CreatePaymentRequest{
+		OrderID:     "sub2_100",
+		Amount:      "66.88",
+		PaymentType: payment.TypeWxpay,
+		Subject:     "Balance Recharge",
+		NotifyURL:   "https://merchant.example/payment/notify",
+		ClientIP:    "203.0.113.10",
+		IsMobile:    true,
+	})
+	if err == nil {
+		t.Fatal("expected no-auth error, got nil")
+	}
+	if jsapiCalls != 0 {
+		t.Fatalf("jsapi prepay calls = %d, want 0", jsapiCalls)
+	}
+	if h5Calls != 1 {
+		t.Fatalf("h5 prepay calls = %d, want 1", h5Calls)
+	}
+	if nativeCalls != 0 {
+		t.Fatalf("native prepay calls = %d, want 0", nativeCalls)
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response, got %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "NO_AUTH") {
+		t.Fatalf("error = %v, want NO_AUTH", err)
 	}
 }

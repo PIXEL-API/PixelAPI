@@ -191,6 +191,80 @@ func TestRegisterOAuthEmailAccountRollsBackCreatedUserWhenTokenPairGenerationFai
 	require.Empty(t, redeemRepo.updateCalls)
 }
 
+func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *testing.T) {
+	userRepo := &userRepoStub{nextID: 42}
+	emailCache := &emailCacheStub{
+		data: &VerificationCodeData{
+			Code:      "246810",
+			Attempts:  0,
+			CreatedAt: time.Now().UTC(),
+			ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
+		},
+	}
+	authService := newOAuthEmailFlowAuthService(
+		userRepo,
+		&redeemCodeRepoStub{},
+		&refreshTokenCacheStub{},
+		map[string]string{
+			SettingKeyRegistrationEnabled: "true",
+			SettingKeyEmailVerifyEnabled:  "true",
+		},
+		emailCache,
+	)
+
+	tokenPair, user, err := authService.RegisterOAuthEmailAccount(
+		context.Background(),
+		"fresh@example.com",
+		"secret-123",
+		"246810",
+		"",
+		" OIDC ",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, tokenPair)
+	require.NotNil(t, user)
+	require.Len(t, userRepo.created, 1)
+	require.Equal(t, "oidc", userRepo.created[0].SignupSource)
+}
+
+func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing.T) {
+	userRepo := &userRepoStub{nextID: 43}
+	emailCache := &emailCacheStub{
+		data: &VerificationCodeData{
+			Code:      "246810",
+			Attempts:  0,
+			CreatedAt: time.Now().UTC(),
+			ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
+		},
+	}
+	authService := newOAuthEmailFlowAuthService(
+		userRepo,
+		&redeemCodeRepoStub{},
+		&refreshTokenCacheStub{},
+		map[string]string{
+			SettingKeyRegistrationEnabled: "true",
+			SettingKeyEmailVerifyEnabled:  "true",
+		},
+		emailCache,
+	)
+
+	tokenPair, user, err := authService.RegisterOAuthEmailAccount(
+		context.Background(),
+		"fallback@example.com",
+		"secret-123",
+		"246810",
+		"",
+		"github",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, tokenPair)
+	require.NotNil(t, user)
+	require.Len(t, userRepo.created, 1)
+	require.Equal(t, "email", userRepo.created[0].SignupSource)
+}
+
 func TestRollbackOAuthEmailAccountCreationRestoresInvitationUsage(t *testing.T) {
 	userRepo := &userRepoStub{}
 	redeemRepo := &redeemCodeRepoStub{

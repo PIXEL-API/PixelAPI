@@ -127,6 +127,7 @@ type UserIdentitySummary struct {
 	Bound         bool       `json:"bound"`
 	BoundCount    int        `json:"bound_count"`
 	DisplayName   string     `json:"display_name,omitempty"`
+	AvatarURL     string     `json:"-"`
 	SubjectHint   string     `json:"subject_hint,omitempty"`
 	ProviderKey   string     `json:"provider_key,omitempty"`
 	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
@@ -228,6 +229,7 @@ func (s *UserService) GetProfile(ctx context.Context, userID int64) (*User, erro
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
+	normalizeLoadedUserTokenVersion(user)
 	if err := s.hydrateUserAvatar(ctx, user); err != nil {
 		return nil, fmt.Errorf("get user avatar: %w", err)
 	}
@@ -248,12 +250,59 @@ func (s *UserService) GetProfileIdentitySummaries(ctx context.Context, userID in
 		return UserIdentitySummarySet{}, err
 	}
 
-	return UserIdentitySummarySet{
+	summaries := UserIdentitySummarySet{
 		Email:   s.buildEmailIdentitySummary(user, records),
 		LinuxDo: s.buildProviderIdentitySummary("linuxdo", user, records),
 		OIDC:    s.buildProviderIdentitySummary("oidc", user, records),
 		WeChat:  s.buildProviderIdentitySummary("wechat", user, records),
-	}, nil
+	}
+
+	s.applyExplicitProviderAvailability(ctx, &summaries)
+	return summaries, nil
+}
+
+func (s *UserService) applyExplicitProviderAvailability(ctx context.Context, summaries *UserIdentitySummarySet) {
+	if s == nil || summaries == nil || s.settingRepo == nil {
+		return
+	}
+
+	settings, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyLinuxDoConnectEnabled,
+		SettingKeyOIDCConnectEnabled,
+		SettingKeyWeChatConnectEnabled,
+		SettingKeyWeChatConnectOpenEnabled,
+		SettingKeyWeChatConnectMPEnabled,
+		SettingKeyWeChatConnectMobileEnabled,
+		SettingKeyWeChatConnectMode,
+	})
+	if err != nil {
+		return
+	}
+
+	if raw, ok := settings[SettingKeyLinuxDoConnectEnabled]; ok && strings.TrimSpace(raw) != "" && raw != "true" {
+		disableIdentityBindAction(&summaries.LinuxDo)
+	}
+	if raw, ok := settings[SettingKeyOIDCConnectEnabled]; ok && strings.TrimSpace(raw) != "" && raw != "true" {
+		disableIdentityBindAction(&summaries.OIDC)
+	}
+	if raw, ok := settings[SettingKeyWeChatConnectEnabled]; ok && strings.TrimSpace(raw) != "" {
+		if raw != "true" {
+			disableIdentityBindAction(&summaries.WeChat)
+			return
+		}
+		openEnabled, mpEnabled, _ := parseWeChatConnectCapabilitySettings(settings, true, settings[SettingKeyWeChatConnectMode])
+		if !openEnabled && !mpEnabled {
+			disableIdentityBindAction(&summaries.WeChat)
+		}
+	}
+}
+
+func disableIdentityBindAction(summary *UserIdentitySummary) {
+	if summary == nil || summary.Bound {
+		return
+	}
+	summary.CanBind = false
+	summary.BindStartPath = ""
 }
 
 func (s *UserService) PrepareIdentityBindingStart(_ context.Context, req StartUserIdentityBindingRequest) (*StartUserIdentityBindingResult, error) {
@@ -276,29 +325,34 @@ func (s *UserService) PrepareIdentityBindingStart(_ context.Context, req StartUs
 }
 
 func (s *UserService) UnbindUserAuthProvider(ctx context.Context, userID int64, provider string) (*User, error) {
+	user, _, err := s.UnbindUserAuthProviderWithResult(ctx, userID, provider)
+	return user, err
+}
+
+func (s *UserService) UnbindUserAuthProviderWithResult(ctx context.Context, userID int64, provider string) (*User, bool, error) {
 	provider = normalizeUserIdentityProvider(provider)
 	if provider == "" || provider == "email" {
-		return nil, ErrIdentityProviderInvalid
+		return nil, false, ErrIdentityProviderInvalid
 	}
 
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, false, fmt.Errorf("get user: %w", err)
 	}
 
 	records, err := s.listUserAuthIdentities(ctx, userID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(filterUserAuthIdentities(records, provider)) == 0 {
-		return user, nil
+		return user, false, nil
 	}
 	if !s.canUnbindProvider(provider, user, records) {
-		return nil, ErrIdentityUnbindLastMethod
+		return nil, false, ErrIdentityUnbindLastMethod
 	}
 
 	if err := s.userRepo.UnbindUserAuthProvider(ctx, userID, provider); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
@@ -306,9 +360,9 @@ func (s *UserService) UnbindUserAuthProvider(ctx context.Context, userID int64, 
 
 	updatedUser, err := s.GetProfile(ctx, userID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return updatedUser, nil
+	return updatedUser, true, nil
 }
 
 // UpdateProfile 更新用户资料
@@ -608,6 +662,7 @@ func (s *UserService) buildProviderIdentitySummary(provider string, user *User, 
 	summary.Bound = true
 	summary.BoundCount = len(filtered)
 	summary.DisplayName = userAuthIdentityDisplayName(primary)
+	summary.AvatarURL = strings.TrimSpace(firstStringIdentityValue(primary.Metadata, "avatar_url", "suggested_avatar_url", "headimgurl"))
 	summary.SubjectHint = maskOpaqueIdentity(primary.ProviderSubject)
 	summary.ProviderKey = strings.TrimSpace(primary.ProviderKey)
 	summary.VerifiedAt = primary.VerifiedAt
@@ -625,7 +680,7 @@ func (s *UserService) canUnbindProvider(provider string, user *User, records []U
 		return false
 	}
 
-	if s.buildEmailIdentitySummary(user, records).Bound {
+	if s.canUseEmailAsSignInMethod(user, records) {
 		return true
 	}
 
@@ -639,6 +694,44 @@ func (s *UserService) canUnbindProvider(provider string, user *User, records []U
 	}
 
 	return false
+}
+
+func (s *UserService) canUseEmailAsSignInMethod(user *User, records []UserAuthIdentityRecord) bool {
+	if user == nil {
+		return false
+	}
+
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	if email == "" || isReservedEmail(email) {
+		return false
+	}
+
+	if emailSignupSourceAllowsLogin(user.SignupSource) {
+		return true
+	}
+
+	for _, record := range filterUserAuthIdentities(records, "email") {
+		if emailIdentitySupportsSignIn(record) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func emailSignupSourceAllowsLogin(signupSource string) bool {
+	signupSource = strings.ToLower(strings.TrimSpace(signupSource))
+	return signupSource == "" || signupSource == "email"
+}
+
+func emailIdentitySupportsSignIn(record UserAuthIdentityRecord) bool {
+	source := strings.TrimSpace(firstStringIdentityValue(record.Metadata, "source"))
+	switch source {
+	case "auth_service_email_bind", "auth_service_login_backfill", "auth_service_dual_write":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *UserService) listUserAuthIdentities(ctx context.Context, userID int64) ([]UserAuthIdentityRecord, error) {
@@ -662,11 +755,11 @@ func buildUserIdentityBindAuthorizeURL(provider, redirectTo string) (string, err
 	path := ""
 	switch provider {
 	case "linuxdo":
-		path = "/api/v1/auth/oauth/linuxdo/start"
+		path = "/api/v1/auth/oauth/linuxdo/bind/start"
 	case "oidc":
-		path = "/api/v1/auth/oauth/oidc/start"
+		path = "/api/v1/auth/oauth/oidc/bind/start"
 	case "wechat":
-		path = "/api/v1/auth/oauth/wechat/start"
+		path = "/api/v1/auth/oauth/wechat/bind/start"
 	default:
 		return "", ErrIdentityProviderInvalid
 	}
@@ -842,10 +935,19 @@ func (s *UserService) GetByID(ctx context.Context, id int64) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
+	normalizeLoadedUserTokenVersion(user)
 	if err := s.hydrateUserAvatar(ctx, user); err != nil {
 		return nil, fmt.Errorf("get user avatar: %w", err)
 	}
 	return user, nil
+}
+
+func normalizeLoadedUserTokenVersion(user *User) {
+	if user == nil || user.TokenVersionResolved {
+		return
+	}
+	user.TokenVersion = resolvedTokenVersion(user)
+	user.TokenVersionResolved = true
 }
 
 // TouchLastActive 通过防抖更新 users.last_active_at，减少鉴权热路径写放大。

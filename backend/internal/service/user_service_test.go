@@ -51,6 +51,44 @@ type mockUserRepoTxState struct {
 	deleteAvatarIDs  []int64
 }
 
+type mockUserSettingRepo struct {
+	values map[string]string
+}
+
+func (m *mockUserSettingRepo) Get(context.Context, string) (*Setting, error) {
+	panic("unexpected Get call")
+}
+
+func (m *mockUserSettingRepo) GetValue(context.Context, string) (string, error) {
+	panic("unexpected GetValue call")
+}
+
+func (m *mockUserSettingRepo) Set(context.Context, string, string) error {
+	panic("unexpected Set call")
+}
+
+func (m *mockUserSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := m.values[key]; ok {
+			out[key] = value
+		}
+	}
+	return out, nil
+}
+
+func (m *mockUserSettingRepo) SetMultiple(context.Context, map[string]string) error {
+	panic("unexpected SetMultiple call")
+}
+
+func (m *mockUserSettingRepo) GetAll(context.Context) (map[string]string, error) {
+	panic("unexpected GetAll call")
+}
+
+func (m *mockUserSettingRepo) Delete(context.Context, string) error {
+	panic("unexpected Delete call")
+}
+
 func (m *mockUserRepo) Create(context.Context, *User) error { return nil }
 func (m *mockUserRepo) GetByID(ctx context.Context, _ int64) (*User, error) {
 	if m.getByIDErr != nil {
@@ -349,6 +387,70 @@ func TestUnbindUserAuthProviderRejectsLastRemainingLoginMethod(t *testing.T) {
 	require.Empty(t, repo.unboundProviders)
 }
 
+func TestGetProfileIdentitySummaries_DoesNotTreatOAuthOnlyCompatEmailAsAlternativeLoginMethod(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:           10,
+			Email:        "oauth-only@example.com",
+			SignupSource: "oidc",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "oidc",
+				ProviderKey:     "https://issuer.example.com",
+				ProviderSubject: "oidc-only-subject",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 10, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.False(t, summaries.OIDC.CanUnbind)
+
+	_, err = svc.UnbindUserAuthProvider(context.Background(), 10, "oidc")
+	require.ErrorIs(t, err, ErrIdentityUnbindLastMethod)
+	require.Empty(t, repo.unboundProviders)
+}
+
+func TestGetProfileIdentitySummaries_DoesNotTreatCompatBackfilledEmailIdentityAsAlternativeLoginMethod(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:           11,
+			Email:        "oauth-only@example.com",
+			SignupSource: "wechat",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "oauth-only@example.com",
+				Metadata: map[string]any{
+					"backfill_source": "users.email",
+					"migration":       "109_auth_identity_compat_backfill",
+				},
+			},
+			{
+				ProviderType:    "wechat",
+				ProviderKey:     "wechat",
+				ProviderSubject: "wechat-only-subject",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 11, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.True(t, summaries.Email.Bound)
+	require.False(t, summaries.WeChat.CanUnbind)
+
+	_, err = svc.UnbindUserAuthProvider(context.Background(), 11, "wechat")
+	require.ErrorIs(t, err, ErrIdentityUnbindLastMethod)
+	require.Empty(t, repo.unboundProviders)
+}
+
 func TestUnbindUserAuthProviderRemovesProviderAndReturnsUpdatedProfile(t *testing.T) {
 	repo := &mockUserRepo{
 		getByIDUser: &User{
@@ -368,18 +470,85 @@ func TestUnbindUserAuthProviderRemovesProviderAndReturnsUpdatedProfile(t *testin
 			},
 		},
 	}
-	svc := NewUserService(repo, nil, nil, nil)
+	invalidator := &mockAuthCacheInvalidator{}
+	svc := NewUserService(repo, nil, invalidator, nil)
 
 	user, err := svc.UnbindUserAuthProvider(context.Background(), 12, "linuxdo")
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"linuxdo"}, repo.unboundProviders)
 	require.Equal(t, int64(12), user.ID)
+	require.Equal(t, []int64{12}, invalidator.invalidatedUserIDs)
 
 	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 12, user)
 	require.NoError(t, err)
 	require.False(t, summaries.LinuxDo.Bound)
 	require.True(t, summaries.LinuxDo.CanBind)
+}
+
+func TestGetProfileIdentitySummaries_HidesBindActionWhenProviderExplicitlyDisabled(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:    15,
+			Email: "alice@example.com",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "alice@example.com",
+			},
+		},
+	}
+	settingRepo := &mockUserSettingRepo{
+		values: map[string]string{
+			SettingKeyLinuxDoConnectEnabled: "false",
+		},
+	}
+	svc := NewUserService(repo, settingRepo, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 15, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.False(t, summaries.LinuxDo.Bound)
+	require.False(t, summaries.LinuxDo.CanBind)
+	require.Empty(t, summaries.LinuxDo.BindStartPath)
+}
+
+func TestGetProfileIdentitySummaries_UsesBindStartRoute(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:    16,
+			Email: "alice@example.com",
+		},
+		identities: []UserAuthIdentityRecord{
+			{
+				ProviderType:    "email",
+				ProviderKey:     "email",
+				ProviderSubject: "alice@example.com",
+			},
+		},
+	}
+	svc := NewUserService(repo, nil, nil, nil)
+
+	summaries, err := svc.GetProfileIdentitySummaries(context.Background(), 16, repo.getByIDUser)
+
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile",
+		summaries.LinuxDo.BindStartPath,
+	)
+	require.Equal(
+		t,
+		"/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile",
+		summaries.OIDC.BindStartPath,
+	)
+	require.Equal(
+		t,
+		"/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile",
+		summaries.WeChat.BindStartPath,
+	)
 }
 
 func TestUpdateBalance_NilBillingCache_NoPanic(t *testing.T) {

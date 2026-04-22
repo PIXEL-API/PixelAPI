@@ -150,13 +150,13 @@ export function buildOAuthBindingStartURL(
     params.set('mode', mode)
   }
 
-  return `${normalized}/auth/oauth/${provider}/start?${params.toString()}`
+  return `${normalized}/auth/oauth/${provider}/bind/start?${params.toString()}`
 }
 
-export function startOAuthBinding(
+export async function startOAuthBinding(
   provider: BindableOAuthProvider,
   options: BuildOAuthBindingStartURLOptions = {}
-): void {
+): Promise<void> {
   if (typeof window === 'undefined') {
     return
   }
@@ -164,7 +164,7 @@ export function startOAuthBinding(
   if (!startURL) {
     return
   }
-  prepareOAuthBindAccessTokenCookie()
+  await prepareOAuthBindAccessTokenCookie()
   window.location.href = startURL
 }
 

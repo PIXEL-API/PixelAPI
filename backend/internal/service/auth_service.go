@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -489,6 +490,7 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 				Balance:      grantPlan.Balance,
 				Concurrency:  grantPlan.Concurrency,
 				Status:       StatusActive,
+				SignupSource: signupSource,
 			}
 
 			if err := s.userRepo.Create(ctx, newUser); err != nil {
@@ -599,6 +601,7 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 				Balance:      grantPlan.Balance,
 				Concurrency:  grantPlan.Concurrency,
 				Status:       StatusActive,
+				SignupSource: signupSource,
 			}
 
 			if s.entClient != nil && invitationRedeemCode != nil {
@@ -1048,7 +1051,7 @@ func (s *AuthService) GenerateToken(user *User) (string, error) {
 		UserID:       user.ID,
 		Email:        user.Email,
 		Role:         user.Role,
-		TokenVersion: user.TokenVersion,
+		TokenVersion: resolvedTokenVersion(user),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -1114,7 +1117,7 @@ func (s *AuthService) RefreshToken(ctx context.Context, oldTokenString string) (
 
 	// Security: Check TokenVersion to prevent refreshing revoked tokens
 	// This ensures tokens issued before a password change cannot be refreshed
-	if claims.TokenVersion != user.TokenVersion {
+	if claims.TokenVersion != resolvedTokenVersion(user) {
 		return "", ErrTokenRevoked
 	}
 
@@ -1342,7 +1345,7 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, fami
 
 	data := &RefreshTokenData{
 		UserID:       user.ID,
-		TokenVersion: user.TokenVersion,
+		TokenVersion: resolvedTokenVersion(user),
 		FamilyID:     familyID,
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(ttl),
@@ -1422,7 +1425,7 @@ func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string)
 	}
 
 	// 检查TokenVersion（密码更改后所有Token失效）
-	if data.TokenVersion != user.TokenVersion {
+	if data.TokenVersion != resolvedTokenVersion(user) {
 		// TokenVersion不匹配，撤销整个Token家族
 		_ = s.refreshTokenCache.DeleteTokenFamily(ctx, data.FamilyID)
 		return nil, ErrTokenRevoked
@@ -1467,8 +1470,42 @@ func (s *AuthService) RevokeAllUserSessions(ctx context.Context, userID int64) e
 	return s.refreshTokenCache.DeleteUserRefreshTokens(ctx, userID)
 }
 
+// RevokeAllUserTokens invalidates both stateless access tokens and refresh sessions.
+// Access/refresh token verification both depend on TokenVersion, so bumping it provides
+// immediate revocation even if refresh-token cache cleanup later fails.
+func (s *AuthService) RevokeAllUserTokens(ctx context.Context, userID int64) error {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+
+	user.TokenVersion++
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return fmt.Errorf("update user: %w", err)
+	}
+
+	if err := s.RevokeAllUserSessions(ctx, userID); err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to revoke refresh sessions after token invalidation for user %d: %v", userID, err)
+	}
+	return nil
+}
+
 // hashToken 计算Token的SHA256哈希
 func hashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
+}
+
+func resolvedTokenVersion(user *User) int64 {
+	if user == nil {
+		return 0
+	}
+	if user.TokenVersionResolved {
+		return user.TokenVersion
+	}
+
+	material := strings.ToLower(strings.TrimSpace(user.Email)) + "\n" + user.PasswordHash
+	sum := sha256.Sum256([]byte(material))
+	fingerprint := int64(binary.BigEndian.Uint64(sum[:8]) & 0x7fffffffffffffff)
+	return user.TokenVersion ^ fingerprint
 }

@@ -299,20 +299,42 @@ const emailSubmitActionLabel = computed(() =>
     : t('profile.authBindings.confirmEmailBindAction')
 )
 
+function resolveLegacyCompatibleWeChatSettings(
+  settings: WeChatOAuthPublicSettings | null | undefined
+): (WeChatOAuthPublicSettings & {
+  wechat_oauth_open_enabled: boolean
+  wechat_oauth_mp_enabled: boolean
+}) | null {
+  if (!settings) {
+    return null
+  }
+
+  if (hasExplicitWeChatOAuthCapabilities(settings)) {
+    return settings
+  }
+
+  if (typeof settings.wechat_oauth_enabled !== 'boolean') {
+    return null
+  }
+
+  return {
+    ...settings,
+    wechat_oauth_open_enabled: settings.wechat_oauth_enabled,
+    wechat_oauth_mp_enabled: settings.wechat_oauth_enabled,
+  }
+}
+
 const wechatOAuthSettings = computed<WeChatOAuthPublicSettings | null>(() => {
-  if (hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings)) {
-    return appStore.cachedPublicSettings
+  const cachedSettings = resolveLegacyCompatibleWeChatSettings(appStore.cachedPublicSettings)
+  if (cachedSettings) {
+    return cachedSettings
   }
 
-  if (typeof props.wechatOpenEnabled === 'boolean' && typeof props.wechatMpEnabled === 'boolean') {
-    return {
-      wechat_oauth_enabled: props.wechatEnabled,
-      wechat_oauth_open_enabled: props.wechatOpenEnabled,
-      wechat_oauth_mp_enabled: props.wechatMpEnabled,
-    }
-  }
-
-  return null
+  return resolveLegacyCompatibleWeChatSettings({
+    wechat_oauth_enabled: props.wechatEnabled,
+    wechat_oauth_open_enabled: props.wechatOpenEnabled,
+    wechat_oauth_mp_enabled: props.wechatMpEnabled,
+  })
 })
 
 const resolvedWeChatBinding = computed(() => resolveWeChatOAuthStartStrict(wechatOAuthSettings.value))
@@ -362,6 +384,27 @@ function getBindingDetails(provider: UserAuthProvider): UserAuthBindingStatus | 
   return binding
 }
 
+function getDisplayableEmail(user: User | null | undefined): string {
+  const email = user?.email?.trim() || ''
+  if (!email) {
+    return ''
+  }
+  if (email.endsWith('.invalid') && !getBindingStatusForUser(user, 'email')) {
+    return ''
+  }
+  return email
+}
+
+function isProviderEnabledForBinding(provider: BindableProvider): boolean {
+  if (provider === 'linuxdo') {
+    return props.linuxdoEnabled
+  }
+  if (provider === 'oidc') {
+    return props.oidcEnabled
+  }
+  return resolvedWeChatBinding.value.mode !== null
+}
+
 const providerItems = computed(() => [
   {
     provider: 'email' as const,
@@ -375,7 +418,10 @@ const providerItems = computed(() => [
     provider: 'linuxdo' as const,
     label: t('profile.authBindings.providers.linuxdo'),
     bound: getBindingStatus('linuxdo'),
-    canBind: getBindingDetails('linuxdo')?.can_bind ?? (props.linuxdoEnabled && !getBindingStatus('linuxdo')),
+    canBind:
+      !getBindingStatus('linuxdo') &&
+      isProviderEnabledForBinding('linuxdo') &&
+      (getBindingDetails('linuxdo')?.can_bind ?? true),
     canUnbind: Boolean(getBindingStatus('linuxdo') && getBindingDetails('linuxdo')?.can_unbind),
     details: getBindingDetails('linuxdo'),
   },
@@ -383,7 +429,10 @@ const providerItems = computed(() => [
     provider: 'oidc' as const,
     label: t('profile.authBindings.providers.oidc', { providerName: props.oidcProviderName }),
     bound: getBindingStatus('oidc'),
-    canBind: getBindingDetails('oidc')?.can_bind ?? (props.oidcEnabled && !getBindingStatus('oidc')),
+    canBind:
+      !getBindingStatus('oidc') &&
+      isProviderEnabledForBinding('oidc') &&
+      (getBindingDetails('oidc')?.can_bind ?? true),
     canUnbind: Boolean(getBindingStatus('oidc') && getBindingDetails('oidc')?.can_unbind),
     details: getBindingDetails('oidc'),
   },
@@ -391,7 +440,10 @@ const providerItems = computed(() => [
     provider: 'wechat' as const,
     label: t('profile.authBindings.providers.wechat'),
     bound: getBindingStatus('wechat'),
-    canBind: getBindingDetails('wechat')?.can_bind ?? (resolvedWeChatBinding.value.mode !== null && !getBindingStatus('wechat')),
+    canBind:
+      !getBindingStatus('wechat') &&
+      isProviderEnabledForBinding('wechat') &&
+      (getBindingDetails('wechat')?.can_bind ?? true),
     canUnbind: Boolean(getBindingStatus('wechat') && getBindingDetails('wechat')?.can_unbind),
     details: getBindingDetails('wechat'),
   },
@@ -425,7 +477,7 @@ function providerIconClass(provider: UserAuthProvider): string {
 
 function providerSummary(provider: UserAuthProvider): string {
   if (provider === 'email') {
-    return currentUser.value?.email || ''
+    return getDisplayableEmail(currentUser.value)
   }
   return ''
 }
