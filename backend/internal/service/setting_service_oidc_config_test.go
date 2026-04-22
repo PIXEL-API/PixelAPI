@@ -133,7 +133,7 @@ func TestSettingService_ParseSettings_DefaultsOIDCSecurityFlagsToSafeConfigValue
 	require.True(t, got.OIDCConnectValidateIDToken)
 }
 
-func TestSettingService_ParseSettings_UsesLegacyOIDCCompatibilityFlagsWhenSettingsMissing(t *testing.T) {
+func TestSettingService_ParseSettings_DefaultsOIDCCompatibilityFlagsToSafeDefaultsWhenSettingsMissing(t *testing.T) {
 	svc := NewSettingService(&settingOIDCRepoStub{values: map[string]string{}}, &config.Config{
 		OIDC: config.OIDCConnectConfig{
 			UsePKCE:         true,
@@ -145,8 +145,8 @@ func TestSettingService_ParseSettings_UsesLegacyOIDCCompatibilityFlagsWhenSettin
 		SettingKeyOIDCConnectEnabled: "true",
 	})
 
-	require.False(t, got.OIDCConnectUsePKCE)
-	require.False(t, got.OIDCConnectValidateIDToken)
+	require.True(t, got.OIDCConnectUsePKCE)
+	require.True(t, got.OIDCConnectValidateIDToken)
 }
 
 func TestGetOIDCConnectOAuthConfig_AllowsCompatibilityFlagsToDisablePKCEAndIDTokenValidation(t *testing.T) {
@@ -216,7 +216,7 @@ func TestGetOIDCConnectOAuthConfig_DefaultsToSecureFlagsWhenSettingsMissing(t *t
 	require.True(t, got.ValidateIDToken)
 }
 
-func TestGetOIDCConnectOAuthConfig_UsesLegacyOIDCCompatibilityFlagsWhenSettingsMissing(t *testing.T) {
+func TestGetOIDCConnectOAuthConfig_DefaultsCompatibilityFlagsToSafeValuesWhenSettingsMissing(t *testing.T) {
 	cfg := &config.Config{
 		OIDC: config.OIDCConnectConfig{
 			Enabled:             true,
@@ -246,6 +246,6 @@ func TestGetOIDCConnectOAuthConfig_UsesLegacyOIDCCompatibilityFlagsWhenSettingsM
 
 	got, err := svc.GetOIDCConnectOAuthConfig(context.Background())
 	require.NoError(t, err)
-	require.False(t, got.UsePKCE)
-	require.False(t, got.ValidateIDToken)
+	require.True(t, got.UsePKCE)
+	require.True(t, got.ValidateIDToken)
 }

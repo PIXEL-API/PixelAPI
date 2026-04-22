@@ -818,14 +818,14 @@ func oidcUsePKCECompatibilityDefault(base config.OIDCConnectConfig) bool {
 	if base.UsePKCEExplicit {
 		return base.UsePKCE
 	}
-	return false
+	return true
 }
 
 func oidcValidateIDTokenCompatibilityDefault(base config.OIDCConnectConfig) bool {
 	if base.ValidateIDTokenExplicit {
 		return base.ValidateIDToken
 	}
-	return false
+	return true
 }
 
 // UpdateSettings 更新系统设置
