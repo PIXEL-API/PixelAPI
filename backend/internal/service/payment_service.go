@@ -268,8 +268,16 @@ func (s *PaymentService) paymentResume() *PaymentResumeService {
 	return psNewPaymentResumeService(s.configService)
 }
 
+func NewLegacyAwarePaymentResumeService(legacyKey []byte) *PaymentResumeService {
+	return newLegacyAwarePaymentResumeService(legacyKey)
+}
+
 func psNewPaymentResumeService(configService *PaymentConfigService) *PaymentResumeService {
-	signingKey, verifyFallbacks := psResumeSigningKeys(configService)
+	return newLegacyAwarePaymentResumeService(psResumeLegacyVerificationKey(configService))
+}
+
+func newLegacyAwarePaymentResumeService(legacyKey []byte) *PaymentResumeService {
+	signingKey, verifyFallbacks := resolvePaymentResumeSigningKeys(legacyKey)
 	return NewPaymentResumeService(signingKey, verifyFallbacks...)
 }
 
@@ -279,8 +287,18 @@ func psResumeSigningKey(configService *PaymentConfigService) []byte {
 }
 
 func psResumeSigningKeys(configService *PaymentConfigService) ([]byte, [][]byte) {
+	return resolvePaymentResumeSigningKeys(psResumeLegacyVerificationKey(configService))
+}
+
+func psResumeLegacyVerificationKey(configService *PaymentConfigService) []byte {
+	if configService == nil {
+		return nil
+	}
+	return configService.encryptionKey
+}
+
+func resolvePaymentResumeSigningKeys(legacyKey []byte) ([]byte, [][]byte) {
 	signingKey := parsePaymentResumeSigningKey(os.Getenv(paymentResumeSigningKeyEnv))
-	legacyKey := psResumeLegacyVerificationKey(configService)
 	if len(signingKey) == 0 {
 		if len(legacyKey) == 0 {
 			return nil, nil
@@ -291,13 +309,6 @@ func psResumeSigningKeys(configService *PaymentConfigService) ([]byte, [][]byte)
 		return signingKey, nil
 	}
 	return signingKey, [][]byte{legacyKey}
-}
-
-func psResumeLegacyVerificationKey(configService *PaymentConfigService) []byte {
-	if configService == nil {
-		return nil
-	}
-	return configService.encryptionKey
 }
 
 func parsePaymentResumeSigningKey(raw string) []byte {

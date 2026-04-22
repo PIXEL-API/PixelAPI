@@ -740,18 +740,23 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       return
     }
     if (decision.kind === 'wechat_jsapi' && decision.jsapi) {
-      const jsapiResult = await invokeWechatJsapiPayment(decision.jsapi as Record<string, unknown>)
-      const errMsg = String(jsapiResult.err_msg || '').toLowerCase()
-      if (errMsg.includes('cancel')) {
-        appStore.showInfo(t('payment.qr.cancelled'))
+      try {
+        const jsapiResult = await invokeWechatJsapiPayment(decision.jsapi as Record<string, unknown>)
+        const errMsg = String(jsapiResult.err_msg || '').toLowerCase()
+        if (errMsg.includes('cancel')) {
+          appStore.showInfo(t('payment.qr.cancelled'))
+          resetPayment()
+        } else if (errMsg && !errMsg.includes('ok')) {
+          applyScenarioError({ reason: 'WECHAT_JSAPI_FAILED', message: errMsg }, visibleMethod)
+          resetPayment()
+        } else {
+          const resultState = { ...decision.paymentState }
+          resetPayment()
+          await redirectToPaymentResult(resultState)
+        }
+      } catch (err: unknown) {
         resetPayment()
-      } else if (errMsg && !errMsg.includes('ok')) {
-        applyScenarioError({ reason: 'WECHAT_JSAPI_FAILED', message: errMsg }, visibleMethod)
-        resetPayment()
-      } else {
-        const resultState = { ...decision.paymentState }
-        resetPayment()
-        await redirectToPaymentResult(resultState)
+        throw err
       }
       return
     }

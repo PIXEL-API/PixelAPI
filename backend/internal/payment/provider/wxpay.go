@@ -204,8 +204,8 @@ func (w *Wxpay) CreatePayment(ctx context.Context, req payment.CreatePaymentRequ
 		if err == nil {
 			return resp, nil
 		}
-		if strings.Contains(err.Error(), wxpayErrNoAuth) {
-			return nil, fmt.Errorf("wxpay h5 payments are not authorized for this merchant: %w", err)
+		if wxpayShouldFallbackToNative(err) {
+			return w.prepayNativeFallback(ctx, client, req, notifyURL, totalFen)
 		}
 		return nil, err
 	case wxpayModeNative:
@@ -292,6 +292,23 @@ func (w *Wxpay) prepayH5(ctx context.Context, c *core.Client, req payment.Create
 	return &payment.CreatePaymentResponse{TradeNo: req.OrderID, PayURL: h5URL}, nil
 }
 
+func (w *Wxpay) prepayNativeFallback(ctx context.Context, c *core.Client, req payment.CreatePaymentRequest, notifyURL string, totalFen int64) (*payment.CreatePaymentResponse, error) {
+	resp, err := w.prepayNative(ctx, c, req, notifyURL, totalFen)
+	if err != nil {
+		return nil, fmt.Errorf("wxpay native fallback after NO_AUTH: %w", err)
+	}
+	nativeURL := strings.TrimSpace(resp.PayURL)
+	if nativeURL == "" {
+		nativeURL = strings.TrimSpace(resp.QRCode)
+	}
+	if nativeURL == "" {
+		return resp, nil
+	}
+	resp.PayURL = nativeURL
+	resp.QRCode = nativeURL
+	return resp, nil
+}
+
 func buildWxpayH5Info(config map[string]string) *h5.H5Info {
 	tp := wxpayH5Type
 	info := &h5.H5Info{Type: &tp}
@@ -302,6 +319,10 @@ func buildWxpayH5Info(config map[string]string) *h5.H5Info {
 		info.AppUrl = core.String(appURL)
 	}
 	return info
+}
+
+func wxpayShouldFallbackToNative(err error) bool {
+	return err != nil && strings.Contains(err.Error(), wxpayErrNoAuth)
 }
 
 func resolveWxpayCreateMode(req payment.CreatePaymentRequest) (string, error) {

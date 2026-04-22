@@ -8,8 +8,13 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"strconv"
 	"testing"
+	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -315,8 +320,261 @@ func TestUpdateProviderInstancePersistsEnabledAndSupportedTypes(t *testing.T) {
 	require.Equal(t, "alipay,wxpay", saved.SupportedTypes)
 }
 
+func TestUpdateProviderInstanceRejectsProtectedConfigChangesWhilePendingOrders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		providerKey   string
+		createConfig  func(*testing.T) map[string]string
+		supportedType []string
+		updateConfig  map[string]string
+		fieldName     string
+		wantValue     string
+	}{
+		{
+			name:          "wxpay appId",
+			providerKey:   payment.TypeWxpay,
+			createConfig:  validWxpayProviderConfig,
+			supportedType: []string{payment.TypeWxpay},
+			updateConfig:  map[string]string{"appId": "wx-app-updated"},
+			fieldName:     "appId",
+			wantValue:     "wx-app-test",
+		},
+		{
+			name:          "wxpay mpAppId",
+			providerKey:   payment.TypeWxpay,
+			createConfig:  validWxpayProviderConfigWithJSAPIAppID,
+			supportedType: []string{payment.TypeWxpay},
+			updateConfig:  map[string]string{"mpAppId": "wx-mp-app-updated"},
+			fieldName:     "mpAppId",
+			wantValue:     "wx-mp-app-test",
+		},
+		{
+			name:          "wxpay mchId",
+			providerKey:   payment.TypeWxpay,
+			createConfig:  validWxpayProviderConfig,
+			supportedType: []string{payment.TypeWxpay},
+			updateConfig:  map[string]string{"mchId": "mch-updated"},
+			fieldName:     "mchId",
+			wantValue:     "mch-test",
+		},
+		{
+			name:          "wxpay publicKeyId",
+			providerKey:   payment.TypeWxpay,
+			createConfig:  validWxpayProviderConfig,
+			supportedType: []string{payment.TypeWxpay},
+			updateConfig:  map[string]string{"publicKeyId": "public-key-id-updated"},
+			fieldName:     "publicKeyId",
+			wantValue:     "public-key-id-test",
+		},
+		{
+			name:          "wxpay certSerial",
+			providerKey:   payment.TypeWxpay,
+			createConfig:  validWxpayProviderConfig,
+			supportedType: []string{payment.TypeWxpay},
+			updateConfig:  map[string]string{"certSerial": "cert-serial-updated"},
+			fieldName:     "certSerial",
+			wantValue:     "cert-serial-test",
+		},
+		{
+			name:          "alipay appId",
+			providerKey:   payment.TypeAlipay,
+			createConfig:  validAlipayProviderConfig,
+			supportedType: []string{payment.TypeAlipay},
+			updateConfig:  map[string]string{"appId": "alipay-app-updated"},
+			fieldName:     "appId",
+			wantValue:     "alipay-app-test",
+		},
+		{
+			name:          "easypay pid",
+			providerKey:   payment.TypeEasyPay,
+			createConfig:  validEasyPayProviderConfig,
+			supportedType: []string{payment.TypeAlipay},
+			updateConfig:  map[string]string{"pid": "pid-updated"},
+			fieldName:     "pid",
+			wantValue:     "pid-test",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+			svc := &PaymentConfigService{
+				entClient:     client,
+				encryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+			}
+
+			instance, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
+				ProviderKey:    tc.providerKey,
+				Name:           "protected-config-instance",
+				Config:         tc.createConfig(t),
+				SupportedTypes: tc.supportedType,
+				Enabled:        true,
+			})
+			require.NoError(t, err)
+
+			createPendingProviderConfigOrder(t, ctx, client, instance)
+
+			updated, err := svc.UpdateProviderInstance(ctx, instance.ID, UpdateProviderInstanceRequest{
+				Config: tc.updateConfig,
+			})
+			require.Nil(t, updated)
+			require.Error(t, err)
+			require.Equal(t, "PENDING_ORDERS", infraerrors.Reason(err))
+
+			saved, err := client.PaymentProviderInstance.Get(ctx, instance.ID)
+			require.NoError(t, err)
+			cfg, err := svc.decryptConfig(saved.Config)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantValue, cfg[tc.fieldName])
+		})
+	}
+}
+
+func TestUpdateProviderInstanceAllowsSafeConfigChangesWhilePendingOrders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		providerKey   string
+		createConfig  func(*testing.T) map[string]string
+		supportedType []string
+		updateConfig  map[string]string
+		fieldName     string
+		wantValue     string
+	}{
+		{
+			name:          "wxpay notifyUrl",
+			providerKey:   payment.TypeWxpay,
+			createConfig:  validWxpayProviderConfig,
+			supportedType: []string{payment.TypeWxpay},
+			updateConfig:  map[string]string{"notifyUrl": "https://merchant.example.com/wxpay/notify-v2"},
+			fieldName:     "notifyUrl",
+			wantValue:     "https://merchant.example.com/wxpay/notify-v2",
+		},
+		{
+			name:          "alipay same appId",
+			providerKey:   payment.TypeAlipay,
+			createConfig:  validAlipayProviderConfig,
+			supportedType: []string{payment.TypeAlipay},
+			updateConfig:  map[string]string{"appId": "alipay-app-test"},
+			fieldName:     "appId",
+			wantValue:     "alipay-app-test",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+			svc := &PaymentConfigService{
+				entClient:     client,
+				encryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+			}
+
+			instance, err := svc.CreateProviderInstance(ctx, CreateProviderInstanceRequest{
+				ProviderKey:    tc.providerKey,
+				Name:           "safe-config-instance",
+				Config:         tc.createConfig(t),
+				SupportedTypes: tc.supportedType,
+				Enabled:        true,
+			})
+			require.NoError(t, err)
+
+			createPendingProviderConfigOrder(t, ctx, client, instance)
+
+			updated, err := svc.UpdateProviderInstance(ctx, instance.ID, UpdateProviderInstanceRequest{
+				Config: tc.updateConfig,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, updated)
+
+			saved, err := client.PaymentProviderInstance.Get(ctx, instance.ID)
+			require.NoError(t, err)
+			cfg, err := svc.decryptConfig(saved.Config)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantValue, cfg[tc.fieldName])
+		})
+	}
+}
+
+func createPendingProviderConfigOrder(t *testing.T, ctx context.Context, client *dbent.Client, instance *dbent.PaymentProviderInstance) {
+	t.Helper()
+
+	user, err := client.User.Create().
+		SetEmail("provider-config-pending@example.com").
+		SetPasswordHash("hash").
+		SetUsername("provider-config-pending-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	instanceID := strconv.FormatInt(instance.ID, 10)
+	_, err = client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(88).
+		SetPayAmount(88).
+		SetFeeRate(0).
+		SetRechargeCode("PENDING-PROVIDER-CONFIG-" + instanceID).
+		SetOutTradeNo("sub2_pending_provider_config_" + instanceID).
+		SetPaymentType(providerPendingOrderPaymentType(instance.ProviderKey)).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		SetProviderInstanceID(instanceID).
+		SetProviderKey(instance.ProviderKey).
+		Save(ctx)
+	require.NoError(t, err)
+}
+
+func providerPendingOrderPaymentType(providerKey string) string {
+	switch providerKey {
+	case payment.TypeWxpay:
+		return payment.TypeWxpay
+	case payment.TypeAlipay:
+		return payment.TypeAlipay
+	default:
+		return payment.TypeAlipay
+	}
+}
+
 func boolPtrValue(v bool) *bool {
 	return &v
+}
+
+func validAlipayProviderConfig(t *testing.T) map[string]string {
+	t.Helper()
+
+	return map[string]string{
+		"appId":      "alipay-app-test",
+		"privateKey": "alipay-private-key-test",
+		"notifyUrl":  "https://merchant.example.com/alipay/notify",
+		"returnUrl":  "https://merchant.example.com/alipay/return",
+	}
+}
+
+func validEasyPayProviderConfig(t *testing.T) map[string]string {
+	t.Helper()
+
+	return map[string]string{
+		"pid":       "pid-test",
+		"pkey":      "pkey-test",
+		"apiBase":   "https://pay.example.com",
+		"notifyUrl": "https://merchant.example.com/easypay/notify",
+		"returnUrl": "https://merchant.example.com/easypay/return",
+	}
 }
 
 func validWxpayProviderConfig(t *testing.T) map[string]string {
@@ -339,4 +597,12 @@ func validWxpayProviderConfig(t *testing.T) map[string]string {
 		"publicKeyId": "public-key-id-test",
 		"certSerial":  "cert-serial-test",
 	}
+}
+
+func validWxpayProviderConfigWithJSAPIAppID(t *testing.T) map[string]string {
+	t.Helper()
+
+	cfg := validWxpayProviderConfig(t)
+	cfg["mpAppId"] = "wx-mp-app-test"
+	return cfg
 }

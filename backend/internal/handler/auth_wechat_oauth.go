@@ -471,11 +471,12 @@ func (h *AuthHandler) WeChatPaymentOAuthCallback(c *gin.Context) {
 }
 
 func (h *AuthHandler) wechatPaymentResumeService() *service.PaymentResumeService {
+	var legacyKey []byte
 	key, err := payment.ProvideEncryptionKey(h.cfg)
-	if err != nil {
-		return service.NewPaymentResumeService(nil)
+	if err == nil {
+		legacyKey = []byte(key)
 	}
-	return service.NewPaymentResumeService([]byte(key))
+	return service.NewLegacyAwarePaymentResumeService(legacyKey)
 }
 
 type completeWeChatOAuthRequest struct {

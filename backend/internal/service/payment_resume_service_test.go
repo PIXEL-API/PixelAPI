@@ -387,6 +387,45 @@ func TestPaymentServiceParseWeChatPaymentResumeTokenAcceptsLegacyEncryptionKeyDu
 	}
 }
 
+func TestNewConfiguredPaymentResumeServicePrefersExplicitSigningKeyAndKeepsLegacyVerificationFallback(t *testing.T) {
+	t.Setenv("PAYMENT_RESUME_SIGNING_KEY", "explicit-payment-resume-signing-key")
+
+	legacyKey := []byte("0123456789abcdef0123456789abcdef")
+	svc := newLegacyAwarePaymentResumeService(legacyKey)
+
+	explicitToken, err := svc.CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:      "openid-explicit-key",
+		PaymentType: payment.TypeWxpay,
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+
+	explicitClaims, err := NewPaymentResumeService([]byte("explicit-payment-resume-signing-key")).ParseWeChatPaymentResumeToken(explicitToken)
+	if err != nil {
+		t.Fatalf("ParseWeChatPaymentResumeToken returned error: %v", err)
+	}
+	if explicitClaims.OpenID != "openid-explicit-key" {
+		t.Fatalf("openid = %q, want %q", explicitClaims.OpenID, "openid-explicit-key")
+	}
+
+	legacyToken, err := NewPaymentResumeService(legacyKey).CreateWeChatPaymentResumeToken(WeChatPaymentResumeClaims{
+		OpenID:      "openid-legacy-key",
+		PaymentType: payment.TypeWxpay,
+	})
+	if err != nil {
+		t.Fatalf("CreateWeChatPaymentResumeToken returned error: %v", err)
+	}
+
+	legacyClaims, err := svc.ParseWeChatPaymentResumeToken(legacyToken)
+	if err != nil {
+		t.Fatalf("ParseWeChatPaymentResumeToken returned error: %v", err)
+	}
+	if legacyClaims.OpenID != "openid-legacy-key" {
+		t.Fatalf("openid = %q, want %q", legacyClaims.OpenID, "openid-legacy-key")
+	}
+}
+
 func TestNormalizeVisibleMethodSource(t *testing.T) {
 	t.Parallel()
 
