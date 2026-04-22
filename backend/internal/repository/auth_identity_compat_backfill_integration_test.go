@@ -20,6 +20,10 @@ func TestAuthIdentityCompatBackfillMigration_AllowsLongReportTypes(t *testing.T)
 	migration108SQL, err := os.ReadFile(migration108Path)
 	require.NoError(t, err)
 
+	migration108aPath := filepath.Join("..", "..", "migrations", "108a_widen_auth_identity_migration_report_type.sql")
+	migration108aSQL, err := os.ReadFile(migration108aPath)
+	require.NoError(t, err)
+
 	migration109Path := filepath.Join("..", "..", "migrations", "109_auth_identity_compat_backfill.sql")
 	migration109SQL, err := os.ReadFile(migration109Path)
 	require.NoError(t, err)
@@ -39,6 +43,9 @@ ALTER TABLE users
 	require.NoError(t, err)
 
 	_, err = tx.ExecContext(ctx, string(migration108SQL))
+	require.NoError(t, err)
+
+	_, err = tx.ExecContext(ctx, string(migration108aSQL))
 	require.NoError(t, err)
 
 	var userID int64
