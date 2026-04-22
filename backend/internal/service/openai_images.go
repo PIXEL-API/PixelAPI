@@ -1294,7 +1294,7 @@ type openAIImageToolMessage struct {
 }
 
 func readOpenAIImageConversationStream(resp *req.Response, startTime time.Time) (string, []openAIImagePointerInfo, OpenAIUsage, *int, error) {
-	if resp == nil || resp.Response == nil || resp.Body == nil {
+	if resp == nil || resp.Body == nil {
 		return "", nil, OpenAIUsage{}, nil, fmt.Errorf("empty conversation response")
 	}
 	reader := bufio.NewReader(resp.Body)
