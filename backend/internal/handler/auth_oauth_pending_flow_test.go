@@ -851,6 +851,56 @@ func TestExchangePendingOAuthCompletionBlocksBackendModeBeforeReturningTokenPayl
 	require.Nil(t, storedSession.ConsumedAt)
 }
 
+func TestExchangePendingOAuthCompletionRejectsDisabledTargetUser(t *testing.T) {
+	handler, client := newOAuthPendingFlowTestHandler(t, false)
+	ctx := context.Background()
+
+	userEntity, err := client.User.Create().
+		SetEmail("disabled-linked@example.com").
+		SetUsername("disabled-linked-user").
+		SetPasswordHash("hash").
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusDisabled).
+		Save(ctx)
+	require.NoError(t, err)
+
+	session, err := client.PendingAuthSession.Create().
+		SetSessionToken("disabled-linked-session-token").
+		SetIntent("login").
+		SetProviderType("linuxdo").
+		SetProviderKey("linuxdo").
+		SetProviderSubject("disabled-linked-subject").
+		SetTargetUserID(userEntity.ID).
+		SetResolvedEmail(userEntity.Email).
+		SetBrowserSessionKey("disabled-linked-browser-session-key").
+		SetUpstreamIdentityClaims(map[string]any{
+			"suggested_display_name": "Disabled Linked User",
+		}).
+		SetLocalFlowState(map[string]any{
+			oauthCompletionResponseKey: map[string]any{
+				"redirect": "/dashboard",
+			},
+		}).
+		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/pending/exchange", nil)
+	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("disabled-linked-browser-session-key")})
+	ginCtx.Request = req
+
+	handler.ExchangePendingOAuthCompletion(ginCtx)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+
+	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
+	require.NoError(t, err)
+	require.Nil(t, storedSession.ConsumedAt)
+}
+
 func TestNormalizePendingOAuthCompletionResponseScrubsLegacyTokenPayload(t *testing.T) {
 	payload := normalizePendingOAuthCompletionResponse(map[string]any{
 		"access_token":  "legacy-access-token",

@@ -464,15 +464,7 @@ func (h *AuthHandler) findOAuthIdentityUser(ctx context.Context, identity servic
 		}
 		return nil, infraerrors.InternalServer("AUTH_IDENTITY_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
 	}
-
-	userEntity, err := client.User.Get(ctx, record.UserID)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, infraerrors.InternalServer("AUTH_IDENTITY_USER_LOOKUP_FAILED", "failed to load auth identity user").WithCause(err)
-	}
-	return userEntity, nil
+	return findActiveUserByID(ctx, client, record.UserID)
 }
 
 func (h *AuthHandler) BindLinuxDoOAuthLogin(c *gin.Context) { h.bindPendingOAuthLogin(c, "linuxdo") }
@@ -997,6 +989,9 @@ func findActiveUserByID(ctx context.Context, client *dbent.Client, userID int64)
 			return nil, nil
 		}
 		return nil, infraerrors.InternalServer("AUTH_IDENTITY_USER_LOOKUP_FAILED", "failed to load auth identity user").WithCause(err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(userEntity.Status), service.StatusActive) {
+		return nil, service.ErrUserNotActive
 	}
 	return userEntity, nil
 }
@@ -1797,6 +1792,11 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 	if canIssueTokenPair {
 		loginUser, err = h.userService.GetByID(c.Request.Context(), *session.TargetUserID)
 		if err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := ensureLoginUserActive(loginUser); err != nil {
 			clearCookies()
 			response.ErrorFrom(c, err)
 			return
