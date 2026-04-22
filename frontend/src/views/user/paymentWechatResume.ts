@@ -19,12 +19,20 @@ function readQueryString(query: LocationQuery, key: string): string {
   return typeof value === 'string' ? value : ''
 }
 
+export function hasWechatResumeQuery(query: LocationQuery): boolean {
+  if (readQueryString(query, 'wechat_resume') === '1') {
+    return true
+  }
+  return readQueryString(query, 'wechat_resume_token') !== ''
+    || readQueryString(query, 'openid') !== ''
+}
+
 export function parseWechatResumeRoute(
   query: LocationQuery,
   plans: SubscriptionPlan[],
   fallbackBalanceAmount: number,
 ): ParsedWechatResumeRoute | null {
-  if (readQueryString(query, 'wechat_resume') !== '1') {
+  if (!hasWechatResumeQuery(query)) {
     return null
   }
 

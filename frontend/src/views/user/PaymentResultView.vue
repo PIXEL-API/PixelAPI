@@ -190,6 +190,15 @@ async function resolveOrderFromResumeToken(resumeToken: string): Promise<Payment
   }
 }
 
+async function resolveOrderFromOutTradeNo(outTradeNo: string): Promise<PaymentOrder | null> {
+  try {
+    const result = await paymentAPI.verifyOrderPublic(outTradeNo)
+    return result.data
+  } catch (_err: unknown) {
+    return null
+  }
+}
+
 function clearStatusRefreshTimer(): void {
   if (statusRefreshTimer !== null) {
     clearTimeout(statusRefreshTimer)
@@ -234,24 +243,19 @@ onMounted(async () => {
     ? route.query.resume_token
     : ''
   const routeOrderId = Number(route.query.order_id) || 0
-  const outTradeNo = String(route.query.out_trade_no || '')
+  let outTradeNo = String(route.query.out_trade_no || '')
   let orderId = 0
 
-  if (resumeToken && typeof window !== 'undefined') {
+  if (typeof window !== 'undefined') {
     const restored = readPaymentRecoverySnapshot(
       window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY),
-      { resumeToken },
+      resumeToken ? { resumeToken } : {},
     )
     if (restored?.orderId) {
       orderId = restored.orderId
     }
-  }
-
-  if (!order.value && resumeToken && orderId) {
-    try {
-      order.value = await paymentStore.pollOrderStatus(orderId)
-    } catch (_err: unknown) {
-      // Fall through to signed resume-token recovery below.
+    if (!outTradeNo && restored?.outTradeNo) {
+      outTradeNo = restored.outTradeNo
     }
   }
 
@@ -269,6 +273,20 @@ onMounted(async () => {
     orderId = routeOrderId
   }
 
+  const hasLegacyFallbackContext = typeof route.query.trade_status === 'string'
+    && route.query.trade_status.trim() !== ''
+  const shouldUsePublicOutTradeNo = !resumeToken && outTradeNo !== '' && (hasLegacyFallbackContext || routeOrderId > 0 || orderId > 0)
+
+  if (!order.value && shouldUsePublicOutTradeNo) {
+    const legacyOrder = await resolveOrderFromOutTradeNo(outTradeNo)
+    if (legacyOrder) {
+      order.value = legacyOrder
+      if (!orderId) {
+        orderId = legacyOrder.id
+      }
+    }
+  }
+
   if (!order.value && !resumeToken && orderId) {
     try {
       order.value = await paymentStore.pollOrderStatus(orderId)
@@ -277,8 +295,6 @@ onMounted(async () => {
     }
   }
 
-  const hasLegacyFallbackContext = typeof route.query.trade_status === 'string'
-    && route.query.trade_status.trim() !== ''
   if (!order.value && !resumeToken && !orderId && outTradeNo && hasLegacyFallbackContext) {
     returnInfo.value = {
       outTradeNo,
@@ -291,6 +307,10 @@ onMounted(async () => {
   const refreshOrder = async (): Promise<PaymentOrder | null> => {
     if (resumeToken) {
       return await resolveOrderFromResumeToken(resumeToken)
+    }
+
+    if (shouldUsePublicOutTradeNo) {
+      return await resolveOrderFromOutTradeNo(outTradeNo)
     }
 
     if (orderId) {
