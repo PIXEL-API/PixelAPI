@@ -125,7 +125,6 @@
                   <Icon name="key" size="sm" />
                   {{ t('nav.apiKeys') }}
                 </router-link>
-
                 <a
                   v-if="authStore.isAdmin"
                   href="https://github.com/Wei-Shaw/sub2api"
@@ -143,7 +142,6 @@
                   </svg>
                   {{ t('nav.github') }}
                 </a>
-
               </div>
 
               <!-- Contact Support (only show if configured) -->
