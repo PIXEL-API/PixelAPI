@@ -45,9 +45,11 @@ const (
 	openAIChatGPTConversationPrepareURL = "https://chatgpt.com/backend-api/f/conversation/prepare"
 	openAIChatGPTChatRequirementsURL    = "https://chatgpt.com/backend-api/sentinel/chat-requirements"
 
-	openAIImageBackendUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-	openAIImageRequirementsDiff = "0fffff"
-	openAIImageLifecycleTimeout = 2 * time.Minute
+	openAIImageBackendUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	openAIImageRequirementsDiff  = "0fffff"
+	openAIImageLifecycleTimeout  = 2 * time.Minute
+	openAIImageMaxDownloadBytes  = 20 << 20 // 20MB per image download
+	openAIImageMaxUploadPartSize = 20 << 20 // 20MB per multipart upload part
 )
 
 type OpenAIImagesCapability string
@@ -218,7 +220,7 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			continue
 		}
 
-		data, err := io.ReadAll(part)
+		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize))
 		_ = part.Close()
 		if err != nil {
 			return fmt.Errorf("read multipart field %s: %w", name, err)
@@ -1952,7 +1954,7 @@ func downloadOpenAIImageBytes(ctx context.Context, client *req.Client, headers h
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, newOpenAIImageStatusError(resp, "download image bytes failed")
 	}
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, openAIImageMaxDownloadBytes))
 }
 
 func handleOpenAIImageBackendError(resp *req.Response) error {
