@@ -2440,10 +2440,7 @@ watch(
 const loadTLSProfiles = async () => {
   try {
     const profiles = await adminAPI.tlsFingerprintProfiles.list()
-    tlsFingerprintProfiles.value = profiles.map(p => ({
-      id: p.id,
-      name: p.name,
-    }))
+    tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name }))
   } catch {
     tlsFingerprintProfiles.value = []
   }
@@ -3312,5 +3309,4 @@ const handleMixedChannelConfirm = async () => {
 const handleMixedChannelCancel = () => {
   clearMixedChannelDialog()
 }
-
 </script>

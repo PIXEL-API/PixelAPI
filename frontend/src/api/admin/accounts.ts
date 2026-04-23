@@ -17,7 +17,7 @@ import type {
   AdminDataPayload,
   AdminDataImportResult,
   CheckMixedChannelRequest,
-  CheckMixedChannelResponse,
+  CheckMixedChannelResponse
 } from '@/types'
 
 /**
@@ -663,7 +663,7 @@ export const accountsAPI = {
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,
-  setPrivacy,
+  setPrivacy
 }
 
 export default accountsAPI

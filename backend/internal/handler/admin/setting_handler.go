@@ -235,9 +235,11 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentCancelRateLimitWindow:           paymentCfg.CancelRateLimitWindow,
 		PaymentCancelRateLimitUnit:             paymentCfg.CancelRateLimitUnit,
 		PaymentCancelRateLimitMode:             paymentCfg.CancelRateLimitMode,
-		ChannelMonitorEnabled:                  settings.ChannelMonitorEnabled,
-		ChannelMonitorDefaultIntervalSeconds:   settings.ChannelMonitorDefaultIntervalSeconds,
-		AvailableChannelsEnabled:               settings.AvailableChannelsEnabled,
+
+		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
+		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
+
+		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
 	}
 	response.Success(c, systemSettingsResponseData(payload, authSourceDefaults))
 }
@@ -1477,9 +1479,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentCancelRateLimitWindow:           updatedPaymentCfg.CancelRateLimitWindow,
 		PaymentCancelRateLimitUnit:             updatedPaymentCfg.CancelRateLimitUnit,
 		PaymentCancelRateLimitMode:             updatedPaymentCfg.CancelRateLimitMode,
-		ChannelMonitorEnabled:                  updatedSettings.ChannelMonitorEnabled,
-		ChannelMonitorDefaultIntervalSeconds:   updatedSettings.ChannelMonitorDefaultIntervalSeconds,
-		AvailableChannelsEnabled:               updatedSettings.AvailableChannelsEnabled,
+
+		ChannelMonitorEnabled:                updatedSettings.ChannelMonitorEnabled,
+		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
+
+		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
 	}
 	response.Success(c, systemSettingsResponseData(payload, updatedAuthSourceDefaults))
 }
