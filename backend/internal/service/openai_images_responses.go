@@ -821,7 +821,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 
 	var (
 		usage        OpenAIUsage
-		imageCount   = parsed.N
+		imageCount   int
 		firstTokenMs *int
 	)
 	if parsed.Stream {
