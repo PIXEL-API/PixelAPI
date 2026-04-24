@@ -4167,14 +4167,14 @@ func reconstructResponseOutputFromSSE(bodyText string) ([]byte, bool) {
 	var output []json.RawMessage
 	if acc.HasContent() {
 		outputJSON, err := json.Marshal(acc.BuildOutput())
-		if err != nil {
-			return nil, false
-		}
-		if err := json.Unmarshal(outputJSON, &output); err != nil {
-			return nil, false
+		if err == nil {
+			_ = json.Unmarshal(outputJSON, &output)
 		}
 	}
 	output = append(output, imageOutputs...)
+	if len(output) == 0 {
+		return nil, false
+	}
 
 	outputJSON, err := json.Marshal(output)
 	if err != nil {
