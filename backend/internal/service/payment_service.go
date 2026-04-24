@@ -170,23 +170,31 @@ type TopUserStat struct {
 // --- Service ---
 
 type PaymentService struct {
-	providerMu      sync.Mutex
-	providersLoaded bool
-	entClient       *dbent.Client
-	registry        *payment.Registry
-	loadBalancer    payment.LoadBalancer
-	redeemService   *RedeemService
-	subscriptionSvc *SubscriptionService
-	configService   *PaymentConfigService
-	userRepo        UserRepository
-	groupRepo       GroupRepository
-	resumeService   *PaymentResumeService
+	providerMu       sync.Mutex
+	providersLoaded  bool
+	entClient        *dbent.Client
+	registry         *payment.Registry
+	loadBalancer     payment.LoadBalancer
+	redeemService    *RedeemService
+	subscriptionSvc  *SubscriptionService
+	configService    *PaymentConfigService
+	userRepo         UserRepository
+	groupRepo        GroupRepository
+	resumeService    *PaymentResumeService
+	affiliateService *AffiliateService
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository) *PaymentService {
 	svc := &PaymentService{entClient: entClient, registry: registry, loadBalancer: newVisibleMethodLoadBalancer(loadBalancer, configService), redeemService: redeemService, subscriptionSvc: subscriptionSvc, configService: configService, userRepo: userRepo, groupRepo: groupRepo}
 	svc.resumeService = psNewPaymentResumeService(configService)
 	return svc
+}
+
+func (s *PaymentService) SetAffiliateService(affiliateService *AffiliateService) {
+	if s == nil {
+		return
+	}
+	s.affiliateService = affiliateService
 }
 
 // --- Provider Registry ---

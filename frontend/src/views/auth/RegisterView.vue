@@ -351,7 +351,8 @@ const formData = reactive({
   email: '',
   password: '',
   promo_code: '',
-  invitation_code: ''
+  invitation_code: '',
+  aff_code: ''
 })
 
 const errors = reactive({
@@ -405,6 +406,10 @@ onMounted(async () => {
         // Validate the promo code from URL
         await validatePromoCodeDebounced(promoParam)
       }
+    }
+    const affParam = (route.query.aff as string) || (route.query.aff_code as string)
+    if (affParam) {
+      formData.aff_code = affParam.trim()
     }
   } catch (error) {
     console.error('Failed to load public settings:', error)
@@ -707,7 +712,8 @@ async function handleRegister(): Promise<void> {
           password: formData.password,
           turnstile_token: turnstileToken.value,
           promo_code: formData.promo_code || undefined,
-          invitation_code: formData.invitation_code || undefined
+          invitation_code: formData.invitation_code || undefined,
+          ...(formData.aff_code ? { aff_code: formData.aff_code } : {})
         })
       )
 
@@ -722,7 +728,8 @@ async function handleRegister(): Promise<void> {
       password: formData.password,
       turnstile_token: turnstileEnabled.value ? turnstileToken.value : undefined,
       promo_code: formData.promo_code || undefined,
-      invitation_code: formData.invitation_code || undefined
+      invitation_code: formData.invitation_code || undefined,
+      ...(formData.aff_code ? { aff_code: formData.aff_code } : {})
     })
 
     // Show success toast
