@@ -198,6 +198,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/affiliate',
+    name: 'Affiliate',
+    component: () => import('@/views/user/AffiliateView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Affiliate',
+      titleKey: 'affiliate.title',
+      descriptionKey: 'affiliate.description'
+    }
+  },
+  {
     path: '/available-channels',
     name: 'UserAvailableChannels',
     component: () => import('@/views/user/AvailableChannelsView.vue'),
