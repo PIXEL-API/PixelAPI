@@ -1176,7 +1176,9 @@ func TestFilterCodexInput_DropsReasoningItemsRegardlessOfPreserveReferences(t *t
 			for _, raw := range filtered {
 				item, ok := raw.(map[string]any)
 				require.True(t, ok)
-				gotTypes[item["type"].(string)]++
+				typ, ok := item["type"].(string)
+				require.True(t, ok)
+				gotTypes[typ]++
 			}
 			require.Equal(t, 1, gotTypes["message"])
 			require.Equal(t, 1, gotTypes["function_call"])
