@@ -646,7 +646,7 @@ export interface UpdateGroupRequest {
 // ==================== Account & Proxy Types ====================
 
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity'
-export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock'
+export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type AccountShareMode = 'private' | 'public'
 export type AccountShareStatus = 'pending' | 'approved' | 'suspended'
 export type AccountStatus = 'active' | 'inactive' | 'disabled' | 'error'

@@ -147,9 +147,10 @@ type SystemSettings struct {
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
 	// Gateway forwarding behavior
-	EnableFingerprintUnification bool `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough    bool `json:"enable_metadata_passthrough"`
-	EnableCCHSigning             bool `json:"enable_cch_signing"`
+	EnableFingerprintUnification       bool `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough          bool `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                   bool `json:"enable_cch_signing"`
+	EnableAnthropicCacheTTL1hInjection bool `json:"enable_anthropic_cache_ttl_1h_injection"`
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool `json:"web_search_emulation_enabled"`
@@ -203,6 +204,9 @@ type SystemSettings struct {
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled bool `json:"affiliate_enabled"`
+
+	// OpenAI fast/flex policy
+	OpenAIFastPolicySettings *OpenAIFastPolicySettings `json:"openai_fast_policy_settings,omitempty"`
 }
 
 type DefaultSubscriptionSetting struct {
@@ -297,6 +301,22 @@ type BetaPolicyRule struct {
 // BetaPolicySettings Beta 策略配置 DTO
 type BetaPolicySettings struct {
 	Rules []BetaPolicyRule `json:"rules"`
+}
+
+// OpenAIFastPolicyRule OpenAI fast/flex 策略规则 DTO
+type OpenAIFastPolicyRule struct {
+	ServiceTier          string   `json:"service_tier"`
+	Action               string   `json:"action"`
+	Scope                string   `json:"scope"`
+	ErrorMessage         string   `json:"error_message,omitempty"`
+	ModelWhitelist       []string `json:"model_whitelist,omitempty"`
+	FallbackAction       string   `json:"fallback_action,omitempty"`
+	FallbackErrorMessage string   `json:"fallback_error_message,omitempty"`
+}
+
+// OpenAIFastPolicySettings OpenAI fast 策略配置 DTO
+type OpenAIFastPolicySettings struct {
+	Rules []OpenAIFastPolicyRule `json:"rules"`
 }
 
 // ParseCustomMenuItems parses a JSON string into a slice of CustomMenuItem.
