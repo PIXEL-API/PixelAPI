@@ -2632,6 +2632,243 @@ func (r *usageLogRepository) GetUserModelStats(ctx context.Context, userID int64
 	return results, nil
 }
 
+// GetUserAccountSharingDashboard returns owned-account self usage and external public-share settlement stats.
+func (r *usageLogRepository) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (*usagestats.AccountSharingDashboardStats, error) {
+	if userID <= 0 {
+		return nil, fmt.Errorf("user id must be positive")
+	}
+	if startTime.IsZero() {
+		startTime = time.Now().AddDate(0, 0, -7)
+	}
+	if endTime.IsZero() {
+		endTime = time.Now()
+	}
+
+	accounts, summary, err := r.getUserAccountSharingAccountStats(ctx, userID, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	trend, err := r.getUserAccountSharingTrend(ctx, userID, startTime, endTime, granularity)
+	if err != nil {
+		return nil, err
+	}
+
+	endDisplay := endTime
+	if endDisplay.After(startTime) {
+		endDisplay = endDisplay.Add(-time.Nanosecond)
+	}
+	return &usagestats.AccountSharingDashboardStats{
+		Summary:     summary,
+		Accounts:    accounts,
+		Trend:       trend,
+		StartDate:   startTime.Format("2006-01-02"),
+		EndDate:     endDisplay.Format("2006-01-02"),
+		Granularity: granularity,
+	}, nil
+}
+
+func (r *usageLogRepository) getUserAccountSharingAccountStats(ctx context.Context, userID int64, startTime, endTime time.Time) ([]usagestats.AccountSharingAccountStat, usagestats.AccountSharingSummary, error) {
+	query := `
+		WITH self_usage AS (
+			SELECT
+				ul.account_id,
+				COUNT(*) AS self_requests,
+				COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) AS self_tokens,
+				COALESCE(SUM(ul.actual_cost), 0) AS self_actual_cost,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS self_account_cost
+			FROM usage_logs ul
+			JOIN accounts a ON a.id = ul.account_id
+			WHERE a.owner_user_id = $1
+			  AND ul.user_id = $1
+			  AND ul.created_at >= $2
+			  AND ul.created_at < $3
+			GROUP BY ul.account_id
+		),
+		external_usage AS (
+			SELECT
+				account_id,
+				COUNT(*) AS external_requests,
+				COALESCE(SUM(consumer_charge), 0) AS external_consumer_charge,
+				COALESCE(SUM(account_cost), 0) AS external_account_cost,
+				COALESCE(SUM(owner_credit), 0) AS external_owner_credit,
+				COALESCE(SUM(platform_fee), 0) AS external_platform_fee
+			FROM account_share_settlement_entries
+			WHERE owner_user_id = $1
+			  AND consumer_user_id <> owner_user_id
+			  AND status = 'applied'
+			  AND created_at >= $2
+			  AND created_at < $3
+			GROUP BY account_id
+		)
+		SELECT
+			a.id,
+			a.name,
+			a.platform,
+			a.share_mode,
+			a.share_status,
+			COALESCE(s.self_requests, 0),
+			COALESCE(s.self_tokens, 0),
+			COALESCE(s.self_actual_cost, 0),
+			COALESCE(s.self_account_cost, 0),
+			COALESCE(e.external_requests, 0),
+			COALESCE(e.external_consumer_charge, 0),
+			COALESCE(e.external_account_cost, 0),
+			COALESCE(e.external_owner_credit, 0),
+			COALESCE(e.external_platform_fee, 0)
+		FROM accounts a
+		LEFT JOIN self_usage s ON s.account_id = a.id
+		LEFT JOIN external_usage e ON e.account_id = a.id
+		WHERE a.owner_user_id = $1
+		  AND a.deleted_at IS NULL
+		ORDER BY
+			(COALESCE(s.self_account_cost, 0) + COALESCE(e.external_account_cost, 0)) DESC,
+			a.created_at DESC,
+			a.id DESC
+	`
+
+	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime)
+	if err != nil {
+		return nil, usagestats.AccountSharingSummary{}, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	accounts := make([]usagestats.AccountSharingAccountStat, 0)
+	summary := usagestats.AccountSharingSummary{}
+	for rows.Next() {
+		var item usagestats.AccountSharingAccountStat
+		if err := rows.Scan(
+			&item.AccountID,
+			&item.Name,
+			&item.Platform,
+			&item.ShareMode,
+			&item.ShareStatus,
+			&item.SelfRequests,
+			&item.SelfTokens,
+			&item.SelfActualCost,
+			&item.SelfAccountCost,
+			&item.ExternalRequests,
+			&item.ExternalConsumerCharge,
+			&item.ExternalAccountCost,
+			&item.ExternalOwnerCredit,
+			&item.ExternalPlatformFee,
+		); err != nil {
+			return nil, usagestats.AccountSharingSummary{}, err
+		}
+		accounts = append(accounts, item)
+		summary.OwnedAccounts++
+		switch {
+		case item.ShareMode == service.AccountShareModePrivate:
+			summary.PrivateAccounts++
+		case item.ShareMode == service.AccountShareModePublic && item.ShareStatus == service.AccountShareStatusPending:
+			summary.PublicPendingAccounts++
+		case item.ShareMode == service.AccountShareModePublic && item.ShareStatus == service.AccountShareStatusApproved:
+			summary.PublicApprovedAccounts++
+		case item.ShareMode == service.AccountShareModePublic && item.ShareStatus == service.AccountShareStatusSuspended:
+			summary.PublicSuspendedAccounts++
+		}
+		summary.SelfRequests += item.SelfRequests
+		summary.SelfTokens += item.SelfTokens
+		summary.SelfActualCost += item.SelfActualCost
+		summary.SelfAccountCost += item.SelfAccountCost
+		summary.ExternalRequests += item.ExternalRequests
+		summary.ExternalConsumerCharge += item.ExternalConsumerCharge
+		summary.ExternalAccountCost += item.ExternalAccountCost
+		summary.ExternalOwnerCredit += item.ExternalOwnerCredit
+		summary.ExternalPlatformFee += item.ExternalPlatformFee
+	}
+	if err := rows.Err(); err != nil {
+		return nil, usagestats.AccountSharingSummary{}, err
+	}
+	summary.TotalAccountCost = summary.SelfAccountCost + summary.ExternalAccountCost
+	summary.BalanceNetChange = summary.ExternalOwnerCredit - summary.SelfActualCost
+	return accounts, summary, nil
+}
+
+func (r *usageLogRepository) getUserAccountSharingTrend(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (results []usagestats.AccountSharingTrendPoint, err error) {
+	dateFormat := safeDateFormat(granularity)
+	query := fmt.Sprintf(`
+		WITH self_usage AS (
+			SELECT
+				TO_CHAR(ul.created_at, '%s') AS date,
+				COUNT(*) AS self_requests,
+				COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) AS self_tokens,
+				COALESCE(SUM(ul.actual_cost), 0) AS self_actual_cost,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS self_account_cost
+			FROM usage_logs ul
+			JOIN accounts a ON a.id = ul.account_id
+			WHERE a.owner_user_id = $1
+			  AND ul.user_id = $1
+			  AND ul.created_at >= $2
+			  AND ul.created_at < $3
+			GROUP BY date
+		),
+		external_usage AS (
+			SELECT
+				TO_CHAR(created_at, '%s') AS date,
+				COUNT(*) AS external_requests,
+				COALESCE(SUM(consumer_charge), 0) AS external_consumer_charge,
+				COALESCE(SUM(account_cost), 0) AS external_account_cost,
+				COALESCE(SUM(owner_credit), 0) AS external_owner_credit,
+				COALESCE(SUM(platform_fee), 0) AS external_platform_fee
+			FROM account_share_settlement_entries
+			WHERE owner_user_id = $1
+			  AND consumer_user_id <> owner_user_id
+			  AND status = 'applied'
+			  AND created_at >= $2
+			  AND created_at < $3
+			GROUP BY date
+		)
+		SELECT
+			COALESCE(s.date, e.date) AS date,
+			COALESCE(s.self_requests, 0),
+			COALESCE(s.self_tokens, 0),
+			COALESCE(s.self_actual_cost, 0),
+			COALESCE(s.self_account_cost, 0),
+			COALESCE(e.external_requests, 0),
+			COALESCE(e.external_consumer_charge, 0),
+			COALESCE(e.external_account_cost, 0),
+			COALESCE(e.external_owner_credit, 0),
+			COALESCE(e.external_platform_fee, 0)
+		FROM self_usage s
+		FULL OUTER JOIN external_usage e ON e.date = s.date
+		ORDER BY date ASC
+	`, dateFormat, dateFormat)
+
+	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	for rows.Next() {
+		var item usagestats.AccountSharingTrendPoint
+		if err := rows.Scan(
+			&item.Date,
+			&item.SelfRequests,
+			&item.SelfTokens,
+			&item.SelfActualCost,
+			&item.SelfAccountCost,
+			&item.ExternalRequests,
+			&item.ExternalConsumerCharge,
+			&item.ExternalAccountCost,
+			&item.ExternalOwnerCredit,
+			&item.ExternalPlatformFee,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // UsageLogFilters represents filters for usage log queries
 type UsageLogFilters = usagestats.UsageLogFilters
 

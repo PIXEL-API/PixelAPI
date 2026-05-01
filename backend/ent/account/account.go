@@ -33,6 +33,14 @@ const (
 	FieldCredentials = "credentials"
 	// FieldExtra holds the string denoting the extra field in the database.
 	FieldExtra = "extra"
+	// FieldOwnerUserID holds the string denoting the owner_user_id field in the database.
+	FieldOwnerUserID = "owner_user_id"
+	// FieldShareMode holds the string denoting the share_mode field in the database.
+	FieldShareMode = "share_mode"
+	// FieldShareStatus holds the string denoting the share_status field in the database.
+	FieldShareStatus = "share_status"
+	// FieldSharePolicyID holds the string denoting the share_policy_id field in the database.
+	FieldSharePolicyID = "share_policy_id"
 	// FieldProxyID holds the string denoting the proxy_id field in the database.
 	FieldProxyID = "proxy_id"
 	// FieldConcurrency holds the string denoting the concurrency field in the database.
@@ -75,6 +83,8 @@ const (
 	EdgeGroups = "groups"
 	// EdgeProxy holds the string denoting the proxy edge name in mutations.
 	EdgeProxy = "proxy"
+	// EdgeOwner holds the string denoting the owner edge name in mutations.
+	EdgeOwner = "owner"
 	// EdgeUsageLogs holds the string denoting the usage_logs edge name in mutations.
 	EdgeUsageLogs = "usage_logs"
 	// EdgeAccountGroups holds the string denoting the account_groups edge name in mutations.
@@ -93,6 +103,13 @@ const (
 	ProxyInverseTable = "proxies"
 	// ProxyColumn is the table column denoting the proxy relation/edge.
 	ProxyColumn = "proxy_id"
+	// OwnerTable is the table that holds the owner relation/edge.
+	OwnerTable = "accounts"
+	// OwnerInverseTable is the table name for the User entity.
+	// It exists in this package in order to avoid circular dependency with the "user" package.
+	OwnerInverseTable = "users"
+	// OwnerColumn is the table column denoting the owner relation/edge.
+	OwnerColumn = "owner_user_id"
 	// UsageLogsTable is the table that holds the usage_logs relation/edge.
 	UsageLogsTable = "usage_logs"
 	// UsageLogsInverseTable is the table name for the UsageLog entity.
@@ -121,6 +138,10 @@ var Columns = []string{
 	FieldType,
 	FieldCredentials,
 	FieldExtra,
+	FieldOwnerUserID,
+	FieldShareMode,
+	FieldShareStatus,
+	FieldSharePolicyID,
 	FieldProxyID,
 	FieldConcurrency,
 	FieldLoadFactor,
@@ -182,6 +203,14 @@ var (
 	DefaultCredentials func() map[string]interface{}
 	// DefaultExtra holds the default value on creation for the "extra" field.
 	DefaultExtra func() map[string]interface{}
+	// DefaultShareMode holds the default value on creation for the "share_mode" field.
+	DefaultShareMode string
+	// ShareModeValidator is a validator for the "share_mode" field. It is called by the builders before save.
+	ShareModeValidator func(string) error
+	// DefaultShareStatus holds the default value on creation for the "share_status" field.
+	DefaultShareStatus string
+	// ShareStatusValidator is a validator for the "share_status" field. It is called by the builders before save.
+	ShareStatusValidator func(string) error
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
 	DefaultConcurrency int
 	// DefaultPriority holds the default value on creation for the "priority" field.
@@ -241,6 +270,26 @@ func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
 // ByType orders the results by the type field.
 func ByType(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldType, opts...).ToFunc()
+}
+
+// ByOwnerUserID orders the results by the owner_user_id field.
+func ByOwnerUserID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOwnerUserID, opts...).ToFunc()
+}
+
+// ByShareMode orders the results by the share_mode field.
+func ByShareMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShareMode, opts...).ToFunc()
+}
+
+// ByShareStatus orders the results by the share_status field.
+func ByShareStatus(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShareStatus, opts...).ToFunc()
+}
+
+// BySharePolicyID orders the results by the share_policy_id field.
+func BySharePolicyID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSharePolicyID, opts...).ToFunc()
 }
 
 // ByProxyID orders the results by the proxy_id field.
@@ -359,6 +408,13 @@ func ByProxyField(field string, opts ...sql.OrderTermOption) OrderOption {
 	}
 }
 
+// ByOwnerField orders the results by owner field.
+func ByOwnerField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newOwnerStep(), sql.OrderByField(field, opts...))
+	}
+}
+
 // ByUsageLogsCount orders the results by usage_logs count.
 func ByUsageLogsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -398,6 +454,13 @@ func newProxyStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ProxyInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, false, ProxyTable, ProxyColumn),
+	)
+}
+func newOwnerStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(OwnerInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, true, OwnerTable, OwnerColumn),
 	)
 }
 func newUsageLogsStep() *sqlgraph.Step {

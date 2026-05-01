@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
@@ -560,6 +561,21 @@ func (_u *UserUpdate) AddPaymentOrders(v ...*PaymentOrder) *UserUpdate {
 	return _u.AddPaymentOrderIDs(ids...)
 }
 
+// AddOwnedAccountIDs adds the "owned_accounts" edge to the Account entity by IDs.
+func (_u *UserUpdate) AddOwnedAccountIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddOwnedAccountIDs(ids...)
+	return _u
+}
+
+// AddOwnedAccounts adds the "owned_accounts" edges to the Account entity.
+func (_u *UserUpdate) AddOwnedAccounts(v ...*Account) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddOwnedAccountIDs(ids...)
+}
+
 // AddAuthIdentityIDs adds the "auth_identities" edge to the AuthIdentity entity by IDs.
 func (_u *UserUpdate) AddAuthIdentityIDs(ids ...int64) *UserUpdate {
 	_u.mutation.AddAuthIdentityIDs(ids...)
@@ -803,6 +819,27 @@ func (_u *UserUpdate) RemovePaymentOrders(v ...*PaymentOrder) *UserUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemovePaymentOrderIDs(ids...)
+}
+
+// ClearOwnedAccounts clears all "owned_accounts" edges to the Account entity.
+func (_u *UserUpdate) ClearOwnedAccounts() *UserUpdate {
+	_u.mutation.ClearOwnedAccounts()
+	return _u
+}
+
+// RemoveOwnedAccountIDs removes the "owned_accounts" edge to Account entities by IDs.
+func (_u *UserUpdate) RemoveOwnedAccountIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveOwnedAccountIDs(ids...)
+	return _u
+}
+
+// RemoveOwnedAccounts removes "owned_accounts" edges to Account entities.
+func (_u *UserUpdate) RemoveOwnedAccounts(v ...*Account) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveOwnedAccountIDs(ids...)
 }
 
 // ClearAuthIdentities clears all "auth_identities" edges to the AuthIdentity entity.
@@ -1497,6 +1534,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.OwnedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedAccountsTable,
+			Columns: []string{user.OwnedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedOwnedAccountsIDs(); len(nodes) > 0 && !_u.mutation.OwnedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedAccountsTable,
+			Columns: []string{user.OwnedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnedAccountsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedAccountsTable,
+			Columns: []string{user.OwnedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _u.mutation.AuthIdentitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
@@ -2128,6 +2210,21 @@ func (_u *UserUpdateOne) AddPaymentOrders(v ...*PaymentOrder) *UserUpdateOne {
 	return _u.AddPaymentOrderIDs(ids...)
 }
 
+// AddOwnedAccountIDs adds the "owned_accounts" edge to the Account entity by IDs.
+func (_u *UserUpdateOne) AddOwnedAccountIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddOwnedAccountIDs(ids...)
+	return _u
+}
+
+// AddOwnedAccounts adds the "owned_accounts" edges to the Account entity.
+func (_u *UserUpdateOne) AddOwnedAccounts(v ...*Account) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddOwnedAccountIDs(ids...)
+}
+
 // AddAuthIdentityIDs adds the "auth_identities" edge to the AuthIdentity entity by IDs.
 func (_u *UserUpdateOne) AddAuthIdentityIDs(ids ...int64) *UserUpdateOne {
 	_u.mutation.AddAuthIdentityIDs(ids...)
@@ -2371,6 +2468,27 @@ func (_u *UserUpdateOne) RemovePaymentOrders(v ...*PaymentOrder) *UserUpdateOne 
 		ids[i] = v[i].ID
 	}
 	return _u.RemovePaymentOrderIDs(ids...)
+}
+
+// ClearOwnedAccounts clears all "owned_accounts" edges to the Account entity.
+func (_u *UserUpdateOne) ClearOwnedAccounts() *UserUpdateOne {
+	_u.mutation.ClearOwnedAccounts()
+	return _u
+}
+
+// RemoveOwnedAccountIDs removes the "owned_accounts" edge to Account entities by IDs.
+func (_u *UserUpdateOne) RemoveOwnedAccountIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveOwnedAccountIDs(ids...)
+	return _u
+}
+
+// RemoveOwnedAccounts removes "owned_accounts" edges to Account entities.
+func (_u *UserUpdateOne) RemoveOwnedAccounts(v ...*Account) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveOwnedAccountIDs(ids...)
 }
 
 // ClearAuthIdentities clears all "auth_identities" edges to the AuthIdentity entity.
@@ -3088,6 +3206,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(paymentorder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.OwnedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedAccountsTable,
+			Columns: []string{user.OwnedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedOwnedAccountsIDs(); len(nodes) > 0 && !_u.mutation.OwnedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedAccountsTable,
+			Columns: []string{user.OwnedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnedAccountsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedAccountsTable,
+			Columns: []string{user.OwnedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

@@ -528,46 +528,48 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 
 // GatewayService handles API gateway operations
 type GatewayService struct {
-	accountRepo           AccountRepository
-	groupRepo             GroupRepository
-	usageLogRepo          UsageLogRepository
-	usageBillingRepo      UsageBillingRepository
-	userRepo              UserRepository
-	userSubRepo           UserSubscriptionRepository
-	userGroupRateRepo     UserGroupRateRepository
-	cache                 GatewayCache
-	digestStore           *DigestSessionStore
-	cfg                   *config.Config
-	schedulerSnapshot     *SchedulerSnapshotService
-	billingService        *BillingService
-	rateLimitService      *RateLimitService
-	billingCacheService   *BillingCacheService
-	identityService       *IdentityService
-	httpUpstream          HTTPUpstream
-	deferredService       *DeferredService
-	concurrencyService    *ConcurrencyService
-	claudeTokenProvider   *ClaudeTokenProvider
-	sessionLimitCache     SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
-	rpmCache              RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
-	userGroupRateResolver *userGroupRateResolver
-	userGroupRateCache    *gocache.Cache
-	userGroupRateSF       singleflight.Group
-	modelsListCache       *gocache.Cache
-	modelsListCacheTTL    time.Duration
-	settingService        *SettingService
-	responseHeaderFilter  *responseheaders.CompiledHeaderFilter
-	debugModelRouting     atomic.Bool
-	debugClaudeMimic      atomic.Bool
-	channelService        *ChannelService
-	resolver              *ModelPricingResolver
-	debugGatewayBodyFile  atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
-	tlsFPProfileService   *TLSFingerprintProfileService
-	balanceNotifyService  *BalanceNotifyService
+	accountRepo            AccountRepository
+	accountSharePolicyRepo AccountSharePolicyRepository
+	groupRepo              GroupRepository
+	usageLogRepo           UsageLogRepository
+	usageBillingRepo       UsageBillingRepository
+	userRepo               UserRepository
+	userSubRepo            UserSubscriptionRepository
+	userGroupRateRepo      UserGroupRateRepository
+	cache                  GatewayCache
+	digestStore            *DigestSessionStore
+	cfg                    *config.Config
+	schedulerSnapshot      *SchedulerSnapshotService
+	billingService         *BillingService
+	rateLimitService       *RateLimitService
+	billingCacheService    *BillingCacheService
+	identityService        *IdentityService
+	httpUpstream           HTTPUpstream
+	deferredService        *DeferredService
+	concurrencyService     *ConcurrencyService
+	claudeTokenProvider    *ClaudeTokenProvider
+	sessionLimitCache      SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
+	rpmCache               RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
+	userGroupRateResolver  *userGroupRateResolver
+	userGroupRateCache     *gocache.Cache
+	userGroupRateSF        singleflight.Group
+	modelsListCache        *gocache.Cache
+	modelsListCacheTTL     time.Duration
+	settingService         *SettingService
+	responseHeaderFilter   *responseheaders.CompiledHeaderFilter
+	debugModelRouting      atomic.Bool
+	debugClaudeMimic       atomic.Bool
+	channelService         *ChannelService
+	resolver               *ModelPricingResolver
+	debugGatewayBodyFile   atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
+	tlsFPProfileService    *TLSFingerprintProfileService
+	balanceNotifyService   *BalanceNotifyService
 }
 
 // NewGatewayService creates a new GatewayService
 func NewGatewayService(
 	accountRepo AccountRepository,
+	accountSharePolicyRepo AccountSharePolicyRepository,
 	groupRepo GroupRepository,
 	usageLogRepo UsageLogRepository,
 	usageBillingRepo UsageBillingRepository,
@@ -598,36 +600,37 @@ func NewGatewayService(
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
 
 	svc := &GatewayService{
-		accountRepo:          accountRepo,
-		groupRepo:            groupRepo,
-		usageLogRepo:         usageLogRepo,
-		usageBillingRepo:     usageBillingRepo,
-		userRepo:             userRepo,
-		userSubRepo:          userSubRepo,
-		userGroupRateRepo:    userGroupRateRepo,
-		cache:                cache,
-		digestStore:          digestStore,
-		cfg:                  cfg,
-		schedulerSnapshot:    schedulerSnapshot,
-		concurrencyService:   concurrencyService,
-		billingService:       billingService,
-		rateLimitService:     rateLimitService,
-		billingCacheService:  billingCacheService,
-		identityService:      identityService,
-		httpUpstream:         httpUpstream,
-		deferredService:      deferredService,
-		claudeTokenProvider:  claudeTokenProvider,
-		sessionLimitCache:    sessionLimitCache,
-		rpmCache:             rpmCache,
-		userGroupRateCache:   gocache.New(userGroupRateTTL, time.Minute),
-		settingService:       settingService,
-		modelsListCache:      gocache.New(modelsListTTL, time.Minute),
-		modelsListCacheTTL:   modelsListTTL,
-		responseHeaderFilter: compileResponseHeaderFilter(cfg),
-		tlsFPProfileService:  tlsFPProfileService,
-		channelService:       channelService,
-		resolver:             resolver,
-		balanceNotifyService: balanceNotifyService,
+		accountRepo:            accountRepo,
+		accountSharePolicyRepo: accountSharePolicyRepo,
+		groupRepo:              groupRepo,
+		usageLogRepo:           usageLogRepo,
+		usageBillingRepo:       usageBillingRepo,
+		userRepo:               userRepo,
+		userSubRepo:            userSubRepo,
+		userGroupRateRepo:      userGroupRateRepo,
+		cache:                  cache,
+		digestStore:            digestStore,
+		cfg:                    cfg,
+		schedulerSnapshot:      schedulerSnapshot,
+		concurrencyService:     concurrencyService,
+		billingService:         billingService,
+		rateLimitService:       rateLimitService,
+		billingCacheService:    billingCacheService,
+		identityService:        identityService,
+		httpUpstream:           httpUpstream,
+		deferredService:        deferredService,
+		claudeTokenProvider:    claudeTokenProvider,
+		sessionLimitCache:      sessionLimitCache,
+		rpmCache:               rpmCache,
+		userGroupRateCache:     gocache.New(userGroupRateTTL, time.Minute),
+		settingService:         settingService,
+		modelsListCache:        gocache.New(modelsListTTL, time.Minute),
+		modelsListCacheTTL:     modelsListTTL,
+		responseHeaderFilter:   compileResponseHeaderFilter(cfg),
+		tlsFPProfileService:    tlsFPProfileService,
+		channelService:         channelService,
+		resolver:               resolver,
+		balanceNotifyService:   balanceNotifyService,
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -2098,6 +2101,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	if s.schedulerSnapshot != nil {
 		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err == nil {
+			accounts = FilterAccountsVisibleToRequestUser(ctx, accounts)
 			slog.Debug("account_scheduling_list_snapshot",
 				"group_id", derefGroupID(groupID),
 				"platform", platform,
@@ -2136,6 +2140,9 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		}
 		filtered := make([]Account, 0, len(accounts))
 		for _, acc := range accounts {
+			if !IsAccountVisibleToRequestUser(ctx, &acc) {
+				continue
+			}
 			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
 				continue
 			}
@@ -2175,6 +2182,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 			"error", err)
 		return nil, useMixed, err
 	}
+	accounts = FilterAccountsVisibleToRequestUser(ctx, accounts)
 	slog.Debug("account_scheduling_list_single",
 		"group_id", derefGroupID(groupID),
 		"platform", platform,
@@ -2559,14 +2567,32 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 }
 
 func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
+	var (
+		account *Account
+		err     error
+	)
 	if s.schedulerSnapshot != nil {
-		return s.schedulerSnapshot.GetAccount(ctx, accountID)
+		account, err = s.schedulerSnapshot.GetAccount(ctx, accountID)
+	} else {
+		account, err = s.accountRepo.GetByID(ctx, accountID)
 	}
-	return s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return account, err
+	}
+	if !IsAccountVisibleToRequestUser(ctx, account) {
+		return nil, ErrAccountNotFound
+	}
+	return account, nil
 }
 
 func (s *GatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
-	if account == nil || s.schedulerSnapshot == nil {
+	if account == nil {
+		return account, nil
+	}
+	if s.schedulerSnapshot == nil {
+		if !IsAccountVisibleToRequestUser(ctx, account) {
+			return nil, ErrAccountNotFound
+		}
 		return account, nil
 	}
 	hydrated, err := s.schedulerSnapshot.GetAccount(ctx, account.ID)
@@ -2575,6 +2601,9 @@ func (s *GatewayService) hydrateSelectedAccount(ctx context.Context, account *Ac
 	}
 	if hydrated == nil {
 		return nil, fmt.Errorf("selected gateway account %d not found during hydration", account.ID)
+	}
+	if !IsAccountVisibleToRequestUser(ctx, hydrated) {
+		return nil, ErrAccountNotFound
 	}
 	return hydrated, nil
 }
@@ -7594,6 +7623,7 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		AccountID:          p.Account.ID,
 		AccountType:        p.Account.Type,
 		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
+		UsageLog:           usageLog,
 	}
 	if usageLog != nil {
 		cmd.Model = usageLog.Model
@@ -7611,6 +7641,9 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		}
 		if usageLog.SubscriptionID != nil {
 			cmd.SubscriptionID = usageLog.SubscriptionID
+		}
+		if usageLog.GroupID != nil {
+			cmd.GroupID = usageLog.GroupID
 		}
 	}
 
@@ -7639,6 +7672,56 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	return cmd
 }
 
+func attachAccountShareBillingSnapshot(ctx context.Context, cmd *UsageBillingCommand, p *postUsageBillingParams, deps *billingDeps) error {
+	if cmd == nil || p == nil || p.Account == nil || p.User == nil {
+		return nil
+	}
+	account := p.Account
+	shareMode := NormalizeAccountShareMode(account.ShareMode)
+	shareStatus := NormalizeAccountShareStatus(account.ShareStatus)
+
+	cmd.ShareSnapshotCaptured = true
+	cmd.ShareModeSnapshot = shareMode
+	cmd.ShareStatusSnapshot = shareStatus
+	cmd.SharePlatform = strings.TrimSpace(account.Platform)
+	if account.OwnerUserID != nil && *account.OwnerUserID > 0 {
+		ownerUserID := *account.OwnerUserID
+		cmd.ShareOwnerUserID = &ownerUserID
+	}
+	if account.SharePolicyID != nil && *account.SharePolicyID > 0 {
+		sharePolicyID := *account.SharePolicyID
+		cmd.SharePolicyID = &sharePolicyID
+	}
+
+	if account.OwnerUserID == nil || *account.OwnerUserID <= 0 || *account.OwnerUserID == p.User.ID {
+		return nil
+	}
+	if shareMode != AccountShareModePublic || shareStatus != AccountShareStatusApproved {
+		return nil
+	}
+
+	if deps == nil || deps.accountSharePolicyRepo == nil {
+		return nil
+	}
+
+	var groupID *int64
+	if p.APIKey != nil {
+		groupID = p.APIKey.GroupID
+	}
+	policy, err := deps.accountSharePolicyRepo.ResolveEnabledAccountSharePolicy(ctx, account.ID, groupID, account.Platform, account.SharePolicyID)
+	if err != nil {
+		return fmt.Errorf("resolve account share policy snapshot: %w", err)
+	}
+	if policy == nil || policy.OwnerShareRatio <= 0 {
+		return nil
+	}
+	sharePolicyID := policy.ID
+	cmd.SharePolicyID = &sharePolicyID
+	cmd.SharePolicyVersion = policy.Version
+	cmd.OwnerShareRatio = policy.OwnerShareRatio
+	return nil
+}
+
 func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog, p *postUsageBillingParams, deps *billingDeps, repo UsageBillingRepository) (bool, error) {
 	if p == nil || deps == nil {
 		return false, nil
@@ -7652,6 +7735,9 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 
 	billingCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
+	if err := attachAccountShareBillingSnapshot(billingCtx, cmd, p, deps); err != nil {
+		return false, err
+	}
 
 	result, err := repo.Apply(billingCtx, cmd)
 	if err != nil {
@@ -7790,22 +7876,24 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 
 // billingDeps 扣费逻辑依赖的服务（由各 gateway service 提供）
 type billingDeps struct {
-	accountRepo          AccountRepository
-	userRepo             UserRepository
-	userSubRepo          UserSubscriptionRepository
-	billingCacheService  *BillingCacheService
-	deferredService      *DeferredService
-	balanceNotifyService *BalanceNotifyService
+	accountRepo            AccountRepository
+	accountSharePolicyRepo AccountSharePolicyRepository
+	userRepo               UserRepository
+	userSubRepo            UserSubscriptionRepository
+	billingCacheService    *BillingCacheService
+	deferredService        *DeferredService
+	balanceNotifyService   *BalanceNotifyService
 }
 
 func (s *GatewayService) billingDeps() *billingDeps {
 	return &billingDeps{
-		accountRepo:          s.accountRepo,
-		userRepo:             s.userRepo,
-		userSubRepo:          s.userSubRepo,
-		billingCacheService:  s.billingCacheService,
-		deferredService:      s.deferredService,
-		balanceNotifyService: s.balanceNotifyService,
+		accountRepo:            s.accountRepo,
+		accountSharePolicyRepo: s.accountSharePolicyRepo,
+		userRepo:               s.userRepo,
+		userSubRepo:            s.userSubRepo,
+		billingCacheService:    s.billingCacheService,
+		deferredService:        s.deferredService,
+		balanceNotifyService:   s.balanceNotifyService,
 	}
 }
 

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ type Group struct {
 	IsExclusive    bool
 	Status         string
 	Hydrated       bool // indicates the group was loaded from a trusted repository source
+	OwnerUserID    *int64
+	Scope          string
 
 	SubscriptionType    string
 	DailyLimitUSD       *float64
@@ -78,6 +81,13 @@ func (g *Group) IsActive() bool {
 
 func (g *Group) IsSubscriptionType() bool {
 	return g.SubscriptionType == SubscriptionTypeSubscription
+}
+
+func (g *Group) IsUserPrivateScope() bool {
+	if g == nil {
+		return false
+	}
+	return NormalizeGroupScope(g.Scope) == GroupScopeUserPrivate
 }
 
 func (g *Group) HasDailyLimit() bool {
@@ -161,4 +171,31 @@ func matchModelPattern(pattern, model string) bool {
 	}
 
 	return false
+}
+
+func NormalizeGroupScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case GroupScopeUserPrivate:
+		return GroupScopeUserPrivate
+	default:
+		return GroupScopePublic
+	}
+}
+
+func SupportedUserPrivateGroupPlatforms() []string {
+	return []string{PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity}
+}
+
+func IsSupportedUserPrivateGroupPlatform(platform string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(platform))
+	for _, supported := range SupportedUserPrivateGroupPlatforms() {
+		if normalized == supported {
+			return true
+		}
+	}
+	return false
+}
+
+func PrivateGroupName(userID int64, platform string) string {
+	return fmt.Sprintf("private-u%d-%s", userID, strings.ToLower(strings.TrimSpace(platform)))
 }

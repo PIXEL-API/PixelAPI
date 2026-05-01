@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -10,8 +12,16 @@ import (
 )
 
 var (
-	ErrAccountNotFound = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
-	ErrAccountNilInput = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrAccountNotFound                        = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
+	ErrAccountNilInput                        = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrOwnedAccountTypeNotAllowed             = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
+	ErrOwnedAccountCredentialsInvalid         = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
+	ErrOwnedAccountCredentialsNotAllowed      = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
+	ErrOwnedAccountGroupPlatformMismatch      = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
+	ErrOwnedAccountGroupValidationUnavailable = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
+	ErrOwnedAccountPublicPoolUnavailable      = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "Plus shared account pool group is not configured for this account platform")
+	ErrOwnedAccountPublicPolicyUnavailable    = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE", "account share policy is not configured for this public account pool")
+	ErrOwnedAccountPublicValidationFailed     = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
 )
 
 const AccountListGroupUngrouped int64 = -1
@@ -99,8 +109,10 @@ type CreateAccountRequest struct {
 	Type               string         `json:"type"`
 	Credentials        map[string]any `json:"credentials"`
 	Extra              map[string]any `json:"extra"`
+	ShareMode          string         `json:"share_mode"`
 	ProxyID            *int64         `json:"proxy_id"`
 	Concurrency        int            `json:"concurrency"`
+	LoadFactor         *int           `json:"load_factor"`
 	Priority           int            `json:"priority"`
 	GroupIDs           []int64        `json:"group_ids"`
 	ExpiresAt          *time.Time     `json:"expires_at"`
@@ -113,31 +125,85 @@ type UpdateAccountRequest struct {
 	Notes              *string         `json:"notes"`
 	Credentials        *map[string]any `json:"credentials"`
 	Extra              *map[string]any `json:"extra"`
+	ShareMode          *string         `json:"share_mode"`
 	ProxyID            *int64          `json:"proxy_id"`
 	Concurrency        *int            `json:"concurrency"`
+	LoadFactor         *int            `json:"load_factor"`
 	Priority           *int            `json:"priority"`
 	Status             *string         `json:"status"`
+	Schedulable        *bool           `json:"schedulable"`
 	GroupIDs           *[]int64        `json:"group_ids"`
 	ExpiresAt          *time.Time      `json:"expires_at"`
+	ClearExpiresAt     bool            `json:"-"`
 	AutoPauseOnExpired *bool           `json:"auto_pause_on_expired"`
+}
+
+type OwnedPublicShareApprovalOptions struct {
+	AllowRateLimited bool
 }
 
 // AccountService 账号管理服务
 type AccountService struct {
-	accountRepo AccountRepository
-	groupRepo   GroupRepository
+	accountRepo             AccountRepository
+	groupRepo               GroupRepository
+	userRepo                accountUserRepository
+	userSubRepo             accountSubscriptionLookupRepository
+	accountSharePolicyRepo  AccountSharePolicyRepository
+	privateGroupProvisioner UserPrivateGroupProvisioner
 }
 
 type groupExistenceBatchChecker interface {
 	ExistsByIDs(ctx context.Context, ids []int64) (map[int64]bool, error)
 }
 
+type accountUserRepository interface {
+	GetByID(ctx context.Context, id int64) (*User, error)
+}
+
+type accountSubscriptionLookupRepository interface {
+	GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*UserSubscription, error)
+}
+
+type ownedAccountFilterRepository interface {
+	ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
+}
+
+type AccountListFilters struct {
+	Platform    string
+	AccountType string
+	Status      string
+	Search      string
+	GroupID     int64
+	PrivacyMode string
+}
+
 // NewAccountService 创建账号服务实例
-func NewAccountService(accountRepo AccountRepository, groupRepo GroupRepository) *AccountService {
+func NewAccountService(
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+) *AccountService {
 	return &AccountService{
 		accountRepo: accountRepo,
 		groupRepo:   groupRepo,
+		userRepo:    userRepo,
+		userSubRepo: userSubRepo,
 	}
+}
+
+func (s *AccountService) SetUserPrivateGroupProvisioner(provisioner UserPrivateGroupProvisioner) {
+	if s == nil {
+		return
+	}
+	s.privateGroupProvisioner = provisioner
+}
+
+func (s *AccountService) SetAccountSharePolicyRepository(repo AccountSharePolicyRepository) {
+	if s == nil {
+		return
+	}
+	s.accountSharePolicyRepo = repo
 }
 
 // Create 创建账号
@@ -157,8 +223,10 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Type:        req.Type,
 		Credentials: req.Credentials,
 		Extra:       req.Extra,
+		ShareMode:   NormalizeAccountShareMode(req.ShareMode),
 		ProxyID:     req.ProxyID,
 		Concurrency: req.Concurrency,
+		LoadFactor:  normalizeLoadFactor(req.LoadFactor),
 		Priority:    req.Priority,
 		Status:      StatusActive,
 		ExpiresAt:   req.ExpiresAt,
@@ -169,21 +237,21 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		account.AutoPauseOnExpired = true
 	}
 
-	if err := s.accountRepo.Create(ctx, account); err != nil {
-		return nil, fmt.Errorf("create account: %w", err)
-	}
-
 	// require_oauth_only 检查：apikey 类型账号不可加入限制分组
-	if account.Type == AccountTypeAPIKey && len(req.GroupIDs) > 0 {
+	if requiresOAuthOnlyGroupCheck(account.Type) && len(req.GroupIDs) > 0 {
 		for _, gid := range req.GroupIDs {
 			g, err := s.groupRepo.GetByID(ctx, gid)
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini) {
-				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
+			if isOAuthOnlyGroup(g) {
+				return nil, fmt.Errorf("group [%s] only allows OAuth accounts", g.Name)
 			}
 		}
+	}
+
+	if err := s.accountRepo.Create(ctx, account); err != nil {
+		return nil, fmt.Errorf("create account: %w", err)
 	}
 
 	// 绑定分组
@@ -212,6 +280,147 @@ func (s *AccountService) List(ctx context.Context, params pagination.PaginationP
 		return nil, nil, fmt.Errorf("list accounts: %w", err)
 	}
 	return accounts, pagination, nil
+}
+
+func (s *AccountService) ListOwned(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, filters AccountListFilters) ([]Account, *pagination.PaginationResult, error) {
+	if ownerUserID <= 0 {
+		return nil, nil, ErrUserNotFound
+	}
+	repo, ok := s.accountRepo.(ownedAccountFilterRepository)
+	if !ok {
+		return nil, nil, fmt.Errorf("owned account listing is not supported by repository")
+	}
+	accounts, result, err := repo.ListOwnedWithFilters(ctx, ownerUserID, params, filters.Platform, filters.AccountType, filters.Status, filters.Search, filters.GroupID, filters.PrivacyMode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list owned accounts: %w", err)
+	}
+	return accounts, result, nil
+}
+
+func (s *AccountService) GetOwnedByID(ctx context.Context, ownerUserID, accountID int64) (*Account, error) {
+	if ownerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("get account: %w", err)
+	}
+	if account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+		return nil, ErrAccountNotFound
+	}
+	return account, nil
+}
+
+func (s *AccountService) CreateOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
+	return s.createOwned(ctx, ownerUserID, req)
+}
+
+func (s *AccountService) ImportOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
+	return s.createOwned(ctx, ownerUserID, req)
+}
+
+func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
+	if ownerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if err := validateOwnedAccountSource(req.Type, req.Credentials, req.Extra); err != nil {
+		return nil, err
+	}
+	shareMode := NormalizeAccountShareMode(req.ShareMode)
+	groupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, req.Platform, req.Type, shareMode, req.GroupIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	shareStatus := AccountShareStatusApproved
+	if shareMode == AccountShareModePublic {
+		shareStatus = AccountShareStatusPending
+	}
+
+	account := &Account{
+		Name:               req.Name,
+		Notes:              normalizeAccountNotes(req.Notes),
+		Platform:           req.Platform,
+		Type:               req.Type,
+		Credentials:        req.Credentials,
+		Extra:              req.Extra,
+		OwnerUserID:        &ownerUserID,
+		ShareMode:          shareMode,
+		ShareStatus:        shareStatus,
+		ProxyID:            req.ProxyID,
+		Concurrency:        req.Concurrency,
+		LoadFactor:         normalizeLoadFactor(req.LoadFactor),
+		Priority:           req.Priority,
+		Status:             StatusActive,
+		ExpiresAt:          req.ExpiresAt,
+		AutoPauseOnExpired: true,
+		Schedulable:        true,
+	}
+	if req.AutoPauseOnExpired != nil {
+		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
+	}
+
+	if err := s.accountRepo.Create(ctx, account); err != nil {
+		return nil, fmt.Errorf("create account: %w", err)
+	}
+	if len(groupIDs) > 0 {
+		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+			return nil, fmt.Errorf("bind groups: %w", err)
+		}
+		account.GroupIDs = append([]int64(nil), groupIDs...)
+	}
+	return account, nil
+}
+
+func isAllowedOwnedAccountType(accountType string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(accountType))
+	return normalized == AccountTypeOAuth
+}
+
+func validateOwnedAccountSource(accountType string, credentials, extra map[string]any) error {
+	if !isAllowedOwnedAccountType(accountType) {
+		return ErrOwnedAccountTypeNotAllowed
+	}
+	if !hasNonEmptyStringField(credentials, "access_token") {
+		return ErrOwnedAccountCredentialsInvalid
+	}
+	if field, ok := findDisallowedOwnedAccountField(credentials); ok {
+		return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+			"section": "credentials",
+			"field":   field,
+		})
+	}
+	if field, ok := findDisallowedOwnedAccountField(extra); ok {
+		return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+			"section": "extra",
+			"field":   field,
+		})
+	}
+	return nil
+}
+
+func hasNonEmptyStringField(values map[string]any, key string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	value, ok := values[key]
+	if !ok {
+		return false
+	}
+	text, ok := value.(string)
+	return ok && strings.TrimSpace(text) != ""
+}
+
+func findDisallowedOwnedAccountField(values map[string]any) (string, bool) {
+	return findDisallowedCredentialContent(values, credentialSafetyOptions{AllowOAuthTokenValues: true})
+}
+
+func normalizeLoadFactor(value *int) *int {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	normalized := *value
+	return &normalized
 }
 
 // ListByPlatform 根据平台获取账号列表
@@ -263,6 +472,10 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		account.Concurrency = *req.Concurrency
 	}
 
+	if req.LoadFactor != nil {
+		account.LoadFactor = normalizeLoadFactor(req.LoadFactor)
+	}
+
 	if req.Priority != nil {
 		account.Priority = *req.Priority
 	}
@@ -270,11 +483,19 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if req.Status != nil {
 		account.Status = *req.Status
 	}
-	if req.ExpiresAt != nil {
+	if req.Schedulable != nil {
+		account.Schedulable = *req.Schedulable
+	}
+	if req.ClearExpiresAt {
+		account.ExpiresAt = nil
+	} else if req.ExpiresAt != nil {
 		account.ExpiresAt = req.ExpiresAt
 	}
 	if req.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
+	}
+	if req.ShareMode != nil {
+		account.ShareMode = NormalizeAccountShareMode(*req.ShareMode)
 	}
 
 	// 先验证分组是否存在（在任何写操作之前）
@@ -284,22 +505,22 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		}
 	}
 
-	// 执行更新
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, fmt.Errorf("update account: %w", err)
-	}
-
-	// require_oauth_only 检查
-	if account.Type == AccountTypeAPIKey && req.GroupIDs != nil {
+	// require_oauth_only 检查必须在任何写操作前完成，避免账号已更新但分组绑定失败。
+	if req.GroupIDs != nil && requiresOAuthOnlyGroupCheck(account.Type) {
 		for _, gid := range *req.GroupIDs {
 			g, err := s.groupRepo.GetByID(ctx, gid)
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini) {
-				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
+			if isOAuthOnlyGroup(g) {
+				return nil, fmt.Errorf("group [%s] only allows OAuth accounts", g.Name)
 			}
 		}
+	}
+
+	// 执行更新
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return nil, fmt.Errorf("update account: %w", err)
 	}
 
 	// 绑定分组
@@ -310,6 +531,109 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	return account, nil
+}
+
+func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID int64, req UpdateAccountRequest) (*Account, error) {
+	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.Name != nil {
+		account.Name = *req.Name
+	}
+	if req.Notes != nil {
+		account.Notes = normalizeAccountNotes(req.Notes)
+	}
+	if req.Credentials != nil {
+		account.Credentials = *req.Credentials
+	}
+	if req.Extra != nil {
+		account.Extra = *req.Extra
+	}
+	if req.ProxyID != nil {
+		account.ProxyID = req.ProxyID
+	}
+	if req.Concurrency != nil {
+		account.Concurrency = *req.Concurrency
+	}
+	if req.LoadFactor != nil {
+		account.LoadFactor = normalizeLoadFactor(req.LoadFactor)
+	}
+	if req.Priority != nil {
+		account.Priority = *req.Priority
+	}
+	if req.Status != nil {
+		switch *req.Status {
+		case StatusActive, StatusDisabled:
+			account.Status = *req.Status
+		default:
+			return nil, fmt.Errorf("invalid account status: %s", *req.Status)
+		}
+	}
+	if req.Schedulable != nil {
+		account.Schedulable = *req.Schedulable
+	}
+	if req.ClearExpiresAt {
+		account.ExpiresAt = nil
+	} else if req.ExpiresAt != nil {
+		account.ExpiresAt = req.ExpiresAt
+	}
+	if req.AutoPauseOnExpired != nil {
+		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
+	}
+	shouldBindGroups := false
+	var groupIDs []int64
+	if req.ShareMode != nil {
+		nextMode := NormalizeAccountShareMode(*req.ShareMode)
+		if nextMode == AccountShareModePrivate {
+			account.ShareMode = AccountShareModePrivate
+			account.ShareStatus = AccountShareStatusApproved
+			account.ErrorMessage = ""
+		} else if NormalizeAccountShareMode(account.ShareMode) != AccountShareModePublic ||
+			NormalizeAccountShareStatus(account.ShareStatus) != AccountShareStatusApproved {
+			account.ShareMode = AccountShareModePublic
+			account.ShareStatus = AccountShareStatusPending
+		}
+		managedGroupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, nextMode, nil)
+		if err != nil {
+			return nil, err
+		}
+		groupIDs = managedGroupIDs
+		shouldBindGroups = true
+	}
+	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+		return nil, err
+	}
+
+	if !shouldBindGroups && req.GroupIDs != nil {
+		var err error
+		groupIDs, err = s.validateOwnedAccountGroupBinding(ctx, ownerUserID, account.Platform, account.Type, *req.GroupIDs)
+		if err != nil {
+			return nil, err
+		}
+		shouldBindGroups = true
+	}
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return nil, fmt.Errorf("update account: %w", err)
+	}
+	if shouldBindGroups {
+		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+			return nil, fmt.Errorf("bind groups: %w", err)
+		}
+		account.GroupIDs = append([]int64(nil), groupIDs...)
+	}
+	return account, nil
+}
+
+func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID int64) error {
+	if _, err := s.GetOwnedByID(ctx, ownerUserID, accountID); err != nil {
+		return err
+	}
+	if err := s.accountRepo.Delete(ctx, accountID); err != nil {
+		return fmt.Errorf("delete account: %w", err)
+	}
+	return nil
 }
 
 // Delete 删除账号
@@ -364,6 +688,305 @@ func (s *AccountService) validateGroupIDsExist(ctx context.Context, groupIDs []i
 		}
 	}
 	return nil
+}
+
+func (s *AccountService) getPrivateGroupForOwnedAccount(ctx context.Context, ownerUserID int64, platform string) (*Group, error) {
+	if s.privateGroupProvisioner == nil {
+		return nil, ErrOwnedAccountGroupValidationUnavailable
+	}
+	group, err := s.privateGroupProvisioner.GetActiveUserPrivateGroup(ctx, ownerUserID, platform)
+	if err != nil {
+		return nil, err
+	}
+	return group, nil
+}
+
+func (s *AccountService) initialOwnedAccountGroupIDs(ctx context.Context, ownerUserID int64, platform, accountType, shareMode string, requestedGroupIDs []int64) ([]int64, error) {
+	if NormalizeAccountShareMode(shareMode) == AccountShareModePublic || len(requestedGroupIDs) == 0 {
+		privateGroup, err := s.getPrivateGroupForOwnedAccount(ctx, ownerUserID, platform)
+		if err != nil {
+			return nil, err
+		}
+		return []int64{privateGroup.ID}, nil
+	}
+	return s.validateOwnedAccountGroupBinding(ctx, ownerUserID, platform, accountType, requestedGroupIDs)
+}
+
+func (s *AccountService) ApproveOwnedPublicShare(ctx context.Context, ownerUserID, accountID int64) (*Account, error) {
+	return s.ApproveOwnedPublicShareWithOptions(ctx, ownerUserID, accountID, OwnedPublicShareApprovalOptions{})
+}
+
+func (s *AccountService) ApproveOwnedPublicShareWithOptions(ctx context.Context, ownerUserID, accountID int64, opts OwnedPublicShareApprovalOptions) (*Account, error) {
+	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+		return nil, err
+	}
+	if !isOwnedAccountPublicShareApprovable(account, opts.AllowRateLimited) {
+		return nil, ErrOwnedAccountPublicValidationFailed.WithMetadata(map[string]string{
+			"reason": "account is not active or schedulable",
+		})
+	}
+
+	publicGroup, err := s.resolveOwnedPublicShareGroup(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateOwnedPublicSharePolicy(ctx, account, publicGroup); err != nil {
+		return nil, err
+	}
+	groupIDs, err := s.publicOwnedAccountGroupIDs(ctx, ownerUserID, account, publicGroup)
+	if err != nil {
+		return nil, err
+	}
+
+	account.ShareMode = AccountShareModePublic
+	account.ShareStatus = AccountShareStatusApproved
+	account.ErrorMessage = ""
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return nil, fmt.Errorf("update account public share status: %w", err)
+	}
+	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+		return nil, fmt.Errorf("bind public account groups: %w", err)
+	}
+	account.GroupIDs = append([]int64(nil), groupIDs...)
+	return account, nil
+}
+
+func isOwnedAccountPublicShareApprovable(account *Account, allowRateLimited bool) bool {
+	if account == nil {
+		return false
+	}
+	if account.IsSchedulable() {
+		return true
+	}
+	if !allowRateLimited || account.RateLimitResetAt == nil || !time.Now().Before(*account.RateLimitResetAt) {
+		return false
+	}
+	copy := *account
+	copy.RateLimitedAt = nil
+	copy.RateLimitResetAt = nil
+	return copy.IsSchedulable()
+}
+
+func (s *AccountService) MarkOwnedPublicSharePending(ctx context.Context, ownerUserID, accountID int64, reason string) (*Account, error) {
+	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	groupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, AccountShareModePublic, nil)
+	if err != nil {
+		return nil, err
+	}
+	account.ShareMode = AccountShareModePublic
+	account.ShareStatus = AccountShareStatusPending
+	account.ErrorMessage = strings.TrimSpace(reason)
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return nil, fmt.Errorf("update account public share status: %w", err)
+	}
+	if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+		return nil, fmt.Errorf("bind pending account groups: %w", err)
+	}
+	account.GroupIDs = append([]int64(nil), groupIDs...)
+	return account, nil
+}
+
+func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, account *Account) (*Group, error) {
+	if s == nil || s.groupRepo == nil || account == nil {
+		return nil, ErrOwnedAccountGroupValidationUnavailable
+	}
+	platform := strings.TrimSpace(account.Platform)
+	if platform == "" {
+		return nil, ErrOwnedAccountGroupPlatformMismatch
+	}
+	groups, err := s.groupRepo.ListActiveByPlatform(ctx, platform)
+	if err != nil {
+		return nil, fmt.Errorf("list public share groups: %w", err)
+	}
+	for i := range groups {
+		group := groups[i]
+		if isOwnedPublicSharePoolGroup(&group, platform) {
+			return &group, nil
+		}
+	}
+	return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
+		"platform": platform,
+	})
+}
+
+func isOwnedPublicSharePoolGroup(group *Group, platform string) bool {
+	if group == nil || !group.IsActive() {
+		return false
+	}
+	if group.OwnerUserID != nil || NormalizeGroupScope(group.Scope) != GroupScopePublic {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(group.Platform), strings.TrimSpace(platform)) {
+		return false
+	}
+	return isPlusSharedPoolGroupName(group.Name)
+}
+
+func isPlusSharedPoolGroupName(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.NewReplacer(" ", "", "-", "", "_", "", "（", "(", "）", ")", "【", "", "】", "").Replace(normalized)
+	if normalized == "plus" || normalized == "pluspool" || normalized == "plussharedpool" || normalized == "plus共享池" || normalized == "plus共享号池" {
+		return true
+	}
+	if !strings.Contains(normalized, "plus") {
+		return false
+	}
+	return strings.Contains(normalized, "shared") ||
+		strings.Contains(normalized, "pool") ||
+		strings.Contains(normalized, "共享") ||
+		strings.Contains(normalized, "号池")
+}
+
+func (s *AccountService) validateOwnedPublicSharePolicy(ctx context.Context, account *Account, group *Group) error {
+	if s == nil || s.accountSharePolicyRepo == nil {
+		return ErrOwnedAccountPublicPolicyUnavailable
+	}
+	if account == nil || group == nil || group.ID <= 0 {
+		return ErrOwnedAccountPublicPolicyUnavailable
+	}
+	groupID := group.ID
+	policy, err := s.accountSharePolicyRepo.ResolveEnabledAccountSharePolicy(ctx, account.ID, &groupID, account.Platform, account.SharePolicyID)
+	if err != nil {
+		return fmt.Errorf("resolve account share policy: %w", err)
+	}
+	if policy == nil || policy.OwnerShareRatio <= 0 {
+		return ErrOwnedAccountPublicPolicyUnavailable.WithMetadata(map[string]string{
+			"platform": account.Platform,
+			"group_id": fmt.Sprintf("%d", group.ID),
+		})
+	}
+	return nil
+}
+
+func (s *AccountService) publicOwnedAccountGroupIDs(ctx context.Context, ownerUserID int64, account *Account, publicGroup *Group) ([]int64, error) {
+	if account == nil || publicGroup == nil {
+		return nil, ErrOwnedAccountPublicPoolUnavailable
+	}
+	privateGroup, err := s.getPrivateGroupForOwnedAccount(ctx, ownerUserID, account.Platform)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeGroupIDs([]int64{privateGroup.ID, publicGroup.ID})
+}
+
+func (s *AccountService) validateOwnedAccountGroupBinding(ctx context.Context, ownerUserID int64, platform, accountType string, groupIDs []int64) ([]int64, error) {
+	groupIDs, err := normalizeGroupIDs(groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(groupIDs) == 0 {
+		return nil, nil
+	}
+	if s.groupRepo == nil || s.userRepo == nil {
+		return nil, ErrOwnedAccountGroupValidationUnavailable
+	}
+
+	user, err := s.userRepo.GetByID(ctx, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+	if user == nil || user.ID <= 0 {
+		return nil, ErrUserNotFound
+	}
+
+	accountPlatform := strings.TrimSpace(platform)
+	if accountPlatform == "" {
+		return nil, ErrOwnedAccountGroupPlatformMismatch
+	}
+	for _, groupID := range groupIDs {
+		group, err := s.groupRepo.GetByID(ctx, groupID)
+		if err != nil {
+			return nil, fmt.Errorf("get group: %w", err)
+		}
+		if group == nil || group.ID <= 0 {
+			return nil, ErrGroupNotFound
+		}
+		if !group.IsActive() {
+			return nil, ErrGroupNotAllowed
+		}
+		groupPlatform := strings.TrimSpace(group.Platform)
+		if groupPlatform == "" || !strings.EqualFold(groupPlatform, accountPlatform) {
+			return nil, ErrOwnedAccountGroupPlatformMismatch
+		}
+		if requiresOAuthOnlyGroupCheck(accountType) && isOAuthOnlyGroup(group) {
+			return nil, ErrGroupNotAllowed
+		}
+		allowed, err := s.canUserBindOwnedAccountGroup(ctx, user, group)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, ErrGroupNotAllowed
+		}
+	}
+	return groupIDs, nil
+}
+
+func requiresOAuthOnlyGroupCheck(accountType string) bool {
+	switch strings.ToLower(strings.TrimSpace(accountType)) {
+	case AccountTypeOAuth, AccountTypeSetupToken:
+		return false
+	default:
+		return true
+	}
+}
+
+func isOAuthOnlyGroup(group *Group) bool {
+	if group == nil || !group.RequireOAuthOnly {
+		return false
+	}
+	switch group.Platform {
+	case PlatformOpenAI, PlatformAntigravity, PlatformAnthropic, PlatformGemini:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeGroupIDs(ids []int64) ([]int64, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, ErrGroupNotFound
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func (s *AccountService) canUserBindOwnedAccountGroup(ctx context.Context, user *User, group *Group) (bool, error) {
+	if user == nil || group == nil {
+		return false, nil
+	}
+	if group.IsSubscriptionType() {
+		if s.userSubRepo == nil {
+			return false, ErrOwnedAccountGroupValidationUnavailable
+		}
+		_, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID)
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, ErrSubscriptionNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get active subscription: %w", err)
+	}
+	return user.CanBindGroup(group.ID, group.IsExclusive), nil
 }
 
 // UpdateStatus 更新账号状态

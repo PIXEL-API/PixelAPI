@@ -314,6 +314,11 @@ export interface SystemSettings {
   affiliate_rebate_per_invitee_cap: number;
   default_concurrency: number;
   default_user_rpm_limit: number;
+  user_private_group_daily_limit_usd: number | null;
+  user_private_group_weekly_limit_usd: number | null;
+  user_private_group_monthly_limit_usd: number | null;
+  user_private_group_rate_multiplier: number;
+  user_private_group_rpm_limit: number;
   default_subscriptions: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
@@ -502,6 +507,11 @@ export interface UpdateSettingsRequest {
   affiliate_rebate_per_invitee_cap?: number;
   default_concurrency?: number;
   default_user_rpm_limit?: number;
+  user_private_group_daily_limit_usd?: number | null;
+  user_private_group_weekly_limit_usd?: number | null;
+  user_private_group_monthly_limit_usd?: number | null;
+  user_private_group_rate_multiplier?: number;
+  user_private_group_rpm_limit?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;

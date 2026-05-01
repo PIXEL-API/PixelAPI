@@ -21,6 +21,7 @@ type UsageBillingCommand struct {
 
 	UserID              int64
 	AccountID           int64
+	GroupID             *int64
 	SubscriptionID      *int64
 	AccountType         string
 	Model               string
@@ -39,6 +40,17 @@ type UsageBillingCommand struct {
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
+
+	ShareSnapshotCaptured bool
+	ShareOwnerUserID      *int64
+	ShareModeSnapshot     string
+	ShareStatusSnapshot   string
+	SharePlatform         string
+	SharePolicyID         *int64
+	SharePolicyVersion    int
+	OwnerShareRatio       float64
+
+	UsageLog *UsageLog
 }
 
 func (c *UsageBillingCommand) Normalize() {
@@ -116,6 +128,7 @@ type UsageBillingApplyResult struct {
 	APIKeyQuotaExhausted bool
 	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
 	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
+	UsageLogID           *int64             // persisted usage log id when the billing transaction wrote one
 }
 
 type UsageBillingRepository interface {

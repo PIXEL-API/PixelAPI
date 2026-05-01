@@ -471,6 +471,7 @@ export interface PaginationConfig {
 export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity'
 
 export type SubscriptionType = 'standard' | 'subscription'
+export type GroupScope = 'public' | 'user_private'
 
 export interface OpenAIMessagesDispatchModelConfig {
   opus_mapped_model?: string
@@ -488,6 +489,8 @@ export interface Group {
   rpm_limit?: number // Group-level RPM cap (0 = unlimited); overrides user-level rpm_limit when set
   is_exclusive: boolean
   status: 'active' | 'inactive'
+  owner_user_id?: number | null
+  scope?: GroupScope
   subscription_type: SubscriptionType
   daily_limit_usd: number | null
   weekly_limit_usd: number | null
@@ -644,6 +647,9 @@ export interface UpdateGroupRequest {
 
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock'
+export type AccountShareMode = 'private' | 'public'
+export type AccountShareStatus = 'pending' | 'approved' | 'suspended'
+export type AccountStatus = 'active' | 'inactive' | 'disabled' | 'error'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
 
@@ -778,12 +784,16 @@ export interface Account {
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
   } & Record<string, unknown>)
   proxy_id: number | null
+  owner_user_id?: number | null
+  share_mode?: AccountShareMode | string
+  share_status?: AccountShareStatus | string
+  share_policy_id?: number | null
   concurrency: number
   load_factor?: number | null
   current_concurrency?: number // Real-time concurrency count from Redis
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
-  status: 'active' | 'inactive' | 'error'
+  status: AccountStatus
   error_message: string | null
   last_used_at: string | null
   expires_at: number | null
@@ -967,6 +977,7 @@ export interface CreateAccountRequest {
   load_factor?: number | null
   priority?: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
+  share_mode?: AccountShareMode
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
@@ -985,7 +996,8 @@ export interface UpdateAccountRequest {
   priority?: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
   schedulable?: boolean
-  status?: 'active' | 'inactive' | 'error'
+  status?: AccountStatus
+  share_mode?: AccountShareMode
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean

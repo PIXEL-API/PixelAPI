@@ -11,6 +11,14 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+type UserPrivateGroupTemplate struct {
+	DailyLimitUSD   *float64
+	WeeklyLimitUSD  *float64
+	MonthlyLimitUSD *float64
+	RateMultiplier  float64
+	RPMLimit        int
+}
+
 type SystemSettings struct {
 	RegistrationEnabled              bool
 	EmailVerifyEnabled               bool
@@ -104,15 +112,20 @@ type SystemSettings struct {
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
-	DefaultConcurrency           int
-	DefaultBalance               float64
-	AffiliateEnabled             bool
-	AffiliateRebateRate          float64
-	AffiliateRebateFreezeHours   int
-	AffiliateRebateDurationDays  int
-	AffiliateRebatePerInviteeCap float64
-	DefaultUserRPMLimit          int
-	DefaultSubscriptions         []DefaultSubscriptionSetting
+	DefaultConcurrency              int
+	DefaultBalance                  float64
+	AffiliateEnabled                bool
+	AffiliateRebateRate             float64
+	AffiliateRebateFreezeHours      int
+	AffiliateRebateDurationDays     int
+	AffiliateRebatePerInviteeCap    float64
+	DefaultUserRPMLimit             int
+	UserPrivateGroupDailyLimitUSD   *float64
+	UserPrivateGroupWeeklyLimitUSD  *float64
+	UserPrivateGroupMonthlyLimitUSD *float64
+	UserPrivateGroupRateMultiplier  float64
+	UserPrivateGroupRPMLimit        int
+	DefaultSubscriptions            []DefaultSubscriptionSetting
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`

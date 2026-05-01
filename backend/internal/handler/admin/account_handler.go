@@ -101,6 +101,10 @@ type CreateAccountRequest struct {
 	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
+	OwnerUserID             *int64         `json:"owner_user_id"`
+	ShareMode               string         `json:"share_mode" binding:"omitempty,oneof=private public"`
+	ShareStatus             string         `json:"share_status" binding:"omitempty,oneof=pending approved suspended"`
+	SharePolicyID           *int64         `json:"share_policy_id"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             int            `json:"concurrency"`
 	Priority                int            `json:"priority"`
@@ -120,6 +124,10 @@ type UpdateAccountRequest struct {
 	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock"`
 	Credentials             map[string]any `json:"credentials"`
 	Extra                   map[string]any `json:"extra"`
+	OwnerUserID             *int64         `json:"owner_user_id"`
+	ShareMode               string         `json:"share_mode" binding:"omitempty,oneof=private public"`
+	ShareStatus             string         `json:"share_status" binding:"omitempty,oneof=pending approved suspended"`
+	SharePolicyID           *int64         `json:"share_policy_id"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             *int           `json:"concurrency"`
 	Priority                *int           `json:"priority"`
@@ -526,6 +534,10 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Type:                  req.Type,
 			Credentials:           req.Credentials,
 			Extra:                 req.Extra,
+			OwnerUserID:           req.OwnerUserID,
+			ShareMode:             req.ShareMode,
+			ShareStatus:           req.ShareStatus,
+			SharePolicyID:         req.SharePolicyID,
 			ProxyID:               req.ProxyID,
 			Concurrency:           req.Concurrency,
 			Priority:              req.Priority,
@@ -600,6 +612,10 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		Type:                  req.Type,
 		Credentials:           req.Credentials,
 		Extra:                 req.Extra,
+		OwnerUserID:           req.OwnerUserID,
+		ShareMode:             req.ShareMode,
+		ShareStatus:           req.ShareStatus,
+		SharePolicyID:         req.SharePolicyID,
 		ProxyID:               req.ProxyID,
 		Concurrency:           req.Concurrency, // 指针类型，nil 表示未提供
 		Priority:              req.Priority,    // 指针类型，nil 表示未提供

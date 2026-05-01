@@ -449,8 +449,10 @@ import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 
+type UsageLoader = (id: number, source?: 'passive' | 'active') => Promise<AccountUsageInfo>
+
 // Module-level cache shared across all AccountUsageCell instances
-const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
+const _usageCache = new Map<string, { data: AccountUsageInfo; ts: number }>()
 const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 
 const props = withDefaults(
@@ -459,11 +461,14 @@ const props = withDefaults(
     todayStats?: WindowStats | null
     todayStatsLoading?: boolean
     manualRefreshToken?: number
+    usageLoader?: UsageLoader
+    usageCacheScope?: string
   }>(),
   {
     todayStats: null,
     todayStatsLoading: false,
-    manualRefreshToken: 0
+    manualRefreshToken: 0,
+    usageCacheScope: 'admin'
   }
 )
 
@@ -478,6 +483,7 @@ const activeQueryLoading = ref(false)
 const error = ref<string | null>(null)
 const usageInfo = ref<AccountUsageInfo | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
+const usageCacheKey = computed(() => `${props.usageCacheScope}:${props.account.id}`)
 const isDesktopViewport = ref(
   typeof window === 'undefined' ? true : window.matchMedia(desktopViewportQuery).matches
 )
@@ -954,7 +960,7 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
 
   // Check cache
   if (!options?.bypassCache) {
-    const cached = _usageCache.get(props.account.id)
+    const cached = _usageCache.get(usageCacheKey.value)
     if (cached && Date.now() - cached.ts < USAGE_CACHE_TTL) {
       usageInfo.value = cached.data
       loading.value = false
@@ -966,11 +972,12 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
   error.value = null
 
   try {
-    const fetchFn = () => adminAPI.accounts.getUsage(props.account.id, options?.source)
+    const loader = props.usageLoader ?? adminAPI.accounts.getUsage
+    const fetchFn = () => loader(props.account.id, options?.source)
     const result = await enqueueUsageRequest(props.account, fetchFn)
     if (!unmounted.value) {
       usageInfo.value = result
-      _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+      _usageCache.set(usageCacheKey.value, { data: result, ts: Date.now() })
     }
   } catch (e: any) {
     if (!unmounted.value) {
@@ -1035,7 +1042,8 @@ const attachVisibilityObserver = () => {
 const loadActiveUsage = async () => {
   activeQueryLoading.value = true
   try {
-    usageInfo.value = await adminAPI.accounts.getUsage(props.account.id, 'active')
+    const loader = props.usageLoader ?? adminAPI.accounts.getUsage
+    usageInfo.value = await loader(props.account.id, 'active')
   } catch (e: any) {
     console.error('Failed to load active usage:', e)
   } finally {
@@ -1163,7 +1171,7 @@ watch(
     if (!shouldFetchUsage.value) return
 
     const source = isAnthropicOAuthOrSetupToken.value ? 'passive' : undefined
-    _usageCache.delete(props.account.id)
+    _usageCache.delete(usageCacheKey.value)
     loadUsage({ source, bypassCache: true }).catch((e) => {
       console.error('Failed to refresh usage after manual refresh:', e)
     })

@@ -88,6 +88,8 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(normalizeJSONMap(account.Extra)).
+		SetShareMode(service.NormalizeAccountShareMode(account.ShareMode)).
+		SetShareStatus(service.NormalizeAccountShareStatus(account.ShareStatus)).
 		SetConcurrency(account.Concurrency).
 		SetPriority(account.Priority).
 		SetStatus(account.Status).
@@ -100,6 +102,12 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	}
 	if account.LoadFactor != nil {
 		builder.SetLoadFactor(*account.LoadFactor)
+	}
+	if account.OwnerUserID != nil {
+		builder.SetOwnerUserID(*account.OwnerUserID)
+	}
+	if account.SharePolicyID != nil {
+		builder.SetSharePolicyID(*account.SharePolicyID)
 	}
 
 	if account.ProxyID != nil {
@@ -325,6 +333,8 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(normalizeJSONMap(account.Extra)).
+		SetShareMode(service.NormalizeAccountShareMode(account.ShareMode)).
+		SetShareStatus(service.NormalizeAccountShareStatus(account.ShareStatus)).
 		SetConcurrency(account.Concurrency).
 		SetPriority(account.Priority).
 		SetStatus(account.Status).
@@ -339,6 +349,16 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 		builder.SetLoadFactor(*account.LoadFactor)
 	} else {
 		builder.ClearLoadFactor()
+	}
+	if account.OwnerUserID != nil {
+		builder.SetOwnerUserID(*account.OwnerUserID)
+	} else {
+		builder.ClearOwnerUserID()
+	}
+	if account.SharePolicyID != nil {
+		builder.SetSharePolicyID(*account.SharePolicyID)
+	} else {
+		builder.ClearSharePolicyID()
 	}
 
 	if account.ProxyID != nil {
@@ -461,8 +481,22 @@ func (r *accountRepository) List(ctx context.Context, params pagination.Paginati
 }
 
 func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+	return r.listWithFilters(ctx, params, nil, platform, accountType, status, search, groupID, privacyMode)
+}
+
+func (r *accountRepository) ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+	if ownerUserID <= 0 {
+		return nil, nil, service.ErrUserNotFound
+	}
+	return r.listWithFilters(ctx, params, &ownerUserID, platform, accountType, status, search, groupID, privacyMode)
+}
+
+func (r *accountRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, ownerUserID *int64, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	q := r.client.Account.Query()
 
+	if ownerUserID != nil {
+		q = q.Where(dbaccount.OwnerUserIDEQ(*ownerUserID))
+	}
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
 	}
@@ -1729,6 +1763,10 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Type:                    m.Type,
 		Credentials:             copyJSONMap(m.Credentials),
 		Extra:                   copyJSONMap(m.Extra),
+		OwnerUserID:             m.OwnerUserID,
+		ShareMode:               service.NormalizeAccountShareMode(m.ShareMode),
+		ShareStatus:             service.NormalizeAccountShareStatus(m.ShareStatus),
+		SharePolicyID:           m.SharePolicyID,
 		ProxyID:                 m.ProxyID,
 		Concurrency:             m.Concurrency,
 		Priority:                m.Priority,

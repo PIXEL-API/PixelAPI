@@ -650,6 +650,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   }
   items.push(
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
+    { path: '/accounts', label: t('nav.myAccounts'), icon: GlobeIcon, hideInSimpleMode: true },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
     { path: '/monitor', label: t('nav.channelStatus'), icon: SignalIcon, featureFlag: flagChannelMonitor },
@@ -734,6 +735,7 @@ const adminNavItems = computed((): NavItem[] => {
         { path: '/admin/orders/plans', label: t('nav.paymentPlans'), icon: CreditCardIcon },
       ],
     },
+    { path: '/admin/revenue', label: t('nav.revenue'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon }
   ]
 

@@ -190,6 +190,11 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AffiliateRebateDurationDays:            settings.AffiliateRebateDurationDays,
 		AffiliateRebatePerInviteeCap:           settings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    settings.DefaultUserRPMLimit,
+		UserPrivateGroupDailyLimitUSD:          settings.UserPrivateGroupDailyLimitUSD,
+		UserPrivateGroupWeeklyLimitUSD:         settings.UserPrivateGroupWeeklyLimitUSD,
+		UserPrivateGroupMonthlyLimitUSD:        settings.UserPrivateGroupMonthlyLimitUSD,
+		UserPrivateGroupRateMultiplier:         settings.UserPrivateGroupRateMultiplier,
+		UserPrivateGroupRPMLimit:               settings.UserPrivateGroupRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
 		EnableModelFallback:                    settings.EnableModelFallback,
 		FallbackModelAnthropic:                 settings.FallbackModelAnthropic,
@@ -349,6 +354,11 @@ type UpdateSettingsRequest struct {
 	AffiliateRebateDurationDays              *int                              `json:"affiliate_rebate_duration_days"`
 	AffiliateRebatePerInviteeCap             *float64                          `json:"affiliate_rebate_per_invitee_cap"`
 	DefaultUserRPMLimit                      int                               `json:"default_user_rpm_limit"`
+	UserPrivateGroupDailyLimitUSD            float64                           `json:"user_private_group_daily_limit_usd"`
+	UserPrivateGroupWeeklyLimitUSD           float64                           `json:"user_private_group_weekly_limit_usd"`
+	UserPrivateGroupMonthlyLimitUSD          float64                           `json:"user_private_group_monthly_limit_usd"`
+	UserPrivateGroupRateMultiplier           float64                           `json:"user_private_group_rate_multiplier"`
+	UserPrivateGroupRPMLimit                 int                               `json:"user_private_group_rpm_limit"`
 	DefaultSubscriptions                     []dto.DefaultSubscriptionSetting  `json:"default_subscriptions"`
 	AuthSourceDefaultEmailBalance            *float64                          `json:"auth_source_default_email_balance"`
 	AuthSourceDefaultEmailConcurrency        *int                              `json:"auth_source_default_email_concurrency"`
@@ -1174,6 +1184,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebateDurationDays:      affiliateRebateDurationDays,
 		AffiliateRebatePerInviteeCap:     affiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:              req.DefaultUserRPMLimit,
+		UserPrivateGroupDailyLimitUSD:    positiveFloat64Ptr(req.UserPrivateGroupDailyLimitUSD),
+		UserPrivateGroupWeeklyLimitUSD:   positiveFloat64Ptr(req.UserPrivateGroupWeeklyLimitUSD),
+		UserPrivateGroupMonthlyLimitUSD:  positiveFloat64Ptr(req.UserPrivateGroupMonthlyLimitUSD),
+		UserPrivateGroupRateMultiplier:   req.UserPrivateGroupRateMultiplier,
+		UserPrivateGroupRPMLimit:         req.UserPrivateGroupRPMLimit,
 		DefaultSubscriptions:             defaultSubscriptions,
 		EnableModelFallback:              req.EnableModelFallback,
 		FallbackModelAnthropic:           req.FallbackModelAnthropic,
@@ -1498,6 +1513,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebateDurationDays:            updatedSettings.AffiliateRebateDurationDays,
 		AffiliateRebatePerInviteeCap:           updatedSettings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    updatedSettings.DefaultUserRPMLimit,
+		UserPrivateGroupDailyLimitUSD:          updatedSettings.UserPrivateGroupDailyLimitUSD,
+		UserPrivateGroupWeeklyLimitUSD:         updatedSettings.UserPrivateGroupWeeklyLimitUSD,
+		UserPrivateGroupMonthlyLimitUSD:        updatedSettings.UserPrivateGroupMonthlyLimitUSD,
+		UserPrivateGroupRateMultiplier:         updatedSettings.UserPrivateGroupRateMultiplier,
+		UserPrivateGroupRPMLimit:               updatedSettings.UserPrivateGroupRPMLimit,
 		DefaultSubscriptions:                   updatedDefaultSubscriptions,
 		EnableModelFallback:                    updatedSettings.EnableModelFallback,
 		FallbackModelAnthropic:                 updatedSettings.FallbackModelAnthropic,
@@ -1804,6 +1824,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.DefaultBalance != after.DefaultBalance {
 		changed = append(changed, "default_balance")
 	}
+	if before.DefaultUserRPMLimit != after.DefaultUserRPMLimit {
+		changed = append(changed, "default_user_rpm_limit")
+	}
 	if before.AffiliateRebateRate != after.AffiliateRebateRate {
 		changed = append(changed, "affiliate_rebate_rate")
 	}
@@ -1815,6 +1838,21 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AffiliateRebatePerInviteeCap != after.AffiliateRebatePerInviteeCap {
 		changed = append(changed, "affiliate_rebate_per_invitee_cap")
+	}
+	if !equalOptionalFloat64(before.UserPrivateGroupDailyLimitUSD, after.UserPrivateGroupDailyLimitUSD) {
+		changed = append(changed, "user_private_group_daily_limit_usd")
+	}
+	if !equalOptionalFloat64(before.UserPrivateGroupWeeklyLimitUSD, after.UserPrivateGroupWeeklyLimitUSD) {
+		changed = append(changed, "user_private_group_weekly_limit_usd")
+	}
+	if !equalOptionalFloat64(before.UserPrivateGroupMonthlyLimitUSD, after.UserPrivateGroupMonthlyLimitUSD) {
+		changed = append(changed, "user_private_group_monthly_limit_usd")
+	}
+	if before.UserPrivateGroupRateMultiplier != after.UserPrivateGroupRateMultiplier {
+		changed = append(changed, "user_private_group_rate_multiplier")
+	}
+	if before.UserPrivateGroupRPMLimit != after.UserPrivateGroupRPMLimit {
+		changed = append(changed, "user_private_group_rpm_limit")
 	}
 	if !equalDefaultSubscriptions(before.DefaultSubscriptions, after.DefaultSubscriptions) {
 		changed = append(changed, "default_subscriptions")
@@ -2013,6 +2051,13 @@ func float64ValueOrDefault(value *float64, fallback float64) float64 {
 	return *value
 }
 
+func positiveFloat64Ptr(value float64) *float64 {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
 func intValueOrDefault(value *int, fallback int) int {
 	if value == nil {
 		return fallback
@@ -2110,6 +2155,13 @@ func equalIntSlice(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func equalOptionalFloat64(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func equalNotifyEmailEntries(a, b []service.NotifyEmailEntry) bool {

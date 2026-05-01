@@ -174,6 +174,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/accounts',
+    name: 'UserAccounts',
+    component: () => import('@/views/user/AccountsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'My Accounts',
+      titleKey: 'userAccounts.title',
+      descriptionKey: 'userAccounts.description'
+    }
+  },
+  {
     path: '/usage',
     name: 'Usage',
     component: () => import('@/views/user/UsageView.vue'),
@@ -515,6 +527,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Usage Records',
       titleKey: 'admin.usage.title',
       descriptionKey: 'admin.usage.description'
+    }
+  },
+  {
+    path: '/admin/revenue',
+    name: 'AdminRevenue',
+    component: () => import('@/views/admin/RevenueView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Revenue Management',
+      titleKey: 'admin.revenue.title',
+      descriptionKey: 'admin.revenue.description'
     }
   },
 

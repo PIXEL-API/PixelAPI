@@ -28,6 +28,7 @@ func RegisterAdminRoutes(
 
 		// 账号管理
 		registerAccountRoutes(admin, h)
+		registerAccountSharePolicyRoutes(admin, h)
 
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
@@ -70,6 +71,7 @@ func RegisterAdminRoutes(
 
 		// 使用记录管理
 		registerUsageRoutes(admin, h)
+		registerRevenueRoutes(admin, h)
 
 		// 用户属性管理
 		registerUserAttributeRoutes(admin, h)
@@ -287,6 +289,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.POST("/batch", h.Admin.Account.BatchCreate)
 		accounts.GET("/data", h.Admin.Account.ExportData)
 		accounts.POST("/data", h.Admin.Account.ImportData)
+		accounts.POST("/import-credentials", h.Admin.Account.ImportCredentials)
 		accounts.POST("/batch-update-credentials", h.Admin.Account.BatchUpdateCredentials)
 		accounts.POST("/batch-refresh-tier", h.Admin.Account.BatchRefreshTier)
 		accounts.POST("/bulk-update", h.Admin.Account.BulkUpdate)
@@ -303,6 +306,17 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.POST("/exchange-setup-token-code", h.Admin.OAuth.ExchangeSetupTokenCode)
 		accounts.POST("/cookie-auth", h.Admin.OAuth.CookieAuth)
 		accounts.POST("/setup-token-cookie-auth", h.Admin.OAuth.SetupTokenCookieAuth)
+	}
+}
+
+func registerAccountSharePolicyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	policies := admin.Group("/account-share-policies")
+	{
+		policies.GET("", h.Admin.AccountSharePolicy.List)
+		policies.GET("/:id", h.Admin.AccountSharePolicy.GetByID)
+		policies.POST("", h.Admin.AccountSharePolicy.Create)
+		policies.PUT("/:id", h.Admin.AccountSharePolicy.Update)
+		policies.DELETE("/:id", h.Admin.AccountSharePolicy.Delete)
 	}
 }
 
@@ -513,6 +527,14 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		usage.GET("/cleanup-tasks", h.Admin.Usage.ListCleanupTasks)
 		usage.POST("/cleanup-tasks", h.Admin.Usage.CreateCleanupTask)
 		usage.POST("/cleanup-tasks/:id/cancel", h.Admin.Usage.CancelCleanupTask)
+	}
+}
+
+func registerRevenueRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	revenue := admin.Group("/revenue")
+	{
+		revenue.GET("/summary", h.Admin.Revenue.GetSummary)
+		revenue.GET("/share-settlements", h.Admin.Revenue.ListShareSettlements)
 	}
 }
 

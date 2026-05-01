@@ -17,16 +17,20 @@ import (
 )
 
 type Account struct {
-	ID          int64
-	Name        string
-	Notes       *string
-	Platform    string
-	Type        string
-	Credentials map[string]any
-	Extra       map[string]any
-	ProxyID     *int64
-	Concurrency int
-	Priority    int
+	ID            int64
+	Name          string
+	Notes         *string
+	Platform      string
+	Type          string
+	Credentials   map[string]any
+	Extra         map[string]any
+	OwnerUserID   *int64
+	ShareMode     string
+	ShareStatus   string
+	SharePolicyID *int64
+	ProxyID       *int64
+	Concurrency   int
+	Priority      int
 	// RateMultiplier 账号计费倍率（>=0，允许 0 表示该账号计费为 0）。
 	// 使用指针用于兼容旧版本调度缓存（Redis）中缺字段的情况：nil 表示按 1.0 处理。
 	RateMultiplier     *float64
@@ -64,6 +68,55 @@ type Account struct {
 	modelMappingCacheRawPtr         uintptr
 	modelMappingCacheRawLen         int
 	modelMappingCacheRawSig         uint64
+}
+
+const (
+	AccountShareModePrivate = "private"
+	AccountShareModePublic  = "public"
+
+	AccountShareStatusPending   = "pending"
+	AccountShareStatusApproved  = "approved"
+	AccountShareStatusSuspended = "suspended"
+)
+
+func NormalizeAccountShareMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case AccountShareModePublic:
+		return AccountShareModePublic
+	default:
+		return AccountShareModePrivate
+	}
+}
+
+func NormalizeAccountShareStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case AccountShareStatusPending:
+		return AccountShareStatusPending
+	case AccountShareStatusSuspended:
+		return AccountShareStatusSuspended
+	default:
+		return AccountShareStatusApproved
+	}
+}
+
+func (a *Account) IsPublicShareApproved() bool {
+	return a != nil &&
+		a.OwnerUserID != nil &&
+		NormalizeAccountShareMode(a.ShareMode) == AccountShareModePublic &&
+		NormalizeAccountShareStatus(a.ShareStatus) == AccountShareStatusApproved
+}
+
+func (a *Account) IsVisibleToConsumer(userID int64) bool {
+	if a == nil {
+		return false
+	}
+	if a.OwnerUserID == nil {
+		return true
+	}
+	if userID > 0 && *a.OwnerUserID == userID {
+		return true
+	}
+	return a.IsPublicShareApproved()
 }
 
 type TempUnschedulableRule struct {

@@ -9,6 +9,9 @@
     <PlatformIcon v-if="platform" :platform="platform" size="sm" />
     <!-- Group name -->
     <span class="truncate">{{ name }}</span>
+    <span v-if="isPrivateScope" :class="scopeLabelClass">
+      {{ t('groups.private') }}
+    </span>
     <!-- Right side label -->
     <span v-if="showLabel" :class="labelClass">
       <template v-if="hasCustomRate">
@@ -26,12 +29,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { SubscriptionType, GroupPlatform } from '@/types'
+import type { SubscriptionType, GroupPlatform, GroupScope } from '@/types'
 import PlatformIcon from './PlatformIcon.vue'
 
 interface Props {
   name: string
   platform?: GroupPlatform
+  scope?: GroupScope
   subscriptionType?: SubscriptionType
   rateMultiplier?: number
   userRateMultiplier?: number | null // 用户专属倍率
@@ -56,6 +60,7 @@ const props = withDefaults(defineProps<Props>(), {
 const { t } = useI18n()
 
 const isSubscription = computed(() => props.subscriptionType === 'subscription')
+const isPrivateScope = computed(() => props.scope === 'user_private')
 
 // 是否有专属倍率（且与默认倍率不同）
 const hasCustomRate = computed(() => {
@@ -125,6 +130,10 @@ const labelClass = computed(() => {
     return `${base} bg-blue-200/60 text-blue-800 dark:bg-blue-800/40 dark:text-blue-300`
   }
   return `${base} bg-violet-200/60 text-violet-800 dark:bg-violet-800/40 dark:text-violet-300`
+})
+
+const scopeLabelClass = computed(() => {
+  return 'px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200/70 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
 })
 
 // Badge color based on platform and subscription type

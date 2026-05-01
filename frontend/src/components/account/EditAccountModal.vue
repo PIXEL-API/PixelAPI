@@ -26,8 +26,40 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <div v-if="isUserScope">
+        <label class="input-label">{{ t('userAccounts.shareMode') }}</label>
+        <div class="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            :class="[
+              'inline-flex min-h-[44px] items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+              form.share_mode === 'private'
+                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
+            ]"
+            @click="form.share_mode = 'private'"
+          >
+            <Icon name="lock" size="sm" class="mr-2" />
+            {{ t('userAccounts.privateMode') }}
+          </button>
+          <button
+            type="button"
+            :class="[
+              'inline-flex min-h-[44px] items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+              form.share_mode === 'public'
+                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
+            ]"
+            @click="form.share_mode = 'public'"
+          >
+            <Icon name="globe" size="sm" class="mr-2" />
+            {{ t('userAccounts.publicMode') }}
+          </button>
+        </div>
+      </div>
+
       <!-- API Key fields (only for apikey type) -->
-      <div v-if="account.type === 'apikey'" class="space-y-4">
+      <div v-if="!isUserScope && account.type === 'apikey'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -544,7 +576,7 @@
       </div>
 
       <!-- Upstream fields (only for upstream type) -->
-      <div v-if="account.type === 'upstream'" class="space-y-4">
+      <div v-if="!isUserScope && account.type === 'upstream'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.upstream.baseUrl') }}</label>
           <input
@@ -568,7 +600,7 @@
       </div>
 
       <!-- Bedrock fields (for bedrock type, both SigV4 and API Key modes) -->
-      <div v-if="account.type === 'bedrock'" class="space-y-4">
+      <div v-if="!isUserScope && account.type === 'bedrock'" class="space-y-4">
         <!-- SigV4 fields -->
         <template v-if="!isBedrockAPIKeyMode">
           <div>
@@ -1031,7 +1063,7 @@
         </div>
       </div>
 
-      <div>
+      <div v-if="canManageProxy">
         <label class="input-label">{{ t('admin.accounts.proxy') }}</label>
         <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
       </div>
@@ -1060,7 +1092,7 @@
           />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
-        <div>
+        <div v-if="canManageBillingRate">
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
           <input v-model.number="form.rate_multiplier" type="number" min="0" step="0.001" class="input" />
           <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
@@ -1405,7 +1437,7 @@
         </div>
 
         <!-- Window Cost Limit -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="!isUserScope" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="mb-3 flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.windowCost.label') }}</label>
@@ -1906,8 +1938,10 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
+import { accountsAPI } from '@/api/accounts'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
-import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode } from '@/types'
+import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode, AccountShareMode, UpdateAccountRequest } from '@/types'
+import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -1940,6 +1974,9 @@ interface Props {
   account: Account | null
   proxies: Proxy[]
   groups: AdminGroup[]
+  accountScope?: AccountApiScope
+  allowProxy?: boolean
+  allowBillingRate?: boolean
 }
 
 const props = defineProps<Props>()
@@ -1951,6 +1988,10 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const accountScope = computed(() => props.accountScope ?? 'admin')
+const isUserScope = computed(() => accountScope.value === 'user')
+const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
+const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
@@ -2069,11 +2110,15 @@ const {
 } = useQuotaNotifyState()
 
 // Load global feature states once
-adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
-  webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
-}).catch(() => { webSearchGlobalEnabled.value = false })
+if (!isUserScope.value) {
+  adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
+    webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
+  }).catch(() => { webSearchGlobalEnabled.value = false })
+}
 
-loadQuotaNotifyGlobal()
+if (!isUserScope.value) {
+  loadQuotaNotifyGlobal()
+}
 const editQuotaLimit = ref<number | null>(null)
 const editQuotaDailyLimit = ref<number | null>(null)
 const editQuotaWeeklyLimit = ref<number | null>(null)
@@ -2177,17 +2222,24 @@ const mixedChannelWarningMessageText = computed(() => {
 const form = reactive({
   name: '',
   notes: '',
+  share_mode: 'private' as AccountShareMode,
   proxy_id: null as number | null,
   concurrency: 1,
   load_factor: null as number | null,
   priority: 1,
   rate_multiplier: 1,
-  status: 'active' as 'active' | 'inactive' | 'error',
+  status: 'active' as 'active' | 'inactive' | 'disabled' | 'error',
   group_ids: [] as number[],
   expires_at: null as number | null
 })
 
 const statusOptions = computed(() => {
+  if (isUserScope.value) {
+    return [
+      { value: 'active', label: t('common.active') },
+      { value: 'disabled', label: t('userAccounts.status.disabled') }
+    ]
+  }
   const options = [
     { value: 'active', label: t('common.active') },
     { value: 'inactive', label: t('common.inactive') }
@@ -2231,12 +2283,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningAction.value = null
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
+  form.share_mode = newAccount.share_mode === 'public' ? 'public' : 'private'
   form.proxy_id = newAccount.proxy_id
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
-  form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error')
+  form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'disabled' || newAccount.status === 'error')
     ? newAccount.status
     : 'active'
   form.group_ids = newAccount.group_ids || []
@@ -2511,6 +2564,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 }
 
 async function loadTLSProfiles() {
+  if (isUserScope.value) {
+    tlsFingerprintProfiles.value = []
+    return
+  }
   try {
     const profiles = await adminAPI.tlsFingerprintProfiles.list()
     tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name }))
@@ -2798,7 +2855,7 @@ function loadQuotaControlSettings(account: Account) {
   }
 
   // Load custom base URL setting
-  if (account.custom_base_url_enabled === true) {
+  if (!isUserScope.value && account.custom_base_url_enabled === true) {
     customBaseUrlEnabled.value = true
     customBaseUrl.value = account.custom_base_url || ''
   }
@@ -2879,6 +2936,9 @@ const withAntigravityConfirmFlag = (payload: Record<string, unknown>) => {
 }
 
 const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<void>): Promise<boolean> => {
+  if (isUserScope.value) {
+    return true
+  }
   if (!needsMixedChannelCheck()) {
     return true
   }
@@ -2922,11 +2982,28 @@ const handleClose = () => {
   emit('close')
 }
 
+const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
+  const next = { ...payload }
+  if (isUserScope.value && next.status === 'inactive') {
+    next.status = 'disabled'
+  }
+  if (!canManageProxy.value) {
+    delete next.proxy_id
+  }
+  if (!canManageBillingRate.value) {
+    delete next.rate_multiplier
+  }
+  return next
+}
+
 const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
   submitting.value = true
   try {
-    const updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
-    appStore.showSuccess(t('admin.accounts.accountUpdated'))
+    const payload = sanitizeUpdatePayload(withAntigravityConfirmFlag(updatePayload))
+    const updatedAccount = isUserScope.value
+      ? await accountsAPI.update(accountID, payload as UpdateAccountRequest)
+      : await adminAPI.accounts.update(accountID, payload)
+    appStore.showSuccess(isUserScope.value ? t('userAccounts.accountUpdatedSuccess') : t('admin.accounts.accountUpdated'))
     emit('updated', updatedAccount)
     handleClose()
   } catch (error: any) {
@@ -2950,7 +3027,12 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
+  if (isUserScope.value && props.account.type !== 'oauth') {
+    appStore.showError(t('userAccounts.typeNotAllowed'))
+    return
+  }
+
+  if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'disabled' && form.status !== 'error') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
   }
@@ -3269,10 +3351,10 @@ const handleSubmit = async () => {
       }
 
       // Custom base URL relay setting
-      if (customBaseUrlEnabled.value && customBaseUrl.value.trim()) {
+      if (!isUserScope.value && customBaseUrlEnabled.value && customBaseUrl.value.trim()) {
         newExtra.custom_base_url_enabled = true
         newExtra.custom_base_url = customBaseUrl.value.trim()
-      } else {
+      } else if (!isUserScope.value) {
         delete newExtra.custom_base_url_enabled
         delete newExtra.custom_base_url
       }

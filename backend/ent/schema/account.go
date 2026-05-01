@@ -86,6 +86,19 @@ func (Account) Fields() []ent.Field {
 			Default(func() map[string]any { return map[string]any{} }).
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
 
+		field.Int64("owner_user_id").
+			Optional().
+			Nillable(),
+		field.String("share_mode").
+			MaxLen(20).
+			Default("private"),
+		field.String("share_status").
+			MaxLen(20).
+			Default("approved"),
+		field.Int64("share_policy_id").
+			Optional().
+			Nillable(),
+
 		// proxy_id: 关联的代理配置 ID（可选）
 		// 用于需要通过特定代理访问 API 的场景
 		field.Int64("proxy_id").
@@ -209,6 +222,10 @@ func (Account) Edges() []ent.Edge {
 		edge.To("proxy", Proxy.Type).
 			Field("proxy_id").
 			Unique(),
+		edge.From("owner", User.Type).
+			Ref("owned_accounts").
+			Field("owner_user_id").
+			Unique(),
 		// usage_logs: 该账户的使用日志
 		edge.To("usage_logs", UsageLog.Type),
 	}
@@ -231,6 +248,8 @@ func (Account) Indexes() []ent.Index {
 		// 调度热路径复合索引（线上由 SQL 迁移创建部分索引，schema 仅用于模型可读性对齐）
 		index.Fields("platform", "priority"),
 		index.Fields("priority", "status"),
+		index.Fields("owner_user_id"),
+		index.Fields("share_mode", "share_status"),
 		index.Fields("deleted_at"), // 软删除查询优化
 	}
 }

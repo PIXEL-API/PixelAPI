@@ -1194,6 +1194,17 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyAffiliateRebatePerInviteeCap] = strconv.FormatFloat(settings.AffiliateRebatePerInviteeCap, 'f', 8, 64)
 	updates[SettingKeyDefaultUserRPMLimit] = strconv.Itoa(settings.DefaultUserRPMLimit)
+	updates[SettingKeyUserPrivateGroupDailyLimitUSD] = formatPositiveOptionalFloat(settings.UserPrivateGroupDailyLimitUSD)
+	updates[SettingKeyUserPrivateGroupWeeklyLimitUSD] = formatPositiveOptionalFloat(settings.UserPrivateGroupWeeklyLimitUSD)
+	updates[SettingKeyUserPrivateGroupMonthlyLimitUSD] = formatPositiveOptionalFloat(settings.UserPrivateGroupMonthlyLimitUSD)
+	if settings.UserPrivateGroupRateMultiplier <= 0 || math.IsNaN(settings.UserPrivateGroupRateMultiplier) || math.IsInf(settings.UserPrivateGroupRateMultiplier, 0) {
+		settings.UserPrivateGroupRateMultiplier = 1
+	}
+	updates[SettingKeyUserPrivateGroupRateMultiplier] = strconv.FormatFloat(settings.UserPrivateGroupRateMultiplier, 'f', 8, 64)
+	if settings.UserPrivateGroupRPMLimit < 0 {
+		settings.UserPrivateGroupRPMLimit = 0
+	}
+	updates[SettingKeyUserPrivateGroupRPMLimit] = strconv.Itoa(settings.UserPrivateGroupRPMLimit)
 	defaultSubsJSON, err := json.Marshal(settings.DefaultSubscriptions)
 	if err != nil {
 		return nil, fmt.Errorf("marshal default subscriptions: %w", err)
@@ -1652,6 +1663,21 @@ func (s *SettingService) GetDefaultUserRPMLimit(ctx context.Context) int {
 	return 0
 }
 
+// GetUserPrivateGroupTemplate returns the default quota template for newly provisioned user-private groups.
+func (s *SettingService) GetUserPrivateGroupTemplate(ctx context.Context) (*UserPrivateGroupTemplate, error) {
+	settings, err := s.GetAllSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &UserPrivateGroupTemplate{
+		DailyLimitUSD:   settings.UserPrivateGroupDailyLimitUSD,
+		WeeklyLimitUSD:  settings.UserPrivateGroupWeeklyLimitUSD,
+		MonthlyLimitUSD: settings.UserPrivateGroupMonthlyLimitUSD,
+		RateMultiplier:  settings.UserPrivateGroupRateMultiplier,
+		RPMLimit:        settings.UserPrivateGroupRPMLimit,
+	}, nil
+}
+
 // GetDefaultSubscriptions 获取新用户默认订阅配置列表。
 func (s *SettingService) GetDefaultSubscriptions(ctx context.Context) []DefaultSubscriptionSetting {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyDefaultSubscriptions)
@@ -1880,12 +1906,17 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyMaxClaudeCodeVersion: "",
 
 		// 分组隔离（默认不允许未分组 Key 调度）
-		SettingKeyAllowUngroupedKeyScheduling:    "false",
-		SettingPaymentVisibleMethodAlipaySource:  "",
-		SettingPaymentVisibleMethodWxpaySource:   "",
-		SettingPaymentVisibleMethodAlipayEnabled: "false",
-		SettingPaymentVisibleMethodWxpayEnabled:  "false",
-		openAIAdvancedSchedulerSettingKey:        "false",
+		SettingKeyAllowUngroupedKeyScheduling:     "false",
+		SettingKeyUserPrivateGroupDailyLimitUSD:   "0",
+		SettingKeyUserPrivateGroupWeeklyLimitUSD:  "0",
+		SettingKeyUserPrivateGroupMonthlyLimitUSD: "0",
+		SettingKeyUserPrivateGroupRateMultiplier:  "1",
+		SettingKeyUserPrivateGroupRPMLimit:        "0",
+		SettingPaymentVisibleMethodAlipaySource:   "",
+		SettingPaymentVisibleMethodWxpaySource:    "",
+		SettingPaymentVisibleMethodAlipayEnabled:  "false",
+		SettingPaymentVisibleMethodWxpayEnabled:   "false",
+		openAIAdvancedSchedulerSettingKey:         "false",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -1949,6 +1980,17 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 
 	// 解析浮点数类型
+	result.UserPrivateGroupDailyLimitUSD = parsePositiveOptionalFloat(settings[SettingKeyUserPrivateGroupDailyLimitUSD])
+	result.UserPrivateGroupWeeklyLimitUSD = parsePositiveOptionalFloat(settings[SettingKeyUserPrivateGroupWeeklyLimitUSD])
+	result.UserPrivateGroupMonthlyLimitUSD = parsePositiveOptionalFloat(settings[SettingKeyUserPrivateGroupMonthlyLimitUSD])
+	result.UserPrivateGroupRateMultiplier = 1
+	if multiplier, err := strconv.ParseFloat(settings[SettingKeyUserPrivateGroupRateMultiplier], 64); err == nil && multiplier > 0 && !math.IsNaN(multiplier) && !math.IsInf(multiplier, 0) {
+		result.UserPrivateGroupRateMultiplier = multiplier
+	}
+	if rpm, err := strconv.Atoi(settings[SettingKeyUserPrivateGroupRPMLimit]); err == nil && rpm >= 0 {
+		result.UserPrivateGroupRPMLimit = rpm
+	}
+
 	if balance, err := strconv.ParseFloat(settings[SettingKeyDefaultBalance], 64); err == nil {
 		result.DefaultBalance = balance
 	} else {
@@ -2259,6 +2301,21 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 
 	return result
+}
+
+func formatPositiveOptionalFloat(value *float64) string {
+	if value == nil || *value <= 0 || math.IsNaN(*value) || math.IsInf(*value, 0) {
+		return "0"
+	}
+	return strconv.FormatFloat(*value, 'f', 8, 64)
+}
+
+func parsePositiveOptionalFloat(value string) *float64 {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return nil
+	}
+	return &parsed
 }
 
 func clampAffiliateRebateRate(value float64) float64 {

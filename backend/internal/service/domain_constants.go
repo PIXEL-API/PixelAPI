@@ -74,6 +74,12 @@ const (
 	SubscriptionTypeSubscription = domain.SubscriptionTypeSubscription // 订阅模式（按限额控制）
 )
 
+// Group scope constants
+const (
+	GroupScopePublic      = domain.GroupScopePublic
+	GroupScopeUserPrivate = domain.GroupScopeUserPrivate
+)
+
 // Subscription status constants
 const (
 	SubscriptionStatusActive    = domain.SubscriptionStatusActive
@@ -317,7 +323,12 @@ const (
 	SettingKeyMaxClaudeCodeVersion = "max_claude_code_version"
 
 	// SettingKeyAllowUngroupedKeyScheduling 允许未分组 API Key 调度（默认 false：未分组 Key 返回 403）
-	SettingKeyAllowUngroupedKeyScheduling = "allow_ungrouped_key_scheduling"
+	SettingKeyAllowUngroupedKeyScheduling     = "allow_ungrouped_key_scheduling"
+	SettingKeyUserPrivateGroupDailyLimitUSD   = "user_private_group_daily_limit_usd"
+	SettingKeyUserPrivateGroupWeeklyLimitUSD  = "user_private_group_weekly_limit_usd"
+	SettingKeyUserPrivateGroupMonthlyLimitUSD = "user_private_group_monthly_limit_usd"
+	SettingKeyUserPrivateGroupRateMultiplier  = "user_private_group_rate_multiplier"
+	SettingKeyUserPrivateGroupRPMLimit        = "user_private_group_rpm_limit"
 
 	// SettingKeyBackendModeEnabled Backend 模式：禁用用户注册和自助服务，仅管理员可登录
 	SettingKeyBackendModeEnabled = "backend_mode_enabled"

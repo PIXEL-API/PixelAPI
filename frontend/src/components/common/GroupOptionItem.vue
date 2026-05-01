@@ -9,6 +9,7 @@
       <GroupBadge
         :name="name"
         :platform="platform"
+        :scope="scope"
         :subscription-type="subscriptionType"
         :show-rate="false"
         class="groupOptionItemBadge"
@@ -52,11 +53,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import GroupBadge from './GroupBadge.vue'
-import type { SubscriptionType, GroupPlatform } from '@/types'
+import type { SubscriptionType, GroupPlatform, GroupScope } from '@/types'
 
 interface Props {
   name: string
   platform: GroupPlatform
+  scope?: GroupScope
   subscriptionType?: SubscriptionType
   rateMultiplier?: number
   userRateMultiplier?: number | null

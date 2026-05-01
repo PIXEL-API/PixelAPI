@@ -145,6 +145,47 @@ func (_u *GroupUpdate) SetNillableStatus(v *string) *GroupUpdate {
 	return _u
 }
 
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *GroupUpdate) SetOwnerUserID(v int64) *GroupUpdate {
+	_u.mutation.ResetOwnerUserID()
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableOwnerUserID(v *int64) *GroupUpdate {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// AddOwnerUserID adds value to the "owner_user_id" field.
+func (_u *GroupUpdate) AddOwnerUserID(v int64) *GroupUpdate {
+	_u.mutation.AddOwnerUserID(v)
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *GroupUpdate) ClearOwnerUserID() *GroupUpdate {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
+// SetScope sets the "scope" field.
+func (_u *GroupUpdate) SetScope(v string) *GroupUpdate {
+	_u.mutation.SetScope(v)
+	return _u
+}
+
+// SetNillableScope sets the "scope" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableScope(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetScope(*v)
+	}
+	return _u
+}
+
 // SetPlatform sets the "platform" field.
 func (_u *GroupUpdate) SetPlatform(v string) *GroupUpdate {
 	_u.mutation.SetPlatform(v)
@@ -863,6 +904,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Group.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Scope(); ok {
+		if err := group.ScopeValidator(v); err != nil {
+			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "Group.scope": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Platform(); ok {
 		if err := group.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
@@ -922,6 +968,18 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.OwnerUserID(); ok {
+		_spec.SetField(group.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedOwnerUserID(); ok {
+		_spec.AddField(group.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.OwnerUserIDCleared() {
+		_spec.ClearField(group.FieldOwnerUserID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.Scope(); ok {
+		_spec.SetField(group.FieldScope, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
@@ -1476,6 +1534,47 @@ func (_u *GroupUpdateOne) SetStatus(v string) *GroupUpdateOne {
 func (_u *GroupUpdateOne) SetNillableStatus(v *string) *GroupUpdateOne {
 	if v != nil {
 		_u.SetStatus(*v)
+	}
+	return _u
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *GroupUpdateOne) SetOwnerUserID(v int64) *GroupUpdateOne {
+	_u.mutation.ResetOwnerUserID()
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableOwnerUserID(v *int64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// AddOwnerUserID adds value to the "owner_user_id" field.
+func (_u *GroupUpdateOne) AddOwnerUserID(v int64) *GroupUpdateOne {
+	_u.mutation.AddOwnerUserID(v)
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *GroupUpdateOne) ClearOwnerUserID() *GroupUpdateOne {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
+// SetScope sets the "scope" field.
+func (_u *GroupUpdateOne) SetScope(v string) *GroupUpdateOne {
+	_u.mutation.SetScope(v)
+	return _u
+}
+
+// SetNillableScope sets the "scope" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableScope(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetScope(*v)
 	}
 	return _u
 }
@@ -2211,6 +2310,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Group.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Scope(); ok {
+		if err := group.ScopeValidator(v); err != nil {
+			return &ValidationError{Name: "scope", err: fmt.Errorf(`ent: validator failed for field "Group.scope": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Platform(); ok {
 		if err := group.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
@@ -2287,6 +2391,18 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.OwnerUserID(); ok {
+		_spec.SetField(group.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedOwnerUserID(); ok {
+		_spec.AddField(group.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.OwnerUserIDCleared() {
+		_spec.ClearField(group.FieldOwnerUserID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.Scope(); ok {
+		_spec.SetField(group.FieldScope, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)

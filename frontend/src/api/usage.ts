@@ -42,7 +42,7 @@ export interface UserDashboardStats {
 export interface TrendParams {
   start_date?: string
   end_date?: string
-  granularity?: 'day' | 'hour'
+  granularity?: 'day' | 'hour' | 'week' | 'month'
 }
 
 export interface TrendResponse {
@@ -56,6 +56,64 @@ export interface ModelStatsResponse {
   models: ModelStat[]
   start_date: string
   end_date: string
+}
+
+export interface AccountSharingSummary {
+  owned_accounts: number
+  private_accounts: number
+  public_pending_accounts: number
+  public_approved_accounts: number
+  public_suspended_accounts: number
+  self_requests: number
+  self_tokens: number
+  self_actual_cost: number
+  self_account_cost: number
+  external_requests: number
+  external_consumer_charge: number
+  external_account_cost: number
+  external_owner_credit: number
+  external_platform_fee: number
+  total_account_cost: number
+  balance_net_change: number
+}
+
+export interface AccountSharingAccountStat {
+  account_id: number
+  name: string
+  platform: string
+  share_mode: 'private' | 'public' | string
+  share_status: 'pending' | 'approved' | 'suspended' | string
+  self_requests: number
+  self_tokens: number
+  self_actual_cost: number
+  self_account_cost: number
+  external_requests: number
+  external_consumer_charge: number
+  external_account_cost: number
+  external_owner_credit: number
+  external_platform_fee: number
+}
+
+export interface AccountSharingTrendPoint {
+  date: string
+  self_requests: number
+  self_tokens: number
+  self_actual_cost: number
+  self_account_cost: number
+  external_requests: number
+  external_consumer_charge: number
+  external_account_cost: number
+  external_owner_credit: number
+  external_platform_fee: number
+}
+
+export interface AccountSharingDashboardStats {
+  summary: AccountSharingSummary
+  accounts: AccountSharingAccountStat[]
+  trend: AccountSharingTrendPoint[]
+  start_date: string
+  end_date: string
+  granularity: string
 }
 
 /**
@@ -223,6 +281,11 @@ export async function getDashboardModels(params?: {
   return data
 }
 
+export async function getDashboardAccountSharing(params?: TrendParams): Promise<AccountSharingDashboardStats> {
+  const { data } = await apiClient.get<AccountSharingDashboardStats>('/usage/dashboard/account-sharing', { params })
+  return data
+}
+
 export interface BatchApiKeyUsageStats {
   api_key_id: number
   today_actual_cost: number
@@ -268,6 +331,7 @@ export const usageAPI = {
   getDashboardStats,
   getDashboardTrend,
   getDashboardModels,
+  getDashboardAccountSharing,
   getDashboardApiKeysUsage
 }
 

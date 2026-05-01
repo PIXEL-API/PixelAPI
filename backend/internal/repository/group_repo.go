@@ -46,6 +46,8 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetSortOrder(groupIn.SortOrder).
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
+		SetNillableOwnerUserID(groupIn.OwnerUserID).
+		SetScope(service.NormalizeGroupScope(groupIn.Scope)).
 		SetSubscriptionType(groupIn.SubscriptionType).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
@@ -108,6 +110,20 @@ func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.G
 	return groupEntityToService(m), nil
 }
 
+func (r *groupRepository) FindUserPrivateByOwnerAndPlatform(ctx context.Context, userID int64, platform string) (*service.Group, error) {
+	m, err := r.client.Group.Query().
+		Where(
+			group.OwnerUserIDEQ(userID),
+			group.PlatformEQ(strings.ToLower(strings.TrimSpace(platform))),
+			group.ScopeEQ(service.GroupScopeUserPrivate),
+		).
+		Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrGroupNotFound, nil)
+	}
+	return groupEntityToService(m), nil
+}
+
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {
 	builder := r.client.Group.UpdateOneID(groupIn.ID).
 		SetName(groupIn.Name).
@@ -116,6 +132,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetRateMultiplier(groupIn.RateMultiplier).
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
+		SetScope(service.NormalizeGroupScope(groupIn.Scope)).
 		SetSubscriptionType(groupIn.SubscriptionType).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
@@ -149,6 +166,11 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		builder = builder.SetMonthlyLimitUsd(*groupIn.MonthlyLimitUSD)
 	} else {
 		builder = builder.ClearMonthlyLimitUsd()
+	}
+	if groupIn.OwnerUserID != nil {
+		builder = builder.SetOwnerUserID(*groupIn.OwnerUserID)
+	} else {
+		builder = builder.ClearOwnerUserID()
 	}
 	if groupIn.ImagePrice1K != nil {
 		builder = builder.SetImagePrice1k(*groupIn.ImagePrice1K)
@@ -216,6 +238,10 @@ func (r *groupRepository) List(ctx context.Context, params pagination.Pagination
 }
 
 func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
+	return r.ListWithScopeFilters(ctx, params, platform, status, search, isExclusive, "")
+}
+
+func (r *groupRepository) ListWithScopeFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool, scope string) ([]service.Group, *pagination.PaginationResult, error) {
 	q := r.client.Group.Query()
 
 	if platform != "" {
@@ -232,6 +258,13 @@ func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination
 	}
 	if isExclusive != nil {
 		q = q.Where(group.IsExclusiveEQ(*isExclusive))
+	}
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "", "all":
+	case service.GroupScopeUserPrivate:
+		q = q.Where(group.ScopeEQ(service.GroupScopeUserPrivate))
+	default:
+		q = q.Where(group.ScopeEQ(service.GroupScopePublic))
 	}
 
 	total, err := q.Clone().Count(ctx)

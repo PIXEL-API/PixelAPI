@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 )
 
 // AccountUpdate is the builder for updating Account entities.
@@ -128,6 +129,81 @@ func (_u *AccountUpdate) SetCredentials(v map[string]interface{}) *AccountUpdate
 // SetExtra sets the "extra" field.
 func (_u *AccountUpdate) SetExtra(v map[string]interface{}) *AccountUpdate {
 	_u.mutation.SetExtra(v)
+	return _u
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *AccountUpdate) SetOwnerUserID(v int64) *AccountUpdate {
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableOwnerUserID(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *AccountUpdate) ClearOwnerUserID() *AccountUpdate {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
+// SetShareMode sets the "share_mode" field.
+func (_u *AccountUpdate) SetShareMode(v string) *AccountUpdate {
+	_u.mutation.SetShareMode(v)
+	return _u
+}
+
+// SetNillableShareMode sets the "share_mode" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableShareMode(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetShareMode(*v)
+	}
+	return _u
+}
+
+// SetShareStatus sets the "share_status" field.
+func (_u *AccountUpdate) SetShareStatus(v string) *AccountUpdate {
+	_u.mutation.SetShareStatus(v)
+	return _u
+}
+
+// SetNillableShareStatus sets the "share_status" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableShareStatus(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetShareStatus(*v)
+	}
+	return _u
+}
+
+// SetSharePolicyID sets the "share_policy_id" field.
+func (_u *AccountUpdate) SetSharePolicyID(v int64) *AccountUpdate {
+	_u.mutation.ResetSharePolicyID()
+	_u.mutation.SetSharePolicyID(v)
+	return _u
+}
+
+// SetNillableSharePolicyID sets the "share_policy_id" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableSharePolicyID(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetSharePolicyID(*v)
+	}
+	return _u
+}
+
+// AddSharePolicyID adds value to the "share_policy_id" field.
+func (_u *AccountUpdate) AddSharePolicyID(v int64) *AccountUpdate {
+	_u.mutation.AddSharePolicyID(v)
+	return _u
+}
+
+// ClearSharePolicyID clears the value of the "share_policy_id" field.
+func (_u *AccountUpdate) ClearSharePolicyID() *AccountUpdate {
+	_u.mutation.ClearSharePolicyID()
 	return _u
 }
 
@@ -523,6 +599,25 @@ func (_u *AccountUpdate) SetProxy(v *Proxy) *AccountUpdate {
 	return _u.SetProxyID(v.ID)
 }
 
+// SetOwnerID sets the "owner" edge to the User entity by ID.
+func (_u *AccountUpdate) SetOwnerID(id int64) *AccountUpdate {
+	_u.mutation.SetOwnerID(id)
+	return _u
+}
+
+// SetNillableOwnerID sets the "owner" edge to the User entity by ID if the given value is not nil.
+func (_u *AccountUpdate) SetNillableOwnerID(id *int64) *AccountUpdate {
+	if id != nil {
+		_u = _u.SetOwnerID(*id)
+	}
+	return _u
+}
+
+// SetOwner sets the "owner" edge to the User entity.
+func (_u *AccountUpdate) SetOwner(v *User) *AccountUpdate {
+	return _u.SetOwnerID(v.ID)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *AccountUpdate) AddUsageLogIDs(ids ...int64) *AccountUpdate {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -567,6 +662,12 @@ func (_u *AccountUpdate) RemoveGroups(v ...*Group) *AccountUpdate {
 // ClearProxy clears the "proxy" edge to the Proxy entity.
 func (_u *AccountUpdate) ClearProxy() *AccountUpdate {
 	_u.mutation.ClearProxy()
+	return _u
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (_u *AccountUpdate) ClearOwner() *AccountUpdate {
+	_u.mutation.ClearOwner()
 	return _u
 }
 
@@ -650,6 +751,16 @@ func (_u *AccountUpdate) check() error {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Account.type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ShareMode(); ok {
+		if err := account.ShareModeValidator(v); err != nil {
+			return &ValidationError{Name: "share_mode", err: fmt.Errorf(`ent: validator failed for field "Account.share_mode": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ShareStatus(); ok {
+		if err := account.ShareStatusValidator(v); err != nil {
+			return &ValidationError{Name: "share_status", err: fmt.Errorf(`ent: validator failed for field "Account.share_status": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := account.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Account.status": %w`, err)}
@@ -704,6 +815,21 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Extra(); ok {
 		_spec.SetField(account.FieldExtra, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.ShareMode(); ok {
+		_spec.SetField(account.FieldShareMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ShareStatus(); ok {
+		_spec.SetField(account.FieldShareStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SharePolicyID(); ok {
+		_spec.SetField(account.FieldSharePolicyID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSharePolicyID(); ok {
+		_spec.AddField(account.FieldSharePolicyID, field.TypeInt64, value)
+	}
+	if _u.mutation.SharePolicyIDCleared() {
+		_spec.ClearField(account.FieldSharePolicyID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(account.FieldConcurrency, field.TypeInt, value)
@@ -893,6 +1019,35 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.OwnerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.OwnerTable,
+			Columns: []string{account.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.OwnerTable,
+			Columns: []string{account.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _u.mutation.UsageLogsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
@@ -1055,6 +1210,81 @@ func (_u *AccountUpdateOne) SetCredentials(v map[string]interface{}) *AccountUpd
 // SetExtra sets the "extra" field.
 func (_u *AccountUpdateOne) SetExtra(v map[string]interface{}) *AccountUpdateOne {
 	_u.mutation.SetExtra(v)
+	return _u
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *AccountUpdateOne) SetOwnerUserID(v int64) *AccountUpdateOne {
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableOwnerUserID(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *AccountUpdateOne) ClearOwnerUserID() *AccountUpdateOne {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
+// SetShareMode sets the "share_mode" field.
+func (_u *AccountUpdateOne) SetShareMode(v string) *AccountUpdateOne {
+	_u.mutation.SetShareMode(v)
+	return _u
+}
+
+// SetNillableShareMode sets the "share_mode" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableShareMode(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetShareMode(*v)
+	}
+	return _u
+}
+
+// SetShareStatus sets the "share_status" field.
+func (_u *AccountUpdateOne) SetShareStatus(v string) *AccountUpdateOne {
+	_u.mutation.SetShareStatus(v)
+	return _u
+}
+
+// SetNillableShareStatus sets the "share_status" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableShareStatus(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetShareStatus(*v)
+	}
+	return _u
+}
+
+// SetSharePolicyID sets the "share_policy_id" field.
+func (_u *AccountUpdateOne) SetSharePolicyID(v int64) *AccountUpdateOne {
+	_u.mutation.ResetSharePolicyID()
+	_u.mutation.SetSharePolicyID(v)
+	return _u
+}
+
+// SetNillableSharePolicyID sets the "share_policy_id" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableSharePolicyID(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetSharePolicyID(*v)
+	}
+	return _u
+}
+
+// AddSharePolicyID adds value to the "share_policy_id" field.
+func (_u *AccountUpdateOne) AddSharePolicyID(v int64) *AccountUpdateOne {
+	_u.mutation.AddSharePolicyID(v)
+	return _u
+}
+
+// ClearSharePolicyID clears the value of the "share_policy_id" field.
+func (_u *AccountUpdateOne) ClearSharePolicyID() *AccountUpdateOne {
+	_u.mutation.ClearSharePolicyID()
 	return _u
 }
 
@@ -1450,6 +1680,25 @@ func (_u *AccountUpdateOne) SetProxy(v *Proxy) *AccountUpdateOne {
 	return _u.SetProxyID(v.ID)
 }
 
+// SetOwnerID sets the "owner" edge to the User entity by ID.
+func (_u *AccountUpdateOne) SetOwnerID(id int64) *AccountUpdateOne {
+	_u.mutation.SetOwnerID(id)
+	return _u
+}
+
+// SetNillableOwnerID sets the "owner" edge to the User entity by ID if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableOwnerID(id *int64) *AccountUpdateOne {
+	if id != nil {
+		_u = _u.SetOwnerID(*id)
+	}
+	return _u
+}
+
+// SetOwner sets the "owner" edge to the User entity.
+func (_u *AccountUpdateOne) SetOwner(v *User) *AccountUpdateOne {
+	return _u.SetOwnerID(v.ID)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *AccountUpdateOne) AddUsageLogIDs(ids ...int64) *AccountUpdateOne {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -1494,6 +1743,12 @@ func (_u *AccountUpdateOne) RemoveGroups(v ...*Group) *AccountUpdateOne {
 // ClearProxy clears the "proxy" edge to the Proxy entity.
 func (_u *AccountUpdateOne) ClearProxy() *AccountUpdateOne {
 	_u.mutation.ClearProxy()
+	return _u
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (_u *AccountUpdateOne) ClearOwner() *AccountUpdateOne {
+	_u.mutation.ClearOwner()
 	return _u
 }
 
@@ -1590,6 +1845,16 @@ func (_u *AccountUpdateOne) check() error {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Account.type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ShareMode(); ok {
+		if err := account.ShareModeValidator(v); err != nil {
+			return &ValidationError{Name: "share_mode", err: fmt.Errorf(`ent: validator failed for field "Account.share_mode": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ShareStatus(); ok {
+		if err := account.ShareStatusValidator(v); err != nil {
+			return &ValidationError{Name: "share_status", err: fmt.Errorf(`ent: validator failed for field "Account.share_status": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := account.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Account.status": %w`, err)}
@@ -1661,6 +1926,21 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.Extra(); ok {
 		_spec.SetField(account.FieldExtra, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.ShareMode(); ok {
+		_spec.SetField(account.FieldShareMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ShareStatus(); ok {
+		_spec.SetField(account.FieldShareStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SharePolicyID(); ok {
+		_spec.SetField(account.FieldSharePolicyID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSharePolicyID(); ok {
+		_spec.AddField(account.FieldSharePolicyID, field.TypeInt64, value)
+	}
+	if _u.mutation.SharePolicyIDCleared() {
+		_spec.ClearField(account.FieldSharePolicyID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(account.FieldConcurrency, field.TypeInt, value)
@@ -1843,6 +2123,35 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.OwnerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.OwnerTable,
+			Columns: []string{account.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.OwnerTable,
+			Columns: []string{account.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

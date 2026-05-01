@@ -144,6 +144,7 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 
 	gwSvc := service.NewGatewayService(
 		nil, // accountRepo (not used: scheduler snapshot hit)
+		nil, // accountSharePolicyRepo
 		&fakeGroupRepo{group: group},
 		nil, // usageLogRepo
 		nil, // usageBillingRepo

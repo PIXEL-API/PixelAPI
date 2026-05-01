@@ -32,6 +32,10 @@ const (
 	FieldIsExclusive = "is_exclusive"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldOwnerUserID holds the string denoting the owner_user_id field in the database.
+	FieldOwnerUserID = "owner_user_id"
+	// FieldScope holds the string denoting the scope field in the database.
+	FieldScope = "scope"
 	// FieldPlatform holds the string denoting the platform field in the database.
 	FieldPlatform = "platform"
 	// FieldSubscriptionType holds the string denoting the subscription_type field in the database.
@@ -161,6 +165,8 @@ var Columns = []string{
 	FieldRateMultiplier,
 	FieldIsExclusive,
 	FieldStatus,
+	FieldOwnerUserID,
+	FieldScope,
 	FieldPlatform,
 	FieldSubscriptionType,
 	FieldDailyLimitUsd,
@@ -229,6 +235,10 @@ var (
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	StatusValidator func(string) error
+	// DefaultScope holds the default value on creation for the "scope" field.
+	DefaultScope string
+	// ScopeValidator is a validator for the "scope" field. It is called by the builders before save.
+	ScopeValidator func(string) error
 	// DefaultPlatform holds the default value on creation for the "platform" field.
 	DefaultPlatform string
 	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
@@ -311,6 +321,16 @@ func ByIsExclusive(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByOwnerUserID orders the results by the owner_user_id field.
+func ByOwnerUserID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOwnerUserID, opts...).ToFunc()
+}
+
+// ByScope orders the results by the scope field.
+func ByScope(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldScope, opts...).ToFunc()
 }
 
 // ByPlatform orders the results by the platform field.

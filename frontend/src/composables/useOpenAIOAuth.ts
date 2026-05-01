@@ -2,7 +2,9 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
+import { accountsAPI } from '@/api/accounts'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
+import type { AccountApiScope } from '@/composables/useAccountOAuth'
 
 export interface OpenAITokenInfo {
   access_token?: string
@@ -26,10 +28,10 @@ export interface OpenAITokenInfo {
 
 export type OpenAIOAuthPlatform = 'openai'
 
-export function useOpenAIOAuth() {
+export function useOpenAIOAuth(scope: AccountApiScope = 'admin') {
   const appStore = useAppStore()
   const { t } = useI18n()
-  const endpointPrefix = '/admin/openai'
+  const endpointPrefix = scope === 'user' ? '/account-oauth/openai' : '/admin/openai'
 
   // State
   const authUrl = ref('')
@@ -147,12 +149,15 @@ export function useOpenAIOAuth() {
 
     try {
       // Use dedicated refresh-token endpoint
-      const tokenInfo = await adminAPI.accounts.refreshOpenAIToken(
-        refreshToken.trim(),
-        proxyId,
-        `${endpointPrefix}/refresh-token`,
-        clientId
-      )
+      const tokenInfo =
+        scope === 'user'
+          ? await accountsAPI.refreshOpenAIToken(refreshToken.trim(), proxyId, clientId)
+          : await adminAPI.accounts.refreshOpenAIToken(
+              refreshToken.trim(),
+              proxyId,
+              `${endpointPrefix}/refresh-token`,
+              clientId
+            )
       return tokenInfo as OpenAITokenInfo
     } catch (err: any) {
       error.value = extractI18nErrorMessage(

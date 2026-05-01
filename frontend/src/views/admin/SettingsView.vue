@@ -2191,6 +2191,84 @@
               </div>
 
               <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <div class="mb-4">
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.defaults.privateGroupTemplate") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.defaults.privateGroupTemplateHint") }}
+                  </p>
+                </div>
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.privateGroupDailyLimit") }}
+                    </label>
+                    <input
+                      v-model.number="form.user_private_group_daily_limit_usd"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      class="input"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.privateGroupWeeklyLimit") }}
+                    </label>
+                    <input
+                      v-model.number="form.user_private_group_weekly_limit_usd"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      class="input"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.privateGroupMonthlyLimit") }}
+                    </label>
+                    <input
+                      v-model.number="form.user_private_group_monthly_limit_usd"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      class="input"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.privateGroupRateMultiplier") }}
+                    </label>
+                    <input
+                      v-model.number="form.user_private_group_rate_multiplier"
+                      type="number"
+                      min="0.0001"
+                      step="0.01"
+                      class="input"
+                      placeholder="1"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.defaults.privateGroupRpmLimit") }}
+                    </label>
+                    <input
+                      v-model.number="form.user_private_group_rpm_limit"
+                      type="number"
+                      min="0"
+                      step="1"
+                      class="input"
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
                 <div class="mb-3 flex items-center justify-between">
                   <div>
                     <label class="font-medium text-gray-900 dark:text-white">
@@ -5390,6 +5468,11 @@ const form = reactive<SettingsForm>({
   default_subscriptions: [],
   force_email_on_third_party_signup: false,
   default_user_rpm_limit: 0,
+  user_private_group_daily_limit_usd: null,
+  user_private_group_weekly_limit_usd: null,
+  user_private_group_monthly_limit_usd: null,
+  user_private_group_rate_multiplier: 1,
+  user_private_group_rpm_limit: 0,
   site_name: "Sub2API",
   site_logo: "",
   site_subtitle: "Subscription to API Conversion Platform",
@@ -6196,6 +6279,11 @@ function findDuplicateDefaultSubscription(
   });
 }
 
+function positiveNumberOrZero(value: number | null | undefined): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
 async function saveSettings() {
   saving.value = true;
   try {
@@ -6321,6 +6409,21 @@ async function saveSettings() {
       default_subscriptions: normalizedDefaultSubscriptions,
       force_email_on_third_party_signup: form.force_email_on_third_party_signup,
       default_user_rpm_limit: form.default_user_rpm_limit,
+      user_private_group_daily_limit_usd: positiveNumberOrZero(
+        form.user_private_group_daily_limit_usd,
+      ),
+      user_private_group_weekly_limit_usd: positiveNumberOrZero(
+        form.user_private_group_weekly_limit_usd,
+      ),
+      user_private_group_monthly_limit_usd: positiveNumberOrZero(
+        form.user_private_group_monthly_limit_usd,
+      ),
+      user_private_group_rate_multiplier:
+        positiveNumberOrZero(form.user_private_group_rate_multiplier) || 1,
+      user_private_group_rpm_limit: Math.max(
+        0,
+        Math.floor(Number(form.user_private_group_rpm_limit) || 0),
+      ),
       site_name: form.site_name,
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle,

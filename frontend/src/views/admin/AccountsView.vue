@@ -118,6 +118,9 @@
               </div>
             </template>
             <template #beforeCreate>
+              <button @click="showCredentialImport = true" class="btn btn-secondary">
+                {{ t('admin.accounts.credentialImport') }}
+              </button>
               <button @click="showImportData = true" class="btn btn-secondary">
                 {{ t('admin.accounts.dataImport') }}
               </button>
@@ -200,6 +203,27 @@
                 :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getAntigravityTierClass(row)]"
               >
                 {{ getAntigravityTierLabel(row) }}
+              </span>
+            </div>
+          </template>
+          <template #cell-share_scope="{ row }">
+            <div class="flex min-w-[120px] flex-col items-start gap-1">
+              <div class="flex flex-wrap items-center gap-1">
+                <span :class="shareScopeBadgeClass(row)">
+                  {{ shareScopeLabel(row) }}
+                </span>
+                <span
+                  v-if="isPublicUserAccount(row)"
+                  :class="shareStatusBadgeClass(row.share_status)"
+                >
+                  {{ shareStatusLabel(row.share_status) }}
+                </span>
+              </div>
+              <span
+                class="max-w-[150px] truncate text-xs text-gray-500 dark:text-gray-400"
+                :title="shareScopeMeta(row)"
+              >
+                {{ shareScopeMeta(row) }}
               </span>
             </div>
           </template>
@@ -302,6 +326,16 @@
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
+    <CredentialImportModal
+      :show="showCredentialImport"
+      :title="t('admin.accounts.credentialImportTitle')"
+      :hint="t('admin.accounts.credentialImportHint')"
+      :warning="t('admin.accounts.credentialImportWarning')"
+      form-id="admin-credential-import-form"
+      :importer="importAdminCredentials"
+      @close="showCredentialImport = false"
+      @imported="handleCredentialImported"
+    />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal :show="showBulkEdit" :account-ids="selIds" :selected-platforms="selPlatforms" :selected-types="selTypes" :proxies="proxies" :groups="groups" @close="showBulkEdit = false" @updated="handleBulkUpdated" />
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
@@ -348,6 +382,7 @@ import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
+import CredentialImportModal from '@/components/account/CredentialImportModal.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
@@ -355,6 +390,7 @@ import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfil
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
+import type { ImportCredentialContentsResponse } from '@/api/accounts'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -383,6 +419,7 @@ const selTypes = computed<AccountType[]>(() => {
 const showCreate = ref(false)
 const showEdit = ref(false)
 const showSync = ref(false)
+const showCredentialImport = ref(false)
 const showImportData = ref(false)
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
@@ -761,6 +798,7 @@ const isAnyModalOpen = computed(() => {
     showCreate.value ||
     showEdit.value ||
     showSync.value ||
+    showCredentialImport.value ||
     showImportData.value ||
     showExportDataDialog.value ||
     showBulkEdit.value ||
@@ -794,6 +832,10 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
+    current.owner_user_id !== next.owner_user_id ||
+    current.share_mode !== next.share_mode ||
+    current.share_status !== next.share_status ||
+    current.share_policy_id !== next.share_policy_id ||
     buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
   )
 }
@@ -986,12 +1028,74 @@ function getAntigravityTierClass(row: any): string {
   }
 }
 
+function isUserOwnedAccount(row: Account): boolean {
+  return row.owner_user_id !== null && row.owner_user_id !== undefined
+}
+
+function isPublicUserAccount(row: Account): boolean {
+  return isUserOwnedAccount(row) && row.share_mode === 'public'
+}
+
+function shareScopeLabel(row: Account): string {
+  if (!isUserOwnedAccount(row)) {
+    return t('admin.accounts.shareScope.platform')
+  }
+  return row.share_mode === 'public'
+    ? t('admin.accounts.shareScope.public')
+    : t('admin.accounts.shareScope.private')
+}
+
+function shareStatusLabel(status?: string): string {
+  switch (status) {
+    case 'pending':
+      return t('admin.accounts.shareScope.pending')
+    case 'suspended':
+      return t('admin.accounts.shareScope.suspended')
+    default:
+      return t('admin.accounts.shareScope.approved')
+  }
+}
+
+function shareScopeMeta(row: Account): string {
+  if (!isUserOwnedAccount(row)) {
+    return t('admin.accounts.shareScope.platformMeta')
+  }
+  const owner = t('admin.accounts.shareScope.ownerId', { id: row.owner_user_id })
+  if (row.share_policy_id) {
+    return `${owner} · ${t('admin.accounts.shareScope.policyId', { id: row.share_policy_id })}`
+  }
+  return owner
+}
+
+function shareScopeBadgeClass(row: Account): string {
+  const base = 'inline-flex w-fit rounded-md px-2 py-0.5 text-xs font-medium'
+  if (!isUserOwnedAccount(row)) {
+    return `${base} bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200`
+  }
+  return row.share_mode === 'public'
+    ? `${base} bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300`
+    : `${base} bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-200`
+}
+
+function shareStatusBadgeClass(status?: string): string {
+  const base = 'inline-flex w-fit rounded-md px-2 py-0.5 text-xs font-medium'
+  switch (status) {
+    case 'pending':
+      return `${base} bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300`
+    case 'suspended':
+      return `${base} bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300`
+    default:
+      return `${base} bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300`
+  }
+}
+
 // All available columns
 const allColumns = computed(() => {
   const c = [
     { key: 'select', label: '', sortable: false },
     { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
     { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false },
+    { key: 'share_scope', label: t('admin.accounts.columns.shareScope'), sortable: false },
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
@@ -1217,6 +1321,23 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
   }
 }
 const handleBulkUpdated = () => { showBulkEdit.value = false; clearSelection(); reload() }
+function importAdminCredentials(contents: string[]): Promise<ImportCredentialContentsResponse> {
+  return adminAPI.accounts.importCredentialContents({
+    contents,
+    concurrency: 3,
+    priority: 50,
+    group_ids: [],
+    auto_pause_on_expired: true
+  })
+}
+
+const handleCredentialImported = (payload?: { close: boolean }) => {
+  if (payload?.close !== false) {
+    showCredentialImport.value = false
+  }
+  reload()
+}
+
 const handleDataImported = () => { showImportData.value = false; reload() }
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'

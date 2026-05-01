@@ -106,14 +106,19 @@ type SystemSettings struct {
 	CustomMenuItems             []CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             []CustomEndpoint `json:"custom_endpoints"`
 
-	DefaultConcurrency           int                          `json:"default_concurrency"`
-	DefaultBalance               float64                      `json:"default_balance"`
-	AffiliateRebateRate          float64                      `json:"affiliate_rebate_rate"`
-	AffiliateRebateFreezeHours   int                          `json:"affiliate_rebate_freeze_hours"`
-	AffiliateRebateDurationDays  int                          `json:"affiliate_rebate_duration_days"`
-	AffiliateRebatePerInviteeCap float64                      `json:"affiliate_rebate_per_invitee_cap"`
-	DefaultUserRPMLimit          int                          `json:"default_user_rpm_limit"`
-	DefaultSubscriptions         []DefaultSubscriptionSetting `json:"default_subscriptions"`
+	DefaultConcurrency              int                          `json:"default_concurrency"`
+	DefaultBalance                  float64                      `json:"default_balance"`
+	AffiliateRebateRate             float64                      `json:"affiliate_rebate_rate"`
+	AffiliateRebateFreezeHours      int                          `json:"affiliate_rebate_freeze_hours"`
+	AffiliateRebateDurationDays     int                          `json:"affiliate_rebate_duration_days"`
+	AffiliateRebatePerInviteeCap    float64                      `json:"affiliate_rebate_per_invitee_cap"`
+	DefaultUserRPMLimit             int                          `json:"default_user_rpm_limit"`
+	UserPrivateGroupDailyLimitUSD   *float64                     `json:"user_private_group_daily_limit_usd"`
+	UserPrivateGroupWeeklyLimitUSD  *float64                     `json:"user_private_group_weekly_limit_usd"`
+	UserPrivateGroupMonthlyLimitUSD *float64                     `json:"user_private_group_monthly_limit_usd"`
+	UserPrivateGroupRateMultiplier  float64                      `json:"user_private_group_rate_multiplier"`
+	UserPrivateGroupRPMLimit        int                          `json:"user_private_group_rpm_limit"`
+	DefaultSubscriptions            []DefaultSubscriptionSetting `json:"default_subscriptions"`
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`

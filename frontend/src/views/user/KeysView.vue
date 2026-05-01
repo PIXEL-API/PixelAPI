@@ -419,6 +419,7 @@
                 v-if="option"
                 :name="(option as unknown as GroupOption).label"
                 :platform="(option as unknown as GroupOption).platform"
+                :scope="(option as unknown as GroupOption).scope"
                 :subscription-type="(option as unknown as GroupOption).subscriptionType"
                 :rate-multiplier="(option as unknown as GroupOption).rate"
                 :user-rate-multiplier="(option as unknown as GroupOption).userRate"
@@ -429,6 +430,7 @@
               <GroupOptionItem
                 :name="(option as unknown as GroupOption).label"
                 :platform="(option as unknown as GroupOption).platform"
+                :scope="(option as unknown as GroupOption).scope"
                 :subscription-type="(option as unknown as GroupOption).subscriptionType"
                 :rate-multiplier="(option as unknown as GroupOption).rate"
                 :user-rate-multiplier="(option as unknown as GroupOption).userRate"
@@ -1024,6 +1026,7 @@
             <GroupOptionItem
               :name="option.label"
               :platform="option.platform"
+              :scope="option.scope"
               :subscription-type="option.subscriptionType"
               :rate-multiplier="option.rate"
               :user-rate-multiplier="option.userRate"
@@ -1068,7 +1071,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import EndpointPopover from '@/components/keys/EndpointPopover.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
-	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform } from '@/types'
+	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform, GroupScope } from '@/types'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
@@ -1089,6 +1092,7 @@ interface GroupOption {
   userRate: number | null
   subscriptionType: SubscriptionType
   platform: GroupPlatform
+  scope?: GroupScope
 }
 
 const appStore = useAppStore()
@@ -1246,7 +1250,8 @@ const groupOptions = computed(() =>
     rate: group.rate_multiplier,
     userRate: userGroupRates.value[group.id] ?? null,
     subscriptionType: group.subscription_type,
-    platform: group.platform
+    platform: group.platform,
+    scope: group.scope
   }))
 )
 

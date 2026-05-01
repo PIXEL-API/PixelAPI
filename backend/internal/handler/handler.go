@@ -10,6 +10,7 @@ type AdminHandlers struct {
 	User                   *admin.UserHandler
 	Group                  *admin.GroupHandler
 	Account                *admin.AccountHandler
+	AccountSharePolicy     *admin.AccountSharePolicyHandler
 	Announcement           *admin.AnnouncementHandler
 	DataManagement         *admin.DataManagementHandler
 	Backup                 *admin.BackupHandler
@@ -34,6 +35,7 @@ type AdminHandlers struct {
 	ChannelMonitor         *admin.ChannelMonitorHandler
 	ChannelMonitorTemplate *admin.ChannelMonitorRequestTemplateHandler
 	Payment                *admin.PaymentHandler
+	Revenue                *admin.RevenueHandler
 	Affiliate              *admin.AffiliateHandler
 }
 
@@ -42,6 +44,7 @@ type Handlers struct {
 	Auth             *AuthHandler
 	User             *UserHandler
 	APIKey           *APIKeyHandler
+	UserAccount      *UserAccountHandler
 	Usage            *UsageHandler
 	Redeem           *RedeemHandler
 	Subscription     *SubscriptionHandler

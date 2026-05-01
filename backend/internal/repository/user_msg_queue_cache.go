@@ -32,14 +32,12 @@ redis.call('SET', KEYS[1], ARGV[1], 'PX', tonumber(ARGV[2]))
 return 1
 `)
 
-// Lua 脚本：原子释放锁 + 记录完成时间（使用 Redis TIME 避免时钟偏差）
+// Lua 脚本：原子释放锁 + 记录完成时间，完成时间由 Go 侧通过 Redis TIME 获取后传入。
 var releaseLockScript = redis.NewScript(`
 local cur = redis.call('GET', KEYS[1])
 if cur == ARGV[1] then
     redis.call('DEL', KEYS[1])
-    local t = redis.call('TIME')
-    local ms = tonumber(t[1])*1000 + math.floor(tonumber(t[2])/1000)
-    redis.call('SET', KEYS[2], ms, 'EX', 60)
+    redis.call('SET', KEYS[2], ARGV[2], 'EX', 60)
     return 1
 end
 return 0
@@ -93,7 +91,13 @@ func (c *userMsgQueueCache) AcquireLock(ctx context.Context, accountID int64, re
 func (c *userMsgQueueCache) ReleaseLock(ctx context.Context, accountID int64, requestID string) (bool, error) {
 	lockKey := umqLockKey(accountID)
 	lastKey := umqLastKey(accountID)
-	result, err := releaseLockScript.Run(ctx, c.rdb, []string{lockKey, lastKey}, requestID).Int()
+
+	nowMs, err := c.GetCurrentTimeMs(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	result, err := releaseLockScript.Run(ctx, c.rdb, []string{lockKey, lastKey}, requestID, nowMs).Int()
 	if err != nil {
 		return false, fmt.Errorf("umq release lock: %w", err)
 	}

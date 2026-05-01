@@ -315,6 +315,15 @@ func (s *UsageService) GetUserModelStats(ctx context.Context, userID int64, star
 	return stats, nil
 }
 
+// GetUserAccountSharingDashboard returns owned-account consumption and public-sharing settlement stats.
+func (s *UsageService) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (*usagestats.AccountSharingDashboardStats, error) {
+	stats, err := s.usageRepo.GetUserAccountSharingDashboard(ctx, userID, startTime, endTime, granularity)
+	if err != nil {
+		return nil, fmt.Errorf("get user account sharing dashboard: %w", err)
+	}
+	return stats, nil
+}
+
 // GetAPIKeyModelStats returns per-model usage stats for a specific API Key.
 func (s *UsageService) GetAPIKeyModelStats(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) ([]usagestats.ModelStat, error) {
 	stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, startTime, endTime, 0, apiKeyID, 0, 0, nil, nil, nil)

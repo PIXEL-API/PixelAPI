@@ -312,28 +312,29 @@ var ErrNoAvailableCompactAccounts = errors.New("no available OpenAI accounts sup
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
-	accountRepo           AccountRepository
-	usageLogRepo          UsageLogRepository
-	usageBillingRepo      UsageBillingRepository
-	userRepo              UserRepository
-	userSubRepo           UserSubscriptionRepository
-	cache                 GatewayCache
-	cfg                   *config.Config
-	codexDetector         CodexClientRestrictionDetector
-	schedulerSnapshot     *SchedulerSnapshotService
-	concurrencyService    *ConcurrencyService
-	billingService        *BillingService
-	rateLimitService      *RateLimitService
-	billingCacheService   *BillingCacheService
-	userGroupRateResolver *userGroupRateResolver
-	httpUpstream          HTTPUpstream
-	deferredService       *DeferredService
-	openAITokenProvider   *OpenAITokenProvider
-	toolCorrector         *CodexToolCorrector
-	openaiWSResolver      OpenAIWSProtocolResolver
-	resolver              *ModelPricingResolver
-	channelService        *ChannelService
-	balanceNotifyService  *BalanceNotifyService
+	accountRepo            AccountRepository
+	accountSharePolicyRepo AccountSharePolicyRepository
+	usageLogRepo           UsageLogRepository
+	usageBillingRepo       UsageBillingRepository
+	userRepo               UserRepository
+	userSubRepo            UserSubscriptionRepository
+	cache                  GatewayCache
+	cfg                    *config.Config
+	codexDetector          CodexClientRestrictionDetector
+	schedulerSnapshot      *SchedulerSnapshotService
+	concurrencyService     *ConcurrencyService
+	billingService         *BillingService
+	rateLimitService       *RateLimitService
+	billingCacheService    *BillingCacheService
+	userGroupRateResolver  *userGroupRateResolver
+	httpUpstream           HTTPUpstream
+	deferredService        *DeferredService
+	openAITokenProvider    *OpenAITokenProvider
+	toolCorrector          *CodexToolCorrector
+	openaiWSResolver       OpenAIWSProtocolResolver
+	resolver               *ModelPricingResolver
+	channelService         *ChannelService
+	balanceNotifyService   *BalanceNotifyService
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -354,6 +355,7 @@ type OpenAIGatewayService struct {
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
 func NewOpenAIGatewayService(
 	accountRepo AccountRepository,
+	accountSharePolicyRepo AccountSharePolicyRepository,
 	usageLogRepo UsageLogRepository,
 	usageBillingRepo UsageBillingRepository,
 	userRepo UserRepository,
@@ -374,19 +376,20 @@ func NewOpenAIGatewayService(
 	balanceNotifyService *BalanceNotifyService,
 ) *OpenAIGatewayService {
 	svc := &OpenAIGatewayService{
-		accountRepo:         accountRepo,
-		usageLogRepo:        usageLogRepo,
-		usageBillingRepo:    usageBillingRepo,
-		userRepo:            userRepo,
-		userSubRepo:         userSubRepo,
-		cache:               cache,
-		cfg:                 cfg,
-		codexDetector:       NewOpenAICodexClientRestrictionDetector(cfg),
-		schedulerSnapshot:   schedulerSnapshot,
-		concurrencyService:  concurrencyService,
-		billingService:      billingService,
-		rateLimitService:    rateLimitService,
-		billingCacheService: billingCacheService,
+		accountRepo:            accountRepo,
+		accountSharePolicyRepo: accountSharePolicyRepo,
+		usageLogRepo:           usageLogRepo,
+		usageBillingRepo:       usageBillingRepo,
+		userRepo:               userRepo,
+		userSubRepo:            userSubRepo,
+		cache:                  cache,
+		cfg:                    cfg,
+		codexDetector:          NewOpenAICodexClientRestrictionDetector(cfg),
+		schedulerSnapshot:      schedulerSnapshot,
+		concurrencyService:     concurrencyService,
+		billingService:         billingService,
+		rateLimitService:       rateLimitService,
+		billingCacheService:    billingCacheService,
 		userGroupRateResolver: newUserGroupRateResolver(
 			userGroupRateRepo,
 			nil,
@@ -486,12 +489,13 @@ func (s *OpenAIGatewayService) getCodexSnapshotThrottle() *accountWriteThrottle 
 
 func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 	return &billingDeps{
-		accountRepo:          s.accountRepo,
-		userRepo:             s.userRepo,
-		userSubRepo:          s.userSubRepo,
-		billingCacheService:  s.billingCacheService,
-		deferredService:      s.deferredService,
-		balanceNotifyService: s.balanceNotifyService,
+		accountRepo:            s.accountRepo,
+		accountSharePolicyRepo: s.accountSharePolicyRepo,
+		userRepo:               s.userRepo,
+		userSubRepo:            s.userSubRepo,
+		billingCacheService:    s.billingCacheService,
+		deferredService:        s.deferredService,
+		balanceNotifyService:   s.balanceNotifyService,
 	}
 }
 
@@ -1364,6 +1368,10 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 	if err != nil {
 		return nil
 	}
+	if !IsAccountVisibleToRequestUser(ctx, account) {
+		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+		return nil
+	}
 
 	// 检查账号是否需要清理粘性会话
 	// Check if sticky session should be cleared
@@ -1409,6 +1417,9 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 
 	for i := range accounts {
 		acc := &accounts[i]
+		if !IsAccountVisibleToRequestUser(ctx, acc) {
+			continue
+		}
 
 		// 跳过被排除的账号
 		// Skip excluded accounts
@@ -1774,7 +1785,10 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64) ([]Account, error) {
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, PlatformOpenAI, false)
-		return accounts, err
+		if err != nil {
+			return nil, err
+		}
+		return FilterAccountsVisibleToRequestUser(ctx, accounts), nil
 	}
 	var accounts []Account
 	var err error
@@ -1788,7 +1802,7 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	if err != nil {
 		return nil, fmt.Errorf("query accounts failed: %w", err)
 	}
-	return accounts, nil
+	return FilterAccountsVisibleToRequestUser(ctx, accounts), nil
 }
 
 func (s *OpenAIGatewayService) tryAcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int) (*AcquireResult, error) {
@@ -1815,6 +1829,9 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccount(ctx context.
 	if !isOpenAIAccountEligibleForRequest(fresh, requestedModel, requireCompact) {
 		return nil
 	}
+	if !IsAccountVisibleToRequestUser(ctx, fresh) {
+		return nil
+	}
 	return fresh
 }
 
@@ -1836,6 +1853,9 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	if !isOpenAIAccountEligibleForRequest(latest, requestedModel, requireCompact) {
 		return nil
 	}
+	if !IsAccountVisibleToRequestUser(ctx, latest) {
+		return nil
+	}
 	return latest
 }
 
@@ -1852,11 +1872,20 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 	if err != nil || account == nil {
 		return account, err
 	}
+	if !IsAccountVisibleToRequestUser(ctx, account) {
+		return nil, ErrAccountNotFound
+	}
 	return account, nil
 }
 
 func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
-	if account == nil || s.schedulerSnapshot == nil {
+	if account == nil {
+		return account, nil
+	}
+	if s.schedulerSnapshot == nil {
+		if !IsAccountVisibleToRequestUser(ctx, account) {
+			return nil, ErrAccountNotFound
+		}
 		return account, nil
 	}
 	hydrated, err := s.schedulerSnapshot.GetAccount(ctx, account.ID)
@@ -1865,6 +1894,9 @@ func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, accou
 	}
 	if hydrated == nil {
 		return nil, fmt.Errorf("selected openai account %d not found during hydration", account.ID)
+	}
+	if !IsAccountVisibleToRequestUser(ctx, hydrated) {
+		return nil, ErrAccountNotFound
 	}
 	return hydrated, nil
 }

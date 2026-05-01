@@ -240,15 +240,15 @@ func (s *stubAdminService) BindUserAuthIdentity(ctx context.Context, userID int6
 	return result, nil
 }
 
-func (s *stubAdminService) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]service.Group, int64, error) {
+func (s *stubAdminService) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, scope, sortBy, sortOrder string) ([]service.Group, int64, error) {
 	return s.groups, int64(len(s.groups)), nil
 }
 
-func (s *stubAdminService) GetAllGroups(ctx context.Context) ([]service.Group, error) {
+func (s *stubAdminService) GetAllGroups(ctx context.Context, scope string) ([]service.Group, error) {
 	return s.groups, nil
 }
 
-func (s *stubAdminService) GetAllGroupsByPlatform(ctx context.Context, platform string) ([]service.Group, error) {
+func (s *stubAdminService) GetAllGroupsByPlatform(ctx context.Context, platform, scope string) ([]service.Group, error) {
 	return s.groups, nil
 }
 

@@ -50,6 +50,14 @@ func (Group) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
+		field.Int64("owner_user_id").
+			Optional().
+			Nillable().
+			Comment("Owner user for user-private groups"),
+		field.String("scope").
+			MaxLen(20).
+			Default(domain.GroupScopePublic).
+			Comment("Group visibility scope: public or user_private"),
 
 		// Subscription-related fields (added by migration 003)
 		field.String("platform").
@@ -177,6 +185,9 @@ func (Group) Indexes() []ent.Index {
 		index.Fields("platform"),
 		index.Fields("subscription_type"),
 		index.Fields("is_exclusive"),
+		index.Fields("owner_user_id"),
+		index.Fields("scope"),
+		index.Fields("owner_user_id", "platform", "scope"),
 		index.Fields("deleted_at"),
 		index.Fields("sort_order"),
 	}

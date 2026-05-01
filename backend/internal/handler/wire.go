@@ -13,6 +13,7 @@ func ProvideAdminHandlers(
 	userHandler *admin.UserHandler,
 	groupHandler *admin.GroupHandler,
 	accountHandler *admin.AccountHandler,
+	accountSharePolicyHandler *admin.AccountSharePolicyHandler,
 	announcementHandler *admin.AnnouncementHandler,
 	dataManagementHandler *admin.DataManagementHandler,
 	backupHandler *admin.BackupHandler,
@@ -37,6 +38,7 @@ func ProvideAdminHandlers(
 	channelMonitorHandler *admin.ChannelMonitorHandler,
 	channelMonitorTemplateHandler *admin.ChannelMonitorRequestTemplateHandler,
 	paymentHandler *admin.PaymentHandler,
+	revenueHandler *admin.RevenueHandler,
 	affiliateHandler *admin.AffiliateHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
@@ -44,6 +46,7 @@ func ProvideAdminHandlers(
 		User:                   userHandler,
 		Group:                  groupHandler,
 		Account:                accountHandler,
+		AccountSharePolicy:     accountSharePolicyHandler,
 		Announcement:           announcementHandler,
 		DataManagement:         dataManagementHandler,
 		Backup:                 backupHandler,
@@ -68,6 +71,7 @@ func ProvideAdminHandlers(
 		ChannelMonitor:         channelMonitorHandler,
 		ChannelMonitorTemplate: channelMonitorTemplateHandler,
 		Payment:                paymentHandler,
+		Revenue:                revenueHandler,
 		Affiliate:              affiliateHandler,
 	}
 }
@@ -87,6 +91,7 @@ func ProvideHandlers(
 	authHandler *AuthHandler,
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
+	userAccountHandler *UserAccountHandler,
 	usageHandler *UsageHandler,
 	redeemHandler *RedeemHandler,
 	subscriptionHandler *SubscriptionHandler,
@@ -107,6 +112,7 @@ func ProvideHandlers(
 		Auth:             authHandler,
 		User:             userHandler,
 		APIKey:           apiKeyHandler,
+		UserAccount:      userAccountHandler,
 		Usage:            usageHandler,
 		Redeem:           redeemHandler,
 		Subscription:     subscriptionHandler,
@@ -129,6 +135,7 @@ var ProviderSet = wire.NewSet(
 	NewAuthHandler,
 	NewUserHandler,
 	NewAPIKeyHandler,
+	NewUserAccountHandler,
 	NewUsageHandler,
 	NewRedeemHandler,
 	NewSubscriptionHandler,
@@ -147,6 +154,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewUserHandler,
 	admin.NewGroupHandler,
 	admin.NewAccountHandler,
+	admin.NewAccountSharePolicyHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,
 	admin.NewBackupHandler,
@@ -171,6 +179,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewChannelMonitorHandler,
 	admin.NewChannelMonitorRequestTemplateHandler,
 	admin.NewPaymentHandler,
+	admin.NewRevenueHandler,
 	admin.NewAffiliateHandler,
 
 	// AdminHandlers and Handlers constructors

@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from '../client'
+import type { ImportCredentialContentsRequest, ImportCredentialContentsResponse } from '../accounts'
 import type {
   Account,
   CreateAccountRequest,
@@ -544,6 +545,26 @@ export async function importData(payload: {
   return data
 }
 
+export interface AdminImportCredentialContentsRequest extends ImportCredentialContentsRequest {
+  owner_user_id?: number | null
+  share_status?: 'pending' | 'approved' | 'suspended'
+  share_policy_id?: number | null
+  proxy_id?: number | null
+  rate_multiplier?: number | null
+  skip_default_group_bind?: boolean
+  confirm_mixed_channel_risk?: boolean
+}
+
+export async function importCredentialContents(
+  request: AdminImportCredentialContentsRequest
+): Promise<ImportCredentialContentsResponse> {
+  const { data } = await apiClient.post<ImportCredentialContentsResponse>(
+    '/admin/accounts/import-credentials',
+    request
+  )
+  return data
+}
+
 /**
  * Get Antigravity default model mapping from backend
  * @returns Default model mapping (from -> to)
@@ -660,6 +681,7 @@ export const accountsAPI = {
   syncFromCrs,
   exportData,
   importData,
+  importCredentialContents,
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,

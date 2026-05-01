@@ -87,6 +87,8 @@ type Group struct {
 	RateMultiplier float64 `json:"rate_multiplier"`
 	IsExclusive    bool    `json:"is_exclusive"`
 	Status         string  `json:"status"`
+	OwnerUserID    *int64  `json:"owner_user_id,omitempty"`
+	Scope          string  `json:"scope"`
 
 	SubscriptionType string   `json:"subscription_type"`
 	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
@@ -153,6 +155,10 @@ type Account struct {
 	Type               string         `json:"type"`
 	Credentials        map[string]any `json:"credentials"`
 	Extra              map[string]any `json:"extra"`
+	OwnerUserID        *int64         `json:"owner_user_id,omitempty"`
+	ShareMode          string         `json:"share_mode"`
+	ShareStatus        string         `json:"share_status"`
+	SharePolicyID      *int64         `json:"share_policy_id,omitempty"`
 	ProxyID            *int64         `json:"proxy_id"`
 	Concurrency        int            `json:"concurrency"`
 	LoadFactor         *int           `json:"load_factor,omitempty"`

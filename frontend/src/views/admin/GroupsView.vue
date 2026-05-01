@@ -42,6 +42,13 @@
               class="w-44"
               @change="loadGroups"
             />
+            <Select
+              v-model="filters.scope"
+              :options="scopeOptions"
+              :placeholder="t('admin.groups.scope.public')"
+              class="w-44"
+              @change="loadGroups"
+            />
           </div>
 
           <!-- Right: actions -->
@@ -90,10 +97,18 @@
           default-sort-order="asc"
           @sort="handleSort"
         >
-          <template #cell-name="{ value }">
-            <span class="font-medium text-gray-900 dark:text-white">{{
-              value
-            }}</span>
+          <template #cell-name="{ value, row }">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="truncate font-medium text-gray-900 dark:text-white">{{
+                value
+              }}</span>
+              <span
+                v-if="row.scope === 'user_private'"
+                class="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+              >
+                {{ t("admin.groups.scope.private") }}
+              </span>
+            </div>
           </template>
 
           <template #cell-platform="{ value }">
@@ -2820,6 +2835,12 @@ const exclusiveOptions = computed(() => [
   { value: "false", label: t("admin.groups.nonExclusive") },
 ]);
 
+const scopeOptions = computed(() => [
+  { value: "public", label: t("admin.groups.scope.public") },
+  { value: "user_private", label: t("admin.groups.scope.private") },
+  { value: "all", label: t("admin.groups.scope.all") },
+]);
+
 const platformOptions = computed(() => [
   { value: "anthropic", label: "Anthropic" },
   { value: "openai", label: "OpenAI" },
@@ -2969,6 +2990,7 @@ const filters = reactive({
   platform: "",
   status: "",
   is_exclusive: "",
+  scope: "public",
 });
 const pagination = reactive({
   page: 1,
@@ -3352,6 +3374,7 @@ const loadGroups = async () => {
         is_exclusive: filters.is_exclusive
           ? filters.is_exclusive === "true"
           : undefined,
+        scope: filters.scope as "public" | "user_private" | "all",
         search: searchQuery.value.trim() || undefined,
         sort_by: sortState.sort_by,
         sort_order: sortState.sort_order,
@@ -3817,7 +3840,7 @@ const handleClickOutside = (event: MouseEvent) => {
 const openSortModal = async () => {
   try {
     // 获取所有分组（不分页）
-    const allGroups = await adminAPI.groups.getAll();
+    const allGroups = await adminAPI.groups.getAll(undefined, filters.scope as "public" | "user_private" | "all");
     // 按 sort_order 排序
     sortableGroups.value = [...allGroups].sort(
       (a, b) => a.sort_order - b.sort_order,

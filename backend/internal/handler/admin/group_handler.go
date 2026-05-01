@@ -22,6 +22,22 @@ type GroupHandler struct {
 	groupCapacityService *service.GroupCapacityService
 }
 
+func parseAdminGroupScope(scope string, includePrivate bool) (string, error) {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	if scope == "" {
+		if includePrivate {
+			return "all", nil
+		}
+		return service.GroupScopePublic, nil
+	}
+	switch scope {
+	case "all", service.GroupScopePublic, service.GroupScopeUserPrivate:
+		return scope, nil
+	default:
+		return "", fmt.Errorf("invalid group scope: %s", scope)
+	}
+}
+
 type optionalLimitField struct {
 	set   bool
 	value *float64
@@ -160,6 +176,11 @@ func (h *GroupHandler) List(c *gin.Context) {
 	platform := c.Query("platform")
 	status := c.Query("status")
 	search := c.Query("search")
+	scope, err := parseAdminGroupScope(c.Query("scope"), c.Query("include_private") == "true")
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	// 标准化和验证 search 参数
 	search = strings.TrimSpace(search)
 	if len(search) > 100 {
@@ -175,7 +196,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 		isExclusive = &val
 	}
 
-	groups, total, err := h.adminService.ListGroups(c.Request.Context(), page, pageSize, platform, status, search, isExclusive, sortBy, sortOrder)
+	groups, total, err := h.adminService.ListGroups(c.Request.Context(), page, pageSize, platform, status, search, isExclusive, scope, sortBy, sortOrder)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -192,14 +213,18 @@ func (h *GroupHandler) List(c *gin.Context) {
 // GET /api/v1/admin/groups/all
 func (h *GroupHandler) GetAll(c *gin.Context) {
 	platform := c.Query("platform")
+	scope, err := parseAdminGroupScope(c.Query("scope"), c.Query("include_private") == "true")
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 
 	var groups []service.Group
-	var err error
 
 	if platform != "" {
-		groups, err = h.adminService.GetAllGroupsByPlatform(c.Request.Context(), platform)
+		groups, err = h.adminService.GetAllGroupsByPlatform(c.Request.Context(), platform, scope)
 	} else {
-		groups, err = h.adminService.GetAllGroups(c.Request.Context())
+		groups, err = h.adminService.GetAllGroups(c.Request.Context(), scope)
 	}
 
 	if err != nil {

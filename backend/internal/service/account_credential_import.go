@@ -1,0 +1,512 @@
+package service
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+)
+
+const MaxAccountCredentialImportItems = 200
+
+type AccountCredentialImportKind string
+
+const (
+	AccountCredentialImportKindOAuthCredentials   AccountCredentialImportKind = "oauth_credentials"
+	AccountCredentialImportKindOpenAIRefreshToken AccountCredentialImportKind = "openai_refresh_token"
+	AccountCredentialImportKindClaudeSessionKey   AccountCredentialImportKind = "claude_session_key"
+)
+
+type AccountCredentialImportSource struct {
+	Kind        AccountCredentialImportKind
+	Name        string
+	Notes       *string
+	Platform    string
+	Credentials map[string]any
+	Extra       map[string]any
+	Token       string
+	ClientID    string
+}
+
+type AccountCredentialImportError struct {
+	Index   int    `json:"index"`
+	Kind    string `json:"kind,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Message string `json:"message"`
+}
+
+type AccountCredentialImportResult struct {
+	Total   int                            `json:"total"`
+	Created int                            `json:"created"`
+	Failed  int                            `json:"failed"`
+	Errors  []AccountCredentialImportError `json:"errors"`
+}
+
+func ParseAccountCredentialImportContents(contents []string) ([]AccountCredentialImportSource, []AccountCredentialImportError) {
+	sources := make([]AccountCredentialImportSource, 0)
+	errs := make([]AccountCredentialImportError, 0)
+	nextIndex := 1
+
+	for _, content := range contents {
+		items, err := parseAccountCredentialImportContent(content)
+		if err != nil {
+			errs = append(errs, AccountCredentialImportError{
+				Index:   nextIndex,
+				Message: err.Error(),
+			})
+			nextIndex++
+			continue
+		}
+		for _, item := range items {
+			itemSources, itemErr := accountCredentialImportSourcesFromValue(item)
+			if itemErr != nil {
+				errs = append(errs, AccountCredentialImportError{
+					Index:   nextIndex,
+					Message: itemErr.Error(),
+				})
+				nextIndex++
+				continue
+			}
+			for _, source := range itemSources {
+				sources = append(sources, source)
+				nextIndex++
+			}
+		}
+	}
+	return sources, errs
+}
+
+func BuildOpenAIAccountCredentialImportExtra(tokenInfo *OpenAITokenInfo) map[string]any {
+	extra := map[string]any{}
+	if tokenInfo == nil {
+		return extra
+	}
+	if strings.TrimSpace(tokenInfo.Email) != "" {
+		extra["email"] = strings.TrimSpace(tokenInfo.Email)
+	}
+	if strings.TrimSpace(tokenInfo.PrivacyMode) != "" {
+		extra["privacy_mode"] = strings.TrimSpace(tokenInfo.PrivacyMode)
+	}
+	return extra
+}
+
+func BuildClaudeAccountCredentialImportExtra(tokenInfo *TokenInfo) map[string]any {
+	extra := map[string]any{}
+	if tokenInfo == nil {
+		return extra
+	}
+	if strings.TrimSpace(tokenInfo.OrgUUID) != "" {
+		extra["org_uuid"] = strings.TrimSpace(tokenInfo.OrgUUID)
+	}
+	if strings.TrimSpace(tokenInfo.AccountUUID) != "" {
+		extra["account_uuid"] = strings.TrimSpace(tokenInfo.AccountUUID)
+	}
+	if strings.TrimSpace(tokenInfo.EmailAddress) != "" {
+		extra["email_address"] = strings.TrimSpace(tokenInfo.EmailAddress)
+	}
+	return extra
+}
+
+func DeriveAccountCredentialImportName(platform string, credentials, extra map[string]any, sequence int) string {
+	for _, source := range []map[string]any{credentials, extra} {
+		if name := importStringField(source, "name", "email", "email_address"); name != "" {
+			return name
+		}
+	}
+	switch platform {
+	case PlatformAnthropic:
+		return fmt.Sprintf("Claude OAuth Account #%d", sequence)
+	case PlatformGemini:
+		return fmt.Sprintf("Gemini OAuth Account #%d", sequence)
+	case PlatformAntigravity:
+		return fmt.Sprintf("Antigravity OAuth Account #%d", sequence)
+	default:
+		return fmt.Sprintf("OpenAI OAuth Account #%d", sequence)
+	}
+}
+
+func parseAccountCredentialImportContent(content string) ([]any, error) {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+		return decodeAccountCredentialImportJSONValues(text)
+	}
+
+	items := make([]any, 0)
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "{") || strings.HasPrefix(line, "[") {
+			values, err := decodeAccountCredentialImportJSONValues(line)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, values...)
+			continue
+		}
+		items = append(items, line)
+	}
+	return items, nil
+}
+
+func decodeAccountCredentialImportJSONValues(text string) ([]any, error) {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	values := make([]any, 0)
+	for {
+		var value any
+		err := decoder.Decode(&value)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("invalid JSON import content: %w", err)
+		}
+		if array, ok := value.([]any); ok {
+			values = append(values, array...)
+			continue
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func accountCredentialImportSourcesFromValue(value any) ([]AccountCredentialImportSource, error) {
+	switch typed := value.(type) {
+	case string:
+		source, err := accountCredentialImportSourceFromString(typed, "", nil)
+		if err != nil {
+			return nil, err
+		}
+		return []AccountCredentialImportSource{source}, nil
+	case []any:
+		out := make([]AccountCredentialImportSource, 0, len(typed))
+		for _, item := range typed {
+			sources, err := accountCredentialImportSourcesFromValue(item)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, sources...)
+		}
+		return out, nil
+	case map[string]any:
+		if accounts, ok := importArrayField(typed, "accounts"); ok {
+			out := make([]AccountCredentialImportSource, 0, len(accounts))
+			for _, account := range accounts {
+				sources, err := accountCredentialImportSourcesFromValue(account)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, sources...)
+			}
+			return out, nil
+		}
+		source, err := accountCredentialImportSourceFromMap(typed)
+		if err != nil {
+			return nil, err
+		}
+		return []AccountCredentialImportSource{source}, nil
+	default:
+		return nil, fmt.Errorf("invalid import item")
+	}
+}
+
+func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentialImportSource, error) {
+	if field, found := findDisallowedCredentialImportField(item); found {
+		return AccountCredentialImportSource{}, fmt.Errorf("disallowed credential field: %s", field)
+	}
+
+	name := credentialImportFirstNonEmptyString(
+		importStringField(item, "name"),
+		importStringField(item, "label"),
+		importStringField(item, "email"),
+	)
+	notes := importOptionalStringField(item, "notes", "note", "description")
+	extra := importMapField(item, "extra", "metadata")
+	platform := normalizeCredentialImportPlatform(importStringField(item, "platform", "provider", "service"))
+
+	if sessionKey := importStringField(item, "session_key", "sessionKey", "session_token", "claude_session_key", "claudeSessionKey"); sessionKey != "" {
+		source, err := accountCredentialImportSourceFromString(sessionKey, name, notes)
+		if err != nil {
+			return AccountCredentialImportSource{}, err
+		}
+		return source, nil
+	}
+
+	credentials := importMapField(item, "credentials")
+	if len(credentials) > 0 {
+		accountType := strings.ToLower(strings.TrimSpace(importStringField(item, "type", "account_type", "accountType")))
+		if accountType != "" && accountType != AccountTypeOAuth {
+			return AccountCredentialImportSource{}, fmt.Errorf("credential import only supports OAuth account credentials")
+		}
+		if platform == "" {
+			platform = inferOAuthCredentialPlatform(credentials, extra)
+		}
+		if platform == "" {
+			return AccountCredentialImportSource{}, fmt.Errorf("account platform is required")
+		}
+		if accessToken := importStringField(credentials, "access_token", "accessToken"); accessToken != "" {
+			credentials["access_token"] = accessToken
+			return AccountCredentialImportSource{
+				Kind:        AccountCredentialImportKindOAuthCredentials,
+				Name:        name,
+				Notes:       notes,
+				Platform:    platform,
+				Credentials: credentials,
+				Extra:       extra,
+			}, nil
+		}
+		if refreshToken := importStringField(credentials, "refresh_token", "refreshToken"); refreshToken != "" && platform == PlatformOpenAI {
+			return AccountCredentialImportSource{
+				Kind:     AccountCredentialImportKindOpenAIRefreshToken,
+				Name:     name,
+				Notes:    notes,
+				Token:    refreshToken,
+				ClientID: importStringField(credentials, "client_id", "clientId"),
+			}, nil
+		}
+		return AccountCredentialImportSource{}, fmt.Errorf("OAuth credentials must include access_token")
+	}
+
+	if tokens := importMapField(item, "tokens", "token"); len(tokens) > 0 {
+		tokenName := credentialImportFirstNonEmptyString(name, importStringField(tokens, "email", "email_address"))
+		if refreshToken := importStringField(tokens, "refresh_token", "refreshToken"); refreshToken != "" && importStringField(tokens, "access_token", "accessToken") == "" {
+			return AccountCredentialImportSource{
+				Kind:     AccountCredentialImportKindOpenAIRefreshToken,
+				Name:     tokenName,
+				Notes:    notes,
+				Token:    refreshToken,
+				ClientID: importStringField(tokens, "client_id", "clientId"),
+			}, nil
+		}
+		if accessToken := importStringField(tokens, "access_token", "accessToken"); accessToken != "" {
+			tokens["access_token"] = accessToken
+			if idToken := importStringField(tokens, "id_token", "idToken"); idToken != "" {
+				tokens["id_token"] = idToken
+			}
+			if refreshToken := importStringField(tokens, "refresh_token", "refreshToken"); refreshToken != "" {
+				tokens["refresh_token"] = refreshToken
+			}
+			return AccountCredentialImportSource{
+				Kind:        AccountCredentialImportKindOAuthCredentials,
+				Name:        tokenName,
+				Notes:       notes,
+				Platform:    PlatformOpenAI,
+				Credentials: tokens,
+				Extra:       extra,
+			}, nil
+		}
+	}
+
+	if refreshToken := importStringField(item, "refresh_token", "refreshToken"); refreshToken != "" {
+		if platform != "" && platform != PlatformOpenAI {
+			return AccountCredentialImportSource{}, fmt.Errorf("refresh-token credential import currently supports OpenAI only; use OAuth JSON for this platform")
+		}
+		return AccountCredentialImportSource{
+			Kind:     AccountCredentialImportKindOpenAIRefreshToken,
+			Name:     name,
+			Notes:    notes,
+			Token:    refreshToken,
+			ClientID: importStringField(item, "client_id", "clientId"),
+		}, nil
+	}
+
+	if accessToken := importStringField(item, "access_token", "accessToken"); accessToken != "" {
+		if platform == "" {
+			platform = inferOAuthCredentialPlatform(item, extra)
+		}
+		if platform == "" {
+			platform = PlatformOpenAI
+		}
+		credentials := copyImportMap(item)
+		credentials["access_token"] = accessToken
+		return AccountCredentialImportSource{
+			Kind:        AccountCredentialImportKindOAuthCredentials,
+			Name:        name,
+			Notes:       notes,
+			Platform:    platform,
+			Credentials: credentials,
+			Extra:       extra,
+		}, nil
+	}
+
+	if value := importStringField(item, "value", "token", "credential"); value != "" {
+		return accountCredentialImportSourceFromString(value, name, notes)
+	}
+	return AccountCredentialImportSource{}, fmt.Errorf("unsupported credential import item")
+}
+
+func accountCredentialImportSourceFromString(value, name string, notes *string) (AccountCredentialImportSource, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return AccountCredentialImportSource{}, fmt.Errorf("empty credential")
+	}
+	if sessionKey, ok := extractClaudeSessionKey(text); ok {
+		return AccountCredentialImportSource{
+			Kind:  AccountCredentialImportKindClaudeSessionKey,
+			Name:  name,
+			Notes: notes,
+			Token: sessionKey,
+		}, nil
+	}
+	if reason, blocked := disallowedRawCredentialReason(text); blocked {
+		return AccountCredentialImportSource{}, fmt.Errorf("disallowed credential content: %s", reason)
+	}
+	return AccountCredentialImportSource{
+		Kind:  AccountCredentialImportKindOpenAIRefreshToken,
+		Name:  name,
+		Notes: notes,
+		Token: text,
+	}, nil
+}
+
+func extractClaudeSessionKey(value string) (string, bool) {
+	text := strings.TrimSpace(strings.Trim(value, `"'`))
+	lower := strings.ToLower(text)
+	if strings.HasPrefix(lower, "sk-ant-sid") {
+		return text, true
+	}
+	for _, prefix := range []string{"sessionkey=", "session_key=", "claude_session_key="} {
+		idx := strings.Index(lower, prefix)
+		if idx < 0 {
+			continue
+		}
+		candidate := strings.TrimSpace(text[idx+len(prefix):])
+		if cut := strings.IndexAny(candidate, ";\r\n\t "); cut >= 0 {
+			candidate = candidate[:cut]
+		}
+		candidate = strings.Trim(candidate, `"'`)
+		if strings.HasPrefix(strings.ToLower(candidate), "sk-ant-sid") {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func disallowedRawCredentialReason(value string) (string, bool) {
+	return disallowedCredentialStringReason("", value, credentialSafetyOptions{})
+}
+
+func findDisallowedCredentialImportField(value any) (string, bool) {
+	return findDisallowedCredentialContent(value, credentialSafetyOptions{
+		AllowClaudeSessionKeyFields: true,
+		AllowOAuthTokenValues:       true,
+	})
+}
+
+func importMapField(values map[string]any, keys ...string) map[string]any {
+	value, ok := importAnyField(values, keys...)
+	if !ok {
+		return nil
+	}
+	if typed, ok := value.(map[string]any); ok {
+		return copyImportMap(typed)
+	}
+	return nil
+}
+
+func importArrayField(values map[string]any, keys ...string) ([]any, bool) {
+	value, ok := importAnyField(values, keys...)
+	if !ok {
+		return nil, false
+	}
+	typed, ok := value.([]any)
+	return typed, ok
+}
+
+func importStringField(values map[string]any, keys ...string) string {
+	value, ok := importAnyField(values, keys...)
+	if !ok {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	default:
+		return ""
+	}
+}
+
+func importOptionalStringField(values map[string]any, keys ...string) *string {
+	value := importStringField(values, keys...)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func importAnyField(values map[string]any, keys ...string) (any, bool) {
+	if len(values) == 0 {
+		return nil, false
+	}
+	for _, key := range keys {
+		normalizedTarget := normalizeCredentialImportKey(key)
+		for existingKey, value := range values {
+			if normalizeCredentialImportKey(existingKey) == normalizedTarget {
+				return value, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func copyImportMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func normalizeCredentialImportKey(key string) string {
+	return strings.NewReplacer("-", "_", ".", "_").Replace(strings.ToLower(strings.TrimSpace(key)))
+}
+
+func normalizeCredentialImportPlatform(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "anthropic", "claude":
+		return PlatformAnthropic
+	case "openai", "chatgpt", "codex":
+		return PlatformOpenAI
+	case "gemini", "google":
+		return PlatformGemini
+	case "antigravity":
+		return PlatformAntigravity
+	default:
+		return ""
+	}
+}
+
+func inferOAuthCredentialPlatform(credentials, extra map[string]any) string {
+	if importStringField(credentials, "org_uuid", "account_uuid", "email_address") != "" ||
+		importStringField(extra, "org_uuid", "account_uuid", "email_address") != "" {
+		return PlatformAnthropic
+	}
+	if importStringField(credentials, "project_id", "oauth_type", "tier_id") != "" {
+		return PlatformGemini
+	}
+	if importStringField(credentials, "chatgpt_account_id", "chatgpt_user_id", "organization_id", "id_token") != "" {
+		return PlatformOpenAI
+	}
+	return ""
+}
+
+func credentialImportFirstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}

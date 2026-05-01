@@ -95,6 +95,16 @@ func Status(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldStatus, v))
 }
 
+// OwnerUserID applies equality check predicate on the "owner_user_id" field. It's identical to OwnerUserIDEQ.
+func OwnerUserID(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldOwnerUserID, v))
+}
+
+// Scope applies equality check predicate on the "scope" field. It's identical to ScopeEQ.
+func Scope(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldScope, v))
+}
+
 // Platform applies equality check predicate on the "platform" field. It's identical to PlatformEQ.
 func Platform(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldPlatform, v))
@@ -578,6 +588,121 @@ func StatusEqualFold(v string) predicate.Group {
 // StatusContainsFold applies the ContainsFold predicate on the "status" field.
 func StatusContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldStatus, v))
+}
+
+// OwnerUserIDEQ applies the EQ predicate on the "owner_user_id" field.
+func OwnerUserIDEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDNEQ applies the NEQ predicate on the "owner_user_id" field.
+func OwnerUserIDNEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDIn applies the In predicate on the "owner_user_id" field.
+func OwnerUserIDIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldOwnerUserID, vs...))
+}
+
+// OwnerUserIDNotIn applies the NotIn predicate on the "owner_user_id" field.
+func OwnerUserIDNotIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldOwnerUserID, vs...))
+}
+
+// OwnerUserIDGT applies the GT predicate on the "owner_user_id" field.
+func OwnerUserIDGT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDGTE applies the GTE predicate on the "owner_user_id" field.
+func OwnerUserIDGTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDLT applies the LT predicate on the "owner_user_id" field.
+func OwnerUserIDLT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDLTE applies the LTE predicate on the "owner_user_id" field.
+func OwnerUserIDLTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDIsNil applies the IsNil predicate on the "owner_user_id" field.
+func OwnerUserIDIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldOwnerUserID))
+}
+
+// OwnerUserIDNotNil applies the NotNil predicate on the "owner_user_id" field.
+func OwnerUserIDNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldOwnerUserID))
+}
+
+// ScopeEQ applies the EQ predicate on the "scope" field.
+func ScopeEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldScope, v))
+}
+
+// ScopeNEQ applies the NEQ predicate on the "scope" field.
+func ScopeNEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldScope, v))
+}
+
+// ScopeIn applies the In predicate on the "scope" field.
+func ScopeIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldScope, vs...))
+}
+
+// ScopeNotIn applies the NotIn predicate on the "scope" field.
+func ScopeNotIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldScope, vs...))
+}
+
+// ScopeGT applies the GT predicate on the "scope" field.
+func ScopeGT(v string) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldScope, v))
+}
+
+// ScopeGTE applies the GTE predicate on the "scope" field.
+func ScopeGTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldScope, v))
+}
+
+// ScopeLT applies the LT predicate on the "scope" field.
+func ScopeLT(v string) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldScope, v))
+}
+
+// ScopeLTE applies the LTE predicate on the "scope" field.
+func ScopeLTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldScope, v))
+}
+
+// ScopeContains applies the Contains predicate on the "scope" field.
+func ScopeContains(v string) predicate.Group {
+	return predicate.Group(sql.FieldContains(FieldScope, v))
+}
+
+// ScopeHasPrefix applies the HasPrefix predicate on the "scope" field.
+func ScopeHasPrefix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasPrefix(FieldScope, v))
+}
+
+// ScopeHasSuffix applies the HasSuffix predicate on the "scope" field.
+func ScopeHasSuffix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasSuffix(FieldScope, v))
+}
+
+// ScopeEqualFold applies the EqualFold predicate on the "scope" field.
+func ScopeEqualFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldEqualFold(FieldScope, v))
+}
+
+// ScopeContainsFold applies the ContainsFold predicate on the "scope" field.
+func ScopeContainsFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldContainsFold(FieldScope, v))
 }
 
 // PlatformEQ applies the EQ predicate on the "platform" field.

@@ -56,11 +56,33 @@ type DataAccount struct {
 	RateMultiplier     *float64       `json:"rate_multiplier,omitempty"`
 	ExpiresAt          *int64         `json:"expires_at,omitempty"`
 	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired,omitempty"`
+	OwnerUserID        *int64         `json:"owner_user_id,omitempty"`
+	ShareMode          string         `json:"share_mode,omitempty"`
+	ShareStatus        string         `json:"share_status,omitempty"`
+	SharePolicyID      *int64         `json:"share_policy_id,omitempty"`
 }
 
 type DataImportRequest struct {
 	Data                 DataPayload `json:"data"`
 	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
+}
+
+type CredentialImportRequest struct {
+	Contents                []string `json:"contents" binding:"required"`
+	OwnerUserID             *int64   `json:"owner_user_id"`
+	ShareMode               string   `json:"share_mode" binding:"omitempty,oneof=private public"`
+	ShareStatus             string   `json:"share_status" binding:"omitempty,oneof=pending approved suspended"`
+	SharePolicyID           *int64   `json:"share_policy_id"`
+	ProxyID                 *int64   `json:"proxy_id"`
+	Concurrency             int      `json:"concurrency"`
+	Priority                int      `json:"priority"`
+	RateMultiplier          *float64 `json:"rate_multiplier"`
+	LoadFactor              *int     `json:"load_factor"`
+	GroupIDs                []int64  `json:"group_ids"`
+	ExpiresAt               *int64   `json:"expires_at"`
+	AutoPauseOnExpired      *bool    `json:"auto_pause_on_expired"`
+	SkipDefaultGroupBind    *bool    `json:"skip_default_group_bind"`
+	ConfirmMixedChannelRisk *bool    `json:"confirm_mixed_channel_risk"`
 }
 
 type DataImportResult struct {
@@ -160,6 +182,10 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			RateMultiplier:     acc.RateMultiplier,
 			ExpiresAt:          expiresAt,
 			AutoPauseOnExpired: &acc.AutoPauseOnExpired,
+			OwnerUserID:        acc.OwnerUserID,
+			ShareMode:          acc.ShareMode,
+			ShareStatus:        acc.ShareStatus,
+			SharePolicyID:      acc.SharePolicyID,
 		})
 	}
 
@@ -187,6 +213,181 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 	executeAdminIdempotentJSON(c, "admin.accounts.import_data", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		return h.importData(ctx, req)
 	})
+}
+
+func (h *AccountHandler) ImportCredentials(c *gin.Context) {
+	var req CredentialImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
+		response.BadRequest(c, "rate_multiplier must be >= 0")
+		return
+	}
+	if req.Concurrency <= 0 {
+		req.Concurrency = 3
+	}
+	if req.Priority <= 0 {
+		req.Priority = 50
+	}
+
+	sources, parseErrors := service.ParseAccountCredentialImportContents(req.Contents)
+	if len(sources) == 0 && len(parseErrors) == 0 {
+		response.BadRequest(c, "No importable account credentials found")
+		return
+	}
+	if len(sources) > service.MaxAccountCredentialImportItems {
+		response.BadRequest(c, fmt.Sprintf("Too many import items; maximum is %d", service.MaxAccountCredentialImportItems))
+		return
+	}
+
+	executeAdminIdempotentJSON(c, "admin.accounts.import_credentials", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		return h.importCredentials(ctx, req, sources, parseErrors), nil
+	})
+}
+
+func (h *AccountHandler) importCredentials(
+	ctx context.Context,
+	req CredentialImportRequest,
+	sources []service.AccountCredentialImportSource,
+	parseErrors []service.AccountCredentialImportError,
+) service.AccountCredentialImportResult {
+	result := service.AccountCredentialImportResult{
+		Total:  len(sources) + len(parseErrors),
+		Errors: []service.AccountCredentialImportError{},
+	}
+	result.Errors = append(result.Errors, parseErrors...)
+
+	for idx, source := range sources {
+		account, err := h.createAccountFromCredentialImportSource(ctx, source, req, idx+1)
+		if err != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, service.AccountCredentialImportError{
+				Index:   len(parseErrors) + idx + 1,
+				Kind:    string(source.Kind),
+				Name:    source.Name,
+				Message: err.Error(),
+			})
+			continue
+		}
+		if account != nil {
+			result.Created++
+		}
+	}
+	result.Failed += len(parseErrors)
+	return result
+}
+
+func (h *AccountHandler) createAccountFromCredentialImportSource(
+	ctx context.Context,
+	source service.AccountCredentialImportSource,
+	defaults CredentialImportRequest,
+	sequence int,
+) (*service.Account, error) {
+	skipDefaultGroupBind := false
+	if defaults.SkipDefaultGroupBind != nil {
+		skipDefaultGroupBind = *defaults.SkipDefaultGroupBind
+	}
+	skipMixedChannelCheck := defaults.ConfirmMixedChannelRisk != nil && *defaults.ConfirmMixedChannelRisk
+
+	input := service.CreateAccountInput{
+		Name:                  strings.TrimSpace(source.Name),
+		Notes:                 source.Notes,
+		Platform:              source.Platform,
+		Type:                  service.AccountTypeOAuth,
+		Credentials:           source.Credentials,
+		Extra:                 source.Extra,
+		OwnerUserID:           defaults.OwnerUserID,
+		ShareMode:             defaults.ShareMode,
+		ShareStatus:           defaults.ShareStatus,
+		SharePolicyID:         defaults.SharePolicyID,
+		ProxyID:               defaults.ProxyID,
+		Concurrency:           defaults.Concurrency,
+		Priority:              defaults.Priority,
+		RateMultiplier:        defaults.RateMultiplier,
+		LoadFactor:            defaults.LoadFactor,
+		GroupIDs:              defaults.GroupIDs,
+		ExpiresAt:             defaults.ExpiresAt,
+		AutoPauseOnExpired:    defaults.AutoPauseOnExpired,
+		SkipDefaultGroupBind:  skipDefaultGroupBind,
+		SkipMixedChannelCheck: skipMixedChannelCheck,
+	}
+
+	switch source.Kind {
+	case service.AccountCredentialImportKindOAuthCredentials:
+		if input.Name == "" {
+			input.Name = service.DeriveAccountCredentialImportName(input.Platform, input.Credentials, input.Extra, sequence)
+		}
+	case service.AccountCredentialImportKindOpenAIRefreshToken:
+		proxyURL, err := h.resolveCredentialImportProxyURL(ctx, defaults.ProxyID)
+		if err != nil {
+			return nil, err
+		}
+		clientID := strings.TrimSpace(source.ClientID)
+		if clientID == "" {
+			clientID, _ = openai.OAuthClientConfigByPlatform(service.PlatformOpenAI)
+		}
+		tokenInfo, err := h.openaiOAuthService.RefreshTokenWithClientID(ctx, source.Token, proxyURL, clientID)
+		if err != nil {
+			return nil, fmt.Errorf("validate OpenAI refresh token: %w", err)
+		}
+		input.Platform = service.PlatformOpenAI
+		input.Credentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
+		input.Extra = service.BuildOpenAIAccountCredentialImportExtra(tokenInfo)
+		if input.Name == "" {
+			input.Name = strings.TrimSpace(tokenInfo.Email)
+		}
+		if input.Name == "" {
+			input.Name = fmt.Sprintf("OpenAI OAuth Account #%d", sequence)
+		}
+	case service.AccountCredentialImportKindClaudeSessionKey:
+		tokenInfo, err := h.oauthService.CookieAuth(ctx, &service.CookieAuthInput{
+			SessionKey: source.Token,
+			ProxyID:    defaults.ProxyID,
+			Scope:      "full",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("exchange Claude session key: %w", err)
+		}
+		input.Platform = service.PlatformAnthropic
+		input.Credentials = service.BuildClaudeAccountCredentials(tokenInfo)
+		input.Extra = service.BuildClaudeAccountCredentialImportExtra(tokenInfo)
+		if input.Name == "" {
+			input.Name = strings.TrimSpace(tokenInfo.EmailAddress)
+		}
+		if input.Name == "" {
+			input.Name = fmt.Sprintf("Claude OAuth Account #%d", sequence)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported credential import kind")
+	}
+
+	if strings.TrimSpace(input.Name) == "" {
+		return nil, fmt.Errorf("account name is required")
+	}
+	sanitizeExtraBaseRPM(input.Extra)
+	account, err := h.adminService.CreateAccount(ctx, &input)
+	if err != nil {
+		return nil, err
+	}
+	h.adminService.ForceAntigravityPrivacy(ctx, account)
+	h.adminService.ForceOpenAIPrivacy(ctx, account)
+	return account, nil
+}
+
+func (h *AccountHandler) resolveCredentialImportProxyURL(ctx context.Context, proxyID *int64) (string, error) {
+	if proxyID == nil {
+		return "", nil
+	}
+	proxy, err := h.adminService.GetProxy(ctx, *proxyID)
+	if err != nil {
+		return "", fmt.Errorf("load proxy: %w", err)
+	}
+	if proxy == nil {
+		return "", fmt.Errorf("proxy not found")
+	}
+	return proxy.URL(), nil
 }
 
 func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {
@@ -312,6 +513,10 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			Concurrency:          item.Concurrency,
 			Priority:             item.Priority,
 			RateMultiplier:       item.RateMultiplier,
+			OwnerUserID:          item.OwnerUserID,
+			ShareMode:            item.ShareMode,
+			ShareStatus:          item.ShareStatus,
+			SharePolicyID:        item.SharePolicyID,
 			GroupIDs:             nil,
 			ExpiresAt:            item.ExpiresAt,
 			AutoPauseOnExpired:   item.AutoPauseOnExpired,
@@ -572,6 +777,26 @@ func validateDataAccount(item DataAccount) error {
 	}
 	if item.Priority < 0 {
 		return errors.New("priority must be >= 0")
+	}
+	if item.OwnerUserID != nil && *item.OwnerUserID <= 0 {
+		return errors.New("owner_user_id must be > 0")
+	}
+	if shareMode := strings.ToLower(strings.TrimSpace(item.ShareMode)); shareMode != "" {
+		switch shareMode {
+		case service.AccountShareModePrivate, service.AccountShareModePublic:
+		default:
+			return fmt.Errorf("share_mode is invalid: %s", item.ShareMode)
+		}
+	}
+	if shareStatus := strings.ToLower(strings.TrimSpace(item.ShareStatus)); shareStatus != "" {
+		switch shareStatus {
+		case service.AccountShareStatusPending, service.AccountShareStatusApproved, service.AccountShareStatusSuspended:
+		default:
+			return fmt.Errorf("share_status is invalid: %s", item.ShareStatus)
+		}
+	}
+	if item.SharePolicyID != nil && *item.SharePolicyID <= 0 {
+		return errors.New("share_policy_id must be > 0")
 	}
 	return nil
 }

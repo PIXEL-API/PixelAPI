@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 )
 
 // Account is the model entity for the Account schema.
@@ -37,6 +38,14 @@ type Account struct {
 	Credentials map[string]interface{} `json:"credentials,omitempty"`
 	// Extra holds the value of the "extra" field.
 	Extra map[string]interface{} `json:"extra,omitempty"`
+	// OwnerUserID holds the value of the "owner_user_id" field.
+	OwnerUserID *int64 `json:"owner_user_id,omitempty"`
+	// ShareMode holds the value of the "share_mode" field.
+	ShareMode string `json:"share_mode,omitempty"`
+	// ShareStatus holds the value of the "share_status" field.
+	ShareStatus string `json:"share_status,omitempty"`
+	// SharePolicyID holds the value of the "share_policy_id" field.
+	SharePolicyID *int64 `json:"share_policy_id,omitempty"`
 	// ProxyID holds the value of the "proxy_id" field.
 	ProxyID *int64 `json:"proxy_id,omitempty"`
 	// Concurrency holds the value of the "concurrency" field.
@@ -87,13 +96,15 @@ type AccountEdges struct {
 	Groups []*Group `json:"groups,omitempty"`
 	// Proxy holds the value of the proxy edge.
 	Proxy *Proxy `json:"proxy,omitempty"`
+	// Owner holds the value of the owner edge.
+	Owner *User `json:"owner,omitempty"`
 	// UsageLogs holds the value of the usage_logs edge.
 	UsageLogs []*UsageLog `json:"usage_logs,omitempty"`
 	// AccountGroups holds the value of the account_groups edge.
 	AccountGroups []*AccountGroup `json:"account_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [4]bool
+	loadedTypes [5]bool
 }
 
 // GroupsOrErr returns the Groups value or an error if the edge
@@ -116,10 +127,21 @@ func (e AccountEdges) ProxyOrErr() (*Proxy, error) {
 	return nil, &NotLoadedError{edge: "proxy"}
 }
 
+// OwnerOrErr returns the Owner value or an error if the edge
+// was not loaded in eager-loading, or loaded but was not found.
+func (e AccountEdges) OwnerOrErr() (*User, error) {
+	if e.Owner != nil {
+		return e.Owner, nil
+	} else if e.loadedTypes[2] {
+		return nil, &NotFoundError{label: user.Label}
+	}
+	return nil, &NotLoadedError{edge: "owner"}
+}
+
 // UsageLogsOrErr returns the UsageLogs value or an error if the edge
 // was not loaded in eager-loading.
 func (e AccountEdges) UsageLogsOrErr() ([]*UsageLog, error) {
-	if e.loadedTypes[2] {
+	if e.loadedTypes[3] {
 		return e.UsageLogs, nil
 	}
 	return nil, &NotLoadedError{edge: "usage_logs"}
@@ -128,7 +150,7 @@ func (e AccountEdges) UsageLogsOrErr() ([]*UsageLog, error) {
 // AccountGroupsOrErr returns the AccountGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e AccountEdges) AccountGroupsOrErr() ([]*AccountGroup, error) {
-	if e.loadedTypes[3] {
+	if e.loadedTypes[4] {
 		return e.AccountGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "account_groups"}
@@ -145,9 +167,9 @@ func (*Account) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case account.FieldRateMultiplier:
 			values[i] = new(sql.NullFloat64)
-		case account.FieldID, account.FieldProxyID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority:
+		case account.FieldID, account.FieldOwnerUserID, account.FieldSharePolicyID, account.FieldProxyID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority:
 			values[i] = new(sql.NullInt64)
-		case account.FieldName, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus:
+		case account.FieldName, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldShareMode, account.FieldShareStatus, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus:
 			values[i] = new(sql.NullString)
 		case account.FieldCreatedAt, account.FieldUpdatedAt, account.FieldDeletedAt, account.FieldLastUsedAt, account.FieldExpiresAt, account.FieldRateLimitedAt, account.FieldRateLimitResetAt, account.FieldOverloadUntil, account.FieldTempUnschedulableUntil, account.FieldSessionWindowStart, account.FieldSessionWindowEnd:
 			values[i] = new(sql.NullTime)
@@ -231,6 +253,32 @@ func (_m *Account) assignValues(columns []string, values []any) error {
 				if err := json.Unmarshal(*value, &_m.Extra); err != nil {
 					return fmt.Errorf("unmarshal field extra: %w", err)
 				}
+			}
+		case account.FieldOwnerUserID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field owner_user_id", values[i])
+			} else if value.Valid {
+				_m.OwnerUserID = new(int64)
+				*_m.OwnerUserID = value.Int64
+			}
+		case account.FieldShareMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field share_mode", values[i])
+			} else if value.Valid {
+				_m.ShareMode = value.String
+			}
+		case account.FieldShareStatus:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field share_status", values[i])
+			} else if value.Valid {
+				_m.ShareStatus = value.String
+			}
+		case account.FieldSharePolicyID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field share_policy_id", values[i])
+			} else if value.Valid {
+				_m.SharePolicyID = new(int64)
+				*_m.SharePolicyID = value.Int64
 			}
 		case account.FieldProxyID:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -382,6 +430,11 @@ func (_m *Account) QueryProxy() *ProxyQuery {
 	return NewAccountClient(_m.config).QueryProxy(_m)
 }
 
+// QueryOwner queries the "owner" edge of the Account entity.
+func (_m *Account) QueryOwner() *UserQuery {
+	return NewAccountClient(_m.config).QueryOwner(_m)
+}
+
 // QueryUsageLogs queries the "usage_logs" edge of the Account entity.
 func (_m *Account) QueryUsageLogs() *UsageLogQuery {
 	return NewAccountClient(_m.config).QueryUsageLogs(_m)
@@ -445,6 +498,22 @@ func (_m *Account) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("extra=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Extra))
+	builder.WriteString(", ")
+	if v := _m.OwnerUserID; v != nil {
+		builder.WriteString("owner_user_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("share_mode=")
+	builder.WriteString(_m.ShareMode)
+	builder.WriteString(", ")
+	builder.WriteString("share_status=")
+	builder.WriteString(_m.ShareStatus)
+	builder.WriteString(", ")
+	if v := _m.SharePolicyID; v != nil {
+		builder.WriteString("share_policy_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	if v := _m.ProxyID; v != nil {
 		builder.WriteString("proxy_id=")

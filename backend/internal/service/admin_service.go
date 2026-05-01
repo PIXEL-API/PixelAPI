@@ -41,9 +41,9 @@ type AdminService interface {
 	BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error)
 
 	// Group management
-	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error)
-	GetAllGroups(ctx context.Context) ([]Group, error)
-	GetAllGroupsByPlatform(ctx context.Context, platform string) ([]Group, error)
+	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, scope, sortBy, sortOrder string) ([]Group, int64, error)
+	GetAllGroups(ctx context.Context, scope string) ([]Group, error)
+	GetAllGroupsByPlatform(ctx context.Context, platform, scope string) ([]Group, error)
 	GetGroup(ctx context.Context, id int64) (*Group, error)
 	CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error)
 	UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error)
@@ -255,6 +255,10 @@ type CreateAccountInput struct {
 	Type               string
 	Credentials        map[string]any
 	Extra              map[string]any
+	OwnerUserID        *int64
+	ShareMode          string
+	ShareStatus        string
+	SharePolicyID      *int64
 	ProxyID            *int64
 	Concurrency        int
 	Priority           int
@@ -276,6 +280,10 @@ type UpdateAccountInput struct {
 	Type                  string // Account type: oauth, setup-token, apikey
 	Credentials           map[string]any
 	Extra                 map[string]any
+	OwnerUserID           *int64
+	ShareMode             string
+	ShareStatus           string
+	SharePolicyID         *int64
 	ProxyID               *int64
 	Concurrency           *int     // 使用指针区分"未提供"和"设置为0"
 	Priority              *int     // 使用指针区分"未提供"和"设置为0"
@@ -493,23 +501,24 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
-	userRepo             UserRepository
-	groupRepo            GroupRepository
-	accountRepo          AccountRepository
-	proxyRepo            ProxyRepository
-	apiKeyRepo           APIKeyRepository
-	redeemCodeRepo       RedeemCodeRepository
-	userGroupRateRepo    UserGroupRateRepository
-	userRPMCache         UserRPMCache
-	billingCacheService  *BillingCacheService
-	proxyProber          ProxyExitInfoProber
-	proxyLatencyCache    ProxyLatencyCache
-	authCacheInvalidator APIKeyAuthCacheInvalidator
-	entClient            *dbent.Client // 用于开启数据库事务
-	settingService       *SettingService
-	defaultSubAssigner   DefaultSubscriptionAssigner
-	userSubRepo          UserSubscriptionRepository
-	privacyClientFactory PrivacyClientFactory
+	userRepo                UserRepository
+	groupRepo               GroupRepository
+	accountRepo             AccountRepository
+	proxyRepo               ProxyRepository
+	apiKeyRepo              APIKeyRepository
+	redeemCodeRepo          RedeemCodeRepository
+	userGroupRateRepo       UserGroupRateRepository
+	userRPMCache            UserRPMCache
+	billingCacheService     *BillingCacheService
+	proxyProber             ProxyExitInfoProber
+	proxyLatencyCache       ProxyLatencyCache
+	authCacheInvalidator    APIKeyAuthCacheInvalidator
+	entClient               *dbent.Client // 用于开启数据库事务
+	settingService          *SettingService
+	defaultSubAssigner      DefaultSubscriptionAssigner
+	userSubRepo             UserSubscriptionRepository
+	privacyClientFactory    PrivacyClientFactory
+	privateGroupProvisioner UserPrivateGroupProvisioner
 }
 
 type userGroupRateBatchReader interface {
@@ -555,6 +564,13 @@ func NewAdminService(
 		userSubRepo:          userSubRepo,
 		privacyClientFactory: privacyClientFactory,
 	}
+}
+
+func SetAdminUserPrivateGroupProvisioner(svc AdminService, provisioner UserPrivateGroupProvisioner) AdminService {
+	if impl, ok := svc.(*adminServiceImpl); ok {
+		impl.privateGroupProvisioner = provisioner
+	}
+	return svc
 }
 
 // User management implementations
@@ -657,6 +673,11 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 	}
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		return nil, err
+	}
+	if s.privateGroupProvisioner != nil {
+		if err := s.privateGroupProvisioner.ProvisionUserPrivateGroups(ctx, user.ID); err != nil {
+			return nil, err
+		}
 	}
 	s.assignDefaultSubscriptions(ctx, user.ID)
 	return user, nil
@@ -1301,22 +1322,60 @@ func cloneAdminAuthIdentityMetadata(input map[string]any) map[string]any {
 	return out
 }
 
+type groupScopeFilterRepository interface {
+	ListWithScopeFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool, scope string) ([]Group, *pagination.PaginationResult, error)
+}
+
 // Group management implementations
-func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error) {
+func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, scope, sortBy, sortOrder string) ([]Group, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
+	if repo, ok := s.groupRepo.(groupScopeFilterRepository); ok {
+		groups, result, err := repo.ListWithScopeFilters(ctx, params, platform, status, search, isExclusive, scope)
+		if err != nil {
+			return nil, 0, err
+		}
+		return groups, result.Total, nil
+	}
 	groups, result, err := s.groupRepo.ListWithFilters(ctx, params, platform, status, search, isExclusive)
 	if err != nil {
 		return nil, 0, err
 	}
+	groups = filterGroupsByScope(groups, scope)
+	if scope != "" && strings.ToLower(strings.TrimSpace(scope)) != "all" {
+		return groups, int64(len(groups)), nil
+	}
 	return groups, result.Total, nil
 }
 
-func (s *adminServiceImpl) GetAllGroups(ctx context.Context) ([]Group, error) {
-	return s.groupRepo.ListActive(ctx)
+func (s *adminServiceImpl) GetAllGroups(ctx context.Context, scope string) ([]Group, error) {
+	groups, err := s.groupRepo.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return filterGroupsByScope(groups, scope), nil
 }
 
-func (s *adminServiceImpl) GetAllGroupsByPlatform(ctx context.Context, platform string) ([]Group, error) {
-	return s.groupRepo.ListActiveByPlatform(ctx, platform)
+func (s *adminServiceImpl) GetAllGroupsByPlatform(ctx context.Context, platform, scope string) ([]Group, error) {
+	groups, err := s.groupRepo.ListActiveByPlatform(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	return filterGroupsByScope(groups, scope), nil
+}
+
+func filterGroupsByScope(groups []Group, scope string) []Group {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	if scope == "" || scope == "all" {
+		return groups
+	}
+	scope = NormalizeGroupScope(scope)
+	filtered := make([]Group, 0, len(groups))
+	for _, group := range groups {
+		if NormalizeGroupScope(group.Scope) == scope {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered
 }
 
 func (s *adminServiceImpl) GetGroup(ctx context.Context, id int64) (*Group, error) {
@@ -2078,17 +2137,21 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 
 	account := &Account{
-		Name:        input.Name,
-		Notes:       normalizeAccountNotes(input.Notes),
-		Platform:    input.Platform,
-		Type:        input.Type,
-		Credentials: input.Credentials,
-		Extra:       input.Extra,
-		ProxyID:     input.ProxyID,
-		Concurrency: input.Concurrency,
-		Priority:    input.Priority,
-		Status:      StatusActive,
-		Schedulable: true,
+		Name:          input.Name,
+		Notes:         normalizeAccountNotes(input.Notes),
+		Platform:      input.Platform,
+		Type:          input.Type,
+		Credentials:   input.Credentials,
+		Extra:         input.Extra,
+		OwnerUserID:   input.OwnerUserID,
+		ShareMode:     NormalizeAccountShareMode(input.ShareMode),
+		ShareStatus:   NormalizeAccountShareStatus(input.ShareStatus),
+		SharePolicyID: input.SharePolicyID,
+		ProxyID:       input.ProxyID,
+		Concurrency:   input.Concurrency,
+		Priority:      input.Priority,
+		Status:        StatusActive,
+		Schedulable:   true,
 	}
 	// 预计算固定时间重置的下次重置时间
 	if account.Extra != nil {
@@ -2237,6 +2300,26 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if input.Status != "" {
 		account.Status = input.Status
+	}
+	if input.OwnerUserID != nil {
+		if *input.OwnerUserID <= 0 {
+			account.OwnerUserID = nil
+		} else {
+			account.OwnerUserID = input.OwnerUserID
+		}
+	}
+	if input.ShareMode != "" {
+		account.ShareMode = NormalizeAccountShareMode(input.ShareMode)
+	}
+	if input.ShareStatus != "" {
+		account.ShareStatus = NormalizeAccountShareStatus(input.ShareStatus)
+	}
+	if input.SharePolicyID != nil {
+		if *input.SharePolicyID <= 0 {
+			account.SharePolicyID = nil
+		} else {
+			account.SharePolicyID = input.SharePolicyID
+		}
 	}
 	if input.ExpiresAt != nil {
 		if *input.ExpiresAt <= 0 {

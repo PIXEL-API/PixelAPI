@@ -6,11 +6,14 @@
 import { apiClient } from '../client'
 import type {
   AdminGroup,
+  GroupScope,
   GroupPlatform,
   CreateGroupRequest,
   UpdateGroupRequest,
   PaginatedResponse
 } from '@/types'
+
+export type GroupScopeFilter = GroupScope | 'all'
 
 /**
  * List all groups with pagination
@@ -26,6 +29,7 @@ export async function list(
     platform?: GroupPlatform
     status?: 'active' | 'inactive'
     is_exclusive?: boolean
+    scope?: GroupScopeFilter
     search?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
@@ -50,9 +54,12 @@ export async function list(
  * @param platform - Optional platform filter
  * @returns List of all active groups
  */
-export async function getAll(platform?: GroupPlatform): Promise<AdminGroup[]> {
+export async function getAll(platform?: GroupPlatform, scope: GroupScopeFilter = 'public'): Promise<AdminGroup[]> {
   const { data } = await apiClient.get<AdminGroup[]>('/admin/groups/all', {
-    params: platform ? { platform } : undefined
+    params: {
+      ...(platform ? { platform } : {}),
+      scope
+    }
   })
   return data
 }

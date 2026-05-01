@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -298,6 +299,32 @@ func parseUserTimeRange(c *gin.Context) (time.Time, time.Time) {
 	return startTime, endTime
 }
 
+func parseUserDashboardTimeRangeStrict(c *gin.Context) (time.Time, time.Time, error) {
+	userTZ := c.Query("timezone")
+	now := timezone.NowInUserLocation(userTZ)
+	startTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
+	endTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+
+	if startDate := strings.TrimSpace(c.Query("start_date")); startDate != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", startDate, userTZ)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid start_date format, use YYYY-MM-DD")
+		}
+		startTime = t
+	}
+	if endDate := strings.TrimSpace(c.Query("end_date")); endDate != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", endDate, userTZ)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid end_date format, use YYYY-MM-DD")
+		}
+		endTime = t.AddDate(0, 0, 1)
+	}
+	if !endTime.After(startTime) {
+		return time.Time{}, time.Time{}, fmt.Errorf("end_date must be greater than or equal to start_date")
+	}
+	return startTime, endTime, nil
+}
+
 // DashboardStats handles getting user dashboard statistics
 // GET /api/v1/usage/dashboard/stats
 func (h *UsageHandler) DashboardStats(c *gin.Context) {
@@ -415,4 +442,35 @@ func (h *UsageHandler) DashboardAPIKeysUsage(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"stats": stats})
+}
+
+// DashboardAccountSharing handles owned-account self usage and public-share settlement statistics.
+// GET /api/v1/usage/dashboard/account-sharing
+func (h *UsageHandler) DashboardAccountSharing(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	startTime, endTime, err := parseUserDashboardTimeRangeStrict(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	granularity := strings.TrimSpace(c.DefaultQuery("granularity", "day"))
+	switch granularity {
+	case "hour", "day", "week", "month":
+	default:
+		response.BadRequest(c, "Invalid granularity, use hour, day, week, or month")
+		return
+	}
+
+	stats, err := h.usageService.GetUserAccountSharingDashboard(c.Request.Context(), subject.UserID, startTime, endTime, granularity)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, stats)
 }

@@ -62,6 +62,7 @@ type UsageLogRepository interface {
 	GetAPIKeyDashboardStats(ctx context.Context, apiKeyID int64) (*usagestats.UserDashboardStats, error)
 	GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) ([]usagestats.TrendDataPoint, error)
 	GetUserModelStats(ctx context.Context, userID int64, startTime, endTime time.Time) ([]usagestats.ModelStat, error)
+	GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (*usagestats.AccountSharingDashboardStats, error)
 
 	// Admin usage listing/stats
 	ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters usagestats.UsageLogFilters) ([]UsageLog, *pagination.PaginationResult, error)

@@ -62,18 +62,19 @@ type JWTClaims struct {
 
 // AuthService 认证服务
 type AuthService struct {
-	entClient          *dbent.Client
-	userRepo           UserRepository
-	redeemRepo         RedeemCodeRepository
-	refreshTokenCache  RefreshTokenCache
-	cfg                *config.Config
-	settingService     *SettingService
-	emailService       *EmailService
-	turnstileService   *TurnstileService
-	emailQueueService  *EmailQueueService
-	promoService       *PromoService
-	affiliateService   *AffiliateService
-	defaultSubAssigner DefaultSubscriptionAssigner
+	entClient               *dbent.Client
+	userRepo                UserRepository
+	redeemRepo              RedeemCodeRepository
+	refreshTokenCache       RefreshTokenCache
+	cfg                     *config.Config
+	settingService          *SettingService
+	emailService            *EmailService
+	turnstileService        *TurnstileService
+	emailQueueService       *EmailQueueService
+	promoService            *PromoService
+	affiliateService        *AffiliateService
+	defaultSubAssigner      DefaultSubscriptionAssigner
+	privateGroupProvisioner UserPrivateGroupProvisioner
 }
 
 type DefaultSubscriptionAssigner interface {
@@ -122,6 +123,13 @@ func (s *AuthService) EntClient() *dbent.Client {
 		return nil
 	}
 	return s.entClient
+}
+
+func (s *AuthService) SetUserPrivateGroupProvisioner(provisioner UserPrivateGroupProvisioner) {
+	if s == nil {
+		return
+	}
+	s.privateGroupProvisioner = provisioner
 }
 
 // Register 用户注册，返回token和用户
@@ -225,6 +233,9 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 		return "", nil, ErrServiceUnavailable
 	}
 	s.postAuthUserBootstrap(ctx, user, "email", true)
+	if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
+		return "", nil, err
+	}
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 	if s.affiliateService != nil {
 		if _, err := s.affiliateService.EnsureUserAffiliate(ctx, user.ID); err != nil {
@@ -534,6 +545,9 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 			} else {
 				user = newUser
 				s.postAuthUserBootstrap(ctx, user, signupSource, false)
+				if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
+					return "", nil, err
+				}
 				s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 			}
 		} else {
@@ -666,6 +680,9 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 					}
 					user = newUser
 					s.postAuthUserBootstrap(ctx, user, signupSource, false)
+					if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
+						return nil, nil, err
+					}
 					s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 					s.bindOAuthAffiliate(ctx, user.ID, affiliateCode)
 				}
@@ -684,6 +701,9 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 				} else {
 					user = newUser
 					s.postAuthUserBootstrap(ctx, user, signupSource, false)
+					if err := s.provisionUserPrivateGroups(ctx, user.ID); err != nil {
+						return nil, nil, err
+					}
 					s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 					s.bindOAuthAffiliate(ctx, user.ID, affiliateCode)
 					if invitationRedeemCode != nil {
@@ -730,6 +750,16 @@ func (s *AuthService) assignSubscriptions(ctx context.Context, userID int64, ite
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to assign default subscription: user_id=%d group_id=%d err=%v", userID, item.GroupID, err)
 		}
 	}
+}
+
+func (s *AuthService) provisionUserPrivateGroups(ctx context.Context, userID int64) error {
+	if s == nil || s.privateGroupProvisioner == nil || userID <= 0 {
+		return nil
+	}
+	if err := s.privateGroupProvisioner.ProvisionUserPrivateGroups(ctx, userID); err != nil {
+		return fmt.Errorf("provision user private groups: %w", err)
+	}
+	return nil
 }
 
 func (s *AuthService) resolveSignupGrantPlan(ctx context.Context, signupSource string) signupGrantPlan {

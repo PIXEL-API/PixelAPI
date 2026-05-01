@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 )
 
 // AccountCreate is the builder for creating a Account entity.
@@ -108,6 +109,62 @@ func (_c *AccountCreate) SetCredentials(v map[string]interface{}) *AccountCreate
 // SetExtra sets the "extra" field.
 func (_c *AccountCreate) SetExtra(v map[string]interface{}) *AccountCreate {
 	_c.mutation.SetExtra(v)
+	return _c
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_c *AccountCreate) SetOwnerUserID(v int64) *AccountCreate {
+	_c.mutation.SetOwnerUserID(v)
+	return _c
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableOwnerUserID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetOwnerUserID(*v)
+	}
+	return _c
+}
+
+// SetShareMode sets the "share_mode" field.
+func (_c *AccountCreate) SetShareMode(v string) *AccountCreate {
+	_c.mutation.SetShareMode(v)
+	return _c
+}
+
+// SetNillableShareMode sets the "share_mode" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableShareMode(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetShareMode(*v)
+	}
+	return _c
+}
+
+// SetShareStatus sets the "share_status" field.
+func (_c *AccountCreate) SetShareStatus(v string) *AccountCreate {
+	_c.mutation.SetShareStatus(v)
+	return _c
+}
+
+// SetNillableShareStatus sets the "share_status" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableShareStatus(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetShareStatus(*v)
+	}
+	return _c
+}
+
+// SetSharePolicyID sets the "share_policy_id" field.
+func (_c *AccountCreate) SetSharePolicyID(v int64) *AccountCreate {
+	_c.mutation.SetSharePolicyID(v)
+	return _c
+}
+
+// SetNillableSharePolicyID sets the "share_policy_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableSharePolicyID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetSharePolicyID(*v)
+	}
 	return _c
 }
 
@@ -397,6 +454,25 @@ func (_c *AccountCreate) SetProxy(v *Proxy) *AccountCreate {
 	return _c.SetProxyID(v.ID)
 }
 
+// SetOwnerID sets the "owner" edge to the User entity by ID.
+func (_c *AccountCreate) SetOwnerID(id int64) *AccountCreate {
+	_c.mutation.SetOwnerID(id)
+	return _c
+}
+
+// SetNillableOwnerID sets the "owner" edge to the User entity by ID if the given value is not nil.
+func (_c *AccountCreate) SetNillableOwnerID(id *int64) *AccountCreate {
+	if id != nil {
+		_c = _c.SetOwnerID(*id)
+	}
+	return _c
+}
+
+// SetOwner sets the "owner" edge to the User entity.
+func (_c *AccountCreate) SetOwner(v *User) *AccountCreate {
+	return _c.SetOwnerID(v.ID)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_c *AccountCreate) AddUsageLogIDs(ids ...int64) *AccountCreate {
 	_c.mutation.AddUsageLogIDs(ids...)
@@ -477,6 +553,14 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultExtra()
 		_c.mutation.SetExtra(v)
 	}
+	if _, ok := _c.mutation.ShareMode(); !ok {
+		v := account.DefaultShareMode
+		_c.mutation.SetShareMode(v)
+	}
+	if _, ok := _c.mutation.ShareStatus(); !ok {
+		v := account.DefaultShareStatus
+		_c.mutation.SetShareStatus(v)
+	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		v := account.DefaultConcurrency
 		_c.mutation.SetConcurrency(v)
@@ -541,6 +625,22 @@ func (_c *AccountCreate) check() error {
 	}
 	if _, ok := _c.mutation.Extra(); !ok {
 		return &ValidationError{Name: "extra", err: errors.New(`ent: missing required field "Account.extra"`)}
+	}
+	if _, ok := _c.mutation.ShareMode(); !ok {
+		return &ValidationError{Name: "share_mode", err: errors.New(`ent: missing required field "Account.share_mode"`)}
+	}
+	if v, ok := _c.mutation.ShareMode(); ok {
+		if err := account.ShareModeValidator(v); err != nil {
+			return &ValidationError{Name: "share_mode", err: fmt.Errorf(`ent: validator failed for field "Account.share_mode": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.ShareStatus(); !ok {
+		return &ValidationError{Name: "share_status", err: errors.New(`ent: missing required field "Account.share_status"`)}
+	}
+	if v, ok := _c.mutation.ShareStatus(); ok {
+		if err := account.ShareStatusValidator(v); err != nil {
+			return &ValidationError{Name: "share_status", err: fmt.Errorf(`ent: validator failed for field "Account.share_status": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		return &ValidationError{Name: "concurrency", err: errors.New(`ent: missing required field "Account.concurrency"`)}
@@ -632,6 +732,18 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Extra(); ok {
 		_spec.SetField(account.FieldExtra, field.TypeJSON, value)
 		_node.Extra = value
+	}
+	if value, ok := _c.mutation.ShareMode(); ok {
+		_spec.SetField(account.FieldShareMode, field.TypeString, value)
+		_node.ShareMode = value
+	}
+	if value, ok := _c.mutation.ShareStatus(); ok {
+		_spec.SetField(account.FieldShareStatus, field.TypeString, value)
+		_node.ShareStatus = value
+	}
+	if value, ok := _c.mutation.SharePolicyID(); ok {
+		_spec.SetField(account.FieldSharePolicyID, field.TypeInt64, value)
+		_node.SharePolicyID = &value
 	}
 	if value, ok := _c.mutation.Concurrency(); ok {
 		_spec.SetField(account.FieldConcurrency, field.TypeInt, value)
@@ -740,6 +852,23 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.ProxyID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.OwnerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.OwnerTable,
+			Columns: []string{account.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.OwnerUserID = &nodes[0]
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	if nodes := _c.mutation.UsageLogsIDs(); len(nodes) > 0 {
@@ -915,6 +1044,72 @@ func (u *AccountUpsert) SetExtra(v map[string]interface{}) *AccountUpsert {
 // UpdateExtra sets the "extra" field to the value that was provided on create.
 func (u *AccountUpsert) UpdateExtra() *AccountUpsert {
 	u.SetExcluded(account.FieldExtra)
+	return u
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *AccountUpsert) SetOwnerUserID(v int64) *AccountUpsert {
+	u.Set(account.FieldOwnerUserID, v)
+	return u
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateOwnerUserID() *AccountUpsert {
+	u.SetExcluded(account.FieldOwnerUserID)
+	return u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *AccountUpsert) ClearOwnerUserID() *AccountUpsert {
+	u.SetNull(account.FieldOwnerUserID)
+	return u
+}
+
+// SetShareMode sets the "share_mode" field.
+func (u *AccountUpsert) SetShareMode(v string) *AccountUpsert {
+	u.Set(account.FieldShareMode, v)
+	return u
+}
+
+// UpdateShareMode sets the "share_mode" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateShareMode() *AccountUpsert {
+	u.SetExcluded(account.FieldShareMode)
+	return u
+}
+
+// SetShareStatus sets the "share_status" field.
+func (u *AccountUpsert) SetShareStatus(v string) *AccountUpsert {
+	u.Set(account.FieldShareStatus, v)
+	return u
+}
+
+// UpdateShareStatus sets the "share_status" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateShareStatus() *AccountUpsert {
+	u.SetExcluded(account.FieldShareStatus)
+	return u
+}
+
+// SetSharePolicyID sets the "share_policy_id" field.
+func (u *AccountUpsert) SetSharePolicyID(v int64) *AccountUpsert {
+	u.Set(account.FieldSharePolicyID, v)
+	return u
+}
+
+// UpdateSharePolicyID sets the "share_policy_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateSharePolicyID() *AccountUpsert {
+	u.SetExcluded(account.FieldSharePolicyID)
+	return u
+}
+
+// AddSharePolicyID adds v to the "share_policy_id" field.
+func (u *AccountUpsert) AddSharePolicyID(v int64) *AccountUpsert {
+	u.Add(account.FieldSharePolicyID, v)
+	return u
+}
+
+// ClearSharePolicyID clears the value of the "share_policy_id" field.
+func (u *AccountUpsert) ClearSharePolicyID() *AccountUpsert {
+	u.SetNull(account.FieldSharePolicyID)
 	return u
 }
 
@@ -1416,6 +1611,83 @@ func (u *AccountUpsertOne) SetExtra(v map[string]interface{}) *AccountUpsertOne 
 func (u *AccountUpsertOne) UpdateExtra() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateExtra()
+	})
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *AccountUpsertOne) SetOwnerUserID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetOwnerUserID(v)
+	})
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateOwnerUserID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateOwnerUserID()
+	})
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *AccountUpsertOne) ClearOwnerUserID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearOwnerUserID()
+	})
+}
+
+// SetShareMode sets the "share_mode" field.
+func (u *AccountUpsertOne) SetShareMode(v string) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetShareMode(v)
+	})
+}
+
+// UpdateShareMode sets the "share_mode" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateShareMode() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateShareMode()
+	})
+}
+
+// SetShareStatus sets the "share_status" field.
+func (u *AccountUpsertOne) SetShareStatus(v string) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetShareStatus(v)
+	})
+}
+
+// UpdateShareStatus sets the "share_status" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateShareStatus() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateShareStatus()
+	})
+}
+
+// SetSharePolicyID sets the "share_policy_id" field.
+func (u *AccountUpsertOne) SetSharePolicyID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetSharePolicyID(v)
+	})
+}
+
+// AddSharePolicyID adds v to the "share_policy_id" field.
+func (u *AccountUpsertOne) AddSharePolicyID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddSharePolicyID(v)
+	})
+}
+
+// UpdateSharePolicyID sets the "share_policy_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateSharePolicyID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateSharePolicyID()
+	})
+}
+
+// ClearSharePolicyID clears the value of the "share_policy_id" field.
+func (u *AccountUpsertOne) ClearSharePolicyID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearSharePolicyID()
 	})
 }
 
@@ -2138,6 +2410,83 @@ func (u *AccountUpsertBulk) SetExtra(v map[string]interface{}) *AccountUpsertBul
 func (u *AccountUpsertBulk) UpdateExtra() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateExtra()
+	})
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *AccountUpsertBulk) SetOwnerUserID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetOwnerUserID(v)
+	})
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateOwnerUserID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateOwnerUserID()
+	})
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *AccountUpsertBulk) ClearOwnerUserID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearOwnerUserID()
+	})
+}
+
+// SetShareMode sets the "share_mode" field.
+func (u *AccountUpsertBulk) SetShareMode(v string) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetShareMode(v)
+	})
+}
+
+// UpdateShareMode sets the "share_mode" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateShareMode() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateShareMode()
+	})
+}
+
+// SetShareStatus sets the "share_status" field.
+func (u *AccountUpsertBulk) SetShareStatus(v string) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetShareStatus(v)
+	})
+}
+
+// UpdateShareStatus sets the "share_status" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateShareStatus() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateShareStatus()
+	})
+}
+
+// SetSharePolicyID sets the "share_policy_id" field.
+func (u *AccountUpsertBulk) SetSharePolicyID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetSharePolicyID(v)
+	})
+}
+
+// AddSharePolicyID adds v to the "share_policy_id" field.
+func (u *AccountUpsertBulk) AddSharePolicyID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddSharePolicyID(v)
+	})
+}
+
+// UpdateSharePolicyID sets the "share_policy_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateSharePolicyID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateSharePolicyID()
+	})
+}
+
+// ClearSharePolicyID clears the value of the "share_policy_id" field.
+func (u *AccountUpsertBulk) ClearSharePolicyID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearSharePolicyID()
 	})
 }
 

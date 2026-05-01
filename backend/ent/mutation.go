@@ -2284,6 +2284,10 @@ type AccountMutation struct {
 	_type                     *string
 	credentials               *map[string]interface{}
 	extra                     *map[string]interface{}
+	share_mode                *string
+	share_status              *string
+	share_policy_id           *int64
+	addshare_policy_id        *int64
 	concurrency               *int
 	addconcurrency            *int
 	load_factor               *int
@@ -2312,6 +2316,8 @@ type AccountMutation struct {
 	clearedgroups             bool
 	proxy                     *int64
 	clearedproxy              bool
+	owner                     *int64
+	clearedowner              bool
 	usage_logs                map[int64]struct{}
 	removedusage_logs         map[int64]struct{}
 	clearedusage_logs         bool
@@ -2766,6 +2772,197 @@ func (m *AccountMutation) OldExtra(ctx context.Context) (v map[string]interface{
 // ResetExtra resets all changes to the "extra" field.
 func (m *AccountMutation) ResetExtra() {
 	m.extra = nil
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (m *AccountMutation) SetOwnerUserID(i int64) {
+	m.owner = &i
+}
+
+// OwnerUserID returns the value of the "owner_user_id" field in the mutation.
+func (m *AccountMutation) OwnerUserID() (r int64, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOwnerUserID returns the old "owner_user_id" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldOwnerUserID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOwnerUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOwnerUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOwnerUserID: %w", err)
+	}
+	return oldValue.OwnerUserID, nil
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (m *AccountMutation) ClearOwnerUserID() {
+	m.owner = nil
+	m.clearedFields[account.FieldOwnerUserID] = struct{}{}
+}
+
+// OwnerUserIDCleared returns if the "owner_user_id" field was cleared in this mutation.
+func (m *AccountMutation) OwnerUserIDCleared() bool {
+	_, ok := m.clearedFields[account.FieldOwnerUserID]
+	return ok
+}
+
+// ResetOwnerUserID resets all changes to the "owner_user_id" field.
+func (m *AccountMutation) ResetOwnerUserID() {
+	m.owner = nil
+	delete(m.clearedFields, account.FieldOwnerUserID)
+}
+
+// SetShareMode sets the "share_mode" field.
+func (m *AccountMutation) SetShareMode(s string) {
+	m.share_mode = &s
+}
+
+// ShareMode returns the value of the "share_mode" field in the mutation.
+func (m *AccountMutation) ShareMode() (r string, exists bool) {
+	v := m.share_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShareMode returns the old "share_mode" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldShareMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShareMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShareMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShareMode: %w", err)
+	}
+	return oldValue.ShareMode, nil
+}
+
+// ResetShareMode resets all changes to the "share_mode" field.
+func (m *AccountMutation) ResetShareMode() {
+	m.share_mode = nil
+}
+
+// SetShareStatus sets the "share_status" field.
+func (m *AccountMutation) SetShareStatus(s string) {
+	m.share_status = &s
+}
+
+// ShareStatus returns the value of the "share_status" field in the mutation.
+func (m *AccountMutation) ShareStatus() (r string, exists bool) {
+	v := m.share_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShareStatus returns the old "share_status" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldShareStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShareStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShareStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShareStatus: %w", err)
+	}
+	return oldValue.ShareStatus, nil
+}
+
+// ResetShareStatus resets all changes to the "share_status" field.
+func (m *AccountMutation) ResetShareStatus() {
+	m.share_status = nil
+}
+
+// SetSharePolicyID sets the "share_policy_id" field.
+func (m *AccountMutation) SetSharePolicyID(i int64) {
+	m.share_policy_id = &i
+	m.addshare_policy_id = nil
+}
+
+// SharePolicyID returns the value of the "share_policy_id" field in the mutation.
+func (m *AccountMutation) SharePolicyID() (r int64, exists bool) {
+	v := m.share_policy_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSharePolicyID returns the old "share_policy_id" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldSharePolicyID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSharePolicyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSharePolicyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSharePolicyID: %w", err)
+	}
+	return oldValue.SharePolicyID, nil
+}
+
+// AddSharePolicyID adds i to the "share_policy_id" field.
+func (m *AccountMutation) AddSharePolicyID(i int64) {
+	if m.addshare_policy_id != nil {
+		*m.addshare_policy_id += i
+	} else {
+		m.addshare_policy_id = &i
+	}
+}
+
+// AddedSharePolicyID returns the value that was added to the "share_policy_id" field in this mutation.
+func (m *AccountMutation) AddedSharePolicyID() (r int64, exists bool) {
+	v := m.addshare_policy_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearSharePolicyID clears the value of the "share_policy_id" field.
+func (m *AccountMutation) ClearSharePolicyID() {
+	m.share_policy_id = nil
+	m.addshare_policy_id = nil
+	m.clearedFields[account.FieldSharePolicyID] = struct{}{}
+}
+
+// SharePolicyIDCleared returns if the "share_policy_id" field was cleared in this mutation.
+func (m *AccountMutation) SharePolicyIDCleared() bool {
+	_, ok := m.clearedFields[account.FieldSharePolicyID]
+	return ok
+}
+
+// ResetSharePolicyID resets all changes to the "share_policy_id" field.
+func (m *AccountMutation) ResetSharePolicyID() {
+	m.share_policy_id = nil
+	m.addshare_policy_id = nil
+	delete(m.clearedFields, account.FieldSharePolicyID)
 }
 
 // SetProxyID sets the "proxy_id" field.
@@ -3783,6 +3980,46 @@ func (m *AccountMutation) ResetProxy() {
 	m.clearedproxy = false
 }
 
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *AccountMutation) SetOwnerID(id int64) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *AccountMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[account.FieldOwnerUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *AccountMutation) OwnerCleared() bool {
+	return m.OwnerUserIDCleared() || m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *AccountMutation) OwnerID() (id int64, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *AccountMutation) OwnerIDs() (ids []int64) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *AccountMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by ids.
 func (m *AccountMutation) AddUsageLogIDs(ids ...int64) {
 	if m.usage_logs == nil {
@@ -3871,7 +4108,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 28)
+	fields := make([]string, 0, 32)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -3898,6 +4135,18 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.extra != nil {
 		fields = append(fields, account.FieldExtra)
+	}
+	if m.owner != nil {
+		fields = append(fields, account.FieldOwnerUserID)
+	}
+	if m.share_mode != nil {
+		fields = append(fields, account.FieldShareMode)
+	}
+	if m.share_status != nil {
+		fields = append(fields, account.FieldShareStatus)
+	}
+	if m.share_policy_id != nil {
+		fields = append(fields, account.FieldSharePolicyID)
 	}
 	if m.proxy != nil {
 		fields = append(fields, account.FieldProxyID)
@@ -3982,6 +4231,14 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.Credentials()
 	case account.FieldExtra:
 		return m.Extra()
+	case account.FieldOwnerUserID:
+		return m.OwnerUserID()
+	case account.FieldShareMode:
+		return m.ShareMode()
+	case account.FieldShareStatus:
+		return m.ShareStatus()
+	case account.FieldSharePolicyID:
+		return m.SharePolicyID()
 	case account.FieldProxyID:
 		return m.ProxyID()
 	case account.FieldConcurrency:
@@ -4047,6 +4304,14 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldCredentials(ctx)
 	case account.FieldExtra:
 		return m.OldExtra(ctx)
+	case account.FieldOwnerUserID:
+		return m.OldOwnerUserID(ctx)
+	case account.FieldShareMode:
+		return m.OldShareMode(ctx)
+	case account.FieldShareStatus:
+		return m.OldShareStatus(ctx)
+	case account.FieldSharePolicyID:
+		return m.OldSharePolicyID(ctx)
 	case account.FieldProxyID:
 		return m.OldProxyID(ctx)
 	case account.FieldConcurrency:
@@ -4156,6 +4421,34 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetExtra(v)
+		return nil
+	case account.FieldOwnerUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOwnerUserID(v)
+		return nil
+	case account.FieldShareMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShareMode(v)
+		return nil
+	case account.FieldShareStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShareStatus(v)
+		return nil
+	case account.FieldSharePolicyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSharePolicyID(v)
 		return nil
 	case account.FieldProxyID:
 		v, ok := value.(int64)
@@ -4298,6 +4591,9 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *AccountMutation) AddedFields() []string {
 	var fields []string
+	if m.addshare_policy_id != nil {
+		fields = append(fields, account.FieldSharePolicyID)
+	}
 	if m.addconcurrency != nil {
 		fields = append(fields, account.FieldConcurrency)
 	}
@@ -4318,6 +4614,8 @@ func (m *AccountMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case account.FieldSharePolicyID:
+		return m.AddedSharePolicyID()
 	case account.FieldConcurrency:
 		return m.AddedConcurrency()
 	case account.FieldLoadFactor:
@@ -4335,6 +4633,13 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *AccountMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case account.FieldSharePolicyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSharePolicyID(v)
+		return nil
 	case account.FieldConcurrency:
 		v, ok := value.(int)
 		if !ok {
@@ -4376,6 +4681,12 @@ func (m *AccountMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(account.FieldNotes) {
 		fields = append(fields, account.FieldNotes)
+	}
+	if m.FieldCleared(account.FieldOwnerUserID) {
+		fields = append(fields, account.FieldOwnerUserID)
+	}
+	if m.FieldCleared(account.FieldSharePolicyID) {
+		fields = append(fields, account.FieldSharePolicyID)
 	}
 	if m.FieldCleared(account.FieldProxyID) {
 		fields = append(fields, account.FieldProxyID)
@@ -4435,6 +4746,12 @@ func (m *AccountMutation) ClearField(name string) error {
 		return nil
 	case account.FieldNotes:
 		m.ClearNotes()
+		return nil
+	case account.FieldOwnerUserID:
+		m.ClearOwnerUserID()
+		return nil
+	case account.FieldSharePolicyID:
+		m.ClearSharePolicyID()
 		return nil
 	case account.FieldProxyID:
 		m.ClearProxyID()
@@ -4510,6 +4827,18 @@ func (m *AccountMutation) ResetField(name string) error {
 	case account.FieldExtra:
 		m.ResetExtra()
 		return nil
+	case account.FieldOwnerUserID:
+		m.ResetOwnerUserID()
+		return nil
+	case account.FieldShareMode:
+		m.ResetShareMode()
+		return nil
+	case account.FieldShareStatus:
+		m.ResetShareStatus()
+		return nil
+	case account.FieldSharePolicyID:
+		m.ResetSharePolicyID()
+		return nil
 	case account.FieldProxyID:
 		m.ResetProxyID()
 		return nil
@@ -4573,12 +4902,15 @@ func (m *AccountMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *AccountMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.groups != nil {
 		edges = append(edges, account.EdgeGroups)
 	}
 	if m.proxy != nil {
 		edges = append(edges, account.EdgeProxy)
+	}
+	if m.owner != nil {
+		edges = append(edges, account.EdgeOwner)
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, account.EdgeUsageLogs)
@@ -4600,6 +4932,10 @@ func (m *AccountMutation) AddedIDs(name string) []ent.Value {
 		if id := m.proxy; id != nil {
 			return []ent.Value{*id}
 		}
+	case account.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
 	case account.EdgeUsageLogs:
 		ids := make([]ent.Value, 0, len(m.usage_logs))
 		for id := range m.usage_logs {
@@ -4612,7 +4948,7 @@ func (m *AccountMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *AccountMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.removedgroups != nil {
 		edges = append(edges, account.EdgeGroups)
 	}
@@ -4644,12 +4980,15 @@ func (m *AccountMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *AccountMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.clearedgroups {
 		edges = append(edges, account.EdgeGroups)
 	}
 	if m.clearedproxy {
 		edges = append(edges, account.EdgeProxy)
+	}
+	if m.clearedowner {
+		edges = append(edges, account.EdgeOwner)
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, account.EdgeUsageLogs)
@@ -4665,6 +5004,8 @@ func (m *AccountMutation) EdgeCleared(name string) bool {
 		return m.clearedgroups
 	case account.EdgeProxy:
 		return m.clearedproxy
+	case account.EdgeOwner:
+		return m.clearedowner
 	case account.EdgeUsageLogs:
 		return m.clearedusage_logs
 	}
@@ -4677,6 +5018,9 @@ func (m *AccountMutation) ClearEdge(name string) error {
 	switch name {
 	case account.EdgeProxy:
 		m.ClearProxy()
+		return nil
+	case account.EdgeOwner:
+		m.ClearOwner()
 		return nil
 	}
 	return fmt.Errorf("unknown Account unique edge %s", name)
@@ -4691,6 +5035,9 @@ func (m *AccountMutation) ResetEdge(name string) error {
 		return nil
 	case account.EdgeProxy:
 		m.ResetProxy()
+		return nil
+	case account.EdgeOwner:
+		m.ResetOwner()
 		return nil
 	case account.EdgeUsageLogs:
 		m.ResetUsageLogs()
@@ -14754,6 +15101,9 @@ type GroupMutation struct {
 	addrate_multiplier                      *float64
 	is_exclusive                            *bool
 	status                                  *string
+	owner_user_id                           *int64
+	addowner_user_id                        *int64
+	scope                                   *string
 	platform                                *string
 	subscription_type                       *string
 	daily_limit_usd                         *float64
@@ -15243,6 +15593,112 @@ func (m *GroupMutation) OldStatus(ctx context.Context) (v string, err error) {
 // ResetStatus resets all changes to the "status" field.
 func (m *GroupMutation) ResetStatus() {
 	m.status = nil
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (m *GroupMutation) SetOwnerUserID(i int64) {
+	m.owner_user_id = &i
+	m.addowner_user_id = nil
+}
+
+// OwnerUserID returns the value of the "owner_user_id" field in the mutation.
+func (m *GroupMutation) OwnerUserID() (r int64, exists bool) {
+	v := m.owner_user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOwnerUserID returns the old "owner_user_id" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldOwnerUserID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOwnerUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOwnerUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOwnerUserID: %w", err)
+	}
+	return oldValue.OwnerUserID, nil
+}
+
+// AddOwnerUserID adds i to the "owner_user_id" field.
+func (m *GroupMutation) AddOwnerUserID(i int64) {
+	if m.addowner_user_id != nil {
+		*m.addowner_user_id += i
+	} else {
+		m.addowner_user_id = &i
+	}
+}
+
+// AddedOwnerUserID returns the value that was added to the "owner_user_id" field in this mutation.
+func (m *GroupMutation) AddedOwnerUserID() (r int64, exists bool) {
+	v := m.addowner_user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (m *GroupMutation) ClearOwnerUserID() {
+	m.owner_user_id = nil
+	m.addowner_user_id = nil
+	m.clearedFields[group.FieldOwnerUserID] = struct{}{}
+}
+
+// OwnerUserIDCleared returns if the "owner_user_id" field was cleared in this mutation.
+func (m *GroupMutation) OwnerUserIDCleared() bool {
+	_, ok := m.clearedFields[group.FieldOwnerUserID]
+	return ok
+}
+
+// ResetOwnerUserID resets all changes to the "owner_user_id" field.
+func (m *GroupMutation) ResetOwnerUserID() {
+	m.owner_user_id = nil
+	m.addowner_user_id = nil
+	delete(m.clearedFields, group.FieldOwnerUserID)
+}
+
+// SetScope sets the "scope" field.
+func (m *GroupMutation) SetScope(s string) {
+	m.scope = &s
+}
+
+// Scope returns the value of the "scope" field in the mutation.
+func (m *GroupMutation) Scope() (r string, exists bool) {
+	v := m.scope
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldScope returns the old "scope" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldScope(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldScope is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldScope requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldScope: %w", err)
+	}
+	return oldValue.Scope, nil
+}
+
+// ResetScope resets all changes to the "scope" field.
+func (m *GroupMutation) ResetScope() {
+	m.scope = nil
 }
 
 // SetPlatform sets the "platform" field.
@@ -16791,7 +17247,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 31)
+	fields := make([]string, 0, 33)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -16815,6 +17271,12 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.status != nil {
 		fields = append(fields, group.FieldStatus)
+	}
+	if m.owner_user_id != nil {
+		fields = append(fields, group.FieldOwnerUserID)
+	}
+	if m.scope != nil {
+		fields = append(fields, group.FieldScope)
 	}
 	if m.platform != nil {
 		fields = append(fields, group.FieldPlatform)
@@ -16909,6 +17371,10 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.IsExclusive()
 	case group.FieldStatus:
 		return m.Status()
+	case group.FieldOwnerUserID:
+		return m.OwnerUserID()
+	case group.FieldScope:
+		return m.Scope()
 	case group.FieldPlatform:
 		return m.Platform()
 	case group.FieldSubscriptionType:
@@ -16980,6 +17446,10 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldIsExclusive(ctx)
 	case group.FieldStatus:
 		return m.OldStatus(ctx)
+	case group.FieldOwnerUserID:
+		return m.OldOwnerUserID(ctx)
+	case group.FieldScope:
+		return m.OldScope(ctx)
 	case group.FieldPlatform:
 		return m.OldPlatform(ctx)
 	case group.FieldSubscriptionType:
@@ -17090,6 +17560,20 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetStatus(v)
+		return nil
+	case group.FieldOwnerUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOwnerUserID(v)
+		return nil
+	case group.FieldScope:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetScope(v)
 		return nil
 	case group.FieldPlatform:
 		v, ok := value.(string)
@@ -17263,6 +17747,9 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addrate_multiplier != nil {
 		fields = append(fields, group.FieldRateMultiplier)
 	}
+	if m.addowner_user_id != nil {
+		fields = append(fields, group.FieldOwnerUserID)
+	}
 	if m.adddaily_limit_usd != nil {
 		fields = append(fields, group.FieldDailyLimitUsd)
 	}
@@ -17306,6 +17793,8 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case group.FieldRateMultiplier:
 		return m.AddedRateMultiplier()
+	case group.FieldOwnerUserID:
+		return m.AddedOwnerUserID()
 	case group.FieldDailyLimitUsd:
 		return m.AddedDailyLimitUsd()
 	case group.FieldWeeklyLimitUsd:
@@ -17343,6 +17832,13 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddRateMultiplier(v)
+		return nil
+	case group.FieldOwnerUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddOwnerUserID(v)
 		return nil
 	case group.FieldDailyLimitUsd:
 		v, ok := value.(float64)
@@ -17435,6 +17931,9 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldDescription) {
 		fields = append(fields, group.FieldDescription)
 	}
+	if m.FieldCleared(group.FieldOwnerUserID) {
+		fields = append(fields, group.FieldOwnerUserID)
+	}
 	if m.FieldCleared(group.FieldDailyLimitUsd) {
 		fields = append(fields, group.FieldDailyLimitUsd)
 	}
@@ -17481,6 +17980,9 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldDescription:
 		m.ClearDescription()
+		return nil
+	case group.FieldOwnerUserID:
+		m.ClearOwnerUserID()
 		return nil
 	case group.FieldDailyLimitUsd:
 		m.ClearDailyLimitUsd()
@@ -17540,6 +18042,12 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case group.FieldOwnerUserID:
+		m.ResetOwnerUserID()
+		return nil
+	case group.FieldScope:
+		m.ResetScope()
 		return nil
 	case group.FieldPlatform:
 		m.ResetPlatform()
@@ -37486,6 +37994,9 @@ type UserMutation struct {
 	payment_orders                map[int64]struct{}
 	removedpayment_orders         map[int64]struct{}
 	clearedpayment_orders         bool
+	owned_accounts                map[int64]struct{}
+	removedowned_accounts         map[int64]struct{}
+	clearedowned_accounts         bool
 	auth_identities               map[int64]struct{}
 	removedauth_identities        map[int64]struct{}
 	clearedauth_identities        bool
@@ -39142,6 +39653,60 @@ func (m *UserMutation) ResetPaymentOrders() {
 	m.removedpayment_orders = nil
 }
 
+// AddOwnedAccountIDs adds the "owned_accounts" edge to the Account entity by ids.
+func (m *UserMutation) AddOwnedAccountIDs(ids ...int64) {
+	if m.owned_accounts == nil {
+		m.owned_accounts = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.owned_accounts[ids[i]] = struct{}{}
+	}
+}
+
+// ClearOwnedAccounts clears the "owned_accounts" edge to the Account entity.
+func (m *UserMutation) ClearOwnedAccounts() {
+	m.clearedowned_accounts = true
+}
+
+// OwnedAccountsCleared reports if the "owned_accounts" edge to the Account entity was cleared.
+func (m *UserMutation) OwnedAccountsCleared() bool {
+	return m.clearedowned_accounts
+}
+
+// RemoveOwnedAccountIDs removes the "owned_accounts" edge to the Account entity by IDs.
+func (m *UserMutation) RemoveOwnedAccountIDs(ids ...int64) {
+	if m.removedowned_accounts == nil {
+		m.removedowned_accounts = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.owned_accounts, ids[i])
+		m.removedowned_accounts[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedOwnedAccounts returns the removed IDs of the "owned_accounts" edge to the Account entity.
+func (m *UserMutation) RemovedOwnedAccountsIDs() (ids []int64) {
+	for id := range m.removedowned_accounts {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// OwnedAccountsIDs returns the "owned_accounts" edge IDs in the mutation.
+func (m *UserMutation) OwnedAccountsIDs() (ids []int64) {
+	for id := range m.owned_accounts {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetOwnedAccounts resets all changes to the "owned_accounts" edge.
+func (m *UserMutation) ResetOwnedAccounts() {
+	m.owned_accounts = nil
+	m.clearedowned_accounts = false
+	m.removedowned_accounts = nil
+}
+
 // AddAuthIdentityIDs adds the "auth_identities" edge to the AuthIdentity entity by ids.
 func (m *UserMutation) AddAuthIdentityIDs(ids ...int64) {
 	if m.auth_identities == nil {
@@ -39859,7 +40424,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 12)
+	edges := make([]string, 0, 13)
 	if m.api_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -39889,6 +40454,9 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.payment_orders != nil {
 		edges = append(edges, user.EdgePaymentOrders)
+	}
+	if m.owned_accounts != nil {
+		edges = append(edges, user.EdgeOwnedAccounts)
 	}
 	if m.auth_identities != nil {
 		edges = append(edges, user.EdgeAuthIdentities)
@@ -39963,6 +40531,12 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeOwnedAccounts:
+		ids := make([]ent.Value, 0, len(m.owned_accounts))
+		for id := range m.owned_accounts {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeAuthIdentities:
 		ids := make([]ent.Value, 0, len(m.auth_identities))
 		for id := range m.auth_identities {
@@ -39981,7 +40555,7 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 12)
+	edges := make([]string, 0, 13)
 	if m.removedapi_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -40011,6 +40585,9 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedpayment_orders != nil {
 		edges = append(edges, user.EdgePaymentOrders)
+	}
+	if m.removedowned_accounts != nil {
+		edges = append(edges, user.EdgeOwnedAccounts)
 	}
 	if m.removedauth_identities != nil {
 		edges = append(edges, user.EdgeAuthIdentities)
@@ -40085,6 +40662,12 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeOwnedAccounts:
+		ids := make([]ent.Value, 0, len(m.removedowned_accounts))
+		for id := range m.removedowned_accounts {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeAuthIdentities:
 		ids := make([]ent.Value, 0, len(m.removedauth_identities))
 		for id := range m.removedauth_identities {
@@ -40103,7 +40686,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 12)
+	edges := make([]string, 0, 13)
 	if m.clearedapi_keys {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -40133,6 +40716,9 @@ func (m *UserMutation) ClearedEdges() []string {
 	}
 	if m.clearedpayment_orders {
 		edges = append(edges, user.EdgePaymentOrders)
+	}
+	if m.clearedowned_accounts {
+		edges = append(edges, user.EdgeOwnedAccounts)
 	}
 	if m.clearedauth_identities {
 		edges = append(edges, user.EdgeAuthIdentities)
@@ -40167,6 +40753,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedpromo_code_usages
 	case user.EdgePaymentOrders:
 		return m.clearedpayment_orders
+	case user.EdgeOwnedAccounts:
+		return m.clearedowned_accounts
 	case user.EdgeAuthIdentities:
 		return m.clearedauth_identities
 	case user.EdgePendingAuthSessions:
@@ -40216,6 +40804,9 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgePaymentOrders:
 		m.ResetPaymentOrders()
+		return nil
+	case user.EdgeOwnedAccounts:
+		m.ResetOwnedAccounts()
 		return nil
 	case user.EdgeAuthIdentities:
 		m.ResetAuthIdentities()

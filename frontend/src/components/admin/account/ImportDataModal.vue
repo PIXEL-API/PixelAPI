@@ -48,7 +48,15 @@
           {{ t('admin.accounts.dataImportResult') }}
         </div>
         <div class="text-sm text-gray-700 dark:text-dark-300">
-          {{ t('admin.accounts.dataImportResultSummary', result) }}
+          {{
+            result.credential_import
+              ? t('userAccounts.importResultSummary', {
+                  created: result.account_created,
+                  skipped: result.account_skipped || 0,
+                  failed: result.account_failed
+                })
+              : t('admin.accounts.dataImportResultSummary', result)
+          }}
         </div>
 
         <div v-if="errorItems.length" class="mt-2">
@@ -90,7 +98,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { AdminDataImportResult } from '@/types'
+import type { AdminDataImportResult, AdminDataPayload } from '@/types'
 
 interface Props {
   show: boolean
@@ -109,7 +117,12 @@ const appStore = useAppStore()
 
 const importing = ref(false)
 const file = ref<File | null>(null)
-const result = ref<AdminDataImportResult | null>(null)
+type ImportResult = AdminDataImportResult & {
+  credential_import?: boolean
+  account_skipped?: number
+}
+
+const result = ref<ImportResult | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const fileName = computed(() => file.value?.name || '')
@@ -161,6 +174,53 @@ const readFileAsText = async (sourceFile: File): Promise<string> => {
   })
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const normalizeDataPayload = (value: unknown): AdminDataPayload | null => {
+  if (!isRecord(value)) return null
+
+  const directAccounts = Array.isArray(value.accounts)
+  const directProxies = Array.isArray(value.proxies)
+  if (directAccounts && directProxies) {
+    return value as unknown as AdminDataPayload
+  }
+
+  const nestedData = value.data
+  if (isRecord(nestedData) && Array.isArray(nestedData.accounts) && Array.isArray(nestedData.proxies)) {
+    return nestedData as unknown as AdminDataPayload
+  }
+
+  return null
+}
+
+const importAsCredentialContents = async (contents: string): Promise<ImportResult> => {
+  const credentialResult = await adminAPI.accounts.importCredentialContents({
+    contents: [contents],
+    concurrency: 3,
+    priority: 50,
+    group_ids: [],
+    auto_pause_on_expired: true,
+    skip_default_group_bind: true
+  })
+
+  return {
+    credential_import: true,
+    account_skipped: 0,
+    proxy_created: 0,
+    proxy_reused: 0,
+    proxy_failed: 0,
+    account_created: credentialResult.created,
+    account_failed: credentialResult.failed,
+    errors: (credentialResult.errors ?? []).map((item) => ({
+      kind: 'account' as const,
+      name: item.name || `#${item.index}`,
+      message: item.message
+    }))
+  }
+}
+
 const handleImport = async () => {
   if (!file.value) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
@@ -170,21 +230,38 @@ const handleImport = async () => {
   importing.value = true
   try {
     const text = await readFileAsText(file.value)
-    const dataPayload = JSON.parse(text)
-
-    const res = await adminAPI.accounts.importData({
-      data: dataPayload,
-      skip_default_group_bind: true
-    })
+    const parsedPayload = JSON.parse(text)
+    const dataPayload = normalizeDataPayload(parsedPayload)
+    const res: ImportResult = dataPayload
+      ? await adminAPI.accounts.importData({
+          data: dataPayload,
+          skip_default_group_bind: true
+        })
+      : await importAsCredentialContents(text)
 
     result.value = res
+
+    if (res.credential_import) {
+      const params = {
+        created: res.account_created,
+        skipped: res.account_skipped || 0,
+        failed: res.account_failed
+      }
+      if (res.account_failed > 0 || (res.account_skipped || 0) > 0) {
+        appStore.showWarning(t('userAccounts.importCompletedWithIssues', params))
+      } else {
+        appStore.showSuccess(t('userAccounts.importSuccess', params))
+        emit('imported')
+      }
+      return
+    }
 
     const msgParams: Record<string, unknown> = {
       account_created: res.account_created,
       account_failed: res.account_failed,
       proxy_created: res.proxy_created,
       proxy_reused: res.proxy_reused,
-      proxy_failed: res.proxy_failed,
+      proxy_failed: res.proxy_failed
     }
     if (res.account_failed > 0 || res.proxy_failed > 0) {
       appStore.showError(t('admin.accounts.dataImportCompletedWithErrors', msgParams))

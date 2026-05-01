@@ -59,6 +59,12 @@ const (
 	SubscriptionTypeSubscription = "subscription" // 订阅模式（按限额控制）
 )
 
+// Group scope constants
+const (
+	GroupScopePublic      = "public"
+	GroupScopeUserPrivate = "user_private"
+)
+
 // Subscription status constants
 const (
 	SubscriptionStatusActive    = "active"

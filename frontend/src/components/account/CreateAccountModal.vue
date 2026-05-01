@@ -67,6 +67,38 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <div v-if="isUserScope">
+        <label class="input-label">{{ t('userAccounts.shareMode') }}</label>
+        <div class="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            :class="[
+              'inline-flex min-h-[44px] items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+              form.share_mode === 'private'
+                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
+            ]"
+            @click="form.share_mode = 'private'"
+          >
+            <Icon name="lock" size="sm" class="mr-2" />
+            {{ t('userAccounts.privateMode') }}
+          </button>
+          <button
+            type="button"
+            :class="[
+              'inline-flex min-h-[44px] items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+              form.share_mode === 'public'
+                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
+            ]"
+            @click="form.share_mode = 'public'"
+          >
+            <Icon name="globe" size="sm" class="mr-2" />
+            {{ t('userAccounts.publicMode') }}
+          </button>
+        </div>
+      </div>
+
       <!-- Platform Selection - Segmented Control Style -->
       <div>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
@@ -153,7 +185,7 @@
       <!-- Account Type Selection (Anthropic) -->
       <div v-if="form.platform === 'anthropic'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
-        <div class="mt-2 grid grid-cols-3 gap-3" data-tour="account-form-type">
+        <div :class="['mt-2 grid gap-3', isUserScope ? 'grid-cols-1' : 'grid-cols-3']" data-tour="account-form-type">
           <button
             type="button"
             @click="accountCategory = 'oauth-based'"
@@ -179,12 +211,13 @@
                 t('admin.accounts.claudeCode')
               }}</span>
               <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.oauthSetupToken')
+                isUserScope ? t('admin.accounts.types.oauth') : t('admin.accounts.oauthSetupToken')
               }}</span>
             </div>
           </button>
 
           <button
+            v-if="!isUserScope"
             type="button"
             @click="accountCategory = 'apikey'"
             :class="[
@@ -215,6 +248,7 @@
           </button>
 
           <button
+            v-if="!isUserScope"
             type="button"
             @click="accountCategory = 'bedrock'"
             :class="[
@@ -250,7 +284,7 @@
       <!-- Account Type Selection (OpenAI) -->
       <div v-if="form.platform === 'openai'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
-        <div class="mt-2 grid grid-cols-2 gap-3" data-tour="account-form-type">
+        <div :class="['mt-2 grid gap-3', isUserScope ? 'grid-cols-1' : 'grid-cols-2']" data-tour="account-form-type">
           <button
             type="button"
             @click="accountCategory = 'oauth-based'"
@@ -278,6 +312,7 @@
           </button>
 
           <button
+            v-if="!isUserScope"
             type="button"
             @click="accountCategory = 'apikey'"
             :class="[
@@ -320,7 +355,7 @@
             {{ t('admin.accounts.gemini.helpButton') }}
           </button>
         </div>
-        <div class="mt-2 grid grid-cols-2 gap-3" data-tour="account-form-type">
+        <div :class="['mt-2 grid gap-3', isUserScope ? 'grid-cols-1' : 'grid-cols-2']" data-tour="account-form-type">
           <button
             type="button"
             @click="accountCategory = 'oauth-based'"
@@ -352,6 +387,7 @@
           </button>
 
           <button
+            v-if="!isUserScope"
             type="button"
             @click="accountCategory = 'apikey'"
             :class="[
@@ -395,7 +431,7 @@
         </div>
 
         <div
-          v-if="accountCategory === 'apikey'"
+          v-if="!isUserScope && accountCategory === 'apikey'"
           class="mt-3 rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-xs text-purple-800 dark:border-purple-800/40 dark:bg-purple-900/20 dark:text-purple-200"
         >
           <p>{{ t('admin.accounts.gemini.accountType.apiKeyNote') }}</p>
@@ -648,7 +684,7 @@
       <!-- Account Type Selection (Antigravity - OAuth or Upstream) -->
       <div v-if="form.platform === 'antigravity'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
-        <div class="mt-2 grid grid-cols-2 gap-3">
+        <div :class="['mt-2 grid gap-3', isUserScope ? 'grid-cols-1' : 'grid-cols-2']">
           <button
             type="button"
             @click="antigravityAccountType = 'oauth'"
@@ -676,6 +712,7 @@
           </button>
 
           <button
+            v-if="!isUserScope"
             type="button"
             @click="antigravityAccountType = 'upstream'"
             :class="[
@@ -704,7 +741,7 @@
       </div>
 
       <!-- Upstream config (only for Antigravity upstream type) -->
-      <div v-if="form.platform === 'antigravity' && antigravityAccountType === 'upstream'" class="space-y-4">
+      <div v-if="!isUserScope && form.platform === 'antigravity' && antigravityAccountType === 'upstream'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.upstream.baseUrl') }}</label>
           <input
@@ -821,7 +858,7 @@
       </div>
 
       <!-- Add Method (only for Anthropic OAuth-based type) -->
-      <div v-if="form.platform === 'anthropic' && isOAuthFlow">
+      <div v-if="!isUserScope && form.platform === 'anthropic' && isOAuthFlow">
         <label class="input-label">{{ t('admin.accounts.addMethod') }}</label>
         <div class="mt-2 flex gap-4">
           <label class="flex cursor-pointer items-center">
@@ -848,7 +885,7 @@
       </div>
 
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
-      <div v-if="form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
+      <div v-if="!isUserScope && form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -1232,7 +1269,7 @@
       </div>
 
       <!-- Bedrock credentials (only for Anthropic Bedrock type) -->
-      <div v-if="form.platform === 'anthropic' && accountCategory === 'bedrock'" class="space-y-4">
+      <div v-if="!isUserScope && form.platform === 'anthropic' && accountCategory === 'bedrock'" class="space-y-4">
         <!-- Auth Mode Radio -->
         <div>
           <label class="input-label">{{ t('admin.accounts.bedrockAuthMode') }}</label>
@@ -1479,7 +1516,7 @@
 
       <!-- 配额控制 (Anthropic apikey/bedrock: 配额限制 + 亲和) -->
       <div
-        v-if="form.platform === 'anthropic' && (form.type === 'apikey' || form.type === 'bedrock')"
+        v-if="!isUserScope && form.platform === 'anthropic' && (form.type === 'apikey' || form.type === 'bedrock')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -1531,7 +1568,7 @@
 
       <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
       <div
-        v-else-if="form.type === 'apikey' || form.type === 'bedrock'"
+        v-else-if="!isUserScope && (form.type === 'apikey' || form.type === 'bedrock')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2242,7 +2279,7 @@
         </div>
 
         <!-- Custom Base URL Relay -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+        <div v-if="!isUserScope" class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <div>
               <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.customBaseUrl.label') }}</label>
@@ -2277,7 +2314,7 @@
         </div>
       </div>
 
-      <div>
+      <div v-if="canManageProxy">
         <label class="input-label">{{ t('admin.accounts.proxy') }}</label>
         <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
       </div>
@@ -2306,7 +2343,7 @@
           />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
-        <div>
+        <div v-if="canManageBillingRate">
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
           <input v-model.number="form.rate_multiplier" type="number" min="0" step="0.001" class="input" />
           <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
@@ -2599,9 +2636,9 @@
         :show-help="form.platform === 'anthropic'"
         :show-proxy-warning="form.platform !== 'openai' && !!form.proxy_id"
         :allow-multiple="form.platform === 'anthropic'"
-        :show-cookie-option="form.platform === 'anthropic'"
-        :show-refresh-token-option="form.platform === 'openai' || form.platform === 'antigravity'"
-        :show-mobile-refresh-token-option="form.platform === 'openai'"
+        :show-cookie-option="!isUserScope && form.platform === 'anthropic'"
+        :show-refresh-token-option="!isUserScope && (form.platform === 'openai' || form.platform === 'antigravity')"
+        :show-mobile-refresh-token-option="!isUserScope && form.platform === 'openai'"
         :show-session-token-option="false"
         :show-access-token-option="false"
         :platform="form.platform"
@@ -2942,11 +2979,13 @@ import {
 } from '@/composables/useModelWhitelist'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
+import { accountsAPI } from '@/api/accounts'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import {
   useAccountOAuth,
   type AddMethod,
-  type AuthInputMethod
+  type AuthInputMethod,
+  type AccountApiScope
 } from '@/composables/useAccountOAuth'
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
@@ -2955,6 +2994,7 @@ import type {
   Proxy,
   AdminGroup,
   AccountPlatform,
+  AccountShareMode,
   AccountType,
   CheckMixedChannelResponse,
   CreateAccountRequest,
@@ -3021,6 +3061,9 @@ interface Props {
   show: boolean
   proxies: Proxy[]
   groups: AdminGroup[]
+  accountScope?: AccountApiScope
+  allowProxy?: boolean
+  allowBillingRate?: boolean
 }
 
 const props = defineProps<Props>()
@@ -3030,12 +3073,16 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const accountScope = computed(() => props.accountScope ?? 'admin')
+const isUserScope = computed(() => accountScope.value === 'user')
+const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
+const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 
 // OAuth composables
-const oauth = useAccountOAuth() // For Anthropic OAuth
-const openaiOAuth = useOpenAIOAuth() // For OpenAI OAuth
-const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
-const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
+const oauth = useAccountOAuth(accountScope.value) // For Anthropic OAuth
+const openaiOAuth = useOpenAIOAuth(accountScope.value) // For OpenAI OAuth
+const geminiOAuth = useGeminiOAuth(accountScope.value) // For Gemini OAuth
+const antigravityOAuth = useAntigravityOAuth(accountScope.value) // For Antigravity OAuth
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
@@ -3127,11 +3174,15 @@ const {
 } = useQuotaNotifyState()
 
 // Load global feature states once
-adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
-  webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
-}).catch(() => { webSearchGlobalEnabled.value = false })
+if (!isUserScope.value) {
+  adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
+    webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
+  }).catch(() => { webSearchGlobalEnabled.value = false })
+}
 
-loadQuotaNotifyGlobal()
+if (!isUserScope.value) {
+  loadQuotaNotifyGlobal()
+}
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
@@ -3318,6 +3369,7 @@ const form = reactive({
   notes: '',
   platform: 'anthropic' as AccountPlatform,
   type: 'oauth' as AccountType, // Will be 'oauth', 'setup-token', or 'apikey'
+  share_mode: 'private' as AccountShareMode,
   credentials: {} as Record<string, unknown>,
   proxy_id: null as number | null,
   concurrency: 10,
@@ -3372,9 +3424,13 @@ watch(
   (newVal) => {
     if (newVal) {
       // Load TLS fingerprint profiles
-      adminAPI.tlsFingerprintProfiles.list()
-        .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
-        .catch(() => { tlsFingerprintProfiles.value = [] })
+      if (!isUserScope.value) {
+        adminAPI.tlsFingerprintProfiles.list()
+          .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
+          .catch(() => { tlsFingerprintProfiles.value = [] })
+      } else {
+        tlsFingerprintProfiles.value = []
+      }
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
       // Antigravity: 默认使用映射模式并填充默认映射
@@ -3397,8 +3453,21 @@ watch(
 
 // Sync form.type based on accountCategory, addMethod, and platform-specific type
 watch(
-  [accountCategory, addMethod, antigravityAccountType],
+  [accountCategory, addMethod, antigravityAccountType, () => form.platform, isUserScope],
   ([category, method, agType]) => {
+    if (isUserScope.value) {
+      if (accountCategory.value !== 'oauth-based') {
+        accountCategory.value = 'oauth-based'
+      }
+      if (addMethod.value !== 'oauth') {
+        addMethod.value = 'oauth'
+      }
+      if (antigravityAccountType.value !== 'oauth') {
+        antigravityAccountType.value = 'oauth'
+      }
+      form.type = 'oauth'
+      return
+    }
     // Antigravity upstream 类型（实际创建为 apikey）
     if (form.platform === 'antigravity' && agType === 'upstream') {
       form.type = 'apikey'
@@ -3422,6 +3491,12 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
+    if (isUserScope.value) {
+      accountCategory.value = 'oauth-based'
+      addMethod.value = 'oauth'
+      antigravityAccountType.value = 'oauth'
+      form.type = 'oauth'
+    }
     // Reset base URL based on platform
     apiKeyBaseUrl.value =
       (newPlatform === 'openai')
@@ -3758,6 +3833,9 @@ const withAntigravityConfirmFlag = (payload: CreateAccountRequest): CreateAccoun
 }
 
 const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<void>): Promise<boolean> => {
+  if (isUserScope.value) {
+    return true
+  }
   if (!needsMixedChannelCheck(form.platform)) {
     return true
   }
@@ -3787,11 +3865,30 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
   }
 }
 
+const sanitizeCreatePayload = (payload: CreateAccountRequest): CreateAccountRequest => {
+  const next: CreateAccountRequest = {
+    ...payload,
+    share_mode: isUserScope.value ? form.share_mode : payload.share_mode
+  }
+  if (!canManageProxy.value) {
+    delete next.proxy_id
+  }
+  if (!canManageBillingRate.value) {
+    delete next.rate_multiplier
+  }
+  return next
+}
+
+const createAccount = (payload: CreateAccountRequest): Promise<unknown> => {
+  const next = sanitizeCreatePayload(payload)
+  return isUserScope.value ? accountsAPI.create(next) : adminAPI.accounts.create(next)
+}
+
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
-    await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
-    appStore.showSuccess(t('admin.accounts.accountCreated'))
+    await createAccount(withAntigravityConfirmFlag(payload))
+    appStore.showSuccess(isUserScope.value ? t('userAccounts.accountCreatedSuccess') : t('admin.accounts.accountCreated'))
     emit('created')
     handleClose()
   } catch (error: any) {
@@ -3818,6 +3915,7 @@ const resetForm = () => {
   form.notes = ''
   form.platform = 'anthropic'
   form.type = 'oauth'
+  form.share_mode = 'private'
   form.credentials = {}
   form.proxy_id = null
   form.concurrency = 10
@@ -4010,6 +4108,15 @@ const normalizePoolModeRetryCount = (value: number) => {
 }
 
 const handleSubmit = async () => {
+  if (isUserScope.value && !isOAuthFlow.value) {
+    accountCategory.value = 'oauth-based'
+    addMethod.value = 'oauth'
+    antigravityAccountType.value = 'oauth'
+    form.type = 'oauth'
+    appStore.showError(t('userAccounts.typeNotAllowed'))
+    return
+  }
+
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
     if (!form.name.trim()) {
@@ -4345,7 +4452,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     }
 
     if (shouldCreateOpenAI) {
-      await adminAPI.accounts.create({
+      await createAccount({
         name: form.name,
         notes: form.notes,
         platform: 'openai',
@@ -4442,7 +4549,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         const accountName = refreshTokens.length > 1 ? `${baseName} #${i + 1}` : baseName
 
         if (shouldCreateOpenAI) {
-          await adminAPI.accounts.create({
+          await createAccount({
             name: accountName,
             notes: form.notes,
             platform: 'openai',
@@ -4556,7 +4663,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           expires_at: form.expires_at,
           auto_pause_on_expired: autoPauseOnExpired.value
         })
-        await adminAPI.accounts.create(createPayload)
+        await createAccount(createPayload)
         successCount++
       } catch (error: any) {
         failedCount++
@@ -4681,9 +4788,13 @@ const handleAnthropicExchange = async (authCode: string) => {
   try {
     const proxyConfig = form.proxy_id ? { proxy_id: form.proxy_id } : {}
     const endpoint =
-      addMethod.value === 'oauth'
-        ? '/admin/accounts/exchange-code'
-        : '/admin/accounts/exchange-setup-token-code'
+      isUserScope.value
+        ? addMethod.value === 'oauth'
+          ? '/account-oauth/anthropic/exchange-code'
+          : '/account-oauth/anthropic/setup-token/exchange-code'
+        : addMethod.value === 'oauth'
+          ? '/admin/accounts/exchange-code'
+          : '/admin/accounts/exchange-setup-token-code'
 
     const tokenInfo = await adminAPI.accounts.exchangeCode(endpoint, {
       session_id: oauth.sessionId.value,
@@ -4744,7 +4855,7 @@ const handleAnthropicExchange = async (authCode: string) => {
     }
 
     // Add custom base URL settings
-    if (customBaseUrlEnabled.value && customBaseUrl.value.trim()) {
+    if (!isUserScope.value && customBaseUrlEnabled.value && customBaseUrl.value.trim()) {
       extra.custom_base_url_enabled = true
       extra.custom_base_url = customBaseUrl.value.trim()
     }
@@ -4798,9 +4909,13 @@ const handleCookieAuth = async (sessionKey: string) => {
     }
 
     const endpoint =
-      addMethod.value === 'oauth'
-        ? '/admin/accounts/cookie-auth'
-        : '/admin/accounts/setup-token-cookie-auth'
+      isUserScope.value
+        ? addMethod.value === 'oauth'
+          ? '/account-oauth/anthropic/cookie-auth'
+          : '/account-oauth/anthropic/setup-token-cookie-auth'
+        : addMethod.value === 'oauth'
+          ? '/admin/accounts/cookie-auth'
+          : '/admin/accounts/setup-token-cookie-auth'
 
     let successCount = 0
     let failedCount = 0
@@ -4867,7 +4982,7 @@ const handleCookieAuth = async (sessionKey: string) => {
         }
 
         // Add custom base URL settings
-        if (customBaseUrlEnabled.value && customBaseUrl.value.trim()) {
+        if (!isUserScope.value && customBaseUrlEnabled.value && customBaseUrl.value.trim()) {
           extra.custom_base_url_enabled = true
           extra.custom_base_url = customBaseUrl.value.trim()
         }
@@ -4881,7 +4996,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           credentials.temp_unschedulable_rules = tempUnschedPayload
         }
 
-        await adminAPI.accounts.create({
+        await createAccount({
           name: accountName,
           notes: form.notes,
           platform: form.platform,

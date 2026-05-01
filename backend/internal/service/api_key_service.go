@@ -20,13 +20,14 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound     = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed    = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrAPIKeyExists       = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort     = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited  = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrInvalidIPPattern   = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyNotFound      = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed     = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrAPIKeyExists        = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort      = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars  = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited   = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrInvalidIPPattern    = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyGroupRequired = infraerrors.BadRequest("API_KEY_GROUP_REQUIRED", "api key group is required when ungrouped key scheduling is disabled")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -200,6 +201,7 @@ type APIKeyService struct {
 	userGroupRateRepo     UserGroupRateRepository
 	cache                 APIKeyCache
 	rateLimitCacheInvalid RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
+	settingService        *SettingService
 	cfg                   *config.Config
 	authCacheL1           *ristretto.Cache
 	authCfg               apiKeyAuthCacheConfig
@@ -235,6 +237,11 @@ func NewAPIKeyService(
 // Called after construction (e.g. in wire) to avoid circular dependencies.
 func (s *APIKeyService) SetRateLimitCacheInvalidator(inv RateLimitCacheInvalidator) {
 	s.rateLimitCacheInvalid = inv
+}
+
+// SetSettingService injects system settings used by API key write validation.
+func (s *APIKeyService) SetSettingService(settingService *SettingService) {
+	s.settingService = settingService
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -325,7 +332,15 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 	return user.CanBindGroup(group.ID, group.IsExclusive)
 }
 
-// Create 创建API Key
+// isUngroupedKeySchedulingAllowed returns false unless the system explicitly enables ungrouped key scheduling.
+func (s *APIKeyService) isUngroupedKeySchedulingAllowed(ctx context.Context) bool {
+	if s.settingService == nil {
+		return false
+	}
+	return s.settingService.IsUngroupedKeySchedulingAllowed(ctx)
+}
+
+// Create 鍒涘缓API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
 	// 验证用户存在
 	user, err := s.userRepo.GetByID(ctx, userID)
@@ -358,6 +373,8 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		if !s.canUserBindGroup(ctx, user, group) {
 			return nil, ErrGroupNotAllowed
 		}
+	} else if !s.isUngroupedKeySchedulingAllowed(ctx) {
+		return nil, ErrAPIKeyGroupRequired
 	}
 
 	var key string

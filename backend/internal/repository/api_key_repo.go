@@ -695,6 +695,8 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		IsExclusive:                     g.IsExclusive,
 		Status:                          g.Status,
 		Hydrated:                        true,
+		OwnerUserID:                     g.OwnerUserID,
+		Scope:                           service.NormalizeGroupScope(g.Scope),
 		SubscriptionType:                g.SubscriptionType,
 		DailyLimitUSD:                   g.DailyLimitUsd,
 		WeeklyLimitUSD:                  g.WeeklyLimitUsd,

@@ -63,6 +63,40 @@ func RegisterUserRoutes(
 			keys.DELETE("/:id", h.APIKey.Delete)
 		}
 
+		accounts := authenticated.Group("/accounts")
+		{
+			accounts.GET("", h.UserAccount.List)
+			accounts.POST("/today-stats/batch", h.UserAccount.GetBatchTodayStats)
+			accounts.GET("/:id/usage", h.UserAccount.GetUsage)
+			accounts.GET("/:id/today-stats", h.UserAccount.GetTodayStats)
+			accounts.GET("/:id", h.UserAccount.GetByID)
+			accounts.POST("", h.UserAccount.Create)
+			accounts.POST("/import", h.UserAccount.Import)
+			accounts.POST("/import-credentials", h.UserAccount.ImportCredentials)
+			accounts.PUT("/:id", h.UserAccount.Update)
+			accounts.DELETE("/:id", h.UserAccount.Delete)
+		}
+
+		// User-scoped OAuth endpoints for creating personal accounts.
+		accountOAuth := authenticated.Group("/account-oauth")
+		{
+			accountOAuth.POST("/anthropic/auth-url", h.UserAccount.GenerateAnthropicOAuthURL)
+			accountOAuth.POST("/anthropic/exchange-code", h.UserAccount.ExchangeAnthropicOAuthCode)
+			accountOAuth.POST("/anthropic/setup-token/auth-url", h.UserAccount.GenerateAnthropicSetupTokenURL)
+			accountOAuth.POST("/anthropic/setup-token/exchange-code", h.UserAccount.ExchangeAnthropicSetupTokenCode)
+			accountOAuth.POST("/anthropic/cookie-auth", h.UserAccount.AnthropicCookieAuth)
+			accountOAuth.POST("/anthropic/setup-token-cookie-auth", h.UserAccount.AnthropicSetupTokenCookieAuth)
+			accountOAuth.POST("/openai/auth-url", h.UserAccount.GenerateOpenAIOAuthURL)
+			accountOAuth.POST("/openai/exchange-code", h.UserAccount.ExchangeOpenAIOAuthCode)
+			accountOAuth.POST("/openai/refresh-token", h.UserAccount.RefreshOpenAIToken)
+			accountOAuth.GET("/gemini/capabilities", h.UserAccount.GetGeminiOAuthCapabilities)
+			accountOAuth.POST("/gemini/auth-url", h.UserAccount.GenerateGeminiOAuthURL)
+			accountOAuth.POST("/gemini/exchange-code", h.UserAccount.ExchangeGeminiOAuthCode)
+			accountOAuth.POST("/antigravity/auth-url", h.UserAccount.GenerateAntigravityOAuthURL)
+			accountOAuth.POST("/antigravity/exchange-code", h.UserAccount.ExchangeAntigravityOAuthCode)
+			accountOAuth.POST("/antigravity/refresh-token", h.UserAccount.RefreshAntigravityToken)
+		}
+
 		// 用户可用分组（非管理员接口）
 		groups := authenticated.Group("/groups")
 		{
@@ -86,6 +120,7 @@ func RegisterUserRoutes(
 			usage.GET("/dashboard/stats", h.Usage.DashboardStats)
 			usage.GET("/dashboard/trend", h.Usage.DashboardTrend)
 			usage.GET("/dashboard/models", h.Usage.DashboardModels)
+			usage.GET("/dashboard/account-sharing", h.Usage.DashboardAccountSharing)
 			usage.POST("/dashboard/api-keys-usage", h.Usage.DashboardAPIKeysUsage)
 		}
 
