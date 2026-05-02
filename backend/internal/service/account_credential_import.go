@@ -10,6 +10,8 @@ import (
 
 const MaxAccountCredentialImportItems = 200
 
+const codexManagerOpenAIIssuer = "https://auth.openai.com"
+
 type AccountCredentialImportKind string
 
 const (
@@ -218,6 +220,10 @@ func accountCredentialImportSourcesFromValue(value any) ([]AccountCredentialImpo
 }
 
 func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentialImportSource, error) {
+	if source, handled, err := accountCredentialImportSourceFromCodexManagerExport(item); handled || err != nil {
+		return source, err
+	}
+
 	if field, found := findDisallowedCredentialImportField(item); found {
 		return AccountCredentialImportSource{}, fmt.Errorf("disallowed credential field: %s", field)
 	}
@@ -340,6 +346,69 @@ func accountCredentialImportSourceFromMap(item map[string]any) (AccountCredentia
 		return accountCredentialImportSourceFromString(value, name, notes)
 	}
 	return AccountCredentialImportSource{}, fmt.Errorf("unsupported credential import item")
+}
+
+func accountCredentialImportSourceFromCodexManagerExport(item map[string]any) (AccountCredentialImportSource, bool, error) {
+	tokens := importMapField(item, "tokens")
+	meta := importMapField(item, "meta")
+	if len(tokens) == 0 || len(meta) == 0 {
+		return AccountCredentialImportSource{}, false, nil
+	}
+
+	topLevel := copyImportMap(item)
+	removeImportMapField(topLevel, "tokens")
+	removeImportMapField(topLevel, "meta")
+	if field, found := findDisallowedCredentialImportField(topLevel); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("disallowed credential field: %s", field)
+	}
+	if field, found := findDisallowedCredentialImportField(tokens); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("disallowed credential field: %s", field)
+	}
+	metaForSafety := copyImportMap(meta)
+	removeImportMapField(metaForSafety, "issuer")
+	if field, found := findDisallowedCredentialImportField(metaForSafety); found {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("disallowed credential field: %s", field)
+	}
+
+	issuer := strings.TrimRight(strings.TrimSpace(importStringField(meta, "issuer")), "/")
+	if issuer != "" && !strings.EqualFold(issuer, codexManagerOpenAIIssuer) {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("unsupported Codex-Manager issuer: %s", issuer)
+	}
+
+	accessToken := importStringField(tokens, "access_token", "accessToken")
+	if accessToken == "" {
+		return AccountCredentialImportSource{}, true, fmt.Errorf("OAuth credentials must include access_token")
+	}
+
+	credentials := map[string]any{
+		"access_token": accessToken,
+	}
+	if idToken := importStringField(tokens, "id_token", "idToken"); idToken != "" {
+		credentials["id_token"] = idToken
+	}
+	if refreshToken := importStringField(tokens, "refresh_token", "refreshToken"); refreshToken != "" {
+		credentials["refresh_token"] = refreshToken
+	}
+	if chatgptAccountID := importStringField(meta, "chatgpt_account_id", "chatgptAccountId"); chatgptAccountID != "" {
+		credentials["chatgpt_account_id"] = chatgptAccountID
+	}
+	if workspaceID := importStringField(meta, "workspace_id", "workspaceId"); workspaceID != "" {
+		credentials["workspace_id"] = workspaceID
+	}
+
+	notes := importOptionalStringField(meta, "note", "notes", "description")
+	if notes == nil {
+		notes = importOptionalStringField(item, "note", "notes", "description")
+	}
+
+	return AccountCredentialImportSource{
+		Kind:        AccountCredentialImportKindOAuthCredentials,
+		Name:        credentialImportFirstNonEmptyString(importStringField(meta, "label", "name"), importStringField(item, "name", "label")),
+		Notes:       notes,
+		Platform:    PlatformOpenAI,
+		Credentials: credentials,
+		Extra:       map[string]any{},
+	}, true, nil
 }
 
 func accountCredentialImportSourceFromString(value, name string, notes *string) (AccountCredentialImportSource, error) {
@@ -467,6 +536,15 @@ func copyImportMap(values map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func removeImportMapField(values map[string]any, key string) {
+	normalizedTarget := normalizeCredentialImportKey(key)
+	for existingKey := range values {
+		if normalizeCredentialImportKey(existingKey) == normalizedTarget {
+			delete(values, existingKey)
+		}
+	}
 }
 
 func normalizeCredentialImportKey(key string) string {

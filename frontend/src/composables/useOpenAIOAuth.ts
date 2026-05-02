@@ -69,10 +69,10 @@ export function useOpenAIOAuth(scope: AccountApiScope = 'admin') {
         payload.redirect_uri = redirectUri
       }
 
-      const response = await adminAPI.accounts.generateAuthUrl(
-        `${endpointPrefix}/generate-auth-url`,
-        payload
-      )
+      const response =
+        scope === 'user'
+          ? await accountsAPI.generateOpenAIOAuthUrl(payload)
+          : await adminAPI.accounts.generateAuthUrl(`${endpointPrefix}/generate-auth-url`, payload)
       authUrl.value = response.auth_url
       sessionId.value = response.session_id
       try {

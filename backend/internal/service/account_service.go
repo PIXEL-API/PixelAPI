@@ -586,18 +586,19 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	var groupIDs []int64
 	if req.ShareMode != nil {
 		nextMode := NormalizeAccountShareMode(*req.ShareMode)
+		managedGroupIDs, err := s.managedOwnedAccountGroupIDsForShareMode(ctx, ownerUserID, account, nextMode)
+		if err != nil {
+			return nil, err
+		}
 		if nextMode == AccountShareModePrivate {
 			account.ShareMode = AccountShareModePrivate
 			account.ShareStatus = AccountShareStatusApproved
 			account.ErrorMessage = ""
-		} else if NormalizeAccountShareMode(account.ShareMode) != AccountShareModePublic ||
-			NormalizeAccountShareStatus(account.ShareStatus) != AccountShareStatusApproved {
+		} else if account.IsPublicShareApproved() {
+			account.ShareMode = AccountShareModePublic
+		} else {
 			account.ShareMode = AccountShareModePublic
 			account.ShareStatus = AccountShareStatusPending
-		}
-		managedGroupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, nextMode, nil)
-		if err != nil {
-			return nil, err
 		}
 		groupIDs = managedGroupIDs
 		shouldBindGroups = true
@@ -695,6 +696,16 @@ func (s *AccountService) getPrivateGroupForOwnedAccount(ctx context.Context, own
 		return nil, ErrOwnedAccountGroupValidationUnavailable
 	}
 	group, err := s.privateGroupProvisioner.GetActiveUserPrivateGroup(ctx, ownerUserID, platform)
+	if err == nil {
+		return group, nil
+	}
+	if !errors.Is(err, ErrGroupNotFound) && !errors.Is(err, ErrGroupNotAllowed) {
+		return nil, err
+	}
+	if provisionErr := s.privateGroupProvisioner.ProvisionUserPrivateGroups(ctx, ownerUserID); provisionErr != nil {
+		return nil, provisionErr
+	}
+	group, err = s.privateGroupProvisioner.GetActiveUserPrivateGroup(ctx, ownerUserID, platform)
 	if err != nil {
 		return nil, err
 	}
@@ -710,6 +721,20 @@ func (s *AccountService) initialOwnedAccountGroupIDs(ctx context.Context, ownerU
 		return []int64{privateGroup.ID}, nil
 	}
 	return s.validateOwnedAccountGroupBinding(ctx, ownerUserID, platform, accountType, requestedGroupIDs)
+}
+
+func (s *AccountService) managedOwnedAccountGroupIDsForShareMode(ctx context.Context, ownerUserID int64, account *Account, nextMode string) ([]int64, error) {
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	if NormalizeAccountShareMode(nextMode) == AccountShareModePublic && account.IsPublicShareApproved() {
+		publicGroup, err := s.resolveOwnedPublicShareGroup(ctx, account)
+		if err != nil {
+			return nil, err
+		}
+		return s.publicOwnedAccountGroupIDs(ctx, ownerUserID, account, publicGroup)
+	}
+	return s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, nextMode, nil)
 }
 
 func (s *AccountService) ApproveOwnedPublicShare(ctx context.Context, ownerUserID, accountID int64) (*Account, error) {

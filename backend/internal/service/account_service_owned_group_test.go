@@ -104,17 +104,23 @@ func (s *ownedPublicSharePolicyRepoStub) DeleteAccountSharePolicy(context.Contex
 }
 
 type ownedPrivateGroupProvisionerStub struct {
-	group *Group
-	err   error
+	group          *Group
+	err            error
+	provisionErr   error
+	provisionCalls int
 }
 
 func (s *ownedPrivateGroupProvisionerStub) ProvisionUserPrivateGroups(context.Context, int64) error {
-	panic("unexpected ProvisionUserPrivateGroups call")
+	s.provisionCalls++
+	return s.provisionErr
 }
 
 func (s *ownedPrivateGroupProvisionerStub) GetActiveUserPrivateGroup(context.Context, int64, string) (*Group, error) {
-	if s.err != nil {
+	if s.err != nil && s.provisionCalls == 0 {
 		return nil, s.err
+	}
+	if s.group == nil {
+		return nil, ErrGroupNotFound
 	}
 	cp := *s.group
 	return &cp, nil
@@ -289,6 +295,47 @@ func TestAccountServiceInitialOwnedAccountGroupIDsUsesPrivateGroupForPublicMode(
 
 	require.NoError(t, err)
 	require.Equal(t, []int64{99}, groupIDs)
+}
+
+func TestAccountServiceGetPrivateGroupForOwnedAccountProvisionsMissingPrivateGroup(t *testing.T) {
+	provisioner := &ownedPrivateGroupProvisionerStub{
+		group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		err:   ErrGroupNotFound,
+	}
+	svc := &AccountService{privateGroupProvisioner: provisioner}
+
+	group, err := svc.getPrivateGroupForOwnedAccount(context.Background(), 101, PlatformOpenAI)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(99), group.ID)
+	require.Equal(t, 1, provisioner.provisionCalls)
+}
+
+func TestAccountServiceManagedGroupIDsKeepsApprovedPublicAccountInPublicPool(t *testing.T) {
+	ownerID := int64(101)
+	svc := &AccountService{
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 18, Name: "Plus Shared Pool", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic},
+			},
+		},
+	}
+	account := &Account{
+		ID:          20,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		OwnerUserID: &ownerID,
+		ShareMode:   AccountShareModePublic,
+		ShareStatus: AccountShareStatusApproved,
+	}
+
+	groupIDs, err := svc.managedOwnedAccountGroupIDsForShareMode(context.Background(), ownerID, account, AccountShareModePublic)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{99, 18}, groupIDs)
 }
 
 func TestIsOwnedAccountPublicShareApprovableAllowsRateLimitedAccountWithOption(t *testing.T) {
