@@ -83,7 +83,7 @@
       </div>
 
       <!-- Base URL (API Key only) -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="canManageBaseUrl" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-base-url-label"
@@ -116,7 +116,7 @@
       </div>
 
       <!-- Model restriction -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="canManageModelRestriction" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-model-restriction-label"
@@ -347,7 +347,7 @@
       </div>
 
       <!-- Custom error codes -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="canManageCustomErrorCodes" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label
@@ -487,7 +487,7 @@
       </div>
 
       <!-- Proxy -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="canManageProxy" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-proxy-label"
@@ -602,7 +602,7 @@
             aria-labelledby="bulk-edit-priority-label"
           />
         </div>
-        <div>
+        <div v-if="canManageBillingRate">
           <div class="mb-3 flex items-center justify-between">
             <label
               id="bulk-edit-rate-multiplier-label"
@@ -906,7 +906,7 @@
       </div>
 
       <!-- Groups -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="canManageGroups" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-groups-label"
@@ -926,7 +926,7 @@
         <div id="bulk-edit-groups" :class="!enableGroups && 'pointer-events-none opacity-50'">
           <GroupSelector
             v-model="groupIds"
-            :groups="groups"
+            :groups="bulkEditableGroups"
             aria-labelledby="bulk-edit-groups-label"
           />
         </div>
@@ -989,7 +989,9 @@ import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType } from '@/types'
+import { accountsAPI } from '@/api/accounts'
+import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType, GroupPlatform } from '@/types'
+import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -1023,9 +1025,18 @@ interface Props {
   }
   proxies: ProxyConfig[]
   groups: AdminGroup[]
+  accountScope?: AccountApiScope
+  allowProxy?: boolean
+  allowBillingRate?: boolean
+  allowBaseUrl?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  accountScope: 'admin',
+  allowProxy: true,
+  allowBillingRate: true,
+  allowBaseUrl: true
+})
 const emit = defineEmits<{
   close: []
   updated: []
@@ -1033,6 +1044,11 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const accountScope = computed(() => props.accountScope ?? 'admin')
+const isUserScope = computed(() => accountScope.value === 'user')
+const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
+const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
+const canManageBaseUrl = computed(() => !isUserScope.value && props.allowBaseUrl !== false)
 
 // Platform awareness
 const targetMode = computed(() => props.target?.mode ?? 'selected')
@@ -1040,6 +1056,38 @@ const targetPreviewCount = computed(() => props.target?.previewCount ?? props.ac
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
 const isMixedPlatform = computed(() => targetSelectedPlatforms.value.length > 1)
+const bulkGroupPlatform = computed<GroupPlatform | undefined>(() => {
+  if (targetSelectedPlatforms.value.length !== 1) return undefined
+  return targetSelectedPlatforms.value[0] as GroupPlatform
+})
+const selectedTypesAllowOAuthOnlyGroups = computed(
+  () =>
+    targetSelectedTypes.value.length > 0 &&
+    targetSelectedTypes.value.every(type => type === 'oauth' || type === 'setup-token')
+)
+const canManageGroups = computed(() => !isUserScope.value || Boolean(bulkGroupPlatform.value))
+const bulkEditableGroups = computed<AdminGroup[]>(() => {
+  if (!isUserScope.value) {
+    return props.groups
+  }
+  const platform = bulkGroupPlatform.value
+  if (!platform) {
+    return []
+  }
+  return props.groups.filter((group) => {
+    if (group.status !== 'active' || group.platform !== platform) {
+      return false
+    }
+    return !group.require_oauth_only || selectedTypesAllowOAuthOnlyGroups.value
+  })
+})
+const canManageModelRestriction = computed(
+  () =>
+    !isUserScope.value ||
+    (targetSelectedTypes.value.length > 0 &&
+      targetSelectedTypes.value.every(type => type === 'oauth' || type === 'setup-token'))
+)
+const canManageCustomErrorCodes = computed(() => !isUserScope.value)
 
 const allOpenAIPassthroughCapable = computed(() => {
   return (
@@ -1134,7 +1182,7 @@ const concurrency = ref(1)
 const loadFactor = ref<number | null>(null)
 const priority = ref(1)
 const rateMultiplier = ref(1)
-const status = ref<'active' | 'inactive'>('active')
+const status = ref<'active' | 'inactive' | 'disabled'>('active')
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -1164,7 +1212,7 @@ const commonErrorCodes = [
 
 const statusOptions = computed(() => [
   { value: 'active', label: t('common.active') },
-  { value: 'inactive', label: t('common.inactive') }
+  { value: isUserScope.value ? 'disabled' : 'inactive', label: t('common.inactive') }
 ])
 const isOpenAIModelRestrictionDisabled = computed(
   () =>
@@ -1273,7 +1321,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     return updates.extra as Record<string, unknown>
   }
 
-  if (enableProxy.value) {
+  if (canManageProxy.value && enableProxy.value) {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     updates.proxy_id = proxyId.value === null ? 0 : proxyId.value
   }
@@ -1292,7 +1340,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     updates.priority = priority.value
   }
 
-  if (enableRateMultiplier.value) {
+  if (canManageBillingRate.value && enableRateMultiplier.value) {
     updates.rate_multiplier = rateMultiplier.value
   }
 
@@ -1300,11 +1348,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     updates.status = status.value
   }
 
-  if (enableGroups.value) {
+  if (canManageGroups.value && enableGroups.value) {
     updates.group_ids = groupIds.value
   }
 
-  if (enableBaseUrl.value) {
+  if (canManageBaseUrl.value && enableBaseUrl.value) {
     const baseUrlValue = baseUrl.value.trim()
     if (baseUrlValue) {
       credentials.base_url = baseUrlValue
@@ -1320,7 +1368,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     }
   }
 
-  if (enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value) {
+  if (canManageModelRestriction.value && enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value) {
     // 统一使用 model_mapping 字段
     if (modelRestrictionMode.value === 'whitelist') {
       // 白名单模式：将模型转换为 model_mapping 格式（key=value）
@@ -1339,7 +1387,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     }
   }
 
-  if (enableCustomErrorCodes.value) {
+  if (canManageCustomErrorCodes.value && enableCustomErrorCodes.value) {
     credentials.custom_error_codes_enabled = true
     credentials.custom_error_codes = [...selectedErrorCodes.value]
     credentialsChanged = true
@@ -1410,6 +1458,7 @@ const mixedChannelConfirmed = ref(false)
 // 是否需要预检查：改了分组 + 全是单一的 antigravity 或 anthropic 平台
 // 多平台混合的情况由 submitBulkUpdate 的 409 catch 兜底
 const canPreCheck = () =>
+  !isUserScope.value &&
   enableGroups.value &&
   groupIds.value.length > 0 &&
   targetSelectedPlatforms.value.length === 1 &&
@@ -1421,6 +1470,41 @@ const handleClose = () => {
   pendingUpdatesForConfirm.value = null
   mixedChannelConfirmed.value = false
   emit('close')
+}
+
+const sanitizeBulkUpdatePayload = (payload: Record<string, unknown>) => {
+  const next = { ...payload }
+  if (isUserScope.value && next.status === 'inactive') {
+    next.status = 'disabled'
+  }
+  if (!canManageProxy.value) {
+    delete next.proxy_id
+  }
+  if (!canManageBillingRate.value) {
+    delete next.rate_multiplier
+  }
+  if (!canManageGroups.value) {
+    delete next.group_ids
+  }
+  if (next.credentials && typeof next.credentials === 'object') {
+    const credentials = { ...(next.credentials as Record<string, unknown>) }
+    if (!canManageBaseUrl.value) {
+      delete credentials.base_url
+    }
+    if (!canManageModelRestriction.value) {
+      delete credentials.model_mapping
+    }
+    if (!canManageCustomErrorCodes.value) {
+      delete credentials.custom_error_codes_enabled
+      delete credentials.custom_error_codes
+    }
+    if (Object.keys(credentials).length > 0) {
+      next.credentials = credentials
+    } else {
+      delete next.credentials
+    }
+  }
+  return next
 }
 
 // 预检查：提交前调接口检测，有风险就弹窗阻止，返回 false 表示需要用户确认
@@ -1452,18 +1536,18 @@ const handleSubmit = async () => {
   }
 
   const hasAnyFieldEnabled =
-    enableBaseUrl.value ||
+    (canManageBaseUrl.value && enableBaseUrl.value) ||
     enableOpenAIPassthrough.value ||
-    enableModelRestriction.value ||
-    enableCustomErrorCodes.value ||
+    (canManageModelRestriction.value && enableModelRestriction.value) ||
+    (canManageCustomErrorCodes.value && enableCustomErrorCodes.value) ||
     enableInterceptWarmup.value ||
-    enableProxy.value ||
+    (canManageProxy.value && enableProxy.value) ||
     enableConcurrency.value ||
     enableLoadFactor.value ||
     enablePriority.value ||
-    enableRateMultiplier.value ||
+    (canManageBillingRate.value && enableRateMultiplier.value) ||
     enableStatus.value ||
-    enableGroups.value ||
+    (canManageGroups.value && enableGroups.value) ||
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
     enableCodexCLIOnly.value ||
@@ -1496,12 +1580,15 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
   submitting.value = true
 
   try {
-    const res = targetMode.value === 'filtered' && props.target?.filters
+    const payload = sanitizeBulkUpdatePayload(updates)
+    const res = isUserScope.value
+      ? await accountsAPI.bulkUpdate(props.accountIds, payload)
+      : targetMode.value === 'filtered' && props.target?.filters
       ? await adminAPI.accounts.bulkUpdate({
         filters: props.target.filters,
-        ...updates
+        ...payload
       })
-      : await adminAPI.accounts.bulkUpdate(props.accountIds, updates)
+      : await adminAPI.accounts.bulkUpdate(props.accountIds, payload)
     const success = res.success || 0
     const failed = res.failed || 0
 
@@ -1601,5 +1688,22 @@ watch(
       mixedChannelConfirmed.value = false
     }
   }
+)
+
+watch(
+  [bulkEditableGroups, canManageGroups],
+  () => {
+    if (!canManageGroups.value) {
+      enableGroups.value = false
+      groupIds.value = []
+      return
+    }
+    const allowedGroupIDs = new Set(bulkEditableGroups.value.map((group) => group.id))
+    const nextGroupIDs = groupIds.value.filter((groupID) => allowedGroupIDs.has(groupID))
+    if (nextGroupIDs.length !== groupIds.value.length) {
+      groupIds.value = nextGroupIDs
+    }
+  },
+  { immediate: true }
 )
 </script>

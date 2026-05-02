@@ -95,6 +95,20 @@ type updateUserAccountRequest struct {
 	AutoPauseOnExpired *bool           `json:"auto_pause_on_expired"`
 }
 
+type bulkUpdateUserAccountsRequest struct {
+	AccountIDs     []int64        `json:"account_ids"`
+	ProxyID        *int64         `json:"proxy_id"`
+	Concurrency    *int           `json:"concurrency"`
+	LoadFactor     *int           `json:"load_factor"`
+	Priority       *int           `json:"priority"`
+	RateMultiplier *float64       `json:"rate_multiplier"`
+	Status         string         `json:"status" binding:"omitempty,oneof=active disabled inactive"`
+	Schedulable    *bool          `json:"schedulable"`
+	GroupIDs       *[]int64       `json:"group_ids"`
+	Credentials    map[string]any `json:"credentials"`
+	Extra          map[string]any `json:"extra"`
+}
+
 type userOAuthProxyRequest struct {
 	ProxyID *int64 `json:"proxy_id"`
 }
@@ -715,6 +729,79 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 		}
 	}
 	response.Success(c, dto.AccountFromService(account))
+}
+
+func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	var req bulkUpdateUserAccountsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeUserAccountIDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	if !rejectUserProxyID(c, req.ProxyID) {
+		return
+	}
+	if req.RateMultiplier != nil {
+		response.BadRequest(c, "rate_multiplier is not allowed for user accounts")
+		return
+	}
+
+	status := strings.ToLower(strings.TrimSpace(req.Status))
+	if status == "inactive" {
+		status = service.StatusDisabled
+	}
+	if req.Concurrency != nil && *req.Concurrency <= 0 {
+		response.BadRequest(c, "concurrency must be > 0")
+		return
+	}
+	if req.Priority != nil && *req.Priority <= 0 {
+		response.BadRequest(c, "priority must be > 0")
+		return
+	}
+	if req.LoadFactor != nil && *req.LoadFactor > 10000 {
+		response.BadRequest(c, "load_factor must be <= 10000")
+		return
+	}
+
+	hasUpdates := req.Concurrency != nil ||
+		req.LoadFactor != nil ||
+		req.Priority != nil ||
+		status != "" ||
+		req.Schedulable != nil ||
+		req.GroupIDs != nil ||
+		len(req.Credentials) > 0 ||
+		len(req.Extra) > 0
+	if !hasUpdates {
+		response.BadRequest(c, "No updates provided")
+		return
+	}
+
+	result, err := h.accountService.BulkUpdateOwned(c.Request.Context(), subject.UserID, &service.BulkUpdateOwnedAccountsInput{
+		AccountIDs:  accountIDs,
+		Concurrency: req.Concurrency,
+		LoadFactor:  req.LoadFactor,
+		Priority:    req.Priority,
+		Status:      status,
+		Schedulable: req.Schedulable,
+		GroupIDs:    req.GroupIDs,
+		Credentials: req.Credentials,
+		Extra:       req.Extra,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *UserAccountHandler) Delete(c *gin.Context) {

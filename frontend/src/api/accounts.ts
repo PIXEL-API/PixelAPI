@@ -99,6 +99,29 @@ export async function toggleStatus(id: number, status: 'active' | 'disabled'): P
   return update(id, { status })
 }
 
+export async function bulkUpdate(
+  accountIds: number[],
+  updates: Partial<UpdateAccountRequest>
+): Promise<{
+  success: number
+  failed: number
+  success_ids?: number[]
+  failed_ids?: number[]
+  results: Array<{ account_id: number; success: boolean; error?: string }>
+}> {
+  const { data } = await apiClient.post<{
+    success: number
+    failed: number
+    success_ids?: number[]
+    failed_ids?: number[]
+    results: Array<{ account_id: number; success: boolean; error?: string }>
+  }>('/accounts/bulk-update', {
+    account_ids: accountIds,
+    ...updates
+  })
+  return data
+}
+
 export async function getUsage(id: number, source?: 'passive' | 'active'): Promise<AccountUsageInfo> {
   const { data } = await apiClient.get<AccountUsageInfo>(`/accounts/${id}/usage`, {
     params: source ? { source } : undefined
@@ -326,6 +349,7 @@ export const accountsAPI = {
   update,
   delete: deleteAccount,
   toggleStatus,
+  bulkUpdate,
   getUsage,
   getTodayStats,
   getBatchTodayStats,

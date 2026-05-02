@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import BulkEditAccountModal from '../BulkEditAccountModal.vue'
 import ModelWhitelistSelector from '../ModelWhitelistSelector.vue'
 import { adminAPI } from '@/api/admin'
+import { accountsAPI } from '@/api/accounts'
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -21,6 +22,12 @@ vi.mock('@/api/admin', () => ({
   }
 }))
 
+vi.mock('@/api/accounts', () => ({
+  accountsAPI: {
+    bulkUpdate: vi.fn()
+  }
+}))
+
 vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
@@ -35,7 +42,46 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-function mountModal(extraProps: Record<string, unknown> = {}) {
+function makeGroup(overrides: Record<string, unknown>) {
+  return {
+    id: 1,
+    name: 'group',
+    description: null,
+    platform: 'openai',
+    rate_multiplier: 1,
+    rpm_limit: 0,
+    is_exclusive: false,
+    status: 'active',
+    owner_user_id: null,
+    scope: 'user_private',
+    subscription_type: 'standard',
+    daily_limit_usd: null,
+    weekly_limit_usd: null,
+    monthly_limit_usd: null,
+    image_price_1k: null,
+    image_price_2k: null,
+    image_price_4k: null,
+    claude_code_only: false,
+    fallback_group_id: null,
+    fallback_group_id_on_invalid_request: null,
+    allow_messages_dispatch: false,
+    require_oauth_only: false,
+    require_privacy_set: false,
+    created_at: '',
+    updated_at: '',
+    model_routing: null,
+    model_routing_enabled: false,
+    mcp_xml_inject: false,
+    supported_model_scopes: [],
+    account_count: 0,
+    active_account_count: 0,
+    rate_limited_account_count: 0,
+    sort_order: 0,
+    ...overrides
+  }
+}
+
+function mountModal(extraProps: Record<string, unknown> = {}, extraStubs: Record<string, unknown> = {}) {
   return mount(BulkEditAccountModal, {
     props: {
       show: true,
@@ -67,7 +113,8 @@ function mountModal(extraProps: Record<string, unknown> = {}) {
         },
         ProxySelector: true,
         GroupSelector: true,
-        Icon: true
+        Icon: true,
+        ...extraStubs
       }
     }
   })
@@ -77,6 +124,7 @@ describe('BulkEditAccountModal', () => {
   beforeEach(() => {
     vi.mocked(adminAPI.accounts.bulkUpdate).mockReset()
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockReset()
+    vi.mocked(accountsAPI.bulkUpdate).mockReset()
 
     vi.mocked(adminAPI.accounts.bulkUpdate).mockResolvedValue({
       success: 2,
@@ -85,6 +133,11 @@ describe('BulkEditAccountModal', () => {
     } as any)
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockResolvedValue({
       has_risk: false
+    } as any)
+    vi.mocked(accountsAPI.bulkUpdate).mockResolvedValue({
+      success: 2,
+      failed: 0,
+      results: []
     } as any)
   })
 
@@ -292,5 +345,73 @@ describe('BulkEditAccountModal', () => {
       },
       status: 'active'
     })
+  })
+
+  it('用户作用域批量编辑分组只展示当前账号平台兼容分组', async () => {
+    const wrapper = mountModal({
+      accountScope: 'user',
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey'],
+      groups: [
+        makeGroup({ id: 1, name: 'private-u9-openai', platform: 'openai' }),
+        makeGroup({ id: 2, name: 'private-u9-anthropic', platform: 'anthropic' }),
+        makeGroup({ id: 3, name: 'private-u9-gemini', platform: 'gemini' }),
+        makeGroup({ id: 4, name: 'Codex OAuth Only', platform: 'openai', require_oauth_only: true })
+      ]
+    }, {
+      GroupSelector: {
+        props: ['groups'],
+        template: `
+          <div>
+            <span v-for="group in groups" :key="group.id" class="group-option">{{ group.name }}</span>
+          </div>
+        `
+      }
+    })
+
+    expect(wrapper.text()).toContain('private-u9-openai')
+    expect(wrapper.text()).not.toContain('private-u9-anthropic')
+    expect(wrapper.text()).not.toContain('private-u9-gemini')
+    expect(wrapper.text()).not.toContain('Codex OAuth Only')
+  })
+
+  it('用户作用域提交分组更新时调用用户接口', async () => {
+    const wrapper = mountModal({
+      accountScope: 'user',
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth'],
+      groups: [
+        makeGroup({ id: 1, name: 'private-u9-openai', platform: 'openai' }),
+        makeGroup({ id: 2, name: 'private-u9-anthropic', platform: 'anthropic' })
+      ]
+    }, {
+      GroupSelector: {
+        props: ['groups'],
+        emits: ['update:modelValue'],
+        template: `
+          <div>
+            <button
+              v-for="group in groups"
+              :key="group.id"
+              type="button"
+              class="group-option"
+              @click="$emit('update:modelValue', [group.id])"
+            >
+              {{ group.name }}
+            </button>
+          </div>
+        `
+      }
+    })
+
+    await wrapper.get('#bulk-edit-groups-enabled').setValue(true)
+    await wrapper.get('button.group-option').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(accountsAPI.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      group_ids: [1]
+    })
+    expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
   })
 })

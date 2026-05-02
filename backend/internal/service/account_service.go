@@ -177,6 +177,18 @@ type AccountListFilters struct {
 	PrivacyMode string
 }
 
+type BulkUpdateOwnedAccountsInput struct {
+	AccountIDs  []int64
+	Concurrency *int
+	Priority    *int
+	LoadFactor  *int
+	Status      string
+	Schedulable *bool
+	GroupIDs    *[]int64
+	Credentials map[string]any
+	Extra       map[string]any
+}
+
 // NewAccountService 创建账号服务实例
 func NewAccountService(
 	accountRepo AccountRepository,
@@ -640,6 +652,157 @@ func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID
 // Delete 删除账号
 // 优化：使用 ExistsByID 替代 GetByID 进行存在性检查，
 // 避免加载完整账号对象及其关联数据，提升删除操作的性能
+func normalizeOwnedBulkAccountIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func normalizeOwnedBulkStatus(status string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	if normalized == "" {
+		return "", nil
+	}
+	if normalized == "inactive" {
+		normalized = StatusDisabled
+	}
+	switch normalized {
+	case StatusActive, StatusDisabled:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid account status: %s", status)
+	}
+}
+
+func mergeAccountMap(current map[string]any, updates map[string]any) map[string]any {
+	if len(current) == 0 && len(updates) == 0 {
+		return nil
+	}
+	next := make(map[string]any, len(current)+len(updates))
+	for key, value := range current {
+		next[key] = value
+	}
+	for key, value := range updates {
+		next[key] = value
+	}
+	return next
+}
+
+func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64, input *BulkUpdateOwnedAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if ownerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if input == nil {
+		return nil, ErrAccountNilInput
+	}
+
+	accountIDs := normalizeOwnedBulkAccountIDs(input.AccountIDs)
+	result := &BulkUpdateAccountsResult{
+		SuccessIDs: make([]int64, 0, len(accountIDs)),
+		FailedIDs:  make([]int64, 0, len(accountIDs)),
+		Results:    make([]BulkUpdateAccountResult, 0, len(accountIDs)),
+	}
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+
+	if input.Concurrency != nil && *input.Concurrency <= 0 {
+		return nil, fmt.Errorf("concurrency must be > 0")
+	}
+	if input.Priority != nil && *input.Priority <= 0 {
+		return nil, fmt.Errorf("priority must be > 0")
+	}
+	if input.LoadFactor != nil && *input.LoadFactor > 10000 {
+		return nil, fmt.Errorf("load_factor must be <= 10000")
+	}
+	status, err := normalizeOwnedBulkStatus(input.Status)
+	if err != nil {
+		return nil, err
+	}
+
+	accounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get accounts: %w", err)
+	}
+	accountsByID := make(map[int64]*Account, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			accountsByID[account.ID] = account
+		}
+	}
+
+	validatedGroupIDsByAccount := make(map[int64][]int64, len(accountIDs))
+	for _, accountID := range accountIDs {
+		account := accountsByID[accountID]
+		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+			return nil, ErrAccountNotFound
+		}
+
+		nextCredentials := mergeAccountMap(account.Credentials, input.Credentials)
+		nextExtra := mergeAccountMap(account.Extra, input.Extra)
+		if err := validateOwnedAccountSource(account.Type, nextCredentials, nextExtra); err != nil {
+			return nil, err
+		}
+
+		if input.GroupIDs != nil {
+			groupIDs, err := s.validateOwnedAccountGroupBinding(ctx, ownerUserID, account.Platform, account.Type, *input.GroupIDs)
+			if err != nil {
+				return nil, err
+			}
+			validatedGroupIDsByAccount[accountID] = groupIDs
+		}
+	}
+
+	repoUpdates := AccountBulkUpdate{
+		Concurrency: input.Concurrency,
+		Priority:    input.Priority,
+		LoadFactor:  input.LoadFactor,
+		Schedulable: input.Schedulable,
+		Credentials: input.Credentials,
+		Extra:       input.Extra,
+	}
+	if status != "" {
+		repoUpdates.Status = &status
+	}
+
+	if _, err := s.accountRepo.BulkUpdate(ctx, accountIDs, repoUpdates); err != nil {
+		return nil, fmt.Errorf("bulk update accounts: %w", err)
+	}
+
+	for _, accountID := range accountIDs {
+		entry := BulkUpdateAccountResult{AccountID: accountID}
+		if input.GroupIDs != nil {
+			if err := s.accountRepo.BindGroups(ctx, accountID, validatedGroupIDsByAccount[accountID]); err != nil {
+				entry.Success = false
+				entry.Error = err.Error()
+				result.Failed++
+				result.FailedIDs = append(result.FailedIDs, accountID)
+				result.Results = append(result.Results, entry)
+				continue
+			}
+		}
+		entry.Success = true
+		result.Success++
+		result.SuccessIDs = append(result.SuccessIDs, accountID)
+		result.Results = append(result.Results, entry)
+	}
+
+	return result, nil
+}
+
 func (s *AccountService) Delete(ctx context.Context, id int64) error {
 	// 使用轻量级的存在性检查，而非加载完整账号对象
 	exists, err := s.accountRepo.ExistsByID(ctx, id)

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import AccountStatusIndicator from '../AccountStatusIndicator.vue'
 import type { Account } from '@/types'
+import zh from '@/i18n/locales/zh'
+import en from '@/i18n/locales/en'
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -43,6 +45,29 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('defines admin disabled status translations', () => {
+    expect((zh as any).admin.accounts.status.disabled).toBeTruthy()
+    expect((zh as any).admin.accounts.status.disabled).not.toBe('admin.accounts.status.disabled')
+    expect((en as any).admin.accounts.status.disabled).toBe('Disabled')
+  })
+
+  it('renders disabled account status through the admin status key', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          status: 'disabled'
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.disabled')
+  })
+
   it('模型限流 + overages 启用 + 无 AICredits key → 显示 ⚡ (credits_active)', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

@@ -12,6 +12,15 @@
           >
             <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
           </button>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="selectedCount === 0"
+            @click="openBulkEditModal"
+          >
+            <Icon name="edit" size="md" class="mr-2" />
+            {{ t('admin.accounts.bulkActions.edit') }}
+          </button>
           <button type="button" class="btn btn-secondary" @click="showImportModal = true">
             <Icon name="upload" size="md" class="mr-2" />
             {{ t('userAccounts.importAccounts') }}
@@ -59,6 +68,34 @@
       </template>
 
       <template #table>
+        <div
+          v-if="selectedCount > 0"
+          class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-primary-50 p-3 dark:bg-primary-900/20"
+        >
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-primary-900 dark:text-primary-100">
+              {{ t('admin.accounts.bulkActions.selected', { count: selectedCount }) }}
+            </span>
+            <button
+              type="button"
+              class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
+              @click="selectVisible"
+            >
+              {{ t('admin.accounts.bulkActions.selectCurrentPage') }}
+            </button>
+            <span class="text-gray-300 dark:text-primary-800">/</span>
+            <button
+              type="button"
+              class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
+              @click="clearSelection"
+            >
+              {{ t('admin.accounts.bulkActions.clear') }}
+            </button>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" @click="openBulkEditModal">
+            {{ t('admin.accounts.bulkActions.edit') }}
+          </button>
+        </div>
         <DataTable
           :columns="columns"
           :data="accounts"
@@ -71,6 +108,23 @@
           :overscan="5"
           @sort="handleSort"
         >
+          <template #header-select>
+            <input
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="allVisibleSelected"
+              @click.stop
+              @change="toggleSelectAllVisible($event)"
+            />
+          </template>
+          <template #cell-select="{ row }">
+            <input
+              type="checkbox"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="isSelected(row.id)"
+              @change="toggleSelection(row.id)"
+            />
+          </template>
           <template #cell-name="{ row, value }">
             <div class="flex min-w-[180px] flex-col">
               <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
@@ -278,6 +332,21 @@
       @updated="handleAccountUpdated"
     />
 
+    <BulkEditAccountModal
+      :show="showBulkEditModal"
+      :account-ids="selectedIds"
+      :selected-platforms="selectedPlatforms"
+      :selected-types="selectedTypes"
+      :proxies="[]"
+      :groups="modalGroups"
+      account-scope="user"
+      :allow-proxy="false"
+      :allow-billing-rate="false"
+      :allow-base-url="false"
+      @close="showBulkEditModal = false"
+      @updated="handleBulkAccountsUpdated"
+    />
+
     <ConfirmDialog
       :show="showDeleteDialog"
       :title="t('userAccounts.deleteAccount')"
@@ -303,6 +372,7 @@ import { useI18n } from 'vue-i18n'
 import { accountsAPI, userGroupsAPI } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { useTableSelection } from '@/composables/useTableSelection'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
@@ -320,6 +390,7 @@ import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import CreateAccountModal from '@/components/account/CreateAccountModal.vue'
 import EditAccountModal from '@/components/account/EditAccountModal.vue'
+import BulkEditAccountModal from '@/components/account/BulkEditAccountModal.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
 import type { Account, AccountPlatform, AccountType, AdminGroup, Group, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -336,6 +407,7 @@ const loading = ref(false)
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showImportModal = ref(false)
+const showBulkEditModal = ref(false)
 const showDeleteDialog = ref(false)
 const editingAccount = ref<Account | null>(null)
 const accountToDelete = ref<Account | null>(null)
@@ -368,7 +440,30 @@ const filterGroupId = ref<string | number>('')
 
 const modalGroups = computed(() => groups.value as unknown as AdminGroup[])
 
+const {
+  selectedIds,
+  selectedCount,
+  allVisibleSelected,
+  isSelected,
+  toggle: toggleSelection,
+  clear: clearSelection,
+  selectVisible,
+  toggleVisible
+} = useTableSelection<Account>({
+  rows: accounts,
+  getId: (account) => account.id
+})
+
+const selectedAccounts = computed(() => accounts.value.filter((account) => isSelected(account.id)))
+const selectedPlatforms = computed<AccountPlatform[]>(() => [
+  ...new Set(selectedAccounts.value.map((account) => account.platform))
+])
+const selectedTypes = computed<AccountType[]>(() => [
+  ...new Set(selectedAccounts.value.map((account) => account.type))
+])
+
 const columns = computed<Column[]>(() => [
+  { key: 'select', label: '', sortable: false, class: 'w-10' },
   { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
   { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false, class: 'min-w-[150px]' },
   { key: 'share', label: t('userAccounts.share'), sortable: false },
@@ -687,6 +782,10 @@ function onGroupFilterChange(value: string | number | boolean | null): void {
   onFilterChange()
 }
 
+function toggleSelectAllVisible(event: Event): void {
+  toggleVisible((event.target as HTMLInputElement).checked)
+}
+
 function handleSort(key: string, order: 'asc' | 'desc'): void {
   sortState.value.sort_by = key
   sortState.value.sort_order = order
@@ -715,8 +814,17 @@ function closeEditModal(): void {
   editingAccount.value = null
 }
 
+function openBulkEditModal(): void {
+  if (selectedCount.value === 0) {
+    appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
+    return
+  }
+  showBulkEditModal.value = true
+}
+
 async function handleAccountCreated(): Promise<void> {
   showCreateModal.value = false
+  clearSelection()
   pagination.value.page = 1
   usageManualRefreshToken.value += 1
   await Promise.all([loadGroups(), loadAccounts()])
@@ -730,10 +838,18 @@ async function handleAccountUpdated(account: Account): Promise<void> {
   await loadAccounts()
 }
 
+async function handleBulkAccountsUpdated(): Promise<void> {
+  showBulkEditModal.value = false
+  clearSelection()
+  usageManualRefreshToken.value += 1
+  await Promise.all([loadGroups(), loadAccounts()])
+}
+
 async function handleAccountsImported(payload?: { close: boolean }): Promise<void> {
   if (payload?.close !== false) {
     showImportModal.value = false
   }
+  clearSelection()
   pagination.value.page = 1
   usageManualRefreshToken.value += 1
   await loadAccounts()
@@ -793,6 +909,7 @@ async function deleteAccount(): Promise<void> {
     await accountsAPI.delete(accountToDelete.value.id)
     appStore.showSuccess(t('userAccounts.accountDeletedSuccess'))
     closeDeleteDialog()
+    clearSelection()
     await loadAccounts()
   } catch (error: any) {
     console.error('Failed to delete user account:', error)
