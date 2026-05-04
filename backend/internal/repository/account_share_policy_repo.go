@@ -30,7 +30,7 @@ func (r *accountSharePolicyRepository) ListAccountSharePolicies(ctx context.Cont
 	}
 
 	query := `
-		SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, version, enabled,
+		SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, invite_share_ratio::text, version, enabled,
 			effective_at, created_by_admin_id, created_at, updated_at, deleted_at
 		FROM account_share_policies
 		WHERE deleted_at IS NULL` + where + `
@@ -60,7 +60,7 @@ func (r *accountSharePolicyRepository) ListAccountSharePolicies(ctx context.Cont
 
 func (r *accountSharePolicyRepository) GetAccountSharePolicyByID(ctx context.Context, id int64) (*service.AccountSharePolicy, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, version, enabled,
+		SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, invite_share_ratio::text, version, enabled,
 			effective_at, created_by_admin_id, created_at, updated_at, deleted_at
 		FROM account_share_policies
 		WHERE id = $1 AND deleted_at IS NULL
@@ -85,7 +85,7 @@ func (r *accountSharePolicyRepository) ResolveEnabledAccountSharePolicy(ctx cont
 
 func (r *accountSharePolicyRepository) queryEnabledAccountSharePolicy(ctx context.Context, predicate string, args ...any) (*service.AccountSharePolicy, bool, error) {
 	query := `
-		SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, version, enabled,
+		SELECT id, scope_type, scope_id, platform, owner_share_ratio::text, invite_share_ratio::text, version, enabled,
 			effective_at, created_by_admin_id, created_at, updated_at, deleted_at
 		FROM account_share_policies
 		WHERE deleted_at IS NULL
@@ -108,17 +108,18 @@ func (r *accountSharePolicyRepository) queryEnabledAccountSharePolicy(ctx contex
 func (r *accountSharePolicyRepository) CreateAccountSharePolicy(ctx context.Context, input service.CreateAccountSharePolicyInput) (*service.AccountSharePolicy, error) {
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO account_share_policies (
-			scope_type, scope_id, platform, owner_share_ratio, enabled, effective_at, created_by_admin_id
+			scope_type, scope_id, platform, owner_share_ratio, invite_share_ratio, enabled, effective_at, created_by_admin_id
 		) VALUES (
-			$1, $2, $3, $4::numeric, $5, $6, $7
+			$1, $2, $3, $4::numeric, $5::numeric, $6, $7, $8
 		)
-		RETURNING id, scope_type, scope_id, platform, owner_share_ratio::text, version, enabled,
+		RETURNING id, scope_type, scope_id, platform, owner_share_ratio::text, invite_share_ratio::text, version, enabled,
 			effective_at, created_by_admin_id, created_at, updated_at, deleted_at
 	`,
 		input.ScopeType,
 		nullablePtrInt64(input.ScopeID),
 		nullableStringPtr(input.Platform),
 		strconv.FormatFloat(input.OwnerShareRatio, 'f', 6, 64),
+		strconv.FormatFloat(input.InviteShareRatio, 'f', 6, 64),
 		*input.Enabled,
 		*input.EffectiveAt,
 		nullablePtrInt64(input.CreatedByAdminID),
@@ -135,6 +136,7 @@ func (r *accountSharePolicyRepository) UpdateAccountSharePolicy(ctx context.Cont
 	scopeID := current.ScopeID
 	platform := current.Platform
 	ratio := current.OwnerShareRatio
+	inviteRatio := current.InviteShareRatio
 	enabled := current.Enabled
 	effectiveAt := current.EffectiveAt
 	if input.ScopeType != nil {
@@ -160,6 +162,9 @@ func (r *accountSharePolicyRepository) UpdateAccountSharePolicy(ctx context.Cont
 	if input.OwnerShareRatio != nil {
 		ratio = *input.OwnerShareRatio
 	}
+	if input.InviteShareRatio != nil {
+		inviteRatio = *input.InviteShareRatio
+	}
 	if input.Enabled != nil {
 		enabled = *input.Enabled
 	}
@@ -173,14 +178,15 @@ func (r *accountSharePolicyRepository) UpdateAccountSharePolicy(ctx context.Cont
 			scope_id = $3,
 			platform = $4,
 			owner_share_ratio = $5::numeric,
-			enabled = $6,
-			effective_at = $7,
+			invite_share_ratio = $6::numeric,
+			enabled = $7,
+			effective_at = $8,
 			version = version + 1,
 			updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
-		RETURNING id, scope_type, scope_id, platform, owner_share_ratio::text, version, enabled,
+		RETURNING id, scope_type, scope_id, platform, owner_share_ratio::text, invite_share_ratio::text, version, enabled,
 			effective_at, created_by_admin_id, created_at, updated_at, deleted_at
-	`, id, scopeType, nullablePtrInt64(scopeID), nullableStringPtr(platform), strconv.FormatFloat(ratio, 'f', 6, 64), enabled, effectiveAt)
+	`, id, scopeType, nullablePtrInt64(scopeID), nullableStringPtr(platform), strconv.FormatFloat(ratio, 'f', 6, 64), strconv.FormatFloat(inviteRatio, 'f', 6, 64), enabled, effectiveAt)
 	policy, err := scanAccountSharePolicy(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrAccountNotFound
@@ -237,6 +243,7 @@ func scanAccountSharePolicy(scanner sqlScanner) (*service.AccountSharePolicy, er
 		scopeID        sql.NullInt64
 		platform       sql.NullString
 		ratioRaw       string
+		inviteRatioRaw string
 		createdByAdmin sql.NullInt64
 		deletedAt      sql.NullTime
 	)
@@ -246,6 +253,7 @@ func scanAccountSharePolicy(scanner sqlScanner) (*service.AccountSharePolicy, er
 		&scopeID,
 		&platform,
 		&ratioRaw,
+		&inviteRatioRaw,
 		&policy.Version,
 		&policy.Enabled,
 		&policy.EffectiveAt,
@@ -261,6 +269,11 @@ func scanAccountSharePolicy(scanner sqlScanner) (*service.AccountSharePolicy, er
 		return nil, err
 	}
 	policy.OwnerShareRatio = ratio
+	inviteRatio, err := strconv.ParseFloat(strings.TrimSpace(inviteRatioRaw), 64)
+	if err != nil {
+		return nil, err
+	}
+	policy.InviteShareRatio = inviteRatio
 	if scopeID.Valid {
 		policy.ScopeID = &scopeID.Int64
 	}

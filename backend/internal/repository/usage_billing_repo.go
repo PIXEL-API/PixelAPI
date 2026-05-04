@@ -168,7 +168,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		result.QuotaState = quotaState
 	}
 
-	if err := applyAccountShareSettlement(ctx, tx, cmd, usageLogID); err != nil {
+	if err := applyAccountShareSettlement(ctx, tx, cmd, usageLogID, result); err != nil {
 		return err
 	}
 
@@ -355,12 +355,19 @@ type accountShareSnapshot struct {
 }
 
 type accountSharePolicySnapshot struct {
-	ID              any
-	Version         int
-	OwnerShareRatio decimal.Decimal
+	ID               any
+	Version          int
+	OwnerShareRatio  decimal.Decimal
+	InviteShareRatio decimal.Decimal
 }
 
-func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64) error {
+type accountInviteSnapshot struct {
+	InviterUserID int64
+	BoundAt       sql.NullTime
+	ExpiresAt     sql.NullTime
+}
+
+func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, result *service.UsageBillingApplyResult) error {
 	if cmd == nil || cmd.UserID <= 0 || cmd.AccountID <= 0 {
 		return nil
 	}
@@ -387,6 +394,14 @@ func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.U
 		return err
 	}
 	accountCost := accountCostForSettlement(cmd)
+	invite, err := resolveAccountShareInvite(ctx, tx, cmd, policy)
+	if err != nil {
+		return err
+	}
+	actualInviteRatio := decimal.Zero
+	if invite.InviterUserID > 0 {
+		actualInviteRatio = policy.InviteShareRatio
+	}
 	ownerCredit := consumerCharge.Mul(policy.OwnerShareRatio).Round(10)
 	if ownerCredit.GreaterThan(consumerCharge) {
 		ownerCredit = consumerCharge
@@ -394,9 +409,21 @@ func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.U
 	if ownerCredit.IsNegative() {
 		ownerCredit = decimal.Zero
 	}
-	platformFee := consumerCharge.Sub(ownerCredit).Round(10)
+	inviteCredit := consumerCharge.Mul(actualInviteRatio).Round(10)
+	if inviteCredit.IsNegative() {
+		inviteCredit = decimal.Zero
+	}
+	remainingAfterOwner := consumerCharge.Sub(ownerCredit)
+	if inviteCredit.GreaterThan(remainingAfterOwner) {
+		inviteCredit = remainingAfterOwner
+	}
+	platformFee := consumerCharge.Sub(ownerCredit).Sub(inviteCredit).Round(10)
 	if platformFee.IsNegative() {
 		platformFee = decimal.Zero
+	}
+	platformShareRatio := decimal.NewFromInt(1).Sub(policy.OwnerShareRatio).Sub(actualInviteRatio)
+	if platformShareRatio.IsNegative() {
+		platformShareRatio = decimal.Zero
 	}
 
 	inserted, err := insertAccountShareSettlement(ctx, tx, accountShareSettlementInput{
@@ -415,31 +442,50 @@ func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.U
 		AccountCost:         accountCost,
 		OwnerShareRatio:     policy.OwnerShareRatio,
 		OwnerCredit:         ownerCredit,
+		InviterUserID:       nullablePositiveInt64(invite.InviterUserID),
+		InviteBoundAt:       nullableTime(invite.BoundAt),
+		InviteExpiresAt:     nullableTime(invite.ExpiresAt),
+		InviteShareRatio:    actualInviteRatio,
+		InviteCredit:        inviteCredit,
+		PlatformShareRatio:  platformShareRatio,
 		PlatformFee:         platformFee,
 	})
-	if err != nil || !inserted || ownerCredit.IsZero() {
+	if err != nil || !inserted {
 		return err
 	}
 
-	newBalance, err := creditUsageBillingBalance(ctx, tx, account.OwnerUserID, ownerCredit)
-	if err != nil {
-		return err
+	if !ownerCredit.IsZero() {
+		newBalance, err := creditUsageBillingBalance(ctx, tx, account.OwnerUserID, ownerCredit)
+		if err != nil {
+			return err
+		}
+		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+			UserID:       account.OwnerUserID,
+			Direction:    "credit",
+			Amount:       ownerCredit,
+			Reason:       "account_share_income",
+			RefType:      "usage_log",
+			RefID:        nullablePositiveInt64(usageLogID),
+			BalanceAfter: decimalFromFloat(newBalance),
+			Metadata: map[string]any{
+				"request_id":       cmd.RequestID,
+				"api_key_id":       cmd.APIKeyID,
+				"account_id":       cmd.AccountID,
+				"consumer_user_id": cmd.UserID,
+			},
+		}); err != nil {
+			return err
+		}
+		appendUsageBillingCreditUser(result, account.OwnerUserID)
 	}
-	return insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-		UserID:       account.OwnerUserID,
-		Direction:    "credit",
-		Amount:       ownerCredit,
-		Reason:       "account_share_income",
-		RefType:      "usage_log",
-		RefID:        nullablePositiveInt64(usageLogID),
-		BalanceAfter: decimalFromFloat(newBalance),
-		Metadata: map[string]any{
-			"request_id":       cmd.RequestID,
-			"api_key_id":       cmd.APIKeyID,
-			"account_id":       cmd.AccountID,
-			"consumer_user_id": cmd.UserID,
-		},
-	})
+
+	if invite.InviterUserID > 0 && !inviteCredit.IsZero() {
+		if err := creditInviteShareBalance(ctx, tx, cmd, usageLogID, invite.InviterUserID, inviteCredit); err != nil {
+			return err
+		}
+		appendUsageBillingCreditUser(result, invite.InviterUserID)
+	}
+	return nil
 }
 
 func loadAccountShareSnapshot(ctx context.Context, tx *sql.Tx, accountID int64) (accountShareSnapshot, error) {
@@ -544,10 +590,24 @@ func resolveAccountSharePolicy(ctx context.Context, tx *sql.Tx, cmd *service.Usa
 		if ratio.GreaterThan(decimal.NewFromInt(1)) {
 			ratio = decimal.NewFromInt(1)
 		}
+		inviteRatio := decimalFromFloat(cmd.InviteShareRatio)
+		if inviteRatio.IsNegative() {
+			inviteRatio = decimal.Zero
+		}
+		if inviteRatio.GreaterThan(decimal.NewFromInt(1)) {
+			inviteRatio = decimal.NewFromInt(1)
+		}
+		if ratio.Add(inviteRatio).GreaterThan(decimal.NewFromInt(1)) {
+			inviteRatio = decimal.NewFromInt(1).Sub(ratio)
+			if inviteRatio.IsNegative() {
+				inviteRatio = decimal.Zero
+			}
+		}
 		return accountSharePolicySnapshot{
-			ID:              nullablePtrInt64(cmd.SharePolicyID),
-			Version:         cmd.SharePolicyVersion,
-			OwnerShareRatio: ratio,
+			ID:               nullablePtrInt64(cmd.SharePolicyID),
+			Version:          cmd.SharePolicyVersion,
+			OwnerShareRatio:  ratio,
+			InviteShareRatio: inviteRatio,
 		}, nil
 	}
 	if policy, found, err := queryAccountSharePolicy(ctx, tx, "scope_type = 'global'", nil); err != nil || found {
@@ -558,7 +618,7 @@ func resolveAccountSharePolicy(ctx context.Context, tx *sql.Tx, cmd *service.Usa
 
 func queryAccountSharePolicy(ctx context.Context, tx *sql.Tx, predicate string, arg any) (accountSharePolicySnapshot, bool, error) {
 	query := `
-		SELECT id, owner_share_ratio, version
+		SELECT id, owner_share_ratio, invite_share_ratio, version
 		FROM account_share_policies
 		WHERE deleted_at IS NULL
 			AND enabled = TRUE
@@ -569,12 +629,13 @@ func queryAccountSharePolicy(ctx context.Context, tx *sql.Tx, predicate string, 
 	`
 	var id int64
 	var ratio string
+	var inviteRatio string
 	var version int
 	var err error
 	if arg == nil {
-		err = tx.QueryRowContext(ctx, query).Scan(&id, &ratio, &version)
+		err = tx.QueryRowContext(ctx, query).Scan(&id, &ratio, &inviteRatio, &version)
 	} else {
-		err = tx.QueryRowContext(ctx, query, arg).Scan(&id, &ratio, &version)
+		err = tx.QueryRowContext(ctx, query, arg).Scan(&id, &ratio, &inviteRatio, &version)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return accountSharePolicySnapshot{}, false, nil
@@ -592,11 +653,78 @@ func queryAccountSharePolicy(ctx context.Context, tx *sql.Tx, predicate string, 
 	if parsed.GreaterThan(decimal.NewFromInt(1)) {
 		parsed = decimal.NewFromInt(1)
 	}
+	parsedInvite, err := decimal.NewFromString(strings.TrimSpace(inviteRatio))
+	if err != nil {
+		return accountSharePolicySnapshot{}, false, err
+	}
+	if parsedInvite.IsNegative() {
+		parsedInvite = decimal.Zero
+	}
+	if parsedInvite.GreaterThan(decimal.NewFromInt(1)) {
+		parsedInvite = decimal.NewFromInt(1)
+	}
+	if parsed.Add(parsedInvite).GreaterThan(decimal.NewFromInt(1)) {
+		parsedInvite = decimal.NewFromInt(1).Sub(parsed)
+		if parsedInvite.IsNegative() {
+			parsedInvite = decimal.Zero
+		}
+	}
 	return accountSharePolicySnapshot{
-		ID:              id,
-		Version:         version,
-		OwnerShareRatio: parsed,
+		ID:               id,
+		Version:          version,
+		OwnerShareRatio:  parsed,
+		InviteShareRatio: parsedInvite,
 	}, true, nil
+}
+
+func resolveAccountShareInvite(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, policy accountSharePolicySnapshot) (accountInviteSnapshot, error) {
+	if cmd == nil || cmd.BalanceCost <= 0 || policy.InviteShareRatio.IsZero() || policy.InviteShareRatio.IsNegative() {
+		return accountInviteSnapshot{}, nil
+	}
+	if enabled, err := isUsageAffiliateEnabled(ctx, tx); err != nil || !enabled {
+		return accountInviteSnapshot{}, err
+	}
+
+	var out accountInviteSnapshot
+	err := tx.QueryRowContext(ctx, `
+		SELECT ua.inviter_id,
+			COALESCE(ua.inviter_bound_at, ua.created_at) AS inviter_bound_at,
+			ua.invite_reward_expires_at
+		FROM user_affiliates ua
+		JOIN users inviter
+			ON inviter.id = ua.inviter_id
+			AND inviter.deleted_at IS NULL
+			AND inviter.status = $2
+		WHERE ua.user_id = $1
+			AND ua.inviter_id IS NOT NULL
+			AND ua.inviter_id <> ua.user_id
+			AND (ua.invite_reward_expires_at IS NULL OR ua.invite_reward_expires_at > NOW())
+		LIMIT 1
+	`, cmd.UserID, service.StatusActive).Scan(&out.InviterUserID, &out.BoundAt, &out.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return accountInviteSnapshot{}, nil
+	}
+	if err != nil {
+		return accountInviteSnapshot{}, err
+	}
+	return out, nil
+}
+
+func isUsageAffiliateEnabled(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var raw string
+	err := tx.QueryRowContext(ctx, `
+		SELECT value
+		FROM settings
+		WHERE key = $1
+		LIMIT 1
+	`, service.SettingKeyAffiliateEnabled).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.AffiliateEnabledDefault, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(strings.TrimSpace(raw), "true"), nil
 }
 
 type accountShareSettlementInput struct {
@@ -615,6 +743,12 @@ type accountShareSettlementInput struct {
 	AccountCost         decimal.Decimal
 	OwnerShareRatio     decimal.Decimal
 	OwnerCredit         decimal.Decimal
+	InviterUserID       any
+	InviteBoundAt       any
+	InviteExpiresAt     any
+	InviteShareRatio    decimal.Decimal
+	InviteCredit        decimal.Decimal
+	PlatformShareRatio  decimal.Decimal
 	PlatformFee         decimal.Decimal
 }
 
@@ -625,13 +759,17 @@ func insertAccountShareSettlement(ctx context.Context, tx *sql.Tx, in accountSha
 			usage_log_id, request_id, api_key_id, consumer_user_id, owner_user_id,
 			account_id, group_id, policy_id, policy_version,
 			share_mode_snapshot, share_status_snapshot,
-			consumer_charge, account_cost, owner_share_ratio, owner_credit, platform_fee,
+			consumer_charge, account_cost, owner_share_ratio, owner_credit,
+			inviter_user_id, invite_bound_at_snapshot, invite_expires_at_snapshot,
+			invite_share_ratio, invite_credit, platform_share_ratio, platform_fee,
 			status
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7, $8, $9,
 			$10, $11,
-			$12::numeric, $13::numeric, $14::numeric, $15::numeric, $16::numeric,
+			$12::numeric, $13::numeric, $14::numeric, $15::numeric,
+			$16, $17, $18,
+			$19::numeric, $20::numeric, $21::numeric, $22::numeric,
 			'applied'
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
@@ -640,7 +778,9 @@ func insertAccountShareSettlement(ctx context.Context, tx *sql.Tx, in accountSha
 		in.UsageLogID, in.RequestID, in.APIKeyID, in.ConsumerUserID, in.OwnerUserID,
 		in.AccountID, in.GroupID, in.PolicyID, in.PolicyVersion,
 		in.ShareModeSnapshot, in.ShareStatusSnapshot,
-		in.ConsumerCharge.StringFixed(10), in.AccountCost.StringFixed(10), in.OwnerShareRatio.StringFixed(6), in.OwnerCredit.StringFixed(10), in.PlatformFee.StringFixed(10),
+		in.ConsumerCharge.StringFixed(10), in.AccountCost.StringFixed(10), in.OwnerShareRatio.StringFixed(6), in.OwnerCredit.StringFixed(10),
+		in.InviterUserID, in.InviteBoundAt, in.InviteExpiresAt,
+		in.InviteShareRatio.StringFixed(6), in.InviteCredit.StringFixed(10), in.PlatformShareRatio.StringFixed(6), in.PlatformFee.StringFixed(10),
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -649,6 +789,55 @@ func insertAccountShareSettlement(ctx context.Context, tx *sql.Tx, in accountSha
 		return false, err
 	}
 	return true, nil
+}
+
+func creditInviteShareBalance(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, inviterUserID int64, amount decimal.Decimal) error {
+	newBalance, err := creditUsageBillingBalance(ctx, tx, inviterUserID, amount)
+	if err != nil {
+		return err
+	}
+	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+		UserID:       inviterUserID,
+		Direction:    "credit",
+		Amount:       amount,
+		Reason:       "invite_share_income",
+		RefType:      "usage_log",
+		RefID:        nullablePositiveInt64(usageLogID),
+		BalanceAfter: decimalFromFloat(newBalance),
+		Metadata: map[string]any{
+			"request_id":       cmd.RequestID,
+			"api_key_id":       cmd.APIKeyID,
+			"account_id":       cmd.AccountID,
+			"consumer_user_id": cmd.UserID,
+		},
+	}); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE user_affiliates
+		SET aff_history_quota = aff_history_quota + $1::numeric,
+			updated_at = NOW()
+		WHERE user_id = $2
+	`, amount.StringFixed(10), inviterUserID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO user_affiliate_ledger (user_id, action, amount, source_user_id, created_at, updated_at)
+		VALUES ($1, 'accrue', $2::numeric, $3, NOW(), NOW())
+	`, inviterUserID, amount.StringFixed(10), cmd.UserID)
+	return err
+}
+
+func appendUsageBillingCreditUser(result *service.UsageBillingApplyResult, userID int64) {
+	if result == nil || userID <= 0 {
+		return
+	}
+	for _, existing := range result.BalanceCreditUserIDs {
+		if existing == userID {
+			return
+		}
+	}
+	result.BalanceCreditUserIDs = append(result.BalanceCreditUserIDs, userID)
 }
 
 func creditUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount decimal.Decimal) (float64, error) {
@@ -706,6 +895,13 @@ func nullablePtrInt64(v *int64) any {
 		return nil
 	}
 	return *v
+}
+
+func nullableTime(v sql.NullTime) any {
+	if !v.Valid {
+		return nil
+	}
+	return v.Time
 }
 
 func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount float64) (bool, error) {

@@ -58,17 +58,19 @@ func isValidAffiliateCodeFormat(code string) bool {
 }
 
 type AffiliateSummary struct {
-	UserID               int64     `json:"user_id"`
-	AffCode              string    `json:"aff_code"`
-	AffCodeCustom        bool      `json:"aff_code_custom"`
-	AffRebateRatePercent *float64  `json:"aff_rebate_rate_percent,omitempty"`
-	InviterID            *int64    `json:"inviter_id,omitempty"`
-	AffCount             int       `json:"aff_count"`
-	AffQuota             float64   `json:"aff_quota"`
-	AffFrozenQuota       float64   `json:"aff_frozen_quota"`
-	AffHistoryQuota      float64   `json:"aff_history_quota"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	UserID                int64      `json:"user_id"`
+	AffCode               string     `json:"aff_code"`
+	AffCodeCustom         bool       `json:"aff_code_custom"`
+	AffRebateRatePercent  *float64   `json:"aff_rebate_rate_percent,omitempty"`
+	InviterID             *int64     `json:"inviter_id,omitempty"`
+	InviterBoundAt        *time.Time `json:"inviter_bound_at,omitempty"`
+	InviteRewardExpiresAt *time.Time `json:"invite_reward_expires_at,omitempty"`
+	AffCount              int        `json:"aff_count"`
+	AffQuota              float64    `json:"aff_quota"`
+	AffFrozenQuota        float64    `json:"aff_frozen_quota"`
+	AffHistoryQuota       float64    `json:"aff_history_quota"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 type AffiliateInvitee struct {
@@ -80,13 +82,15 @@ type AffiliateInvitee struct {
 }
 
 type AffiliateDetail struct {
-	UserID          int64   `json:"user_id"`
-	AffCode         string  `json:"aff_code"`
-	InviterID       *int64  `json:"inviter_id,omitempty"`
-	AffCount        int     `json:"aff_count"`
-	AffQuota        float64 `json:"aff_quota"`
-	AffFrozenQuota  float64 `json:"aff_frozen_quota"`
-	AffHistoryQuota float64 `json:"aff_history_quota"`
+	UserID                int64      `json:"user_id"`
+	AffCode               string     `json:"aff_code"`
+	InviterID             *int64     `json:"inviter_id,omitempty"`
+	InviterBoundAt        *time.Time `json:"inviter_bound_at,omitempty"`
+	InviteRewardExpiresAt *time.Time `json:"invite_reward_expires_at,omitempty"`
+	AffCount              int        `json:"aff_count"`
+	AffQuota              float64    `json:"aff_quota"`
+	AffFrozenQuota        float64    `json:"aff_frozen_quota"`
+	AffHistoryQuota       float64    `json:"aff_history_quota"`
 	// EffectiveRebateRatePercent 是当前用户作为邀请人时实际生效的返利比例：
 	// 优先用户自己的专属比例（aff_rebate_rate_percent），否则回退到全局比例。
 	// 用于在用户的 /affiliate 页面直观展示「分享后能拿到多少」。
@@ -98,6 +102,7 @@ type AffiliateRepository interface {
 	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
 	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
+	GetCurrentInviteSharePercent(ctx context.Context) (float64, error)
 	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int) (bool, error)
 	GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error)
 	ThawFrozenQuota(ctx context.Context, userID int64) (float64, error)
@@ -183,11 +188,13 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 		UserID:                     summary.UserID,
 		AffCode:                    summary.AffCode,
 		InviterID:                  summary.InviterID,
+		InviterBoundAt:             summary.InviterBoundAt,
+		InviteRewardExpiresAt:      summary.InviteRewardExpiresAt,
 		AffCount:                   summary.AffCount,
 		AffQuota:                   summary.AffQuota,
 		AffFrozenQuota:             summary.AffFrozenQuota,
 		AffHistoryQuota:            summary.AffHistoryQuota,
-		EffectiveRebateRatePercent: s.resolveRebateRatePercent(ctx, summary),
+		EffectiveRebateRatePercent: s.currentInviteSharePercent(ctx),
 		Invitees:                   invitees,
 	}, nil
 }
@@ -319,6 +326,18 @@ func (s *AffiliateService) resolveRebateRatePercent(ctx context.Context, inviter
 		return clampAffiliateRebateRate(v)
 	}
 	return s.globalRebateRatePercent(ctx)
+}
+
+func (s *AffiliateService) currentInviteSharePercent(ctx context.Context) float64 {
+	if s == nil || s.repo == nil {
+		return 0
+	}
+	percent, err := s.repo.GetCurrentInviteSharePercent(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.affiliate", "[Affiliate] Failed to load current invite share percent: %v", err)
+		return 0
+	}
+	return clampAffiliateRebateRate(percent)
 }
 
 // globalRebateRatePercent reads the system-wide rebate rate via SettingService,

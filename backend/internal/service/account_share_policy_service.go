@@ -22,6 +22,7 @@ type AccountSharePolicy struct {
 	ScopeID          *int64     `json:"scope_id,omitempty"`
 	Platform         *string    `json:"platform,omitempty"`
 	OwnerShareRatio  float64    `json:"owner_share_ratio"`
+	InviteShareRatio float64    `json:"invite_share_ratio"`
 	Version          int        `json:"version"`
 	Enabled          bool       `json:"enabled"`
 	EffectiveAt      time.Time  `json:"effective_at"`
@@ -42,18 +43,20 @@ type CreateAccountSharePolicyInput struct {
 	ScopeID          *int64
 	Platform         *string
 	OwnerShareRatio  float64
+	InviteShareRatio float64
 	Enabled          *bool
 	EffectiveAt      *time.Time
 	CreatedByAdminID *int64
 }
 
 type UpdateAccountSharePolicyInput struct {
-	ScopeType       *string
-	ScopeID         *int64
-	Platform        *string
-	OwnerShareRatio *float64
-	Enabled         *bool
-	EffectiveAt     *time.Time
+	ScopeType        *string
+	ScopeID          *int64
+	Platform         *string
+	OwnerShareRatio  *float64
+	InviteShareRatio *float64
+	Enabled          *bool
+	EffectiveAt      *time.Time
 }
 
 type AccountSharePolicyRepository interface {
@@ -101,12 +104,13 @@ func (s *AccountSharePolicyService) Update(ctx context.Context, id int64, input 
 		return nil, err
 	}
 	merged := CreateAccountSharePolicyInput{
-		ScopeType:       existing.ScopeType,
-		ScopeID:         existing.ScopeID,
-		Platform:        existing.Platform,
-		OwnerShareRatio: existing.OwnerShareRatio,
-		Enabled:         &existing.Enabled,
-		EffectiveAt:     &existing.EffectiveAt,
+		ScopeType:        existing.ScopeType,
+		ScopeID:          existing.ScopeID,
+		Platform:         existing.Platform,
+		OwnerShareRatio:  existing.OwnerShareRatio,
+		InviteShareRatio: existing.InviteShareRatio,
+		Enabled:          &existing.Enabled,
+		EffectiveAt:      &existing.EffectiveAt,
 	}
 	if input.ScopeType != nil {
 		merged.ScopeType = *input.ScopeType
@@ -129,6 +133,9 @@ func (s *AccountSharePolicyService) Update(ctx context.Context, id int64, input 
 	if input.OwnerShareRatio != nil {
 		merged.OwnerShareRatio = *input.OwnerShareRatio
 	}
+	if input.InviteShareRatio != nil {
+		merged.InviteShareRatio = *input.InviteShareRatio
+	}
 	if input.Enabled != nil {
 		merged.Enabled = input.Enabled
 	}
@@ -140,12 +147,13 @@ func (s *AccountSharePolicyService) Update(ctx context.Context, id int64, input 
 		return nil, err
 	}
 	return s.repo.UpdateAccountSharePolicy(ctx, id, UpdateAccountSharePolicyInput{
-		ScopeType:       &normalized.ScopeType,
-		ScopeID:         normalized.ScopeID,
-		Platform:        normalized.Platform,
-		OwnerShareRatio: &normalized.OwnerShareRatio,
-		Enabled:         normalized.Enabled,
-		EffectiveAt:     normalized.EffectiveAt,
+		ScopeType:        &normalized.ScopeType,
+		ScopeID:          normalized.ScopeID,
+		Platform:         normalized.Platform,
+		OwnerShareRatio:  &normalized.OwnerShareRatio,
+		InviteShareRatio: &normalized.InviteShareRatio,
+		Enabled:          normalized.Enabled,
+		EffectiveAt:      normalized.EffectiveAt,
 	})
 }
 
@@ -160,6 +168,12 @@ func normalizeCreateAccountSharePolicyInput(input CreateAccountSharePolicyInput)
 	input.ScopeType = normalizeAccountSharePolicyScope(input.ScopeType)
 	if input.OwnerShareRatio < 0 || input.OwnerShareRatio > 1 {
 		return input, fmt.Errorf("owner_share_ratio must be between 0 and 1")
+	}
+	if input.InviteShareRatio < 0 || input.InviteShareRatio > 1 {
+		return input, fmt.Errorf("invite_share_ratio must be between 0 and 1")
+	}
+	if input.OwnerShareRatio+input.InviteShareRatio > 1 {
+		return input, fmt.Errorf("owner_share_ratio plus invite_share_ratio must be less than or equal to 1")
 	}
 	if input.Enabled == nil {
 		enabled := true

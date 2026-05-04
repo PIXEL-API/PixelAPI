@@ -456,6 +456,18 @@ func ifNoneMatchMatched(ifNoneMatch, etag string) bool {
 	return false
 }
 
+// GetQuotaDashboard returns account quota summaries grouped by platform and account type.
+// GET /api/v1/admin/accounts/quota-dashboard
+func (h *AccountHandler) GetQuotaDashboard(c *gin.Context) {
+	dashboard, err := h.adminService.GetAccountQuotaDashboard(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, dashboard)
+}
+
 // GetByID handles getting an account by ID
 // GET /api/v1/admin/accounts/:id
 func (h *AccountHandler) GetByID(c *gin.Context) {

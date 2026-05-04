@@ -49,6 +49,7 @@ type UsageBillingCommand struct {
 	SharePolicyID         *int64
 	SharePolicyVersion    int
 	OwnerShareRatio       float64
+	InviteShareRatio      float64
 
 	UsageLog *UsageLog
 }
@@ -129,6 +130,7 @@ type UsageBillingApplyResult struct {
 	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
 	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
 	UsageLogID           *int64             // persisted usage log id when the billing transaction wrote one
+	BalanceCreditUserIDs []int64            // users credited by settlement side effects; callers should invalidate balance caches
 }
 
 type UsageBillingRepository interface {

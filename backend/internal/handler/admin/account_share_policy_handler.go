@@ -22,21 +22,23 @@ func NewAccountSharePolicyHandler(service *service.AccountSharePolicyService) *A
 }
 
 type createAccountSharePolicyRequest struct {
-	ScopeType       string     `json:"scope_type" binding:"omitempty,oneof=global"`
-	ScopeID         *int64     `json:"scope_id"`
-	Platform        *string    `json:"platform"`
-	OwnerShareRatio *float64   `json:"owner_share_ratio" binding:"required,gte=0,lte=1"`
-	Enabled         *bool      `json:"enabled"`
-	EffectiveAt     *time.Time `json:"effective_at"`
+	ScopeType        string     `json:"scope_type" binding:"omitempty,oneof=global"`
+	ScopeID          *int64     `json:"scope_id"`
+	Platform         *string    `json:"platform"`
+	OwnerShareRatio  *float64   `json:"owner_share_ratio" binding:"required,gte=0,lte=1"`
+	InviteShareRatio *float64   `json:"invite_share_ratio" binding:"omitempty,gte=0,lte=1"`
+	Enabled          *bool      `json:"enabled"`
+	EffectiveAt      *time.Time `json:"effective_at"`
 }
 
 type updateAccountSharePolicyRequest struct {
-	ScopeType       *string    `json:"scope_type" binding:"omitempty,oneof=global"`
-	ScopeID         *int64     `json:"scope_id"`
-	Platform        *string    `json:"platform"`
-	OwnerShareRatio *float64   `json:"owner_share_ratio" binding:"omitempty,gte=0,lte=1"`
-	Enabled         *bool      `json:"enabled"`
-	EffectiveAt     *time.Time `json:"effective_at"`
+	ScopeType        *string    `json:"scope_type" binding:"omitempty,oneof=global"`
+	ScopeID          *int64     `json:"scope_id"`
+	Platform         *string    `json:"platform"`
+	OwnerShareRatio  *float64   `json:"owner_share_ratio" binding:"omitempty,gte=0,lte=1"`
+	InviteShareRatio *float64   `json:"invite_share_ratio" binding:"omitempty,gte=0,lte=1"`
+	Enabled          *bool      `json:"enabled"`
+	EffectiveAt      *time.Time `json:"effective_at"`
 }
 
 func (h *AccountSharePolicyHandler) List(c *gin.Context) {
@@ -95,6 +97,7 @@ func (h *AccountSharePolicyHandler) Create(c *gin.Context) {
 		ScopeID:          req.ScopeID,
 		Platform:         req.Platform,
 		OwnerShareRatio:  *req.OwnerShareRatio,
+		InviteShareRatio: valueOrZeroFloat64(req.InviteShareRatio),
 		Enabled:          req.Enabled,
 		EffectiveAt:      req.EffectiveAt,
 		CreatedByAdminID: adminID,
@@ -117,18 +120,26 @@ func (h *AccountSharePolicyHandler) Update(c *gin.Context) {
 		return
 	}
 	policy, err := h.service.Update(c.Request.Context(), id, service.UpdateAccountSharePolicyInput{
-		ScopeType:       req.ScopeType,
-		ScopeID:         req.ScopeID,
-		Platform:        req.Platform,
-		OwnerShareRatio: req.OwnerShareRatio,
-		Enabled:         req.Enabled,
-		EffectiveAt:     req.EffectiveAt,
+		ScopeType:        req.ScopeType,
+		ScopeID:          req.ScopeID,
+		Platform:         req.Platform,
+		OwnerShareRatio:  req.OwnerShareRatio,
+		InviteShareRatio: req.InviteShareRatio,
+		Enabled:          req.Enabled,
+		EffectiveAt:      req.EffectiveAt,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, policy)
+}
+
+func valueOrZeroFloat64(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 func (h *AccountSharePolicyHandler) Delete(c *gin.Context) {

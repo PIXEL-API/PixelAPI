@@ -308,6 +308,25 @@ func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int,
 	return s.accounts, int64(len(s.accounts)), nil
 }
 
+func (s *stubAdminService) GetAccountQuotaDashboard(ctx context.Context) (*service.AccountQuotaDashboard, error) {
+	now := time.Now().UTC()
+	return &service.AccountQuotaDashboard{
+		GeneratedAt: now,
+		Summaries: []service.AccountQuotaSummary{
+			{
+				Platform:     service.PlatformAnthropic,
+				Type:         service.AccountTypeOAuth,
+				AccountCount: len(s.accounts),
+			},
+		},
+		Totals: service.AccountQuotaSummary{
+			Platform:     "all",
+			Type:         "all",
+			AccountCount: len(s.accounts),
+		},
+	}, nil
+}
+
 func (s *stubAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {
 	account := service.Account{ID: id, Name: "account", Status: service.StatusActive}
 	return &account, nil

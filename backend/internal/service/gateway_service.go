@@ -8114,6 +8114,7 @@ func attachAccountShareBillingSnapshot(ctx context.Context, cmd *UsageBillingCom
 	cmd.SharePolicyID = &sharePolicyID
 	cmd.SharePolicyVersion = policy.Version
 	cmd.OwnerShareRatio = policy.OwnerShareRatio
+	cmd.InviteShareRatio = policy.InviteShareRatio
 	return nil
 }
 
@@ -8165,6 +8166,14 @@ func finalizePostUsageBilling(p *postUsageBillingParams, deps *billingDeps, resu
 		}
 	} else if p.Cost.ActualCost > 0 && p.User != nil {
 		deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)
+	}
+
+	if result != nil {
+		for _, userID := range result.BalanceCreditUserIDs {
+			if userID > 0 {
+				_ = deps.billingCacheService.InvalidateUserBalance(context.Background(), userID)
+			}
+		}
 	}
 
 	if p.Cost.ActualCost > 0 && p.APIKey != nil && p.APIKey.HasRateLimits() {

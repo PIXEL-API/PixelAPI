@@ -17,6 +17,7 @@ import type {
   TempUnschedulableStatus,
   AdminDataPayload,
   AdminDataImportResult,
+  AccountQuotaDashboard,
   CheckMixedChannelRequest,
   CheckMixedChannelResponse
 } from '@/types'
@@ -112,6 +113,14 @@ export async function listWithEtag(
     etag: etagHeader,
     data: response.data
   }
+}
+
+/**
+ * Get account quota dashboard grouped by platform and account type.
+ */
+export async function getQuotaDashboard(): Promise<AccountQuotaDashboard> {
+  const { data } = await apiClient.get<AccountQuotaDashboard>('/admin/accounts/quota-dashboard')
+  return data
 }
 
 /**
@@ -654,6 +663,7 @@ export async function setPrivacy(id: number): Promise<Account> {
 export const accountsAPI = {
   list,
   listWithEtag,
+  getQuotaDashboard,
   getById,
   create,
   update,

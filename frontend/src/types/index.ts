@@ -871,6 +871,45 @@ export interface Account {
   current_rpm?: number | null // 当前分钟 RPM 计数
 }
 
+export interface AccountQuotaDimensionSummary {
+  enabled_account_count: number
+  exhausted_account_count: number
+  limit: number
+  used: number
+  remaining: number
+  utilization: number
+}
+
+export interface AccountUsageWindowSummary {
+  window: string
+  account_count: number
+  known_account_count: number
+  average_utilization: number
+  remaining_capacity_percent: number
+  min_remaining_seconds?: number | null
+  next_reset_at?: string | null
+}
+
+export interface AccountQuotaSummary {
+  platform: AccountPlatform | 'all' | string
+  type: AccountType | 'all' | string
+  account_count: number
+  active_account_count: number
+  schedulable_account_count: number
+  quota_account_count: number
+  unlimited_account_count: number
+  total: AccountQuotaDimensionSummary
+  daily: AccountQuotaDimensionSummary
+  weekly: AccountQuotaDimensionSummary
+  usage_windows?: AccountUsageWindowSummary[]
+}
+
+export interface AccountQuotaDashboard {
+  generated_at: string
+  summaries: AccountQuotaSummary[]
+  totals: AccountQuotaSummary
+}
+
 // Account Usage types
 export interface WindowStats {
   requests: number

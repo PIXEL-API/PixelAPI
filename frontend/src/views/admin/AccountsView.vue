@@ -142,6 +142,13 @@
             {{ t('admin.accounts.listPendingSyncAction') }}
           </button>
         </div>
+        <AccountQuotaDashboardPanel
+          class="mt-3"
+          :dashboard="quotaDashboard"
+          :loading="quotaDashboardLoading"
+          :error="quotaDashboardError"
+          @refresh="refreshQuotaDashboard"
+        />
       </template>
       <template #table>
         <AccountBulkActionsBar
@@ -391,6 +398,7 @@ import AccountTableActions from '@/components/admin/account/AccountTableActions.
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
+import AccountQuotaDashboardPanel from '@/components/admin/account/AccountQuotaDashboard.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
@@ -409,7 +417,7 @@ import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRules
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
-import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
+import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, AccountQuotaDashboard as AccountQuotaDashboardData } from '@/types'
 import type { ImportCredentialContentsResponse } from '@/api/accounts'
 
 const { t } = useI18n()
@@ -548,6 +556,10 @@ const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
 const pendingTodayStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
+const quotaDashboard = ref<AccountQuotaDashboardData | null>(null)
+const quotaDashboardLoading = ref(false)
+const quotaDashboardError = ref(false)
+const quotaDashboardReqSeq = ref(0)
 
 const buildDefaultTodayStats = (): WindowStats => ({
   requests: 0,
@@ -770,6 +782,25 @@ const resetAutoRefreshCache = () => {
 
 const isFirstLoad = ref(true)
 
+const refreshQuotaDashboard = async () => {
+  const reqSeq = ++quotaDashboardReqSeq.value
+  quotaDashboardLoading.value = true
+  quotaDashboardError.value = false
+  try {
+    const dashboard = await adminAPI.accounts.getQuotaDashboard()
+    if (reqSeq !== quotaDashboardReqSeq.value) return
+    quotaDashboard.value = dashboard
+  } catch (error) {
+    if (reqSeq !== quotaDashboardReqSeq.value) return
+    quotaDashboardError.value = true
+    console.error('Failed to load account quota dashboard:', error)
+  } finally {
+    if (reqSeq === quotaDashboardReqSeq.value) {
+      quotaDashboardLoading.value = false
+    }
+  }
+}
+
 const load = async () => {
   const requestParams = params as any
   hasPendingListSync.value = false
@@ -778,7 +809,7 @@ const load = async () => {
   if (isFirstLoad.value) {
     requestParams.lite = '1'
   }
-  await baseLoad()
+  await Promise.all([baseLoad(), refreshQuotaDashboard()])
   if (isFirstLoad.value) {
     isFirstLoad.value = false
     delete requestParams.lite
@@ -790,7 +821,7 @@ const reload = async () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
-  await baseReload()
+  await Promise.all([baseReload(), refreshQuotaDashboard()])
   await refreshTodayStatsBatch()
 }
 
@@ -951,6 +982,7 @@ const refreshAccountsIncrementally = async () => {
       pagination.pages = result.data.pages || 0
       mergeAccountsIncrementally(result.data.items || [])
       hasPendingListSync.value = false
+      refreshQuotaDashboard()
     }
 
     await refreshTodayStatsBatch()
@@ -1359,6 +1391,7 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
       if (hasIds) clearSelection()
       else setSelectedIds(accountIds)
     }
+    refreshQuotaDashboard()
   } catch (error) {
     console.error('Failed to bulk toggle schedulable:', error)
     appStore.showError(t('common.error'))
@@ -1531,6 +1564,7 @@ const patchAccountInList = (updatedAccount: Account) => {
 }
 const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
+  refreshQuotaDashboard()
   enterAutoRefreshSilentWindow()
 }
 const formatExportTimestamp = () => {
@@ -1593,6 +1627,7 @@ const handleRefresh = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(updated)
+    refreshQuotaDashboard()
     enterAutoRefreshSilentWindow()
   } catch (error) {
     console.error('Failed to refresh credentials:', error)
@@ -1602,6 +1637,7 @@ const handleRecoverState = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.recoverState(a.id)
     patchAccountInList(updated)
+    refreshQuotaDashboard()
     enterAutoRefreshSilentWindow()
     appStore.showSuccess(t('admin.accounts.recoverStateSuccess'))
   } catch (error: any) {
@@ -1613,6 +1649,7 @@ const handleResetQuota = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.resetAccountQuota(a.id)
     patchAccountInList(updated)
+    refreshQuotaDashboard()
     enterAutoRefreshSilentWindow()
     appStore.showSuccess(t('common.success'))
   } catch (error) {
@@ -1623,6 +1660,7 @@ const handleSetPrivacy = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.setPrivacy(a.id)
     patchAccountInList(updated)
+    refreshQuotaDashboard()
     enterAutoRefreshSilentWindow()
     appStore.showSuccess(t('common.success'))
   } catch (error: any) {
@@ -1638,6 +1676,7 @@ const handleToggleSchedulable = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.setSchedulable(a.id, nextSchedulable)
     updateSchedulableInList([a.id], updated?.schedulable ?? nextSchedulable)
+    refreshQuotaDashboard()
     enterAutoRefreshSilentWindow()
   } catch (error) {
     console.error('Failed to toggle schedulable:', error)
@@ -1651,6 +1690,7 @@ const handleTempUnschedReset = async (updated: Account) => {
   showTempUnsched.value = false
   tempUnschedAcc.value = null
   patchAccountInList(updated)
+  refreshQuotaDashboard()
   enterAutoRefreshSilentWindow()
 }
 const formatExpiresAt = (value: number | null) => {

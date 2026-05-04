@@ -48,6 +48,35 @@ func (r *affiliateRepository) GetAffiliateByCode(ctx context.Context, code strin
 	return queryAffiliateByCode(ctx, client, code)
 }
 
+func (r *affiliateRepository) GetCurrentInviteSharePercent(ctx context.Context) (float64, error) {
+	client := clientFromContext(ctx, r.client)
+	rows, err := client.QueryContext(ctx, `
+		SELECT invite_share_ratio::double precision * 100
+		FROM account_share_policies
+		WHERE deleted_at IS NULL
+			AND enabled = TRUE
+			AND effective_at <= NOW()
+			AND scope_type = 'global'
+		ORDER BY effective_at DESC, version DESC, id DESC
+		LIMIT 1
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	var percent float64
+	if err := rows.Scan(&percent); err != nil {
+		return 0, err
+	}
+	return percent, rows.Err()
+}
+
 func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID int64) (bool, error) {
 	var bound bool
 	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
@@ -59,8 +88,29 @@ func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID
 		}
 
 		res, err := txClient.ExecContext(txCtx,
-			"UPDATE user_affiliates SET inviter_id = $1, updated_at = NOW() WHERE user_id = $2 AND inviter_id IS NULL",
-			inviterID, userID,
+			`UPDATE user_affiliates
+			SET inviter_id = $1,
+				inviter_bound_at = COALESCE(inviter_bound_at, NOW()),
+				invite_reward_expires_at = CASE
+					WHEN invite_reward_expires_at IS NOT NULL THEN invite_reward_expires_at
+					WHEN duration.days > 0 THEN NOW() + make_interval(days => duration.days)
+					ELSE NULL
+				END,
+				updated_at = NOW()
+			FROM (
+				SELECT CASE
+					WHEN value ~ '^[0-9]+$' THEN LEAST(value::integer, $3)
+					ELSE 0
+				END AS days
+				FROM settings
+				WHERE key = $4
+				UNION ALL
+				SELECT 0
+				LIMIT 1
+			) duration
+			WHERE user_affiliates.user_id = $2
+				AND user_affiliates.inviter_id IS NULL`,
+			inviterID, userID, service.AffiliateRebateDurationDaysMax, service.SettingKeyAffiliateRebateDurationDays,
 		)
 		if err != nil {
 			return fmt.Errorf("bind inviter: %w", err)
@@ -299,7 +349,7 @@ func (r *affiliateRepository) ListInvitees(ctx context.Context, inviterID int64,
 SELECT ua.user_id,
        COALESCE(u.email, ''),
        COALESCE(u.username, ''),
-       ua.created_at,
+       COALESCE(ua.inviter_bound_at, ua.created_at),
        COALESCE(SUM(ual.amount), 0)::double precision AS total_rebate
 FROM user_affiliates ua
 LEFT JOIN users u ON u.id = ua.user_id
@@ -391,6 +441,8 @@ SELECT user_id,
        aff_code_custom,
        aff_rebate_rate_percent,
        inviter_id,
+       inviter_bound_at,
+       invite_reward_expires_at,
        aff_count,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
@@ -412,6 +464,8 @@ WHERE user_id = $1`, userID)
 
 	var out service.AffiliateSummary
 	var inviterID sql.NullInt64
+	var inviterBoundAt sql.NullTime
+	var inviteRewardExpiresAt sql.NullTime
 	var rebateRate sql.NullFloat64
 	if err := rows.Scan(
 		&out.UserID,
@@ -419,6 +473,8 @@ WHERE user_id = $1`, userID)
 		&out.AffCodeCustom,
 		&rebateRate,
 		&inviterID,
+		&inviterBoundAt,
+		&inviteRewardExpiresAt,
 		&out.AffCount,
 		&out.AffQuota,
 		&out.AffFrozenQuota,
@@ -430,6 +486,14 @@ WHERE user_id = $1`, userID)
 	}
 	if inviterID.Valid {
 		out.InviterID = &inviterID.Int64
+	}
+	if inviterBoundAt.Valid {
+		t := inviterBoundAt.Time
+		out.InviterBoundAt = &t
+	}
+	if inviteRewardExpiresAt.Valid {
+		t := inviteRewardExpiresAt.Time
+		out.InviteRewardExpiresAt = &t
 	}
 	if rebateRate.Valid {
 		v := rebateRate.Float64
@@ -445,6 +509,8 @@ SELECT user_id,
        aff_code_custom,
        aff_rebate_rate_percent,
        inviter_id,
+       inviter_bound_at,
+       invite_reward_expires_at,
        aff_count,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
@@ -468,6 +534,8 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 
 	var out service.AffiliateSummary
 	var inviterID sql.NullInt64
+	var inviterBoundAt sql.NullTime
+	var inviteRewardExpiresAt sql.NullTime
 	var rebateRate sql.NullFloat64
 	if err := rows.Scan(
 		&out.UserID,
@@ -475,6 +543,8 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 		&out.AffCodeCustom,
 		&rebateRate,
 		&inviterID,
+		&inviterBoundAt,
+		&inviteRewardExpiresAt,
 		&out.AffCount,
 		&out.AffQuota,
 		&out.AffFrozenQuota,
@@ -486,6 +556,14 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 	}
 	if inviterID.Valid {
 		out.InviterID = &inviterID.Int64
+	}
+	if inviterBoundAt.Valid {
+		t := inviterBoundAt.Time
+		out.InviterBoundAt = &t
+	}
+	if inviteRewardExpiresAt.Valid {
+		t := inviteRewardExpiresAt.Time
+		out.InviteRewardExpiresAt = &t
 	}
 	if rebateRate.Valid {
 		v := rebateRate.Float64
