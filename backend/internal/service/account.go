@@ -21,6 +21,7 @@ type Account struct {
 	Name          string
 	Notes         *string
 	Platform      string
+	AccountLevel  string
 	Type          string
 	Credentials   map[string]any
 	Extra         map[string]any
@@ -78,6 +79,28 @@ const (
 	AccountShareStatusApproved  = "approved"
 	AccountShareStatusSuspended = "suspended"
 )
+
+func NormalizeAccountLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case AccountLevelFree:
+		return AccountLevelFree
+	case AccountLevelPlus:
+		return AccountLevelPlus
+	case AccountLevelPro:
+		return AccountLevelPro
+	default:
+		return AccountLevelUnknown
+	}
+}
+
+func IsConcreteAccountLevel(level string) bool {
+	switch NormalizeAccountLevel(level) {
+	case AccountLevelFree, AccountLevelPlus, AccountLevelPro:
+		return true
+	default:
+		return false
+	}
+}
 
 func NormalizeAccountShareMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {

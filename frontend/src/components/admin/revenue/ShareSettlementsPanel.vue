@@ -51,7 +51,7 @@
 
     <template v-else>
       <div v-if="items.length" class="overflow-x-auto">
-        <table class="min-w-[1500px] divide-y divide-gray-200 dark:divide-dark-700">
+        <table class="min-w-[1780px] divide-y divide-gray-200 dark:divide-dark-700">
           <thead>
             <tr>
               <th class="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -67,6 +67,9 @@
                 {{ t('admin.revenue.shareSettlements.table.owner') }}
               </th>
               <th class="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.shareSettlements.table.inviter') }}
+              </th>
+              <th class="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 {{ t('admin.revenue.shareSettlements.table.account') }}
               </th>
               <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -76,10 +79,16 @@
                 {{ t('admin.revenue.shareSettlements.table.accountCost') }}
               </th>
               <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                {{ t('admin.revenue.shareSettlements.table.shareRatio') }}
+                {{ t('admin.revenue.shareSettlements.table.ownerShareRatio') }}
               </th>
               <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 {{ t('admin.revenue.shareSettlements.table.ownerCredit') }}
+              </th>
+              <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.shareSettlements.table.inviteShareRatio') }}
+              </th>
+              <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.shareSettlements.table.inviteCredit') }}
               </th>
               <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 {{ t('admin.revenue.shareSettlements.table.platformFee') }}
@@ -113,6 +122,13 @@
                 <div class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ item.owner_email }}</div>
                 <div class="text-xs text-gray-500 dark:text-gray-400">#{{ item.owner_user_id }}</div>
               </td>
+              <td class="max-w-[180px] px-3 py-3">
+                <template v-if="item.inviter_user_id">
+                  <div class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ item.inviter_email || '-' }}</div>
+                  <div class="text-xs text-gray-500 dark:text-gray-400">#{{ item.inviter_user_id }}</div>
+                </template>
+                <span v-else class="text-sm text-gray-400">--</span>
+              </td>
               <td class="max-w-[220px] px-3 py-3">
                 <div class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ item.account_name }}</div>
                 <div class="text-xs text-gray-500 dark:text-gray-400">
@@ -124,6 +140,8 @@
               <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatAmount(item.account_cost) }}</td>
               <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatPercent(item.owner_share_ratio) }}</td>
               <td class="px-3 py-3 text-right text-sm font-medium text-gray-900 dark:text-white">{{ formatAmount(item.owner_credit) }}</td>
+              <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatPercent(item.invite_share_ratio) }}</td>
+              <td class="px-3 py-3 text-right text-sm font-medium text-gray-900 dark:text-white">{{ formatAmount(item.invite_credit) }}</td>
               <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">{{ formatAmount(item.platform_fee) }}</td>
               <td class="px-3 py-3 text-right text-sm font-medium text-gray-900 dark:text-white">{{ formatAmount(item.platform_net_profit) }}</td>
               <td class="px-3 py-3">

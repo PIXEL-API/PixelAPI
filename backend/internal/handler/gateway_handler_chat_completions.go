@@ -82,14 +82,6 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
 	// 解析渠道级模型映射
-	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
-
-	// Claude Code only restriction
-	if apiKey.Group != nil && apiKey.Group.ClaudeCodeOnly {
-		h.chatCompletionsErrorResponse(c, http.StatusForbidden, "permission_error",
-			"This group is restricted to Claude Code clients (/v1/messages only)")
-		return
-	}
 
 	// Error passthrough binding
 	if h.errorPassthroughService != nil {
@@ -134,17 +126,6 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		defer userReleaseFunc()
 	}
 
-	// 2. Re-check billing
-	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
-		reqLog.Info("gateway.cc.billing_check_failed", zap.Error(err))
-		status, code, message, retryAfter := billingErrorDetails(err)
-		if retryAfter > 0 {
-			c.Header("Retry-After", strconv.Itoa(retryAfter))
-		}
-		h.chatCompletionsErrorResponse(c, status, code, message)
-		return
-	}
-
 	// Parse request for session hash
 	parsedReq, _ := service.ParseGatewayRequest(body, "chat_completions")
 	if parsedReq == nil {
@@ -158,123 +139,180 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// 3. Account selection + failover loop
-	fs := NewFailoverState(h.maxAccountSwitches, false)
+	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
+	if _, ok := routeCursor.current(); !ok {
+		h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes")
+		return
+	}
 
+routeLoop:
 	for {
-		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
-		if err != nil {
-			if len(fs.FailedAccountIDs) == 0 {
-				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error())
-				return
-			}
-			action := fs.HandleSelectionExhausted(c.Request.Context())
-			switch action {
-			case FailoverContinue:
-				continue
-			case FailoverCanceled:
-				return
-			default:
-				if fs.LastFailoverErr != nil {
-					h.handleCCFailoverExhausted(c, fs.LastFailoverErr, streamStarted)
-				} else {
-					h.chatCompletionsErrorResponse(c, http.StatusBadGateway, "server_error", "All available accounts exhausted")
-				}
-				return
-			}
+		routeCandidate, ok := routeCursor.current()
+		if !ok {
+			h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes")
+			return
 		}
-		account := selection.Account
-		setOpsSelectedAccount(c, account.ID, account.Platform)
-
-		// 4. Acquire account concurrency slot
-		accountReleaseFunc := selection.ReleaseFunc
-		if !selection.Acquired {
-			if selection.WaitPlan == nil {
-				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
-				return
+		currentAPIKey := routeCandidate.APIKey
+		currentSubscription, subErr := h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
+		if subErr != nil {
+			status, code, message, retryAfter := billingErrorDetails(subErr)
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
-			accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
-				c,
-				account.ID,
-				selection.WaitPlan.MaxConcurrency,
-				selection.WaitPlan.Timeout,
-				reqStream,
-				&streamStarted,
+			h.chatCompletionsErrorResponse(c, status, code, message)
+			return
+		}
+		channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), currentAPIKey.GroupID, reqModel)
+		if currentAPIKey.Group != nil && currentAPIKey.Group.ClaudeCodeOnly {
+			if routeCursor.skipToNext("chat_completions_claude_code_only", reqLog, zap.Int64p("group_id", currentAPIKey.GroupID)) {
+				continue routeLoop
+			}
+			h.chatCompletionsErrorResponse(c, http.StatusForbidden, "permission_error",
+				"This group is restricted to Claude Code clients (/v1/messages only)")
+			return
+		}
+		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), currentAPIKey.User, currentAPIKey, currentAPIKey.Group, currentSubscription); err != nil {
+			reqLog.Info("gateway.cc.billing_check_failed",
+				zap.Error(err),
+				zap.Int64p("group_id", currentAPIKey.GroupID),
 			)
-			if err != nil {
-				reqLog.Warn("gateway.cc.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-				h.handleConcurrencyError(c, err, "account", streamStarted)
-				return
+			status, code, message, retryAfter := billingErrorDetails(err)
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
 			}
+			h.chatCompletionsErrorResponse(c, status, code, message)
+			return
 		}
-		accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+		fs := NewFailoverState(h.maxAccountSwitches, false)
 
-		// 5. Forward request
-		writerSizeBeforeForward := c.Writer.Size()
-		forwardBody := body
-		if channelMapping.Mapped {
-			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
-		}
-		result, err := h.gatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, parsedReq)
-
-		if accountReleaseFunc != nil {
-			accountReleaseFunc()
-		}
-
-		if err != nil {
-			var failoverErr *service.UpstreamFailoverError
-			if errors.As(err, &failoverErr) {
-				if c.Writer.Size() != writerSizeBeforeForward {
-					h.handleCCFailoverExhausted(c, failoverErr, true)
+		for {
+			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
+			if err != nil {
+				if len(fs.FailedAccountIDs) == 0 {
+					if routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
+						continue routeLoop
+					}
+					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error())
 					return
 				}
-				action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+				action := fs.HandleSelectionExhausted(c.Request.Context())
 				switch action {
 				case FailoverContinue:
 					continue
-				case FailoverExhausted:
-					h.handleCCFailoverExhausted(c, fs.LastFailoverErr, streamStarted)
-					return
 				case FailoverCanceled:
+					return
+				default:
+					if fs.LastFailoverErr != nil {
+						if !streamStarted && shouldSwitchAPIKeyGroupRoute(fs.LastFailoverErr) &&
+							routeCursor.switchToNext(apiKey.ID, "account_selection_exhausted", reqLog, zap.Int("upstream_status", fs.LastFailoverErr.StatusCode)) {
+							continue routeLoop
+						}
+						h.handleCCFailoverExhausted(c, fs.LastFailoverErr, streamStarted)
+					} else {
+						h.chatCompletionsErrorResponse(c, http.StatusBadGateway, "server_error", "All available accounts exhausted")
+					}
 					return
 				}
 			}
-			h.ensureForwardErrorResponse(c, streamStarted)
-			reqLog.Error("gateway.cc.forward_failed",
-				zap.Int64("account_id", account.ID),
-				zap.Error(err),
-			)
-			return
-		}
+			account := selection.Account
+			setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		// 6. Record usage
-		userAgent := c.GetHeader("User-Agent")
-		clientIP := ip.GetClientIP(c)
-		requestPayloadHash := service.HashUsageRequestPayload(body)
-		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			// 4. Acquire account concurrency slot
+			accountReleaseFunc := selection.ReleaseFunc
+			if !selection.Acquired {
+				if selection.WaitPlan == nil {
+					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
+					return
+				}
+				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
+					c,
+					account.ID,
+					selection.WaitPlan.MaxConcurrency,
+					selection.WaitPlan.Timeout,
+					reqStream,
+					&streamStarted,
+				)
+				if err != nil {
+					reqLog.Warn("gateway.cc.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+					h.handleConcurrencyError(c, err, "account", streamStarted)
+					return
+				}
+			}
+			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
 
-		h.submitUsageRecordTask(func(ctx context.Context) {
-			if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
-				Result:             result,
-				APIKey:             apiKey,
-				User:               apiKey.User,
-				Account:            account,
-				Subscription:       subscription,
-				InboundEndpoint:    inboundEndpoint,
-				UpstreamEndpoint:   upstreamEndpoint,
-				UserAgent:          userAgent,
-				IPAddress:          clientIP,
-				RequestPayloadHash: requestPayloadHash,
-				APIKeyService:      h.apiKeyService,
-				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-			}); err != nil {
-				reqLog.Error("gateway.cc.record_usage_failed",
+			// 5. Forward request
+			writerSizeBeforeForward := c.Writer.Size()
+			forwardBody := body
+			if channelMapping.Mapped {
+				forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
+			}
+			result, err := h.gatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, parsedReq)
+
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+
+			if err != nil {
+				var failoverErr *service.UpstreamFailoverError
+				if errors.As(err, &failoverErr) {
+					if c.Writer.Size() != writerSizeBeforeForward {
+						h.handleCCFailoverExhausted(c, failoverErr, true)
+						return
+					}
+					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					switch action {
+					case FailoverContinue:
+						continue
+					case FailoverExhausted:
+						if canSwitchAPIKeyGroupRouteAfterForward(c, routeCursor, fs.LastFailoverErr, streamStarted, writerSizeBeforeForward) &&
+							routeCursor.switchToNext(apiKey.ID, "upstream_failover_exhausted", reqLog, zap.Int("upstream_status", fs.LastFailoverErr.StatusCode)) {
+							continue routeLoop
+						}
+						h.handleCCFailoverExhausted(c, fs.LastFailoverErr, streamStarted)
+						return
+					case FailoverCanceled:
+						return
+					}
+				}
+				h.ensureForwardErrorResponse(c, streamStarted)
+				reqLog.Error("gateway.cc.forward_failed",
 					zap.Int64("account_id", account.ID),
 					zap.Error(err),
 				)
+				return
 			}
-		})
-		return
+			routeCursor.recordSuccess(apiKey.ID)
+
+			// 6. Record usage
+			userAgent := c.GetHeader("User-Agent")
+			clientIP := ip.GetClientIP(c)
+			requestPayloadHash := service.HashUsageRequestPayload(body)
+			inboundEndpoint := GetInboundEndpoint(c)
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+					Result:             result,
+					APIKey:             currentAPIKey,
+					User:               currentAPIKey.User,
+					Account:            account,
+					Subscription:       currentSubscription,
+					InboundEndpoint:    inboundEndpoint,
+					UpstreamEndpoint:   upstreamEndpoint,
+					UserAgent:          userAgent,
+					IPAddress:          clientIP,
+					RequestPayloadHash: requestPayloadHash,
+					APIKeyService:      h.apiKeyService,
+					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+				}); err != nil {
+					reqLog.Error("gateway.cc.record_usage_failed",
+						zap.Int64("account_id", account.ID),
+						zap.Error(err),
+					)
+				}
+			})
+			return
+		}
 	}
 }
 

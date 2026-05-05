@@ -78,6 +78,9 @@ func (r *affiliateRepository) GetCurrentInviteSharePercent(ctx context.Context) 
 }
 
 func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID int64) (bool, error) {
+	if userID <= 0 || inviterID <= 0 || userID == inviterID {
+		return false, service.ErrAffiliateCodeInvalid
+	}
 	var bound bool
 	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
 		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, userID); err != nil {
@@ -98,15 +101,15 @@ func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID
 				END,
 				updated_at = NOW()
 			FROM (
-				SELECT CASE
-					WHEN value ~ '^[0-9]+$' THEN LEAST(value::integer, $3)
-					ELSE 0
-				END AS days
-				FROM settings
-				WHERE key = $4
-				UNION ALL
-				SELECT 0
-				LIMIT 1
+				SELECT COALESCE((
+					SELECT CASE
+						WHEN value ~ '^[0-9]+$' THEN LEAST(value::integer, $3)
+						ELSE 0
+					END
+					FROM settings
+					WHERE key = $4
+					LIMIT 1
+				), 0) AS days
 			) duration
 			WHERE user_affiliates.user_id = $2
 				AND user_affiliates.inviter_id IS NULL`,
@@ -134,6 +137,88 @@ func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID
 		return false, err
 	}
 	return bound, nil
+}
+
+func (r *affiliateRepository) AdminBindInviter(ctx context.Context, userID, inviterID int64, resetValidity bool) (*service.AffiliateSummary, error) {
+	if userID <= 0 || inviterID <= 0 || userID == inviterID {
+		return nil, service.ErrAffiliateCodeInvalid
+	}
+	var out *service.AffiliateSummary
+	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		current, err := ensureUserAffiliateWithClient(txCtx, txClient, userID)
+		if err != nil {
+			return err
+		}
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, inviterID); err != nil {
+			return err
+		}
+
+		var oldInviterID int64
+		if current.InviterID != nil {
+			oldInviterID = *current.InviterID
+		}
+
+		resetArg := resetValidity
+		_, err = txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET inviter_id = $1,
+    inviter_bound_at = CASE
+        WHEN $3::boolean OR inviter_bound_at IS NULL THEN NOW()
+        ELSE inviter_bound_at
+    END,
+    invite_reward_expires_at = CASE
+        WHEN $3::boolean OR inviter_bound_at IS NULL THEN
+            CASE
+                WHEN duration.days > 0 THEN NOW() + make_interval(days => duration.days)
+                ELSE NULL
+            END
+        ELSE invite_reward_expires_at
+    END,
+    updated_at = NOW()
+FROM (
+    SELECT COALESCE((
+        SELECT CASE
+            WHEN value ~ '^[0-9]+$' THEN LEAST(value::integer, $4)
+            ELSE 0
+        END
+        FROM settings
+        WHERE key = $5
+        LIMIT 1
+    ), 0) AS days
+) duration
+WHERE user_affiliates.user_id = $2`,
+			inviterID, userID, resetArg, service.AffiliateRebateDurationDaysMax, service.SettingKeyAffiliateRebateDurationDays,
+		)
+		if err != nil {
+			return fmt.Errorf("admin bind inviter: %w", err)
+		}
+
+		if oldInviterID > 0 && oldInviterID != inviterID {
+			if _, err := txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_count = GREATEST(aff_count - 1, 0),
+    updated_at = NOW()
+WHERE user_id = $1`, oldInviterID); err != nil {
+				return fmt.Errorf("decrement old inviter aff_count: %w", err)
+			}
+		}
+		if oldInviterID != inviterID {
+			if _, err := txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_count = aff_count + 1,
+    updated_at = NOW()
+WHERE user_id = $1`, inviterID); err != nil {
+				return fmt.Errorf("increment new inviter aff_count: %w", err)
+			}
+		}
+
+		out, err = queryAffiliateByUserID(txCtx, txClient, userID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *affiliateRepository) AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int) (bool, error) {
@@ -358,8 +443,8 @@ LEFT JOIN user_affiliate_ledger ual
       AND ual.source_user_id = ua.user_id
       AND ual.action = 'accrue'
 WHERE ua.inviter_id = $1
-GROUP BY ua.user_id, u.email, u.username, ua.created_at
-ORDER BY ua.created_at DESC
+GROUP BY ua.user_id, u.email, u.username, ua.inviter_bound_at, ua.created_at
+ORDER BY COALESCE(ua.inviter_bound_at, ua.created_at) DESC
 LIMIT $2`, inviterID, limit)
 	if err != nil {
 		return nil, err
@@ -752,7 +837,7 @@ func nullableArg(v *float64) any {
 	return *v
 }
 
-// ListUsersWithCustomSettings 列出有专属配置（自定义码或专属比例）的用户。
+// ListUsersWithCustomSettings 列出有专属邀请码配置的用户。
 //
 // 单一查询同时处理"无搜索"与"按邮箱/用户名模糊搜索"：
 // 空 search 时拼接出的 LIKE 模式为 "%%"，匹配所有行；非空时按 ILIKE 子串匹配。
@@ -772,7 +857,7 @@ func (r *affiliateRepository) ListUsersWithCustomSettings(ctx context.Context, f
 	const baseFrom = `
 FROM user_affiliates ua
 JOIN users u ON u.id = ua.user_id
-WHERE (ua.aff_code_custom = true OR ua.aff_rebate_rate_percent IS NOT NULL)
+WHERE ua.aff_code_custom = true
   AND (u.email ILIKE $1 OR u.username ILIKE $1)`
 
 	client := clientFromContext(ctx, r.client)

@@ -58,10 +58,10 @@
                 <router-link
                   v-for="child in item.children"
                   :key="child.path"
-                  :to="child.path"
+                  :to="navLinkTo(child)"
                   class="sidebar-link mb-0.5 py-1.5 text-sm"
                   :class="{ 'sidebar-link-active': route.path === child.path }"
-                  @click="handleMenuItemClick(child.path)"
+                  @click="handleMenuItemClick(child, $event)"
                 >
                   <component :is="child.icon" class="h-4 w-4 flex-shrink-0" />
                   <span>{{ child.label }}</span>
@@ -71,7 +71,7 @@
             <!-- Normal item (no children) -->
             <router-link
               v-else
-              :to="item.path"
+              :to="navLinkTo(item)"
               class="sidebar-link mb-1"
               :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
               :title="sidebarCollapsed ? item.label : undefined"
@@ -84,7 +84,7 @@
                       ? 'sidebar-wallet'
                       : undefined
               "
-              @click="handleMenuItemClick(item.path)"
+              @click="handleMenuItemClick(item, $event)"
             >
               <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
               <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -104,12 +104,12 @@
           <router-link
             v-for="item in personalNavItems"
             :key="item.path"
-            :to="item.path"
+            :to="navLinkTo(item)"
             class="sidebar-link mb-1"
             :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
             :title="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
-            @click="handleMenuItemClick(item.path)"
+            @click="handleMenuItemClick(item, $event)"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -124,12 +124,12 @@
           <router-link
             v-for="item in userNavItems"
             :key="item.path"
-            :to="item.path"
+            :to="navLinkTo(item)"
             class="sidebar-link mb-1"
             :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
             :title="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
-            @click="handleMenuItemClick(item.path)"
+            @click="handleMenuItemClick(item, $event)"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -187,12 +187,15 @@ import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } 
 import VersionBadge from '@/components/common/VersionBadge.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
+import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
 
 interface NavItem {
   path: string
   label: string
   icon: unknown
   iconSvg?: string
+  url?: string
+  openInNewWindow?: boolean
   hideInSimpleMode?: boolean
   children?: NavItem[]
   /**
@@ -224,7 +227,7 @@ function applyFeatureFlags(items: NavItem[]): NavItem[] {
   return out
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const route = useRoute()
 const router = useRouter()
@@ -665,6 +668,8 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
       label: item.label,
       icon: null,
       iconSvg: item.icon_svg,
+      url: item.url,
+      openInNewWindow: item.open_in_new_window,
     })),
   )
   return items
@@ -747,14 +752,28 @@ const adminNavItems = computed((): NavItem[] => {
     filtered.push({ path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon })
     filtered.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
     for (const cm of customMenuItemsForAdmin.value) {
-      filtered.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
+      filtered.push({
+        path: `/custom/${cm.id}`,
+        label: cm.label,
+        icon: null,
+        iconSvg: cm.icon_svg,
+        url: cm.url,
+        openInNewWindow: cm.open_in_new_window,
+      })
     }
     return filtered
   }
 
   visible.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
   for (const cm of customMenuItemsForAdmin.value) {
-    visible.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
+    visible.push({
+      path: `/custom/${cm.id}`,
+      label: cm.label,
+      icon: null,
+      iconSvg: cm.icon_svg,
+      url: cm.url,
+      openInNewWindow: cm.open_in_new_window,
+    })
   }
   return visible
 })
@@ -773,11 +792,32 @@ function closeMobile() {
   appStore.setMobileOpen(false)
 }
 
-function handleMenuItemClick(itemPath: string) {
+function navLinkTo(item: NavItem): string {
+  return item.openInNewWindow ? route.fullPath : item.path
+}
+
+function buildNewWindowUrl(item: NavItem): string {
+  if (!item.url) return item.path
+  return buildEmbeddedUrl(
+    item.url,
+    authStore.user?.id,
+    authStore.token,
+    detectTheme(),
+    locale.value,
+  )
+}
+
+function handleMenuItemClick(item: NavItem, event?: MouseEvent) {
   if (mobileOpen.value) {
     setTimeout(() => {
       appStore.setMobileOpen(false)
     }, 150)
+  }
+
+  if (item.openInNewWindow) {
+    event?.preventDefault()
+    window.open(buildNewWindowUrl(item), '_blank', 'noopener,noreferrer')
+    return
   }
 
   // Map paths to tour selectors
@@ -787,7 +827,7 @@ function handleMenuItemClick(itemPath: string) {
     '/keys': '[data-tour="sidebar-my-keys"]'
   }
 
-  const selector = pathToSelector[itemPath]
+  const selector = pathToSelector[item.path]
   if (selector && onboardingStore.isCurrentStep(selector)) {
     onboardingStore.nextStep(500)
   }

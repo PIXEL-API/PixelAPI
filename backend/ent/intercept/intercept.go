@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcement"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/apikeygrouproute"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitor"
@@ -126,6 +127,33 @@ func (f TraverseAPIKey) Traverse(ctx context.Context, q ent.Query) error {
 		return f(ctx, q)
 	}
 	return fmt.Errorf("unexpected query type %T. expect *ent.APIKeyQuery", q)
+}
+
+// The APIKeyGroupRouteFunc type is an adapter to allow the use of ordinary function as a Querier.
+type APIKeyGroupRouteFunc func(context.Context, *ent.APIKeyGroupRouteQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f APIKeyGroupRouteFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.APIKeyGroupRouteQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.APIKeyGroupRouteQuery", q)
+}
+
+// The TraverseAPIKeyGroupRoute type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseAPIKeyGroupRoute func(context.Context, *ent.APIKeyGroupRouteQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseAPIKeyGroupRoute) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseAPIKeyGroupRoute) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.APIKeyGroupRouteQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.APIKeyGroupRouteQuery", q)
 }
 
 // The AccountFunc type is an adapter to allow the use of ordinary function as a Querier.
@@ -1024,6 +1052,8 @@ func NewQuery(q ent.Query) (Query, error) {
 	switch q := q.(type) {
 	case *ent.APIKeyQuery:
 		return &query[*ent.APIKeyQuery, predicate.APIKey, apikey.OrderOption]{typ: ent.TypeAPIKey, tq: q}, nil
+	case *ent.APIKeyGroupRouteQuery:
+		return &query[*ent.APIKeyGroupRouteQuery, predicate.APIKeyGroupRoute, apikeygrouproute.OrderOption]{typ: ent.TypeAPIKeyGroupRoute, tq: q}, nil
 	case *ent.AccountQuery:
 		return &query[*ent.AccountQuery, predicate.Account, account.OrderOption]{typ: ent.TypeAccount, tq: q}, nil
 	case *ent.AccountGroupQuery:

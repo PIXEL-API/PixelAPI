@@ -111,22 +111,30 @@
             </div>
           </template>
 
-          <template #cell-platform="{ value }">
-            <span
-              :class="[
-                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
-                value === 'anthropic'
-                  ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                  : value === 'openai'
-                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                    : value === 'antigravity'
-                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                      : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-              ]"
-            >
-              <PlatformIcon :platform="value" size="xs" />
-              {{ t("admin.groups.platforms." + value) }}
-            </span>
+          <template #cell-platform="{ value, row }">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span
+                :class="[
+                  'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
+                  value === 'anthropic'
+                    ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                    : value === 'openai'
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                      : value === 'antigravity'
+                        ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                ]"
+              >
+                <PlatformIcon :platform="value" size="xs" />
+                {{ t("admin.groups.platforms." + value) }}
+              </span>
+              <span
+                v-if="value === 'openai' && row.required_account_level"
+                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+              >
+                {{ requiredAccountLevelLabel(row.required_account_level) }}
+              </span>
+            </div>
           </template>
 
           <template #cell-billing_type="{ row }">
@@ -410,6 +418,14 @@
             @change="createForm.copy_accounts_from_group_ids = []"
           />
           <p class="input-hint">{{ t("admin.groups.platformHint") }}</p>
+        </div>
+        <div v-if="createForm.platform === 'openai'">
+          <label class="input-label">{{ t("admin.groups.form.requiredAccountLevel") }}</label>
+          <Select
+            v-model="createForm.required_account_level"
+            :options="requiredAccountLevelOptions"
+          />
+          <p class="input-hint">{{ t("admin.groups.form.requiredAccountLevelHint") }}</p>
         </div>
         <!-- 从分组复制账号 -->
         <div v-if="copyAccountsGroupOptions.length > 0">
@@ -1542,6 +1558,14 @@
             data-tour="group-form-platform"
           />
           <p class="input-hint">{{ t("admin.groups.platformNotEditable") }}</p>
+        </div>
+        <div v-if="editForm.platform === 'openai'">
+          <label class="input-label">{{ t("admin.groups.form.requiredAccountLevel") }}</label>
+          <Select
+            v-model="editForm.required_account_level"
+            :options="requiredAccountLevelOptions"
+          />
+          <p class="input-hint">{{ t("admin.groups.form.requiredAccountLevelHint") }}</p>
         </div>
         <!-- 从分组复制账号（编辑时） -->
         <div v-if="copyAccountsGroupOptionsForEdit.length > 0">
@@ -2754,7 +2778,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
-import type { AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
+import type { AccountLevel, AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import TablePageLayout from "@/components/layout/TablePageLayout.vue";
@@ -2865,6 +2889,18 @@ const subscriptionTypeOptions = computed(() => [
   { value: "standard", label: t("admin.groups.subscription.standard") },
   { value: "subscription", label: t("admin.groups.subscription.subscription") },
 ]);
+
+const requiredAccountLevelOptions = computed(() => [
+  { value: "", label: t("admin.groups.form.requiredAccountLevelAny") },
+  { value: "free", label: t("admin.accounts.accountLevel.free") },
+  { value: "plus", label: t("admin.accounts.accountLevel.plus") },
+  { value: "pro", label: t("admin.accounts.accountLevel.pro") },
+]);
+
+const requiredAccountLevelLabel = (level?: Exclude<AccountLevel, "unknown"> | "") => {
+  if (!level) return "";
+  return t(`admin.accounts.accountLevel.${level}`);
+};
 
 // 降级分组选项（创建时）- 仅包含 anthropic 平台且未启用 claude_code_only 的分组
 const fallbackGroupOptions = computed(() => {
@@ -3025,6 +3061,7 @@ const createForm = reactive({
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
+  required_account_level: "" as Exclude<AccountLevel, "unknown"> | "",
   rate_multiplier: 1.0,
   is_exclusive: false,
   subscription_type: "standard" as SubscriptionType,
@@ -3306,6 +3343,7 @@ const editForm = reactive({
   name: "",
   description: "",
   platform: "anthropic" as GroupPlatform,
+  required_account_level: "" as Exclude<AccountLevel, "unknown"> | "",
   rate_multiplier: 1.0,
   is_exclusive: false,
   status: "active" as "active" | "inactive",
@@ -3496,6 +3534,7 @@ const closeCreateModal = () => {
   createForm.name = "";
   createForm.description = "";
   createForm.platform = "anthropic";
+  createForm.required_account_level = "";
   createForm.rate_multiplier = 1.0;
   createForm.is_exclusive = false;
   createForm.subscription_type = "standard";
@@ -3598,6 +3637,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.name = group.name;
   editForm.description = group.description || "";
   editForm.platform = group.platform;
+  editForm.required_account_level = group.platform === "openai" ? group.required_account_level || "" : "";
   editForm.rate_multiplier = group.rate_multiplier;
   editForm.is_exclusive = group.is_exclusive;
   editForm.status = group.status;
@@ -3787,6 +3827,7 @@ watch(
       createForm.fallback_group_id_on_invalid_request = null;
     }
     if (newVal !== "openai") {
+      createForm.required_account_level = "";
       resetMessagesDispatchFormState(createForm);
     }
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
@@ -3803,6 +3844,7 @@ watch(
       editForm.fallback_group_id_on_invalid_request = null;
     }
     if (newVal !== "openai") {
+      editForm.required_account_level = "";
       resetMessagesDispatchFormState(editForm);
     }
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
@@ -3819,6 +3861,7 @@ watch(
       editForm.fallback_group_id_on_invalid_request = null
     }
     if (newVal !== 'openai') {
+      editForm.required_account_level = ''
       editForm.allow_messages_dispatch = false
       editForm.default_mapped_model = ''
     }

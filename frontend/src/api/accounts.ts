@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from './client'
-import type { Account, AccountUsageInfo, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, UserAccountQuotaPoolDashboard, WindowStats } from '@/types'
 
 export interface UserAccountListFilters {
   platform?: string
@@ -37,6 +37,15 @@ export async function list(
 
 export async function getById(id: number): Promise<Account> {
   const { data } = await apiClient.get<Account>(`/accounts/${id}`)
+  return data
+}
+
+export async function getQuotaDashboard(options?: {
+  signal?: AbortSignal
+}): Promise<UserAccountQuotaPoolDashboard> {
+  const { data } = await apiClient.get<UserAccountQuotaPoolDashboard>('/accounts/quota-dashboard', {
+    signal: options?.signal
+  })
   return data
 }
 
@@ -343,6 +352,7 @@ export async function refreshAntigravityToken(
 export const accountsAPI = {
   list,
   getById,
+  getQuotaDashboard,
   create,
   importAccount,
   importCredentialContents,

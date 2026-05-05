@@ -9,6 +9,7 @@ export interface AccountSharePolicy {
   scope_id?: number
   platform?: string
   owner_share_ratio: number
+  invite_share_ratio: number
   version: number
   enabled: boolean
   effective_at: string
@@ -30,6 +31,7 @@ export interface CreateAccountSharePolicyRequest {
   scope_id?: number
   platform?: string
   owner_share_ratio: number
+  invite_share_ratio?: number
   enabled?: boolean
   effective_at?: string
 }

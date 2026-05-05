@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 7 // v7: added UserGroupRPMOverride on user snapshot
+const apiKeyAuthSnapshotVersion = 8 // v8: added API key group routes
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -271,6 +271,22 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			RPMLimit:                        apiKey.Group.RPMLimit,
 		}
 	}
+	if len(apiKey.GroupRoutes) > 0 {
+		snapshot.GroupRoutes = make([]APIKeyAuthGroupRouteSnapshot, 0, len(apiKey.GroupRoutes))
+		for i := range apiKey.GroupRoutes {
+			route := apiKey.GroupRoutes[i]
+			snapshot.GroupRoutes = append(snapshot.GroupRoutes, APIKeyAuthGroupRouteSnapshot{
+				ID:              route.ID,
+				APIKeyID:        route.APIKeyID,
+				GroupID:         route.GroupID,
+				Priority:        route.Priority,
+				Weight:          route.Weight,
+				Enabled:         route.Enabled,
+				CooldownSeconds: route.CooldownSeconds,
+				Group:           groupAuthSnapshotFromService(route.Group),
+			})
+		}
+	}
 	return snapshot
 }
 
@@ -310,33 +326,87 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		},
 	}
 	if snapshot.Group != nil {
-		apiKey.Group = &Group{
-			ID:                              snapshot.Group.ID,
-			Name:                            snapshot.Group.Name,
-			Platform:                        snapshot.Group.Platform,
-			Status:                          snapshot.Group.Status,
-			Hydrated:                        true,
-			SubscriptionType:                snapshot.Group.SubscriptionType,
-			RateMultiplier:                  snapshot.Group.RateMultiplier,
-			DailyLimitUSD:                   snapshot.Group.DailyLimitUSD,
-			WeeklyLimitUSD:                  snapshot.Group.WeeklyLimitUSD,
-			MonthlyLimitUSD:                 snapshot.Group.MonthlyLimitUSD,
-			ImagePrice1K:                    snapshot.Group.ImagePrice1K,
-			ImagePrice2K:                    snapshot.Group.ImagePrice2K,
-			ImagePrice4K:                    snapshot.Group.ImagePrice4K,
-			ClaudeCodeOnly:                  snapshot.Group.ClaudeCodeOnly,
-			FallbackGroupID:                 snapshot.Group.FallbackGroupID,
-			FallbackGroupIDOnInvalidRequest: snapshot.Group.FallbackGroupIDOnInvalidRequest,
-			ModelRouting:                    snapshot.Group.ModelRouting,
-			ModelRoutingEnabled:             snapshot.Group.ModelRoutingEnabled,
-			MCPXMLInject:                    snapshot.Group.MCPXMLInject,
-			SupportedModelScopes:            snapshot.Group.SupportedModelScopes,
-			AllowMessagesDispatch:           snapshot.Group.AllowMessagesDispatch,
-			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
-			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
-			RPMLimit:                        snapshot.Group.RPMLimit,
+		apiKey.Group = groupFromAuthSnapshot(snapshot.Group)
+	}
+	if len(snapshot.GroupRoutes) > 0 {
+		apiKey.GroupRoutes = make([]APIKeyGroupRoute, 0, len(snapshot.GroupRoutes))
+		for i := range snapshot.GroupRoutes {
+			route := snapshot.GroupRoutes[i]
+			apiKey.GroupRoutes = append(apiKey.GroupRoutes, APIKeyGroupRoute{
+				ID:              route.ID,
+				APIKeyID:        route.APIKeyID,
+				GroupID:         route.GroupID,
+				Priority:        route.Priority,
+				Weight:          route.Weight,
+				Enabled:         route.Enabled,
+				CooldownSeconds: route.CooldownSeconds,
+				Group:           groupFromAuthSnapshot(route.Group),
+			})
 		}
 	}
 	s.compileAPIKeyIPRules(apiKey)
 	return apiKey
+}
+
+func groupAuthSnapshotFromService(group *Group) *APIKeyAuthGroupSnapshot {
+	if group == nil {
+		return nil
+	}
+	return &APIKeyAuthGroupSnapshot{
+		ID:                              group.ID,
+		Name:                            group.Name,
+		Platform:                        group.Platform,
+		Status:                          group.Status,
+		SubscriptionType:                group.SubscriptionType,
+		RateMultiplier:                  group.RateMultiplier,
+		DailyLimitUSD:                   group.DailyLimitUSD,
+		WeeklyLimitUSD:                  group.WeeklyLimitUSD,
+		MonthlyLimitUSD:                 group.MonthlyLimitUSD,
+		ImagePrice1K:                    group.ImagePrice1K,
+		ImagePrice2K:                    group.ImagePrice2K,
+		ImagePrice4K:                    group.ImagePrice4K,
+		ClaudeCodeOnly:                  group.ClaudeCodeOnly,
+		FallbackGroupID:                 group.FallbackGroupID,
+		FallbackGroupIDOnInvalidRequest: group.FallbackGroupIDOnInvalidRequest,
+		ModelRouting:                    group.ModelRouting,
+		ModelRoutingEnabled:             group.ModelRoutingEnabled,
+		MCPXMLInject:                    group.MCPXMLInject,
+		SupportedModelScopes:            group.SupportedModelScopes,
+		AllowMessagesDispatch:           group.AllowMessagesDispatch,
+		DefaultMappedModel:              group.DefaultMappedModel,
+		MessagesDispatchModelConfig:     group.MessagesDispatchModelConfig,
+		RPMLimit:                        group.RPMLimit,
+	}
+}
+
+func groupFromAuthSnapshot(snapshot *APIKeyAuthGroupSnapshot) *Group {
+	if snapshot == nil {
+		return nil
+	}
+	return &Group{
+		ID:                              snapshot.ID,
+		Name:                            snapshot.Name,
+		Platform:                        snapshot.Platform,
+		Status:                          snapshot.Status,
+		Hydrated:                        true,
+		SubscriptionType:                snapshot.SubscriptionType,
+		RateMultiplier:                  snapshot.RateMultiplier,
+		DailyLimitUSD:                   snapshot.DailyLimitUSD,
+		WeeklyLimitUSD:                  snapshot.WeeklyLimitUSD,
+		MonthlyLimitUSD:                 snapshot.MonthlyLimitUSD,
+		ImagePrice1K:                    snapshot.ImagePrice1K,
+		ImagePrice2K:                    snapshot.ImagePrice2K,
+		ImagePrice4K:                    snapshot.ImagePrice4K,
+		ClaudeCodeOnly:                  snapshot.ClaudeCodeOnly,
+		FallbackGroupID:                 snapshot.FallbackGroupID,
+		FallbackGroupIDOnInvalidRequest: snapshot.FallbackGroupIDOnInvalidRequest,
+		ModelRouting:                    snapshot.ModelRouting,
+		ModelRoutingEnabled:             snapshot.ModelRoutingEnabled,
+		MCPXMLInject:                    snapshot.MCPXMLInject,
+		SupportedModelScopes:            snapshot.SupportedModelScopes,
+		AllowMessagesDispatch:           snapshot.AllowMessagesDispatch,
+		DefaultMappedModel:              snapshot.DefaultMappedModel,
+		MessagesDispatchModelConfig:     snapshot.MessagesDispatchModelConfig,
+		RPMLimit:                        snapshot.RPMLimit,
+	}
 }

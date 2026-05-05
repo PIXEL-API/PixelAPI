@@ -179,15 +179,16 @@ type AdminBoundAuthIdentityChannel struct {
 }
 
 type CreateGroupInput struct {
-	Name             string
-	Description      string
-	Platform         string
-	RateMultiplier   float64
-	IsExclusive      bool
-	SubscriptionType string   // standard/subscription
-	DailyLimitUSD    *float64 // 日限额 (USD)
-	WeeklyLimitUSD   *float64 // 周限额 (USD)
-	MonthlyLimitUSD  *float64 // 月限额 (USD)
+	Name                 string
+	Description          string
+	Platform             string
+	RateMultiplier       float64
+	IsExclusive          bool
+	SubscriptionType     string // standard/subscription
+	RequiredAccountLevel string
+	DailyLimitUSD        *float64 // 日限额 (USD)
+	WeeklyLimitUSD       *float64 // 周限额 (USD)
+	MonthlyLimitUSD      *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
 	ImagePrice1K    *float64
 	ImagePrice2K    *float64
@@ -215,16 +216,17 @@ type CreateGroupInput struct {
 }
 
 type UpdateGroupInput struct {
-	Name             string
-	Description      string
-	Platform         string
-	RateMultiplier   *float64 // 使用指针以支持设置为0
-	IsExclusive      *bool
-	Status           string
-	SubscriptionType string   // standard/subscription
-	DailyLimitUSD    *float64 // 日限额 (USD)
-	WeeklyLimitUSD   *float64 // 周限额 (USD)
-	MonthlyLimitUSD  *float64 // 月限额 (USD)
+	Name                 string
+	Description          string
+	Platform             string
+	RateMultiplier       *float64 // 使用指针以支持设置为0
+	IsExclusive          *bool
+	Status               string
+	SubscriptionType     string // standard/subscription
+	RequiredAccountLevel *string
+	DailyLimitUSD        *float64 // 日限额 (USD)
+	WeeklyLimitUSD       *float64 // 周限额 (USD)
+	MonthlyLimitUSD      *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
 	ImagePrice1K    *float64
 	ImagePrice2K    *float64
@@ -255,6 +257,7 @@ type CreateAccountInput struct {
 	Name               string
 	Notes              *string
 	Platform           string
+	AccountLevel       string
 	Type               string
 	Credentials        map[string]any
 	Extra              map[string]any
@@ -281,6 +284,7 @@ type UpdateAccountInput struct {
 	Name                  string
 	Notes                 *string
 	Type                  string // Account type: oauth, setup-token, apikey
+	AccountLevel          *string
 	Credentials           map[string]any
 	Extra                 map[string]any
 	OwnerUserID           *int64
@@ -311,6 +315,7 @@ type BulkUpdateAccountsInput struct {
 	LoadFactor     *int
 	Status         string
 	Schedulable    *bool
+	AccountLevel   *string
 	GroupIDs       *[]int64
 	Credentials    map[string]any
 	Extra          map[string]any
@@ -1399,6 +1404,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if input.RateMultiplier <= 0 {
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
+	if !IsValidRequiredAccountLevel(input.RequiredAccountLevel) {
+		return nil, errors.New("required_account_level must be empty, free, plus, or pro")
+	}
 
 	platform := input.Platform
 	if platform == "" {
@@ -1483,6 +1491,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		IsExclusive:                     input.IsExclusive,
 		Status:                          StatusActive,
 		SubscriptionType:                subscriptionType,
+		RequiredAccountLevel:            NormalizeRequiredAccountLevel(input.RequiredAccountLevel),
 		DailyLimitUSD:                   dailyLimit,
 		WeeklyLimitUSD:                  weeklyLimit,
 		MonthlyLimitUSD:                 monthlyLimit,
@@ -1503,29 +1512,13 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		RPMLimit:                        input.RPMLimit,
 	}
 	sanitizeGroupMessagesDispatchFields(group)
-	if err := s.groupRepo.Create(ctx, group); err != nil {
+	accountIDsToCopy, err := s.normalizeAccountIDsForGroupBinding(ctx, group, accountIDsToCopy)
+	if err != nil {
 		return nil, err
 	}
 
-	// require_oauth_only: 过滤掉 apikey 类型账号
-	if group.RequireOAuthOnly && (group.Platform == PlatformOpenAI || group.Platform == PlatformAntigravity || group.Platform == PlatformAnthropic || group.Platform == PlatformGemini) && len(accountIDsToCopy) > 0 {
-		accounts, err := s.accountRepo.GetByIDs(ctx, accountIDsToCopy)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch accounts for oauth filter: %w", err)
-		}
-		oauthIDs := make(map[int64]struct{}, len(accounts))
-		for _, acc := range accounts {
-			if acc.Type != AccountTypeAPIKey {
-				oauthIDs[acc.ID] = struct{}{}
-			}
-		}
-		var filtered []int64
-		for _, aid := range accountIDsToCopy {
-			if _, ok := oauthIDs[aid]; ok {
-				filtered = append(filtered, aid)
-			}
-		}
-		accountIDsToCopy = filtered
+	if err := s.groupRepo.Create(ctx, group); err != nil {
+		return nil, err
 	}
 
 	// 如果有需要复制的账号，绑定到新分组
@@ -1656,6 +1649,12 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.SubscriptionType != "" {
 		group.SubscriptionType = input.SubscriptionType
 	}
+	if input.RequiredAccountLevel != nil {
+		if !IsValidRequiredAccountLevel(*input.RequiredAccountLevel) {
+			return nil, errors.New("required_account_level must be empty, free, plus, or pro")
+		}
+		group.RequiredAccountLevel = NormalizeRequiredAccountLevel(*input.RequiredAccountLevel)
+	}
 	// 限额字段：nil/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额
 	// 前端始终发送这三个字段，无需 nil 守卫
 	group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
@@ -1740,25 +1739,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	sanitizeGroupMessagesDispatchFields(group)
 
-	if err := s.groupRepo.Update(ctx, group); err != nil {
-		return nil, err
-	}
-
-	if s.authCacheInvalidator != nil {
-		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, id)
-	}
-
-	// 如果指定了复制账号的源分组，同步绑定（替换当前分组的账号）
+	var accountIDsToCopy []int64
+	shouldSyncCopiedAccounts := len(input.CopyAccountsFromGroupIDs) > 0
 	if len(input.CopyAccountsFromGroupIDs) > 0 {
-		// 去重源分组 IDs
 		seen := make(map[int64]struct{})
 		uniqueSourceGroupIDs := make([]int64, 0, len(input.CopyAccountsFromGroupIDs))
 		for _, srcGroupID := range input.CopyAccountsFromGroupIDs {
-			// 校验：源分组不能是自身
 			if srcGroupID == id {
 				return nil, fmt.Errorf("cannot copy accounts from self")
 			}
-			// 去重
 			if _, exists := seen[srcGroupID]; !exists {
 				seen[srcGroupID] = struct{}{}
 				uniqueSourceGroupIDs = append(uniqueSourceGroupIDs, srcGroupID)
@@ -1776,39 +1765,31 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			}
 		}
 
-		// 获取所有源分组的账号（去重）
-		accountIDsToCopy, err := s.groupRepo.GetAccountIDsByGroupIDs(ctx, uniqueSourceGroupIDs)
+		var err error
+		accountIDsToCopy, err = s.groupRepo.GetAccountIDsByGroupIDs(ctx, uniqueSourceGroupIDs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get accounts from source groups: %w", err)
 		}
 
-		// 先清空当前分组的所有账号绑定
+		accountIDsToCopy, err = s.normalizeAccountIDsForGroupBinding(ctx, group, accountIDsToCopy)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := s.groupRepo.Update(ctx, group); err != nil {
+		return nil, err
+	}
+
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, id)
+	}
+
+	if shouldSyncCopiedAccounts {
 		if _, err := s.groupRepo.DeleteAccountGroupsByGroupID(ctx, id); err != nil {
 			return nil, fmt.Errorf("failed to clear existing account bindings: %w", err)
 		}
 
-		// require_oauth_only: 过滤掉 apikey 类型账号
-		if group.RequireOAuthOnly && (group.Platform == PlatformOpenAI || group.Platform == PlatformAntigravity || group.Platform == PlatformAnthropic || group.Platform == PlatformGemini) && len(accountIDsToCopy) > 0 {
-			accounts, err := s.accountRepo.GetByIDs(ctx, accountIDsToCopy)
-			if err != nil {
-				return nil, fmt.Errorf("failed to fetch accounts for oauth filter: %w", err)
-			}
-			oauthIDs := make(map[int64]struct{}, len(accounts))
-			for _, acc := range accounts {
-				if acc.Type != AccountTypeAPIKey {
-					oauthIDs[acc.ID] = struct{}{}
-				}
-			}
-			var filtered []int64
-			for _, aid := range accountIDsToCopy {
-				if _, ok := oauthIDs[aid]; ok {
-					filtered = append(filtered, aid)
-				}
-			}
-			accountIDsToCopy = filtered
-		}
-
-		// 再绑定源分组的账号
 		if len(accountIDsToCopy) > 0 {
 			if err := s.groupRepo.BindAccountsToGroup(ctx, id, accountIDsToCopy); err != nil {
 				return nil, fmt.Errorf("failed to bind accounts to group: %w", err)
@@ -1951,6 +1932,7 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		// 0 表示解绑分组（不修改 user_allowed_groups，避免影响用户其他 Key）
 		apiKey.GroupID = nil
 		apiKey.Group = nil
+		apiKey.GroupRoutes = nil
 	} else {
 		// 验证目标分组存在且状态为 active
 		group, err := s.groupRepo.GetByID(ctx, *groupID)
@@ -1976,6 +1958,14 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		gid := *groupID
 		apiKey.GroupID = &gid
 		apiKey.Group = group
+		apiKey.GroupRoutes = []APIKeyGroupRoute{{
+			GroupID:         gid,
+			Priority:        100,
+			Weight:          1,
+			Enabled:         true,
+			CooldownSeconds: 30,
+			Group:           group,
+		}}
 
 		// 专属标准分组：使用事务保证「添加分组权限」与「更新 API Key」的原子性
 		if group.IsExclusive && !group.IsSubscriptionType() {
@@ -2172,11 +2162,15 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 	}
+	if err := s.validateAccountLevelGroupBinding(ctx, input.Platform, NormalizeAccountLevel(input.AccountLevel), groupIDs); err != nil {
+		return nil, err
+	}
 
 	account := &Account{
 		Name:          input.Name,
 		Notes:         normalizeAccountNotes(input.Notes),
 		Platform:      input.Platform,
+		AccountLevel:  NormalizeAccountLevel(input.AccountLevel),
 		Type:          input.Type,
 		Credentials:   input.Credentials,
 		Extra:         input.Extra,
@@ -2269,6 +2263,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if input.Type != "" {
 		account.Type = input.Type
+	}
+	if input.AccountLevel != nil {
+		account.AccountLevel = NormalizeAccountLevel(*input.AccountLevel)
 	}
 	if input.Notes != nil {
 		account.Notes = normalizeAccountNotes(input.Notes)
@@ -2382,6 +2379,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				return nil, err
 			}
 		}
+		if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, account.AccountLevel, *input.GroupIDs); err != nil {
+			return nil, err
+		}
+	} else if input.AccountLevel != nil {
+		if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, account.AccountLevel, account.GroupIDs); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := s.accountRepo.Update(ctx, account); err != nil {
@@ -2429,12 +2433,48 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 	}
 
+	var preflightAccounts []*Account
+	loadPreflightAccounts := func() ([]*Account, error) {
+		if preflightAccounts != nil {
+			return preflightAccounts, nil
+		}
+		accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+		if err != nil {
+			return nil, err
+		}
+		preflightAccounts = accounts
+		return preflightAccounts, nil
+	}
+
+	if input.GroupIDs != nil || input.AccountLevel != nil {
+		accounts, err := loadPreflightAccounts()
+		if err != nil {
+			return nil, err
+		}
+		for _, account := range accounts {
+			if account == nil {
+				continue
+			}
+			level := account.AccountLevel
+			if input.AccountLevel != nil {
+				level = NormalizeAccountLevel(*input.AccountLevel)
+			}
+			groupIDs := account.GroupIDs
+			if input.GroupIDs != nil {
+				groupIDs = *input.GroupIDs
+			}
+			if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, level, groupIDs); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
 
 	// 预加载账号平台信息（混合渠道检查需要）。
 	platformByID := map[int64]string{}
 	if needMixedChannelCheck {
-		accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+		accounts, err := loadPreflightAccounts()
 		if err != nil {
 			return nil, err
 		}
@@ -2498,6 +2538,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	if input.Schedulable != nil {
 		repoUpdates.Schedulable = input.Schedulable
+	}
+	if input.AccountLevel != nil {
+		level := NormalizeAccountLevel(*input.AccountLevel)
+		repoUpdates.AccountLevel = &level
 	}
 
 	// Run bulk update for column/jsonb fields first.
@@ -3273,6 +3317,27 @@ func (s *adminServiceImpl) validateGroupIDsExist(ctx context.Context, groupIDs [
 	return nil
 }
 
+func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context, accountPlatform, accountLevel string, groupIDs []int64) error {
+	if len(groupIDs) == 0 || accountPlatform != PlatformOpenAI {
+		return nil
+	}
+	level := NormalizeAccountLevel(accountLevel)
+	for _, groupID := range groupIDs {
+		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+		if err != nil {
+			return fmt.Errorf("get group: %w", err)
+		}
+		required := NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
+		if group.Platform != PlatformOpenAI || required == "" {
+			continue
+		}
+		if level != required {
+			return fmt.Errorf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s", level, group.Name, required)
+		}
+	}
+	return nil
+}
+
 // CheckMixedChannelRisk checks whether target groups contain mixed channels for the current account platform.
 func (s *adminServiceImpl) CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error {
 	return s.checkMixedChannelRisk(ctx, currentAccountID, currentAccountPlatform, groupIDs)
@@ -3375,6 +3440,57 @@ func (e *MixedChannelError) Error() string {
 
 func (s *adminServiceImpl) ResetAccountQuota(ctx context.Context, id int64) error {
 	return s.accountRepo.ResetQuotaUsed(ctx, id)
+}
+
+func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Context, group *Group, accountIDs []int64) ([]int64, error) {
+	if group == nil || len(accountIDs) == 0 {
+		return accountIDs, nil
+	}
+
+	requiresOAuthFilter := group.RequireOAuthOnly &&
+		(group.Platform == PlatformOpenAI ||
+			group.Platform == PlatformAntigravity ||
+			group.Platform == PlatformAnthropic ||
+			group.Platform == PlatformGemini)
+	requiredLevel := NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
+	requiresLevelCheck := group.Platform == PlatformOpenAI && requiredLevel != ""
+	if !requiresOAuthFilter && !requiresLevelCheck {
+		return accountIDs, nil
+	}
+	if s.accountRepo == nil {
+		return nil, errors.New("account repository not configured")
+	}
+
+	accounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch accounts for group binding: %w", err)
+	}
+	accountByID := make(map[int64]*Account, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			accountByID[account.ID] = account
+		}
+	}
+
+	filtered := make([]int64, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		account := accountByID[accountID]
+		if account == nil {
+			if requiresOAuthFilter {
+				continue
+			}
+			return nil, fmt.Errorf("account %d not found for group binding", accountID)
+		}
+		if requiresOAuthFilter && account.Type == AccountTypeAPIKey {
+			continue
+		}
+		accountLevel := NormalizeAccountLevel(account.AccountLevel)
+		if requiresLevelCheck && account.Platform == PlatformOpenAI && accountLevel != requiredLevel {
+			return nil, fmt.Errorf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s", account.Name, accountLevel, group.Name, requiredLevel)
+		}
+		filtered = append(filtered, accountID)
+	}
+	return filtered, nil
 }
 
 // EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，

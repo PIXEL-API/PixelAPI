@@ -23,6 +23,8 @@ const (
 	FieldDeletedAt = "deleted_at"
 	// FieldName holds the string denoting the name field in the database.
 	FieldName = "name"
+	// FieldAccountLevel holds the string denoting the account_level field in the database.
+	FieldAccountLevel = "account_level"
 	// FieldNotes holds the string denoting the notes field in the database.
 	FieldNotes = "notes"
 	// FieldPlatform holds the string denoting the platform field in the database.
@@ -133,6 +135,7 @@ var Columns = []string{
 	FieldUpdatedAt,
 	FieldDeletedAt,
 	FieldName,
+	FieldAccountLevel,
 	FieldNotes,
 	FieldPlatform,
 	FieldType,
@@ -195,6 +198,10 @@ var (
 	UpdateDefaultUpdatedAt func() time.Time
 	// NameValidator is a validator for the "name" field. It is called by the builders before save.
 	NameValidator func(string) error
+	// DefaultAccountLevel holds the default value on creation for the "account_level" field.
+	DefaultAccountLevel string
+	// AccountLevelValidator is a validator for the "account_level" field. It is called by the builders before save.
+	AccountLevelValidator func(string) error
 	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
 	PlatformValidator func(string) error
 	// TypeValidator is a validator for the "type" field. It is called by the builders before save.
@@ -255,6 +262,11 @@ func ByDeletedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByName orders the results by the name field.
 func ByName(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldName, opts...).ToFunc()
+}
+
+// ByAccountLevel orders the results by the account_level field.
+func ByAccountLevel(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccountLevel, opts...).ToFunc()
 }
 
 // ByNotes orders the results by the notes field.

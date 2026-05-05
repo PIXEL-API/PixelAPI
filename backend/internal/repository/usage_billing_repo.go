@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -394,7 +395,8 @@ func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.U
 		return err
 	}
 	accountCost := accountCostForSettlement(cmd)
-	invite, err := resolveAccountShareInvite(ctx, tx, cmd, policy)
+	usageOccurredAt := resolveUsageOccurredAt(cmd)
+	invite, err := resolveAccountShareInvite(ctx, tx, cmd, policy, usageOccurredAt)
 	if err != nil {
 		return err
 	}
@@ -585,8 +587,11 @@ func accountShareConsumerCharge(cmd *service.UsageBillingCommand) decimal.Decima
 }
 
 func resolveAccountSharePolicy(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, account accountShareSnapshot) (accountSharePolicySnapshot, error) {
-	if cmd != nil && cmd.OwnerShareRatio > 0 {
+	if cmd != nil && cmd.ShareSnapshotCaptured && usageBillingCommandHasPolicySnapshot(cmd) {
 		ratio := decimalFromFloat(cmd.OwnerShareRatio)
+		if ratio.IsNegative() {
+			ratio = decimal.Zero
+		}
 		if ratio.GreaterThan(decimal.NewFromInt(1)) {
 			ratio = decimal.NewFromInt(1)
 		}
@@ -614,6 +619,13 @@ func resolveAccountSharePolicy(ctx context.Context, tx *sql.Tx, cmd *service.Usa
 		return policy, err
 	}
 	return accountSharePolicySnapshot{OwnerShareRatio: decimal.Zero}, nil
+}
+
+func usageBillingCommandHasPolicySnapshot(cmd *service.UsageBillingCommand) bool {
+	if cmd == nil {
+		return false
+	}
+	return cmd.SharePolicyID != nil || cmd.SharePolicyVersion > 0 || cmd.OwnerShareRatio > 0 || cmd.InviteShareRatio > 0
 }
 
 func queryAccountSharePolicy(ctx context.Context, tx *sql.Tx, predicate string, arg any) (accountSharePolicySnapshot, bool, error) {
@@ -677,7 +689,7 @@ func queryAccountSharePolicy(ctx context.Context, tx *sql.Tx, predicate string, 
 	}, true, nil
 }
 
-func resolveAccountShareInvite(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, policy accountSharePolicySnapshot) (accountInviteSnapshot, error) {
+func resolveAccountShareInvite(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, policy accountSharePolicySnapshot, usageOccurredAt time.Time) (accountInviteSnapshot, error) {
 	if cmd == nil || cmd.BalanceCost <= 0 || policy.InviteShareRatio.IsZero() || policy.InviteShareRatio.IsNegative() {
 		return accountInviteSnapshot{}, nil
 	}
@@ -698,9 +710,10 @@ func resolveAccountShareInvite(ctx context.Context, tx *sql.Tx, cmd *service.Usa
 		WHERE ua.user_id = $1
 			AND ua.inviter_id IS NOT NULL
 			AND ua.inviter_id <> ua.user_id
-			AND (ua.invite_reward_expires_at IS NULL OR ua.invite_reward_expires_at > NOW())
+			AND COALESCE(ua.inviter_bound_at, ua.created_at) <= $3
+			AND (ua.invite_reward_expires_at IS NULL OR ua.invite_reward_expires_at > $3)
 		LIMIT 1
-	`, cmd.UserID, service.StatusActive).Scan(&out.InviterUserID, &out.BoundAt, &out.ExpiresAt)
+	`, cmd.UserID, service.StatusActive, usageOccurredAt).Scan(&out.InviterUserID, &out.BoundAt, &out.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return accountInviteSnapshot{}, nil
 	}
@@ -708,6 +721,19 @@ func resolveAccountShareInvite(ctx context.Context, tx *sql.Tx, cmd *service.Usa
 		return accountInviteSnapshot{}, err
 	}
 	return out, nil
+}
+
+func resolveUsageOccurredAt(cmd *service.UsageBillingCommand) time.Time {
+	if cmd == nil {
+		return time.Now()
+	}
+	if !cmd.UsageOccurredAt.IsZero() {
+		return cmd.UsageOccurredAt
+	}
+	if cmd.UsageLog != nil && !cmd.UsageLog.CreatedAt.IsZero() {
+		return cmd.UsageLog.CreatedAt
+	}
+	return time.Now()
 }
 
 func isUsageAffiliateEnabled(ctx context.Context, tx *sql.Tx) (bool, error) {

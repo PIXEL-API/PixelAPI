@@ -630,6 +630,7 @@ func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 			users.GET("", h.Admin.Affiliate.ListUsers)
 			users.GET("/lookup", h.Admin.Affiliate.LookupUsers)
 			users.POST("/batch-rate", h.Admin.Affiliate.BatchSetRate)
+			users.POST("/:user_id/inviter", h.Admin.Affiliate.BindInviter)
 			users.PUT("/:user_id", h.Admin.Affiliate.UpdateUserSettings)
 			users.DELETE("/:user_id", h.Admin.Affiliate.ClearUserSettings)
 		}

@@ -110,6 +110,11 @@ func Platform(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldPlatform, v))
 }
 
+// RequiredAccountLevel applies equality check predicate on the "required_account_level" field. It's identical to RequiredAccountLevelEQ.
+func RequiredAccountLevel(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldRequiredAccountLevel, v))
+}
+
 // SubscriptionType applies equality check predicate on the "subscription_type" field. It's identical to SubscriptionTypeEQ.
 func SubscriptionType(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldSubscriptionType, v))
@@ -768,6 +773,71 @@ func PlatformEqualFold(v string) predicate.Group {
 // PlatformContainsFold applies the ContainsFold predicate on the "platform" field.
 func PlatformContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldPlatform, v))
+}
+
+// RequiredAccountLevelEQ applies the EQ predicate on the "required_account_level" field.
+func RequiredAccountLevelEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelNEQ applies the NEQ predicate on the "required_account_level" field.
+func RequiredAccountLevelNEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelIn applies the In predicate on the "required_account_level" field.
+func RequiredAccountLevelIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldRequiredAccountLevel, vs...))
+}
+
+// RequiredAccountLevelNotIn applies the NotIn predicate on the "required_account_level" field.
+func RequiredAccountLevelNotIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldRequiredAccountLevel, vs...))
+}
+
+// RequiredAccountLevelGT applies the GT predicate on the "required_account_level" field.
+func RequiredAccountLevelGT(v string) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelGTE applies the GTE predicate on the "required_account_level" field.
+func RequiredAccountLevelGTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelLT applies the LT predicate on the "required_account_level" field.
+func RequiredAccountLevelLT(v string) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelLTE applies the LTE predicate on the "required_account_level" field.
+func RequiredAccountLevelLTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelContains applies the Contains predicate on the "required_account_level" field.
+func RequiredAccountLevelContains(v string) predicate.Group {
+	return predicate.Group(sql.FieldContains(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelHasPrefix applies the HasPrefix predicate on the "required_account_level" field.
+func RequiredAccountLevelHasPrefix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasPrefix(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelHasSuffix applies the HasSuffix predicate on the "required_account_level" field.
+func RequiredAccountLevelHasSuffix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasSuffix(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelEqualFold applies the EqualFold predicate on the "required_account_level" field.
+func RequiredAccountLevelEqualFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldEqualFold(FieldRequiredAccountLevel, v))
+}
+
+// RequiredAccountLevelContainsFold applies the ContainsFold predicate on the "required_account_level" field.
+func RequiredAccountLevelContainsFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldContainsFold(FieldRequiredAccountLevel, v))
 }
 
 // SubscriptionTypeEQ applies the EQ predicate on the "subscription_type" field.
@@ -1505,6 +1575,29 @@ func HasAPIKeys() predicate.Group {
 func HasAPIKeysWith(preds ...predicate.APIKey) predicate.Group {
 	return predicate.Group(func(s *sql.Selector) {
 		step := newAPIKeysStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasAPIKeyGroupRoutes applies the HasEdge predicate on the "api_key_group_routes" edge.
+func HasAPIKeyGroupRoutes() predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, APIKeyGroupRoutesTable, APIKeyGroupRoutesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasAPIKeyGroupRoutesWith applies the HasEdge predicate on the "api_key_group_routes" edge with a given conditions (other predicates).
+func HasAPIKeyGroupRoutesWith(preds ...predicate.APIKeyGroupRoute) predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := newAPIKeyGroupRoutesStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

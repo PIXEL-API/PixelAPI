@@ -58,6 +58,12 @@
         </div>
       </div>
 
+      <div v-if="account.platform === 'openai'">
+        <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
+        <Select v-model="form.account_level" :options="accountLevelOptions" />
+        <p class="input-hint">{{ t('admin.accounts.accountLevel.hint') }}</p>
+      </div>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="!isUserScope && account.type === 'apikey'" class="space-y-4">
         <div>
@@ -2155,7 +2161,7 @@ import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
-import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode, AccountShareMode, UpdateAccountRequest } from '@/types'
+import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode, AccountLevel, AccountShareMode, UpdateAccountRequest } from '@/types'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -2219,6 +2225,12 @@ const baseUrlHint = computed(() => {
 
 const antigravityPresetMappings = computed(() => getPresetMappingsByPlatform('antigravity'))
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
+const accountLevelOptions = computed(() => [
+  { value: 'unknown', label: t('admin.accounts.accountLevel.unknown') },
+  { value: 'free', label: t('admin.accounts.accountLevel.free') },
+  { value: 'plus', label: t('admin.accounts.accountLevel.plus') },
+  { value: 'pro', label: t('admin.accounts.accountLevel.pro') }
+])
 
 // Model mapping type
 interface ModelMapping {
@@ -2442,6 +2454,7 @@ const form = reactive({
   name: '',
   notes: '',
   share_mode: 'private' as AccountShareMode,
+  account_level: 'unknown' as AccountLevel,
   proxy_id: null as number | null,
   concurrency: 1,
   load_factor: null as number | null,
@@ -2503,6 +2516,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.share_mode = newAccount.share_mode === 'public' ? 'public' : 'private'
+  form.account_level = newAccount.platform === 'openai' ? (newAccount.account_level || 'unknown') : 'unknown'
   form.proxy_id = newAccount.proxy_id
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
@@ -3284,7 +3298,10 @@ const handleSubmit = async () => {
     return
   }
 
-  const updatePayload: Record<string, unknown> = { ...form }
+  const updatePayload: Record<string, unknown> = {
+    ...form,
+    account_level: props.account.platform === 'openai' ? form.account_level : 'unknown'
+  }
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     if (updatePayload.proxy_id === null) {

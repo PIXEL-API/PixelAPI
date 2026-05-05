@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/apikeygrouproute"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
@@ -171,6 +172,20 @@ func (_c *GroupCreate) SetPlatform(v string) *GroupCreate {
 func (_c *GroupCreate) SetNillablePlatform(v *string) *GroupCreate {
 	if v != nil {
 		_c.SetPlatform(*v)
+	}
+	return _c
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (_c *GroupCreate) SetRequiredAccountLevel(v string) *GroupCreate {
+	_c.mutation.SetRequiredAccountLevel(v)
+	return _c
+}
+
+// SetNillableRequiredAccountLevel sets the "required_account_level" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableRequiredAccountLevel(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetRequiredAccountLevel(*v)
 	}
 	return _c
 }
@@ -482,6 +497,21 @@ func (_c *GroupCreate) AddAPIKeys(v ...*APIKey) *GroupCreate {
 	return _c.AddAPIKeyIDs(ids...)
 }
 
+// AddAPIKeyGroupRouteIDs adds the "api_key_group_routes" edge to the APIKeyGroupRoute entity by IDs.
+func (_c *GroupCreate) AddAPIKeyGroupRouteIDs(ids ...int64) *GroupCreate {
+	_c.mutation.AddAPIKeyGroupRouteIDs(ids...)
+	return _c
+}
+
+// AddAPIKeyGroupRoutes adds the "api_key_group_routes" edges to the APIKeyGroupRoute entity.
+func (_c *GroupCreate) AddAPIKeyGroupRoutes(v ...*APIKeyGroupRoute) *GroupCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddAPIKeyGroupRouteIDs(ids...)
+}
+
 // AddRedeemCodeIDs adds the "redeem_codes" edge to the RedeemCode entity by IDs.
 func (_c *GroupCreate) AddRedeemCodeIDs(ids ...int64) *GroupCreate {
 	_c.mutation.AddRedeemCodeIDs(ids...)
@@ -628,6 +658,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultPlatform
 		_c.mutation.SetPlatform(v)
 	}
+	if _, ok := _c.mutation.RequiredAccountLevel(); !ok {
+		v := group.DefaultRequiredAccountLevel
+		_c.mutation.SetRequiredAccountLevel(v)
+	}
 	if _, ok := _c.mutation.SubscriptionType(); !ok {
 		v := group.DefaultSubscriptionType
 		_c.mutation.SetSubscriptionType(v)
@@ -727,6 +761,14 @@ func (_c *GroupCreate) check() error {
 	if v, ok := _c.mutation.Platform(); ok {
 		if err := group.PlatformValidator(v); err != nil {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.RequiredAccountLevel(); !ok {
+		return &ValidationError{Name: "required_account_level", err: errors.New(`ent: missing required field "Group.required_account_level"`)}
+	}
+	if v, ok := _c.mutation.RequiredAccountLevel(); ok {
+		if err := group.RequiredAccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "required_account_level", err: fmt.Errorf(`ent: validator failed for field "Group.required_account_level": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.SubscriptionType(); !ok {
@@ -849,6 +891,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
 		_node.Platform = value
 	}
+	if value, ok := _c.mutation.RequiredAccountLevel(); ok {
+		_spec.SetField(group.FieldRequiredAccountLevel, field.TypeString, value)
+		_node.RequiredAccountLevel = value
+	}
 	if value, ok := _c.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
 		_node.SubscriptionType = value
@@ -946,6 +992,22 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.APIKeyGroupRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyGroupRoutesTable,
+			Columns: []string{group.APIKeyGroupRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeygrouproute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1240,6 +1302,18 @@ func (u *GroupUpsert) SetPlatform(v string) *GroupUpsert {
 // UpdatePlatform sets the "platform" field to the value that was provided on create.
 func (u *GroupUpsert) UpdatePlatform() *GroupUpsert {
 	u.SetExcluded(group.FieldPlatform)
+	return u
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (u *GroupUpsert) SetRequiredAccountLevel(v string) *GroupUpsert {
+	u.Set(group.FieldRequiredAccountLevel, v)
+	return u
+}
+
+// UpdateRequiredAccountLevel sets the "required_account_level" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateRequiredAccountLevel() *GroupUpsert {
+	u.SetExcluded(group.FieldRequiredAccountLevel)
 	return u
 }
 
@@ -1844,6 +1918,20 @@ func (u *GroupUpsertOne) SetPlatform(v string) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdatePlatform() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdatePlatform()
+	})
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (u *GroupUpsertOne) SetRequiredAccountLevel(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetRequiredAccountLevel(v)
+	})
+}
+
+// UpdateRequiredAccountLevel sets the "required_account_level" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateRequiredAccountLevel() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateRequiredAccountLevel()
 	})
 }
 
@@ -2678,6 +2766,20 @@ func (u *GroupUpsertBulk) SetPlatform(v string) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdatePlatform() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdatePlatform()
+	})
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (u *GroupUpsertBulk) SetRequiredAccountLevel(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetRequiredAccountLevel(v)
+	})
+}
+
+// UpdateRequiredAccountLevel sets the "required_account_level" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateRequiredAccountLevel() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateRequiredAccountLevel()
 	})
 }
 

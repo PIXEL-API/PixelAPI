@@ -93,6 +93,55 @@ var (
 			},
 		},
 	}
+	// APIKeyGroupRoutesColumns holds the columns for the "api_key_group_routes" table.
+	APIKeyGroupRoutesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "priority", Type: field.TypeInt, Default: 100},
+		{Name: "weight", Type: field.TypeInt, Default: 1},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "cooldown_seconds", Type: field.TypeInt, Default: 30},
+		{Name: "api_key_id", Type: field.TypeInt64},
+		{Name: "group_id", Type: field.TypeInt64},
+	}
+	// APIKeyGroupRoutesTable holds the schema information for the "api_key_group_routes" table.
+	APIKeyGroupRoutesTable = &schema.Table{
+		Name:       "api_key_group_routes",
+		Columns:    APIKeyGroupRoutesColumns,
+		PrimaryKey: []*schema.Column{APIKeyGroupRoutesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "api_key_group_routes_api_keys_group_routes",
+				Columns:    []*schema.Column{APIKeyGroupRoutesColumns[7]},
+				RefColumns: []*schema.Column{APIKeysColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "api_key_group_routes_groups_api_key_group_routes",
+				Columns:    []*schema.Column{APIKeyGroupRoutesColumns[8]},
+				RefColumns: []*schema.Column{GroupsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "apikeygrouproute_api_key_id_group_id",
+				Unique:  true,
+				Columns: []*schema.Column{APIKeyGroupRoutesColumns[7], APIKeyGroupRoutesColumns[8]},
+			},
+			{
+				Name:    "apikeygrouproute_api_key_id_enabled_priority",
+				Unique:  false,
+				Columns: []*schema.Column{APIKeyGroupRoutesColumns[7], APIKeyGroupRoutesColumns[5], APIKeyGroupRoutesColumns[3]},
+			},
+			{
+				Name:    "apikeygrouproute_group_id",
+				Unique:  false,
+				Columns: []*schema.Column{APIKeyGroupRoutesColumns[8]},
+			},
+		},
+	}
 	// AccountsColumns holds the columns for the "accounts" table.
 	AccountsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -100,6 +149,7 @@ var (
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "name", Type: field.TypeString, Size: 100},
+		{Name: "account_level", Type: field.TypeString, Size: 20, Default: "unknown"},
 		{Name: "notes", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "platform", Type: field.TypeString, Size: 50},
 		{Name: "type", Type: field.TypeString, Size: 20},
@@ -137,13 +187,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "accounts_proxies_proxy",
-				Columns:    []*schema.Column{AccountsColumns[31]},
+				Columns:    []*schema.Column{AccountsColumns[32]},
 				RefColumns: []*schema.Column{ProxiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "accounts_users_owned_accounts",
-				Columns:    []*schema.Column{AccountsColumns[32]},
+				Columns:    []*schema.Column{AccountsColumns[33]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -152,72 +202,72 @@ var (
 			{
 				Name:    "account_platform",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[6]},
+				Columns: []*schema.Column{AccountsColumns[7]},
 			},
 			{
 				Name:    "account_type",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[7]},
+				Columns: []*schema.Column{AccountsColumns[8]},
 			},
 			{
 				Name:    "account_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[17]},
+				Columns: []*schema.Column{AccountsColumns[18]},
 			},
 			{
 				Name:    "account_proxy_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[31]},
+				Columns: []*schema.Column{AccountsColumns[32]},
 			},
 			{
 				Name:    "account_priority",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[15]},
+				Columns: []*schema.Column{AccountsColumns[16]},
 			},
 			{
 				Name:    "account_last_used_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[19]},
+				Columns: []*schema.Column{AccountsColumns[20]},
 			},
 			{
 				Name:    "account_schedulable",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[22]},
+				Columns: []*schema.Column{AccountsColumns[23]},
 			},
 			{
 				Name:    "account_rate_limited_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[23]},
+				Columns: []*schema.Column{AccountsColumns[24]},
 			},
 			{
 				Name:    "account_rate_limit_reset_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[24]},
+				Columns: []*schema.Column{AccountsColumns[25]},
 			},
 			{
 				Name:    "account_overload_until",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[25]},
+				Columns: []*schema.Column{AccountsColumns[26]},
 			},
 			{
 				Name:    "account_platform_priority",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[6], AccountsColumns[15]},
+				Columns: []*schema.Column{AccountsColumns[7], AccountsColumns[16]},
 			},
 			{
 				Name:    "account_priority_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[15], AccountsColumns[17]},
+				Columns: []*schema.Column{AccountsColumns[16], AccountsColumns[18]},
 			},
 			{
 				Name:    "account_owner_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[32]},
+				Columns: []*schema.Column{AccountsColumns[33]},
 			},
 			{
 				Name:    "account_share_mode_share_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[10], AccountsColumns[11]},
+				Columns: []*schema.Column{AccountsColumns[11], AccountsColumns[12]},
 			},
 			{
 				Name:    "account_deleted_at",
@@ -655,6 +705,7 @@ var (
 		{Name: "owner_user_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "scope", Type: field.TypeString, Size: 20, Default: "public"},
 		{Name: "platform", Type: field.TypeString, Size: 50, Default: "anthropic"},
+		{Name: "required_account_level", Type: field.TypeString, Size: 20, Default: ""},
 		{Name: "subscription_type", Type: field.TypeString, Size: 20, Default: "standard"},
 		{Name: "daily_limit_usd", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "weekly_limit_usd", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
@@ -697,7 +748,7 @@ var (
 			{
 				Name:    "group_subscription_type",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[12]},
+				Columns: []*schema.Column{GroupsColumns[13]},
 			},
 			{
 				Name:    "group_is_exclusive",
@@ -727,7 +778,7 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[27]},
+				Columns: []*schema.Column{GroupsColumns[28]},
 			},
 		},
 	}
@@ -1716,6 +1767,7 @@ var (
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		APIKeysTable,
+		APIKeyGroupRoutesTable,
 		AccountsTable,
 		AccountGroupsTable,
 		AnnouncementsTable,
@@ -1757,6 +1809,11 @@ func init() {
 	APIKeysTable.ForeignKeys[1].RefTable = UsersTable
 	APIKeysTable.Annotation = &entsql.Annotation{
 		Table: "api_keys",
+	}
+	APIKeyGroupRoutesTable.ForeignKeys[0].RefTable = APIKeysTable
+	APIKeyGroupRoutesTable.ForeignKeys[1].RefTable = GroupsTable
+	APIKeyGroupRoutesTable.Annotation = &entsql.Annotation{
+		Table: "api_key_group_routes",
 	}
 	AccountsTable.ForeignKeys[0].RefTable = ProxiesTable
 	AccountsTable.ForeignKeys[1].RefTable = UsersTable

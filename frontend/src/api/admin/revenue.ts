@@ -113,6 +113,9 @@ export interface RevenueShareSettlementItem {
   owner_user_id: number
   owner_email: string
   owner_username?: string
+  inviter_user_id?: number
+  inviter_email?: string
+  inviter_username?: string
   account_id: number
   account_name: string
   account_platform: string
@@ -126,6 +129,11 @@ export interface RevenueShareSettlementItem {
   account_cost: number
   owner_share_ratio: number
   owner_credit: number
+  invite_bound_at?: string
+  invite_expires_at?: string
+  invite_share_ratio: number
+  invite_credit: number
+  platform_share_ratio: number
   platform_fee: number
   platform_net_profit: number
   status: string

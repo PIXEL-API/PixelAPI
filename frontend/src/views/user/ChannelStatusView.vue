@@ -10,6 +10,30 @@
       @refresh="manualReload"
     />
 
+    <div class="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <AccountQuotaDashboardPanel
+        :dashboard="quotaPoolDashboard?.mine ?? null"
+        :loading="quotaPoolLoading"
+        :error="quotaPoolError"
+        :title="t('channelStatus.quotaPool.mineTitle')"
+        :subtitle="t('channelStatus.quotaPool.mineSubtitle')"
+        :empty-message="t('channelStatus.quotaPool.mineEmpty')"
+        :load-failed-message="t('channelStatus.quotaPool.loadFailed')"
+        @refresh="reloadQuotaPool(false)"
+      />
+
+      <AccountQuotaDashboardPanel
+        :dashboard="quotaPoolDashboard?.platform ?? null"
+        :loading="quotaPoolLoading"
+        :error="quotaPoolError"
+        :title="t('channelStatus.quotaPool.platformTitle')"
+        :subtitle="t('channelStatus.quotaPool.platformSubtitle')"
+        :empty-message="t('channelStatus.quotaPool.platformEmpty')"
+        :load-failed-message="t('channelStatus.quotaPool.loadFailed')"
+        @refresh="reloadQuotaPool(false)"
+      />
+    </div>
+
     <MonitorCardGrid
       :items="items"
       :window="currentWindow"
@@ -33,13 +57,16 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { getQuotaDashboard as fetchQuotaPoolDashboard } from '@/api/accounts'
 import {
   list as listChannelMonitorViews,
   status as fetchChannelMonitorDetail,
   type UserMonitorView,
   type UserMonitorDetail,
 } from '@/api/channelMonitor'
+import type { UserAccountQuotaPoolDashboard } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import AccountQuotaDashboardPanel from '@/components/account/AccountQuotaDashboard.vue'
 import MonitorHero, {
   type MonitorWindow,
   type OverallStatus,
@@ -55,19 +82,23 @@ const appStore = useAppStore()
 // ── State ──
 const items = ref<UserMonitorView[]>([])
 const loading = ref(false)
+const quotaPoolDashboard = ref<UserAccountQuotaPoolDashboard | null>(null)
+const quotaPoolLoading = ref(false)
+const quotaPoolError = ref(false)
 const currentWindow = ref<MonitorWindow>('7d')
 const detailCache = reactive<Record<number, UserMonitorDetail>>({})
 const showDetail = ref(false)
 const detailTarget = ref<UserMonitorView | null>(null)
 
 let abortController: AbortController | null = null
+let quotaPoolAbortController: AbortController | null = null
 
 const autoRefresh = useAutoRefresh({
   storageKey: 'channel-status-auto-refresh',
   intervals: [30, 60, 120] as const,
   defaultInterval: DEFAULT_INTERVAL_SECONDS,
-  onRefresh: () => reload(true),
-  shouldPause: () => document.hidden || loading.value,
+  onRefresh: () => reloadAll(true),
+  shouldPause: () => document.hidden || loading.value || quotaPoolLoading.value,
 })
 const countdown = autoRefresh.countdown
 
@@ -108,8 +139,38 @@ async function reload(silent = false) {
   }
 }
 
+async function reloadQuotaPool(silent = false) {
+  if (quotaPoolAbortController) quotaPoolAbortController.abort()
+  const ctrl = new AbortController()
+  quotaPoolAbortController = ctrl
+  if (!silent) quotaPoolLoading.value = true
+  quotaPoolError.value = false
+  try {
+    const dashboard = await fetchQuotaPoolDashboard({ signal: ctrl.signal })
+    if (ctrl.signal.aborted || quotaPoolAbortController !== ctrl) return
+    quotaPoolDashboard.value = dashboard
+  } catch (err: unknown) {
+    const e = err as { name?: string; code?: string }
+    if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return
+    quotaPoolError.value = true
+    appStore.showError(extractApiErrorMessage(err, t('channelStatus.quotaPool.loadFailed')))
+  } finally {
+    if (quotaPoolAbortController === ctrl) {
+      if (!silent) quotaPoolLoading.value = false
+      quotaPoolAbortController = null
+    }
+  }
+}
+
+async function reloadAll(silent = false) {
+  await Promise.all([
+    reload(silent),
+    reloadQuotaPool(silent)
+  ])
+}
+
 async function manualReload() {
-  await reload(false)
+  await reloadAll(false)
   // After base reload, refresh any cached detail records so non-7d availability
   // values stay in sync without forcing the user to switch tabs again.
   if (currentWindow.value !== '7d') {
@@ -160,7 +221,7 @@ watch(
 )
 
 onMounted(() => {
-  void reload(false)
+  void reloadAll(false)
   if (appStore.cachedPublicSettings?.channel_monitor_enabled !== false) {
     autoRefresh.setEnabled(true)
   }
@@ -168,5 +229,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (abortController) abortController.abort()
+  if (quotaPoolAbortController) quotaPoolAbortController.abort()
 })
 </script>

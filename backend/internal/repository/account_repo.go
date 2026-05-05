@@ -85,6 +85,7 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
+		SetAccountLevel(service.NormalizeAccountLevel(account.AccountLevel)).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(normalizeJSONMap(account.Extra)).
@@ -330,6 +331,7 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
+		SetAccountLevel(service.NormalizeAccountLevel(account.AccountLevel)).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(normalizeJSONMap(account.Extra)).
@@ -1455,6 +1457,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Schedulable)
 		idx++
 	}
+	if updates.AccountLevel != nil {
+		setClauses = append(setClauses, "account_level = $"+itoa(idx))
+		args = append(args, service.NormalizeAccountLevel(*updates.AccountLevel))
+		idx++
+	}
 	// JSONB 需要合并而非覆盖，使用 raw SQL 保持旧行为。
 	if len(updates.Credentials) > 0 {
 		payload, err := json.Marshal(updates.Credentials)
@@ -1524,6 +1531,21 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 	// 通过 account_groups 中间表查询账号，并按需叠加状态/平台/调度能力过滤。
 	preds := make([]dbpredicate.Account, 0, 6)
 	preds = append(preds, dbaccount.DeletedAtIsNil())
+	if opts.schedulable {
+		group, err := r.client.Group.Query().
+			Where(dbgroup.IDEQ(groupID), dbgroup.DeletedAtIsNil()).
+			Only(ctx)
+		if err != nil {
+			if dbent.IsNotFound(err) {
+				return []service.Account{}, nil
+			}
+			return nil, err
+		}
+		requiredLevel := service.NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
+		if group.Platform == service.PlatformOpenAI && requiredLevel != "" {
+			preds = append(preds, dbaccount.PlatformEQ(service.PlatformOpenAI), dbaccount.AccountLevelEQ(requiredLevel))
+		}
+	}
 	if opts.status != "" {
 		preds = append(preds, dbaccount.StatusEQ(opts.status))
 	}
@@ -1760,6 +1782,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Name:                    m.Name,
 		Notes:                   m.Notes,
 		Platform:                m.Platform,
+		AccountLevel:            service.NormalizeAccountLevel(m.AccountLevel),
 		Type:                    m.Type,
 		Credentials:             copyJSONMap(m.Credentials),
 		Extra:                   copyJSONMap(m.Extra),

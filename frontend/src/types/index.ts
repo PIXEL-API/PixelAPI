@@ -137,6 +137,8 @@ export interface UserAffiliateDetail {
   user_id: number
   aff_code: string
   inviter_id?: number | null
+  inviter_bound_at?: string | null
+  invite_reward_expires_at?: string | null
   aff_count: number
   aff_quota: number
   aff_frozen_quota: number
@@ -170,6 +172,7 @@ export interface CustomMenuItem {
   url: string
   visibility: 'user' | 'admin'
   sort_order: number
+  open_in_new_window: boolean
 }
 
 export interface CustomEndpoint {
@@ -485,6 +488,7 @@ export interface Group {
   name: string
   description: string | null
   platform: GroupPlatform
+  required_account_level?: Exclude<AccountLevel, 'unknown'> | ''
   rate_multiplier: number
   rpm_limit?: number // Group-level RPM cap (0 = unlimited); overrides user-level rpm_limit when set
   is_exclusive: boolean
@@ -543,6 +547,7 @@ export interface ApiKey {
   key: string
   name: string
   group_id: number | null
+  group_routes?: ApiKeyGroupRoute[]
   status: 'active' | 'inactive' | 'quota_exhausted' | 'expired'
   ip_whitelist: string[]
   ip_blacklist: string[]
@@ -567,9 +572,20 @@ export interface ApiKey {
   reset_7d_at: string | null
 }
 
+export interface ApiKeyGroupRoute {
+  id?: number
+  group_id: number
+  priority: number
+  weight: number
+  enabled: boolean
+  cooldown_seconds: number
+  group?: Group
+}
+
 export interface CreateApiKeyRequest {
   name: string
   group_id?: number | null
+  group_routes?: ApiKeyGroupRoute[]
   custom_key?: string // Optional custom API Key
   ip_whitelist?: string[]
   ip_blacklist?: string[]
@@ -583,6 +599,7 @@ export interface CreateApiKeyRequest {
 export interface UpdateApiKeyRequest {
   name?: string
   group_id?: number | null
+  group_routes?: ApiKeyGroupRoute[]
   status?: 'active' | 'inactive'
   ip_whitelist?: string[]
   ip_blacklist?: string[]
@@ -599,6 +616,7 @@ export interface CreateGroupRequest {
   name: string
   description?: string | null
   platform?: GroupPlatform
+  required_account_level?: Exclude<AccountLevel, 'unknown'> | ''
   rate_multiplier?: number
   is_exclusive?: boolean
   subscription_type?: SubscriptionType
@@ -623,6 +641,7 @@ export interface UpdateGroupRequest {
   name?: string
   description?: string | null
   platform?: GroupPlatform
+  required_account_level?: Exclude<AccountLevel, 'unknown'> | ''
   rate_multiplier?: number
   is_exclusive?: boolean
   status?: 'active' | 'inactive'
@@ -647,6 +666,7 @@ export interface UpdateGroupRequest {
 
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
+export type AccountLevel = 'unknown' | 'free' | 'plus' | 'pro'
 export type AccountShareMode = 'private' | 'public'
 export type AccountShareStatus = 'pending' | 'approved' | 'suspended'
 export type AccountStatus = 'active' | 'inactive' | 'disabled' | 'error'
@@ -776,6 +796,7 @@ export interface Account {
   name: string
   notes?: string | null
   platform: AccountPlatform
+  account_level: AccountLevel
   type: AccountType
   credentials?: Record<string, unknown>
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
@@ -910,6 +931,12 @@ export interface AccountQuotaDashboard {
   totals: AccountQuotaSummary
 }
 
+export interface UserAccountQuotaPoolDashboard {
+  generated_at: string
+  mine: AccountQuotaDashboard
+  platform: AccountQuotaDashboard
+}
+
 // Account Usage types
 export interface WindowStats {
   requests: number
@@ -1008,6 +1035,7 @@ export interface CreateAccountRequest {
   name: string
   notes?: string | null
   platform: AccountPlatform
+  account_level?: AccountLevel
   type: AccountType
   credentials: Record<string, unknown>
   extra?: Record<string, unknown>
@@ -1027,6 +1055,7 @@ export interface UpdateAccountRequest {
   name?: string
   notes?: string | null
   type?: AccountType
+  account_level?: AccountLevel
   credentials?: Record<string, unknown>
   extra?: Record<string, unknown>
   proxy_id?: number | null

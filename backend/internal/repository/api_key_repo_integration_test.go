@@ -150,6 +150,44 @@ func (s *APIKeyRepoSuite) TestUpdate() {
 	s.Require().Equal(service.StatusDisabled, got.Status)
 }
 
+func (s *APIKeyRepoSuite) TestUpdate_PreservesLoadedGroupRoutesOnScalarUpdate() {
+	user := s.mustCreateUser("update-routes@test.com")
+	groupA := s.mustCreateGroup("g-update-routes-a")
+	groupB := s.mustCreateGroup("g-update-routes-b")
+
+	key := &service.APIKey{
+		UserID:  user.ID,
+		Key:     "sk-update-routes",
+		Name:    "Route Key",
+		GroupID: &groupA.ID,
+		Status:  service.StatusActive,
+		GroupRoutes: []service.APIKeyGroupRoute{
+			{GroupID: groupA.ID, Priority: 100, Weight: 2, Enabled: true, CooldownSeconds: 30},
+			{GroupID: groupB.ID, Priority: 200, Weight: 1, Enabled: true, CooldownSeconds: 60},
+		},
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	loaded, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	loaded.Name = "Route Key Renamed"
+
+	s.Require().NoError(s.repo.Update(s.ctx, loaded), "Update scalar field")
+
+	got, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().Equal("Route Key Renamed", got.Name)
+	s.Require().Len(got.GroupRoutes, 2)
+	s.Require().Equal(groupA.ID, got.GroupRoutes[0].GroupID)
+	s.Require().Equal(100, got.GroupRoutes[0].Priority)
+	s.Require().Equal(2, got.GroupRoutes[0].Weight)
+	s.Require().Equal(30, got.GroupRoutes[0].CooldownSeconds)
+	s.Require().Equal(groupB.ID, got.GroupRoutes[1].GroupID)
+	s.Require().Equal(200, got.GroupRoutes[1].Priority)
+	s.Require().Equal(1, got.GroupRoutes[1].Weight)
+	s.Require().Equal(60, got.GroupRoutes[1].CooldownSeconds)
+}
+
 func (s *APIKeyRepoSuite) TestUpdate_ClearGroupID() {
 	user := s.mustCreateUser("cleargroup@test.com")
 	group := s.mustCreateGroup("g-clear")
@@ -347,6 +385,35 @@ func (s *APIKeyRepoSuite) TestClearGroupIDByGroupID() {
 
 	count, _ := s.repo.CountByGroupID(s.ctx, group.ID)
 	s.Require().Zero(count)
+}
+
+func (s *APIKeyRepoSuite) TestClearGroupIDByGroupID_RemovesGroupRoutesOnlyBindings() {
+	user := s.mustCreateUser("cleargrproutes@test.com")
+	targetGroup := s.mustCreateGroup("g-clear-route-target")
+	otherGroup := s.mustCreateGroup("g-clear-route-other")
+
+	key := s.mustCreateApiKey(user.ID, "sk-clr-route-1", "RouteOnly", nil)
+	key.GroupRoutes = []service.APIKeyGroupRoute{
+		{GroupID: targetGroup.ID, Priority: 100, Weight: 1, Enabled: true, CooldownSeconds: 30},
+		{GroupID: otherGroup.ID, Priority: 200, Weight: 1, Enabled: true, CooldownSeconds: 30},
+	}
+	s.Require().NoError(s.repo.Update(s.ctx, key), "add route bindings")
+
+	countBefore, err := s.repo.CountByGroupID(s.ctx, targetGroup.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), countBefore)
+
+	affected, err := s.repo.ClearGroupIDByGroupID(s.ctx, targetGroup.ID)
+	s.Require().NoError(err)
+	s.Require().Zero(affected, "route-only bindings should not count as cleared primary group_id rows")
+
+	countAfterTarget, err := s.repo.CountByGroupID(s.ctx, targetGroup.ID)
+	s.Require().NoError(err)
+	s.Require().Zero(countAfterTarget)
+
+	countAfterOther, err := s.repo.CountByGroupID(s.ctx, otherGroup.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), countAfterOther)
 }
 
 // --- Combined CRUD/Search/ClearGroupID (original test preserved as integration) ---

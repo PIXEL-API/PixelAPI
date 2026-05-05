@@ -104,6 +104,12 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		User:          UserFromServiceShallow(k.User),
 		Group:         GroupFromServiceShallow(k.Group),
 	}
+	if len(k.GroupRoutes) > 0 {
+		out.GroupRoutes = make([]APIKeyGroupRoute, 0, len(k.GroupRoutes))
+		for i := range k.GroupRoutes {
+			out.GroupRoutes = append(out.GroupRoutes, *APIKeyGroupRouteFromService(&k.GroupRoutes[i]))
+		}
+	}
 	if k.Window5hStart != nil && !service.IsWindowExpired(k.Window5hStart, service.RateLimitWindow5h) {
 		t := k.Window5hStart.Add(service.RateLimitWindow5h)
 		out.Reset5hAt = &t
@@ -115,6 +121,29 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 	if k.Window7dStart != nil && !service.IsWindowExpired(k.Window7dStart, service.RateLimitWindow7d) {
 		t := k.Window7dStart.Add(service.RateLimitWindow7d)
 		out.Reset7dAt = &t
+	}
+	return out
+}
+
+func APIKeyGroupRouteFromService(route *service.APIKeyGroupRoute) *APIKeyGroupRoute {
+	if route == nil {
+		return nil
+	}
+	out := &APIKeyGroupRoute{
+		ID:              route.ID,
+		APIKeyID:        route.APIKeyID,
+		GroupID:         route.GroupID,
+		Priority:        route.Priority,
+		Weight:          route.Weight,
+		Enabled:         route.Enabled,
+		CooldownSeconds: route.CooldownSeconds,
+		Group:           GroupFromServiceShallow(route.Group),
+	}
+	if !route.CreatedAt.IsZero() {
+		out.CreatedAt = &route.CreatedAt
+	}
+	if !route.UpdatedAt.IsZero() {
+		out.UpdatedAt = &route.UpdatedAt
 	}
 	return out
 }
@@ -169,6 +198,7 @@ func groupFromServiceBase(g *service.Group) Group {
 		Name:                            g.Name,
 		Description:                     g.Description,
 		Platform:                        g.Platform,
+		RequiredAccountLevel:            service.NormalizeRequiredAccountLevel(g.RequiredAccountLevel),
 		RateMultiplier:                  g.RateMultiplier,
 		IsExclusive:                     g.IsExclusive,
 		Status:                          g.Status,
@@ -202,6 +232,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Name:                    a.Name,
 		Notes:                   a.Notes,
 		Platform:                a.Platform,
+		AccountLevel:            service.NormalizeAccountLevel(a.AccountLevel),
 		Type:                    a.Type,
 		Credentials:             a.Credentials,
 		Extra:                   a.Extra,

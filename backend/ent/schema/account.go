@@ -54,6 +54,11 @@ func (Account) Fields() []ent.Field {
 		field.String("name").
 			MaxLen(100).
 			NotEmpty(),
+
+		field.String("account_level").
+			MaxLen(20).
+			Default(domain.AccountLevelUnknown).
+			Comment("Account capability level: unknown/free/plus/pro."),
 		// notes: 管理员备注（可为空）
 		field.String("notes").
 			Optional().

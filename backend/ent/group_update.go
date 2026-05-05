@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/apikeygrouproute"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
@@ -196,6 +197,20 @@ func (_u *GroupUpdate) SetPlatform(v string) *GroupUpdate {
 func (_u *GroupUpdate) SetNillablePlatform(v *string) *GroupUpdate {
 	if v != nil {
 		_u.SetPlatform(*v)
+	}
+	return _u
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (_u *GroupUpdate) SetRequiredAccountLevel(v string) *GroupUpdate {
+	_u.mutation.SetRequiredAccountLevel(v)
+	return _u
+}
+
+// SetNillableRequiredAccountLevel sets the "required_account_level" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableRequiredAccountLevel(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetRequiredAccountLevel(*v)
 	}
 	return _u
 }
@@ -644,6 +659,21 @@ func (_u *GroupUpdate) AddAPIKeys(v ...*APIKey) *GroupUpdate {
 	return _u.AddAPIKeyIDs(ids...)
 }
 
+// AddAPIKeyGroupRouteIDs adds the "api_key_group_routes" edge to the APIKeyGroupRoute entity by IDs.
+func (_u *GroupUpdate) AddAPIKeyGroupRouteIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.AddAPIKeyGroupRouteIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyGroupRoutes adds the "api_key_group_routes" edges to the APIKeyGroupRoute entity.
+func (_u *GroupUpdate) AddAPIKeyGroupRoutes(v ...*APIKeyGroupRoute) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyGroupRouteIDs(ids...)
+}
+
 // AddRedeemCodeIDs adds the "redeem_codes" edge to the RedeemCode entity by IDs.
 func (_u *GroupUpdate) AddRedeemCodeIDs(ids ...int64) *GroupUpdate {
 	_u.mutation.AddRedeemCodeIDs(ids...)
@@ -743,6 +773,27 @@ func (_u *GroupUpdate) RemoveAPIKeys(v ...*APIKey) *GroupUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAPIKeyIDs(ids...)
+}
+
+// ClearAPIKeyGroupRoutes clears all "api_key_group_routes" edges to the APIKeyGroupRoute entity.
+func (_u *GroupUpdate) ClearAPIKeyGroupRoutes() *GroupUpdate {
+	_u.mutation.ClearAPIKeyGroupRoutes()
+	return _u
+}
+
+// RemoveAPIKeyGroupRouteIDs removes the "api_key_group_routes" edge to APIKeyGroupRoute entities by IDs.
+func (_u *GroupUpdate) RemoveAPIKeyGroupRouteIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.RemoveAPIKeyGroupRouteIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyGroupRoutes removes "api_key_group_routes" edges to APIKeyGroupRoute entities.
+func (_u *GroupUpdate) RemoveAPIKeyGroupRoutes(v ...*APIKeyGroupRoute) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyGroupRouteIDs(ids...)
 }
 
 // ClearRedeemCodes clears all "redeem_codes" edges to the RedeemCode entity.
@@ -914,6 +965,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RequiredAccountLevel(); ok {
+		if err := group.RequiredAccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "required_account_level", err: fmt.Errorf(`ent: validator failed for field "Group.required_account_level": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SubscriptionType(); ok {
 		if err := group.SubscriptionTypeValidator(v); err != nil {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
@@ -983,6 +1039,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RequiredAccountLevel(); ok {
+		_spec.SetField(group.FieldRequiredAccountLevel, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
@@ -1153,6 +1212,51 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyGroupRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyGroupRoutesTable,
+			Columns: []string{group.APIKeyGroupRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeygrouproute.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyGroupRoutesIDs(); len(nodes) > 0 && !_u.mutation.APIKeyGroupRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyGroupRoutesTable,
+			Columns: []string{group.APIKeyGroupRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeygrouproute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyGroupRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyGroupRoutesTable,
+			Columns: []string{group.APIKeyGroupRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeygrouproute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1589,6 +1693,20 @@ func (_u *GroupUpdateOne) SetPlatform(v string) *GroupUpdateOne {
 func (_u *GroupUpdateOne) SetNillablePlatform(v *string) *GroupUpdateOne {
 	if v != nil {
 		_u.SetPlatform(*v)
+	}
+	return _u
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (_u *GroupUpdateOne) SetRequiredAccountLevel(v string) *GroupUpdateOne {
+	_u.mutation.SetRequiredAccountLevel(v)
+	return _u
+}
+
+// SetNillableRequiredAccountLevel sets the "required_account_level" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableRequiredAccountLevel(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetRequiredAccountLevel(*v)
 	}
 	return _u
 }
@@ -2037,6 +2155,21 @@ func (_u *GroupUpdateOne) AddAPIKeys(v ...*APIKey) *GroupUpdateOne {
 	return _u.AddAPIKeyIDs(ids...)
 }
 
+// AddAPIKeyGroupRouteIDs adds the "api_key_group_routes" edge to the APIKeyGroupRoute entity by IDs.
+func (_u *GroupUpdateOne) AddAPIKeyGroupRouteIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.AddAPIKeyGroupRouteIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyGroupRoutes adds the "api_key_group_routes" edges to the APIKeyGroupRoute entity.
+func (_u *GroupUpdateOne) AddAPIKeyGroupRoutes(v ...*APIKeyGroupRoute) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyGroupRouteIDs(ids...)
+}
+
 // AddRedeemCodeIDs adds the "redeem_codes" edge to the RedeemCode entity by IDs.
 func (_u *GroupUpdateOne) AddRedeemCodeIDs(ids ...int64) *GroupUpdateOne {
 	_u.mutation.AddRedeemCodeIDs(ids...)
@@ -2136,6 +2269,27 @@ func (_u *GroupUpdateOne) RemoveAPIKeys(v ...*APIKey) *GroupUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAPIKeyIDs(ids...)
+}
+
+// ClearAPIKeyGroupRoutes clears all "api_key_group_routes" edges to the APIKeyGroupRoute entity.
+func (_u *GroupUpdateOne) ClearAPIKeyGroupRoutes() *GroupUpdateOne {
+	_u.mutation.ClearAPIKeyGroupRoutes()
+	return _u
+}
+
+// RemoveAPIKeyGroupRouteIDs removes the "api_key_group_routes" edge to APIKeyGroupRoute entities by IDs.
+func (_u *GroupUpdateOne) RemoveAPIKeyGroupRouteIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.RemoveAPIKeyGroupRouteIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyGroupRoutes removes "api_key_group_routes" edges to APIKeyGroupRoute entities.
+func (_u *GroupUpdateOne) RemoveAPIKeyGroupRoutes(v ...*APIKeyGroupRoute) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyGroupRouteIDs(ids...)
 }
 
 // ClearRedeemCodes clears all "redeem_codes" edges to the RedeemCode entity.
@@ -2320,6 +2474,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "platform", err: fmt.Errorf(`ent: validator failed for field "Group.platform": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.RequiredAccountLevel(); ok {
+		if err := group.RequiredAccountLevelValidator(v); err != nil {
+			return &ValidationError{Name: "required_account_level", err: fmt.Errorf(`ent: validator failed for field "Group.required_account_level": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.SubscriptionType(); ok {
 		if err := group.SubscriptionTypeValidator(v); err != nil {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
@@ -2406,6 +2565,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RequiredAccountLevel(); ok {
+		_spec.SetField(group.FieldRequiredAccountLevel, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.SubscriptionType(); ok {
 		_spec.SetField(group.FieldSubscriptionType, field.TypeString, value)
@@ -2576,6 +2738,51 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyGroupRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyGroupRoutesTable,
+			Columns: []string{group.APIKeyGroupRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeygrouproute.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyGroupRoutesIDs(); len(nodes) > 0 && !_u.mutation.APIKeyGroupRoutesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyGroupRoutesTable,
+			Columns: []string{group.APIKeyGroupRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeygrouproute.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyGroupRoutesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyGroupRoutesTable,
+			Columns: []string{group.APIKeyGroupRoutesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeygrouproute.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

@@ -22,11 +22,12 @@ type Group struct {
 	OwnerUserID    *int64
 	Scope          string
 
-	SubscriptionType    string
-	DailyLimitUSD       *float64
-	WeeklyLimitUSD      *float64
-	MonthlyLimitUSD     *float64
-	DefaultValidityDays int
+	SubscriptionType     string
+	RequiredAccountLevel string
+	DailyLimitUSD        *float64
+	WeeklyLimitUSD       *float64
+	MonthlyLimitUSD      *float64
+	DefaultValidityDays  int
 
 	// 图片生成计费配置（antigravity 和 gemini 平台使用）
 	ImagePrice1K *float64
@@ -180,6 +181,22 @@ func NormalizeGroupScope(scope string) string {
 	default:
 		return GroupScopePublic
 	}
+}
+
+func NormalizeRequiredAccountLevel(level string) string {
+	normalized := NormalizeAccountLevel(level)
+	if normalized == AccountLevelUnknown {
+		return ""
+	}
+	return normalized
+}
+
+func IsValidRequiredAccountLevel(level string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(level))
+	if trimmed == "" {
+		return true
+	}
+	return IsConcreteAccountLevel(trimmed)
 }
 
 func SupportedUserPrivateGroupPlatforms() []string {

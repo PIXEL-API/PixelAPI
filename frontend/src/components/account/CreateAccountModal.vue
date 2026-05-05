@@ -375,6 +375,12 @@
         </div>
       </div>
 
+      <div v-if="form.platform === 'openai'">
+        <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
+        <Select v-model="form.account_level" :options="accountLevelOptions" />
+        <p class="input-hint">{{ t('admin.accounts.accountLevel.hint') }}</p>
+      </div>
+
       <!-- Account Type Selection (Gemini) -->
       <div v-if="form.platform === 'gemini'">
         <div class="flex items-center justify-between">
@@ -3156,6 +3162,7 @@ import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import type {
   Proxy,
   AdminGroup,
+  AccountLevel,
   AccountPlatform,
   AccountShareMode,
   AccountType,
@@ -3386,6 +3393,13 @@ const openAICompactModeOptions = computed(() => [
   { value: 'force_off', label: t('admin.accounts.openai.compactModeForceOff') }
 ])
 
+const accountLevelOptions = computed(() => [
+  { value: 'unknown', label: t('admin.accounts.accountLevel.unknown') },
+  { value: 'free', label: t('admin.accounts.accountLevel.free') },
+  { value: 'plus', label: t('admin.accounts.accountLevel.plus') },
+  { value: 'pro', label: t('admin.accounts.accountLevel.pro') }
+])
+
 function buildAntigravityExtra(): Record<string, unknown> | undefined {
   const extra: Record<string, unknown> = {}
   if (mixedScheduling.value) extra.mixed_scheduling = true
@@ -3538,6 +3552,7 @@ const form = reactive({
   name: '',
   notes: '',
   platform: 'anthropic' as AccountPlatform,
+  account_level: 'unknown' as AccountLevel,
   type: 'oauth' as AccountType, // Will be 'oauth', 'setup-token', or 'apikey'
   share_mode: 'private' as AccountShareMode,
   credentials: {} as Record<string, unknown>,
@@ -3717,6 +3732,7 @@ watch(
       interceptWarmupRequests.value = false
     }
     if (newPlatform !== 'openai') {
+      form.account_level = 'unknown'
       openaiPassthroughEnabled.value = false
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -4098,6 +4114,7 @@ const resetForm = () => {
   form.platform = 'anthropic'
   form.type = 'oauth'
   form.share_mode = 'private'
+  form.account_level = 'unknown'
   form.credentials = {}
   form.proxy_id = null
   form.concurrency = 10
@@ -4644,6 +4661,7 @@ const createAccountAndFinish = async (
     name: form.name,
     notes: form.notes,
     platform,
+    account_level: platform === 'openai' ? form.account_level : 'unknown',
     type,
     credentials,
     extra: finalExtra,

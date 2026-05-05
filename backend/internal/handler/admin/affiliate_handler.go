@@ -55,6 +55,11 @@ type UpdateAffiliateUserRequest struct {
 	ClearRebateRate bool `json:"clear_rebate_rate"`
 }
 
+type BindAffiliateInviterRequest struct {
+	InviterUserID int64 `json:"inviter_user_id" binding:"required"`
+	ResetValidity bool  `json:"reset_validity"`
+}
+
 func (h *AffiliateHandler) UpdateUserSettings(c *gin.Context) {
 	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
 	if err != nil || userID <= 0 {
@@ -88,6 +93,29 @@ func (h *AffiliateHandler) UpdateUserSettings(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"user_id": userID})
+}
+
+// BindInviter sets or replaces the inviter for a user.
+// POST /api/v1/admin/affiliates/users/:user_id/inviter
+func (h *AffiliateHandler) BindInviter(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil || userID <= 0 {
+		response.BadRequest(c, "Invalid user_id")
+		return
+	}
+
+	var req BindAffiliateInviterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	summary, err := h.affiliateService.AdminBindInviter(c.Request.Context(), userID, req.InviterUserID, req.ResetValidity)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, summary)
 }
 
 // ClearUserSettings removes ALL of a user's custom affiliate settings — clears

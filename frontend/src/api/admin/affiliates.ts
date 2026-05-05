@@ -37,6 +37,11 @@ export interface BatchSetRateRequest {
   clear?: boolean
 }
 
+export interface BindInviterRequest {
+  inviter_user_id: number
+  reset_validity: boolean
+}
+
 export interface SimpleUser {
   id: number
   email: string
@@ -97,12 +102,24 @@ export async function batchSetRate(
   return data
 }
 
+export async function bindInviter(
+  userId: number,
+  payload: BindInviterRequest,
+): Promise<{ user_id: number; inviter_id?: number | null; inviter_bound_at?: string | null; invite_reward_expires_at?: string | null }> {
+  const { data } = await apiClient.post<{ user_id: number; inviter_id?: number | null; inviter_bound_at?: string | null; invite_reward_expires_at?: string | null }>(
+    `/admin/affiliates/users/${userId}/inviter`,
+    payload,
+  )
+  return data
+}
+
 export const affiliatesAPI = {
   listUsers,
   lookupUsers,
   updateUserSettings,
   clearUserSettings,
   batchSetRate,
+  bindInviter,
 }
 
 export default affiliatesAPI

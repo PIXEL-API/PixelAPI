@@ -16,6 +16,7 @@ type accountRepoStubForBulkUpdate struct {
 	accountRepoStub
 	bulkUpdateErr    error
 	bulkUpdateIDs    []int64
+	updatedAccount   *Account
 	bindGroupErrByID map[int64]error
 	bindGroupsCalls  []int64
 	getByIDsAccounts []*Account
@@ -48,6 +49,11 @@ func (s *accountRepoStubForBulkUpdate) BulkUpdate(_ context.Context, ids []int64
 		return 0, s.bulkUpdateErr
 	}
 	return int64(len(ids)), nil
+}
+
+func (s *accountRepoStubForBulkUpdate) Update(_ context.Context, account *Account) error {
+	s.updatedAccount = account
+	return nil
 }
 
 func (s *accountRepoStubForBulkUpdate) BindGroups(_ context.Context, accountID int64, _ []int64) error {
@@ -170,6 +176,80 @@ func TestAdminService_BulkUpdateAccounts_NilGroupRepoReturnsError(t *testing.T) 
 	require.Nil(t, result)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "group repository not configured")
+}
+
+func TestAdminService_UpdateAccountLevel_ValidatesExistingGroups(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDAccounts: map[int64]*Account{
+			1: {
+				ID:           1,
+				Name:         "plus-account",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPlus,
+				GroupIDs:     []int64{10},
+			},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{
+				ID:                   10,
+				Name:                 "Plus Pool",
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPlus,
+			},
+		},
+	}
+
+	level := AccountLevelFree
+	result, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{
+		AccountLevel: &level,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "account_level mismatch")
+	require.Nil(t, repo.updatedAccount)
+}
+
+func TestAdminService_BulkUpdateAccountLevel_ValidatesExistingGroups(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{
+				ID:           1,
+				Name:         "plus-account",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPlus,
+				GroupIDs:     []int64{10},
+			},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{
+				ID:                   10,
+				Name:                 "Plus Pool",
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPlus,
+			},
+		},
+	}
+
+	level := AccountLevelFree
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:   []int64{1},
+		AccountLevel: &level,
+		Schedulable:  nil,
+		Credentials:  nil,
+		Extra:        nil,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "account_level mismatch")
+	require.Empty(t, repo.bulkUpdateIDs)
 }
 
 // TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingConflict verifies

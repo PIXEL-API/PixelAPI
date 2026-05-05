@@ -38,6 +38,8 @@ const (
 	FieldScope = "scope"
 	// FieldPlatform holds the string denoting the platform field in the database.
 	FieldPlatform = "platform"
+	// FieldRequiredAccountLevel holds the string denoting the required_account_level field in the database.
+	FieldRequiredAccountLevel = "required_account_level"
 	// FieldSubscriptionType holds the string denoting the subscription_type field in the database.
 	FieldSubscriptionType = "subscription_type"
 	// FieldDailyLimitUsd holds the string denoting the daily_limit_usd field in the database.
@@ -84,6 +86,8 @@ const (
 	FieldRpmLimit = "rpm_limit"
 	// EdgeAPIKeys holds the string denoting the api_keys edge name in mutations.
 	EdgeAPIKeys = "api_keys"
+	// EdgeAPIKeyGroupRoutes holds the string denoting the api_key_group_routes edge name in mutations.
+	EdgeAPIKeyGroupRoutes = "api_key_group_routes"
 	// EdgeRedeemCodes holds the string denoting the redeem_codes edge name in mutations.
 	EdgeRedeemCodes = "redeem_codes"
 	// EdgeSubscriptions holds the string denoting the subscriptions edge name in mutations.
@@ -107,6 +111,13 @@ const (
 	APIKeysInverseTable = "api_keys"
 	// APIKeysColumn is the table column denoting the api_keys relation/edge.
 	APIKeysColumn = "group_id"
+	// APIKeyGroupRoutesTable is the table that holds the api_key_group_routes relation/edge.
+	APIKeyGroupRoutesTable = "api_key_group_routes"
+	// APIKeyGroupRoutesInverseTable is the table name for the APIKeyGroupRoute entity.
+	// It exists in this package in order to avoid circular dependency with the "apikeygrouproute" package.
+	APIKeyGroupRoutesInverseTable = "api_key_group_routes"
+	// APIKeyGroupRoutesColumn is the table column denoting the api_key_group_routes relation/edge.
+	APIKeyGroupRoutesColumn = "group_id"
 	// RedeemCodesTable is the table that holds the redeem_codes relation/edge.
 	RedeemCodesTable = "redeem_codes"
 	// RedeemCodesInverseTable is the table name for the RedeemCode entity.
@@ -168,6 +179,7 @@ var Columns = []string{
 	FieldOwnerUserID,
 	FieldScope,
 	FieldPlatform,
+	FieldRequiredAccountLevel,
 	FieldSubscriptionType,
 	FieldDailyLimitUsd,
 	FieldWeeklyLimitUsd,
@@ -243,6 +255,10 @@ var (
 	DefaultPlatform string
 	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
 	PlatformValidator func(string) error
+	// DefaultRequiredAccountLevel holds the default value on creation for the "required_account_level" field.
+	DefaultRequiredAccountLevel string
+	// RequiredAccountLevelValidator is a validator for the "required_account_level" field. It is called by the builders before save.
+	RequiredAccountLevelValidator func(string) error
 	// DefaultSubscriptionType holds the default value on creation for the "subscription_type" field.
 	DefaultSubscriptionType string
 	// SubscriptionTypeValidator is a validator for the "subscription_type" field. It is called by the builders before save.
@@ -336,6 +352,11 @@ func ByScope(opts ...sql.OrderTermOption) OrderOption {
 // ByPlatform orders the results by the platform field.
 func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPlatform, opts...).ToFunc()
+}
+
+// ByRequiredAccountLevel orders the results by the required_account_level field.
+func ByRequiredAccountLevel(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRequiredAccountLevel, opts...).ToFunc()
 }
 
 // BySubscriptionType orders the results by the subscription_type field.
@@ -447,6 +468,20 @@ func ByAPIKeys(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByAPIKeyGroupRoutesCount orders the results by api_key_group_routes count.
+func ByAPIKeyGroupRoutesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newAPIKeyGroupRoutesStep(), opts...)
+	}
+}
+
+// ByAPIKeyGroupRoutes orders the results by api_key_group_routes terms.
+func ByAPIKeyGroupRoutes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newAPIKeyGroupRoutesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByRedeemCodesCount orders the results by redeem_codes count.
 func ByRedeemCodesCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -549,6 +584,13 @@ func newAPIKeysStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(APIKeysInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, APIKeysTable, APIKeysColumn),
+	)
+}
+func newAPIKeyGroupRoutesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(APIKeyGroupRoutesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, APIKeyGroupRoutesTable, APIKeyGroupRoutesColumn),
 	)
 }
 func newRedeemCodesStep() *sqlgraph.Step {

@@ -343,6 +343,21 @@ func (h *UserAccountHandler) List(c *gin.Context) {
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
 
+func (h *UserAccountHandler) GetQuotaPoolDashboard(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	dashboard, err := h.accountService.GetQuotaPoolDashboard(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dashboard)
+}
+
 func (h *UserAccountHandler) GetByID(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {

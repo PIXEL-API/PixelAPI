@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var ErrUsageBillingRequestIDRequired = errors.New("usage billing request_id is required")
@@ -50,6 +51,7 @@ type UsageBillingCommand struct {
 	SharePolicyVersion    int
 	OwnerShareRatio       float64
 	InviteShareRatio      float64
+	UsageOccurredAt       time.Time
 
 	UsageLog *UsageLog
 }

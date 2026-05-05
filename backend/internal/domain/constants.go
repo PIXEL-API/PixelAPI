@@ -34,6 +34,14 @@ const (
 	AccountTypeServiceAccount = "service_account" // Google Service Account 类型账号（用于 Vertex AI）
 )
 
+// Account level constants
+const (
+	AccountLevelUnknown = "unknown"
+	AccountLevelFree    = "free"
+	AccountLevelPlus    = "plus"
+	AccountLevelPro     = "pro"
+)
+
 // Redeem type constants
 const (
 	RedeemTypeBalance      = "balance"

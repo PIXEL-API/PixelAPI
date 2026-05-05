@@ -98,6 +98,7 @@ type CreateAccountRequest struct {
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
+	AccountLevel            string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro"`
 	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
@@ -122,6 +123,7 @@ type UpdateAccountRequest struct {
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
 	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	AccountLevel            *string        `json:"account_level" binding:"omitempty,oneof=unknown free plus pro"`
 	Credentials             map[string]any `json:"credentials"`
 	Extra                   map[string]any `json:"extra"`
 	OwnerUserID             *int64         `json:"owner_user_id"`
@@ -152,6 +154,7 @@ type BulkUpdateAccountsRequest struct {
 	LoadFactor              *int                      `json:"load_factor"`
 	Status                  string                    `json:"status" binding:"omitempty,oneof=active inactive error"`
 	Schedulable             *bool                     `json:"schedulable"`
+	AccountLevel            *string                   `json:"account_level" binding:"omitempty,oneof=unknown free plus pro"`
 	GroupIDs                *[]int64                  `json:"group_ids"`
 	Credentials             map[string]any            `json:"credentials"`
 	Extra                   map[string]any            `json:"extra"`
@@ -553,6 +556,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Name:                  req.Name,
 			Notes:                 req.Notes,
 			Platform:              req.Platform,
+			AccountLevel:          req.AccountLevel,
 			Type:                  req.Type,
 			Credentials:           req.Credentials,
 			Extra:                 req.Extra,
@@ -632,6 +636,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		Name:                  req.Name,
 		Notes:                 req.Notes,
 		Type:                  req.Type,
+		AccountLevel:          req.AccountLevel,
 		Credentials:           req.Credentials,
 		Extra:                 req.Extra,
 		OwnerUserID:           req.OwnerUserID,
@@ -1425,6 +1430,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		req.LoadFactor != nil ||
 		req.Status != "" ||
 		req.Schedulable != nil ||
+		req.AccountLevel != nil ||
 		req.GroupIDs != nil ||
 		len(req.Credentials) > 0 ||
 		len(req.Extra) > 0
@@ -1445,6 +1451,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		LoadFactor:            req.LoadFactor,
 		Status:                req.Status,
 		Schedulable:           req.Schedulable,
+		AccountLevel:          req.AccountLevel,
 		GroupIDs:              req.GroupIDs,
 		Credentials:           req.Credentials,
 		Extra:                 req.Extra,

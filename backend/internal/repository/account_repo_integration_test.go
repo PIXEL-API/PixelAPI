@@ -603,6 +603,88 @@ func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform() {
 	s.Require().Equal(a1.ID, accounts[0].ID)
 }
 
+func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_OpenAIRequiredAccountLevel() {
+	group := mustCreateGroup(s.T(), s.client, &service.Group{
+		Name:                 "g-openai-plus",
+		Platform:             service.PlatformOpenAI,
+		RequiredAccountLevel: service.AccountLevelPlus,
+	})
+	freeAcc := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "free",
+		Platform:     service.PlatformOpenAI,
+		AccountLevel: service.AccountLevelFree,
+		Schedulable:  true,
+	})
+	plusAcc := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "plus",
+		Platform:     service.PlatformOpenAI,
+		AccountLevel: service.AccountLevelPlus,
+		Schedulable:  true,
+	})
+	proAcc := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "pro",
+		Platform:     service.PlatformOpenAI,
+		AccountLevel: service.AccountLevelPro,
+		Schedulable:  true,
+	})
+	mustBindAccountToGroup(s.T(), s.client, freeAcc.ID, group.ID, 1)
+	mustBindAccountToGroup(s.T(), s.client, plusAcc.ID, group.ID, 2)
+	mustBindAccountToGroup(s.T(), s.client, proAcc.ID, group.ID, 3)
+
+	accounts, err := s.repo.ListSchedulableByGroupIDAndPlatform(s.ctx, group.ID, service.PlatformOpenAI)
+	s.Require().NoError(err)
+	s.Require().Len(accounts, 1)
+	s.Require().Equal(plusAcc.ID, accounts[0].ID)
+}
+
+func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_RequiredAccountLevelIgnoredForNonOpenAI() {
+	group := mustCreateGroup(s.T(), s.client, &service.Group{
+		Name:                 "g-anthropic-plus",
+		Platform:             service.PlatformAnthropic,
+		RequiredAccountLevel: service.AccountLevelPlus,
+	})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "anthropic",
+		Platform:     service.PlatformAnthropic,
+		AccountLevel: service.AccountLevelFree,
+		Schedulable:  true,
+	})
+	mustBindAccountToGroup(s.T(), s.client, account.ID, group.ID, 1)
+
+	accounts, err := s.repo.ListSchedulableByGroupIDAndPlatform(s.ctx, group.ID, service.PlatformAnthropic)
+	s.Require().NoError(err)
+	s.Require().Len(accounts, 1)
+	s.Require().Equal(account.ID, accounts[0].ID)
+}
+
+func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_EmptyRequiredAccountLevelDoesNotFilterOpenAI() {
+	group := mustCreateGroup(s.T(), s.client, &service.Group{
+		Name:     "g-openai-empty",
+		Platform: service.PlatformOpenAI,
+	})
+	freeAcc := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "free",
+		Platform:     service.PlatformOpenAI,
+		AccountLevel: service.AccountLevelFree,
+		Schedulable:  true,
+	})
+	plusAcc := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "plus",
+		Platform:     service.PlatformOpenAI,
+		AccountLevel: service.AccountLevelPlus,
+		Schedulable:  true,
+	})
+	mustBindAccountToGroup(s.T(), s.client, freeAcc.ID, group.ID, 1)
+	mustBindAccountToGroup(s.T(), s.client, plusAcc.ID, group.ID, 2)
+
+	accounts, err := s.repo.ListSchedulableByGroupIDAndPlatform(s.ctx, group.ID, service.PlatformOpenAI)
+	s.Require().NoError(err)
+	s.Require().Len(accounts, 2)
+	ids := idsOfAccounts(accounts)
+	s.Require().Contains(ids, freeAcc.ID)
+	s.Require().Contains(ids, plusAcc.ID)
+}
+
 func (s *AccountRepoSuite) TestSetSchedulable() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-sched", Schedulable: true})
 	cacheRecorder := &schedulerCacheRecorder{}

@@ -10,6 +10,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/apikeygrouproute"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -49,6 +50,7 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetNillableOwnerUserID(groupIn.OwnerUserID).
 		SetScope(service.NormalizeGroupScope(groupIn.Scope)).
 		SetSubscriptionType(groupIn.SubscriptionType).
+		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(groupIn.RequiredAccountLevel)).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
 		SetNillableMonthlyLimitUsd(groupIn.MonthlyLimitUSD).
@@ -134,6 +136,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetStatus(groupIn.Status).
 		SetScope(service.NormalizeGroupScope(groupIn.Scope)).
 		SetSubscriptionType(groupIn.SubscriptionType).
+		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(groupIn.RequiredAccountLevel)).
 		SetNillableDailyLimitUsd(groupIn.DailyLimitUSD).
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
 		SetNillableMonthlyLimitUsd(groupIn.MonthlyLimitUSD).
@@ -627,6 +630,11 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		Where(apikey.GroupIDEQ(id), apikey.DeletedAtIsNil()).
 		ClearGroupID().
 		Save(ctx); err != nil {
+		return nil, err
+	}
+	if _, err := txClient.APIKeyGroupRoute.Delete().
+		Where(apikeygrouproute.GroupIDEQ(id)).
+		Exec(ctx); err != nil {
 		return nil, err
 	}
 

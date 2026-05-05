@@ -85,6 +85,7 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 	create := client.Group.Create().
 		SetName(g.Name).
 		SetPlatform(g.Platform).
+		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(g.RequiredAccountLevel)).
 		SetStatus(g.Status).
 		SetSubscriptionType(g.SubscriptionType).
 		SetRateMultiplier(g.RateMultiplier).
@@ -194,6 +195,7 @@ func mustCreateAccount(t *testing.T, client *dbent.Client, a *service.Account) *
 	create := client.Account.Create().
 		SetName(a.Name).
 		SetPlatform(a.Platform).
+		SetAccountLevel(service.NormalizeAccountLevel(a.AccountLevel)).
 		SetType(a.Type).
 		SetCredentials(a.Credentials).
 		SetExtra(a.Extra).

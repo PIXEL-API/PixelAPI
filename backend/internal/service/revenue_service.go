@@ -142,34 +142,42 @@ type RevenueShareOwnerBreakdownItem struct {
 }
 
 type RevenueShareSettlementItem struct {
-	ID                  int64     `json:"id"`
-	UsageLogID          *int64    `json:"usage_log_id,omitempty"`
-	RequestID           string    `json:"request_id"`
-	APIKeyID            int64     `json:"api_key_id"`
-	APIKeyName          string    `json:"api_key_name"`
-	ConsumerUserID      int64     `json:"consumer_user_id"`
-	ConsumerEmail       string    `json:"consumer_email"`
-	ConsumerUsername    string    `json:"consumer_username,omitempty"`
-	OwnerUserID         int64     `json:"owner_user_id"`
-	OwnerEmail          string    `json:"owner_email"`
-	OwnerUsername       string    `json:"owner_username,omitempty"`
-	AccountID           int64     `json:"account_id"`
-	AccountName         string    `json:"account_name"`
-	AccountPlatform     string    `json:"account_platform"`
-	GroupID             *int64    `json:"group_id,omitempty"`
-	GroupName           string    `json:"group_name,omitempty"`
-	PolicyID            *int64    `json:"policy_id,omitempty"`
-	PolicyVersion       int       `json:"policy_version"`
-	ShareModeSnapshot   string    `json:"share_mode_snapshot"`
-	ShareStatusSnapshot string    `json:"share_status_snapshot"`
-	ConsumerCharge      float64   `json:"consumer_charge"`
-	AccountCost         float64   `json:"account_cost"`
-	OwnerShareRatio     float64   `json:"owner_share_ratio"`
-	OwnerCredit         float64   `json:"owner_credit"`
-	PlatformFee         float64   `json:"platform_fee"`
-	PlatformNetProfit   float64   `json:"platform_net_profit"`
-	Status              string    `json:"status"`
-	CreatedAt           time.Time `json:"created_at"`
+	ID                  int64      `json:"id"`
+	UsageLogID          *int64     `json:"usage_log_id,omitempty"`
+	RequestID           string     `json:"request_id"`
+	APIKeyID            int64      `json:"api_key_id"`
+	APIKeyName          string     `json:"api_key_name"`
+	ConsumerUserID      int64      `json:"consumer_user_id"`
+	ConsumerEmail       string     `json:"consumer_email"`
+	ConsumerUsername    string     `json:"consumer_username,omitempty"`
+	OwnerUserID         int64      `json:"owner_user_id"`
+	OwnerEmail          string     `json:"owner_email"`
+	OwnerUsername       string     `json:"owner_username,omitempty"`
+	InviterUserID       *int64     `json:"inviter_user_id,omitempty"`
+	InviterEmail        string     `json:"inviter_email,omitempty"`
+	InviterUsername     string     `json:"inviter_username,omitempty"`
+	AccountID           int64      `json:"account_id"`
+	AccountName         string     `json:"account_name"`
+	AccountPlatform     string     `json:"account_platform"`
+	GroupID             *int64     `json:"group_id,omitempty"`
+	GroupName           string     `json:"group_name,omitempty"`
+	PolicyID            *int64     `json:"policy_id,omitempty"`
+	PolicyVersion       int        `json:"policy_version"`
+	ShareModeSnapshot   string     `json:"share_mode_snapshot"`
+	ShareStatusSnapshot string     `json:"share_status_snapshot"`
+	ConsumerCharge      float64    `json:"consumer_charge"`
+	AccountCost         float64    `json:"account_cost"`
+	OwnerShareRatio     float64    `json:"owner_share_ratio"`
+	OwnerCredit         float64    `json:"owner_credit"`
+	InviteBoundAt       *time.Time `json:"invite_bound_at,omitempty"`
+	InviteExpiresAt     *time.Time `json:"invite_expires_at,omitempty"`
+	InviteShareRatio    float64    `json:"invite_share_ratio"`
+	InviteCredit        float64    `json:"invite_credit"`
+	PlatformShareRatio  float64    `json:"platform_share_ratio"`
+	PlatformFee         float64    `json:"platform_fee"`
+	PlatformNetProfit   float64    `json:"platform_net_profit"`
+	Status              string     `json:"status"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 type RevenueService struct {
@@ -256,6 +264,7 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 		FROM account_share_settlement_entries ase
 		LEFT JOIN users cu ON cu.id = ase.consumer_user_id
 		LEFT JOIN users ou ON ou.id = ase.owner_user_id
+		LEFT JOIN users iu ON iu.id = ase.inviter_user_id
 		LEFT JOIN accounts a ON a.id = ase.account_id
 		LEFT JOIN api_keys ak ON ak.id = ase.api_key_id
 		LEFT JOIN groups g ON g.id = ase.group_id
@@ -280,6 +289,9 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 			ase.owner_user_id,
 			COALESCE(NULLIF(ou.email, ''), 'unknown') AS owner_email,
 			COALESCE(NULLIF(ou.username, ''), '') AS owner_username,
+			ase.inviter_user_id,
+			COALESCE(NULLIF(iu.email, ''), '') AS inviter_email,
+			COALESCE(NULLIF(iu.username, ''), '') AS inviter_username,
 			ase.account_id,
 			COALESCE(NULLIF(a.name, ''), CONCAT('Account #', ase.account_id::text)) AS account_name,
 			COALESCE(NULLIF(a.platform, ''), '') AS account_platform,
@@ -293,6 +305,11 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 			ase.account_cost::double precision,
 			ase.owner_share_ratio::double precision,
 			ase.owner_credit::double precision,
+			ase.invite_bound_at_snapshot,
+			ase.invite_expires_at_snapshot,
+			ase.invite_share_ratio::double precision,
+			ase.invite_credit::double precision,
+			ase.platform_share_ratio::double precision,
 			ase.platform_fee::double precision,
 			(ase.platform_fee - ase.account_cost)::double precision AS platform_net_profit,
 			ase.status,
@@ -300,6 +317,7 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 		FROM account_share_settlement_entries ase
 		LEFT JOIN users cu ON cu.id = ase.consumer_user_id
 		LEFT JOIN users ou ON ou.id = ase.owner_user_id
+		LEFT JOIN users iu ON iu.id = ase.inviter_user_id
 		LEFT JOIN accounts a ON a.id = ase.account_id
 		LEFT JOIN api_keys ak ON ak.id = ase.api_key_id
 		LEFT JOIN groups g ON g.id = ase.group_id
@@ -321,6 +339,9 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 			usageLogID sql.NullInt64
 			groupID    sql.NullInt64
 			policyID   sql.NullInt64
+			inviterID  sql.NullInt64
+			boundAt    sql.NullTime
+			expiresAt  sql.NullTime
 		)
 		if err := rows.Scan(
 			&item.ID,
@@ -334,6 +355,9 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 			&item.OwnerUserID,
 			&item.OwnerEmail,
 			&item.OwnerUsername,
+			&inviterID,
+			&item.InviterEmail,
+			&item.InviterUsername,
 			&item.AccountID,
 			&item.AccountName,
 			&item.AccountPlatform,
@@ -347,6 +371,11 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 			&item.AccountCost,
 			&item.OwnerShareRatio,
 			&item.OwnerCredit,
+			&boundAt,
+			&expiresAt,
+			&item.InviteShareRatio,
+			&item.InviteCredit,
+			&item.PlatformShareRatio,
 			&item.PlatformFee,
 			&item.PlatformNetProfit,
 			&item.Status,
@@ -366,10 +395,25 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 			v := policyID.Int64
 			item.PolicyID = &v
 		}
+		if inviterID.Valid {
+			v := inviterID.Int64
+			item.InviterUserID = &v
+		}
+		if boundAt.Valid {
+			v := boundAt.Time
+			item.InviteBoundAt = &v
+		}
+		if expiresAt.Valid {
+			v := expiresAt.Time
+			item.InviteExpiresAt = &v
+		}
 		item.ConsumerCharge = roundRevenue(item.ConsumerCharge)
 		item.AccountCost = roundRevenue(item.AccountCost)
 		item.OwnerShareRatio = roundRevenue(item.OwnerShareRatio)
 		item.OwnerCredit = roundRevenue(item.OwnerCredit)
+		item.InviteShareRatio = roundRevenue(item.InviteShareRatio)
+		item.InviteCredit = roundRevenue(item.InviteCredit)
+		item.PlatformShareRatio = roundRevenue(item.PlatformShareRatio)
 		item.PlatformFee = roundRevenue(item.PlatformFee)
 		item.PlatformNetProfit = roundRevenue(item.PlatformNetProfit)
 		items = append(items, item)

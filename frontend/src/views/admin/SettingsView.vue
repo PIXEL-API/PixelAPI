@@ -4087,6 +4087,19 @@
                     </select>
                   </div>
 
+                  <!-- Open behavior -->
+                  <div class="sm:col-span-2 flex items-start justify-between gap-4 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5 dark:border-dark-700 dark:bg-dark-800/60">
+                    <div class="min-w-0">
+                      <label class="mb-0 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.customMenu.openInNewWindow") }}
+                      </label>
+                      <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.customMenu.openInNewWindowHint") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="item.open_in_new_window" />
+                  </div>
+
                   <!-- URL (full width) -->
                   <div class="sm:col-span-2">
                     <label
@@ -4261,44 +4274,6 @@
             <div v-if="form.affiliate_enabled" class="space-y-6">
               <div>
                 <label class="input-label">
-                  {{ t('admin.settings.features.affiliate.rebateRate') }}
-                </label>
-                <div class="relative">
-                  <input
-                    v-model.number="form.affiliate_rebate_rate"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max="100"
-                    class="input pr-8"
-                    placeholder="20"
-                  />
-                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
-                </div>
-                <p class="mt-1 text-xs text-gray-400">
-                  {{ t('admin.settings.features.affiliate.rebateRateHint') }}
-                </p>
-              </div>
-
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.affiliate.freezeHours') }}
-                </label>
-                <input
-                  v-model.number="form.affiliate_rebate_freeze_hours"
-                  type="number"
-                  step="1"
-                  min="0"
-                  max="720"
-                  class="input"
-                />
-                <p class="mt-1 text-xs text-gray-400">
-                  {{ t('admin.settings.features.affiliate.freezeHoursDesc') }}
-                </p>
-              </div>
-
-              <div>
-                <label class="input-label">
                   {{ t('admin.settings.features.affiliate.durationDays') }}
                 </label>
                 <input
@@ -4314,20 +4289,124 @@
                 </p>
               </div>
 
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.affiliate.perInviteeCap') }}
-                </label>
-                <input
-                  v-model.number="form.affiliate_rebate_per_invitee_cap"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  class="input"
-                />
-                <p class="mt-1 text-xs text-gray-400">
-                  {{ t('admin.settings.features.affiliate.perInviteeCapDesc') }}
-                </p>
+              <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                <div class="mb-4">
+                  <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                    {{ t('admin.settings.features.affiliate.bindInviter.title') }}
+                  </h3>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.features.affiliate.bindInviter.description') }}
+                  </p>
+                </div>
+
+                <div class="grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <label class="input-label">{{ t('admin.settings.features.affiliate.bindInviter.invitee') }}</label>
+                    <div
+                      v-if="affiliateBindState.invitee"
+                      class="flex items-center justify-between rounded-md border border-primary-200 bg-primary-50 px-3 py-2 dark:border-primary-700/50 dark:bg-primary-900/20"
+                    >
+                      <div class="truncate text-sm">
+                        <span class="font-medium text-gray-900 dark:text-white">{{ affiliateBindState.invitee.email }}</span>
+                        <span class="ml-1 text-xs text-gray-500">#{{ affiliateBindState.invitee.id }}</span>
+                      </div>
+                      <button
+                        type="button"
+                        class="text-lg leading-none text-gray-400 hover:text-red-600"
+                        :title="t('admin.settings.features.affiliate.bindInviter.clearSelection')"
+                        @click="clearAffiliateBindUser('invitee')"
+                      >
+                        x
+                      </button>
+                    </div>
+                    <template v-else>
+                      <input
+                        v-model="affiliateBindState.inviteeQuery"
+                        type="text"
+                        class="input"
+                        :placeholder="t('admin.settings.features.affiliate.bindInviter.inviteePlaceholder')"
+                        @input="onAffiliateBindSearchInput('invitee')"
+                      />
+                      <div
+                        v-if="affiliateBindState.inviteeResults.length > 0"
+                        class="mt-1 max-h-40 overflow-y-auto rounded border border-gray-200 dark:border-dark-700"
+                      >
+                        <button
+                          v-for="u in affiliateBindState.inviteeResults"
+                          :key="u.id"
+                          type="button"
+                          class="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-100 dark:hover:bg-dark-800"
+                          @click="selectAffiliateBindUser('invitee', u)"
+                        >
+                          {{ u.email }} <span class="text-xs text-gray-500">({{ u.username }})</span>
+                        </button>
+                      </div>
+                    </template>
+                  </div>
+
+                  <div>
+                    <label class="input-label">{{ t('admin.settings.features.affiliate.bindInviter.inviter') }}</label>
+                    <div
+                      v-if="affiliateBindState.inviter"
+                      class="flex items-center justify-between rounded-md border border-primary-200 bg-primary-50 px-3 py-2 dark:border-primary-700/50 dark:bg-primary-900/20"
+                    >
+                      <div class="truncate text-sm">
+                        <span class="font-medium text-gray-900 dark:text-white">{{ affiliateBindState.inviter.email }}</span>
+                        <span class="ml-1 text-xs text-gray-500">#{{ affiliateBindState.inviter.id }}</span>
+                      </div>
+                      <button
+                        type="button"
+                        class="text-lg leading-none text-gray-400 hover:text-red-600"
+                        :title="t('admin.settings.features.affiliate.bindInviter.clearSelection')"
+                        @click="clearAffiliateBindUser('inviter')"
+                      >
+                        x
+                      </button>
+                    </div>
+                    <template v-else>
+                      <input
+                        v-model="affiliateBindState.inviterQuery"
+                        type="text"
+                        class="input"
+                        :placeholder="t('admin.settings.features.affiliate.bindInviter.inviterPlaceholder')"
+                        @input="onAffiliateBindSearchInput('inviter')"
+                      />
+                      <div
+                        v-if="affiliateBindState.inviterResults.length > 0"
+                        class="mt-1 max-h-40 overflow-y-auto rounded border border-gray-200 dark:border-dark-700"
+                      >
+                        <button
+                          v-for="u in affiliateBindState.inviterResults"
+                          :key="u.id"
+                          type="button"
+                          class="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-100 dark:hover:bg-dark-800"
+                          @click="selectAffiliateBindUser('inviter', u)"
+                        >
+                          {{ u.email }} <span class="text-xs text-gray-500">({{ u.username }})</span>
+                        </button>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <label class="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-300">
+                    <input
+                      v-model="affiliateBindState.resetValidity"
+                      type="checkbox"
+                      class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span>{{ t('admin.settings.features.affiliate.bindInviter.resetValidity') }}</span>
+                  </label>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="affiliateBindState.saving || !affiliateBindCanSubmit"
+                    @click="submitAffiliateBindInviter"
+                  >
+                    {{ affiliateBindState.saving ? t('common.saving') : t('admin.settings.features.affiliate.bindInviter.submit') }}
+                  </button>
+                </div>
               </div>
 
               <!-- 专属用户管理 -->
@@ -4358,53 +4437,30 @@
                     :placeholder="t('admin.settings.features.affiliate.customUsers.searchPlaceholder')"
                     @input="onAffiliateSearchInput"
                   />
-                  <button
-                    v-if="affiliateState.selected.length > 0"
-                    type="button"
-                    class="btn btn-secondary btn-sm"
-                    @click="openAffiliateBatchModal"
-                  >
-                    {{ t('admin.settings.features.affiliate.customUsers.batchButton', { count: affiliateState.selected.length }) }}
-                  </button>
                 </div>
 
                 <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-700">
                   <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
                     <thead class="bg-gray-50 dark:bg-dark-800">
                       <tr>
-                        <th class="px-3 py-2 text-left">
-                          <input
-                            type="checkbox"
-                            :checked="affiliateState.entries.length > 0 && affiliateState.selected.length === affiliateState.entries.length"
-                            @change="toggleAffiliateSelectAll"
-                          />
-                        </th>
                         <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.email') }}</th>
                         <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.username') }}</th>
                         <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.code') }}</th>
-                        <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.rate') }}</th>
                         <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">{{ t('admin.settings.features.affiliate.customUsers.col.actions') }}</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
                       <tr v-if="affiliateState.loading">
-                        <td colspan="6" class="px-3 py-6 text-center text-sm text-gray-500">
+                        <td colspan="4" class="px-3 py-6 text-center text-sm text-gray-500">
                           {{ t('common.loading') }}
                         </td>
                       </tr>
                       <tr v-else-if="affiliateState.entries.length === 0">
-                        <td colspan="6" class="px-3 py-6 text-center text-sm text-gray-500">
+                        <td colspan="4" class="px-3 py-6 text-center text-sm text-gray-500">
                           {{ t('admin.settings.features.affiliate.customUsers.empty') }}
                         </td>
                       </tr>
                       <tr v-for="entry in affiliateState.entries" :key="entry.user_id">
-                        <td class="px-3 py-2">
-                          <input
-                            type="checkbox"
-                            :checked="affiliateState.selected.includes(entry.user_id)"
-                            @change="toggleAffiliateSelect(entry.user_id)"
-                          />
-                        </td>
                         <td class="px-3 py-2 text-sm text-gray-900 dark:text-white">{{ entry.email }}</td>
                         <td class="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">{{ entry.username }}</td>
                         <td class="px-3 py-2 text-sm font-mono">
@@ -4413,10 +4469,6 @@
                             v-if="entry.aff_code_custom"
                             class="ml-1 inline-block rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
                           >{{ t('admin.settings.features.affiliate.customUsers.customBadge') }}</span>
-                        </td>
-                        <td class="px-3 py-2 text-sm">
-                          <span v-if="entry.aff_rebate_rate_percent != null">{{ entry.aff_rebate_rate_percent }}%</span>
-                          <span v-else class="text-gray-400">{{ t('admin.settings.features.affiliate.customUsers.useGlobal') }}</span>
                         </td>
                         <td class="px-3 py-2 text-sm">
                           <div class="flex items-center gap-2">
@@ -4545,25 +4597,6 @@
                   {{ t('admin.settings.features.affiliate.modal.codeHint') }}
                 </p>
               </div>
-
-              <div>
-                <label class="input-label">{{ t('admin.settings.features.affiliate.modal.rateLabel') }}</label>
-                <div class="relative">
-                  <input
-                    v-model="affiliateModal.rate"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max="100"
-                    class="input pr-8"
-                    :placeholder="t('admin.settings.features.affiliate.modal.ratePlaceholder')"
-                  />
-                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
-                </div>
-                <p class="mt-1 text-xs text-gray-400">
-                  {{ t('admin.settings.features.affiliate.modal.rateHint') }}
-                </p>
-              </div>
             </div>
 
             <div class="mt-6 flex items-center justify-between gap-3">
@@ -4587,50 +4620,6 @@
                   {{ affiliateModal.saving ? t('common.saving') : t('common.save') }}
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Affiliate batch rate modal -->
-        <div
-          v-if="affiliateBatchModal.open"
-          class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          @click.self="affiliateBatchModal.open = false"
-        >
-          <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-dark-900">
-            <h3 class="mb-4 text-lg font-semibold">
-              {{ t('admin.settings.features.affiliate.batchModal.title', { count: affiliateState.selected.length }) }}
-            </h3>
-            <p class="mb-4 text-sm text-gray-500">
-              {{ t('admin.settings.features.affiliate.batchModal.hint') }}
-            </p>
-            <div class="relative">
-              <input
-                v-model="affiliateBatchModal.rate"
-                type="number"
-                step="0.01"
-                min="0"
-                max="100"
-                class="input pr-8"
-                :placeholder="t('admin.settings.features.affiliate.batchModal.placeholder')"
-              />
-              <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
-            </div>
-            <p class="mt-2 text-xs text-gray-400">
-              {{ t('admin.settings.features.affiliate.batchModal.clearHint') }}
-            </p>
-            <div class="mt-6 flex justify-end gap-2">
-              <button type="button" class="btn btn-secondary" @click="affiliateBatchModal.open = false">
-                {{ t('common.cancel') }}
-              </button>
-              <button
-                type="button"
-                class="btn btn-primary"
-                :disabled="affiliateBatchModal.saving"
-                @click="submitAffiliateBatchModal"
-              >
-                {{ affiliateBatchModal.saving ? t('common.saving') : t('common.save') }}
-              </button>
             </div>
           </div>
         </div>
@@ -5824,6 +5813,7 @@ const form = reactive<SettingsForm>({
     url: string;
     visibility: "user" | "admin";
     sort_order: number;
+    open_in_new_window: boolean;
   }>,
   custom_endpoints: [] as Array<{
     name: string;
@@ -6360,6 +6350,7 @@ function addMenuItem() {
     url: "",
     visibility: "user",
     sort_order: form.custom_menu_items.length,
+    open_in_new_window: false,
   });
 }
 
@@ -6437,6 +6428,11 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
+    form.custom_menu_items = form.custom_menu_items.map((item, index) => ({
+      ...item,
+      sort_order: Number.isInteger(item.sort_order) ? item.sort_order : index,
+      open_in_new_window: Boolean(item.open_in_new_window),
+    }));
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(settings));
     form.backend_mode_enabled = settings.backend_mode_enabled;
     form.default_subscriptions = normalizeDefaultSubscriptionSettings(
@@ -6729,13 +6725,7 @@ async function saveSettings() {
       password_reset_enabled: form.password_reset_enabled,
       totp_enabled: form.totp_enabled,
       default_balance: form.default_balance,
-      affiliate_rebate_rate: Math.min(
-        100,
-        Math.max(0, Number(form.affiliate_rebate_rate) || 0),
-      ),
-      affiliate_rebate_freeze_hours: Math.max(0, Math.min(720, Number(form.affiliate_rebate_freeze_hours) || 0)),
       affiliate_rebate_duration_days: Math.max(0, Math.min(3650, Math.floor(Number(form.affiliate_rebate_duration_days) || 0))),
-      affiliate_rebate_per_invitee_cap: Math.max(0, Number(form.affiliate_rebate_per_invitee_cap) || 0),
       default_concurrency: form.default_concurrency,
       default_subscriptions: normalizedDefaultSubscriptions,
       force_email_on_third_party_signup: form.force_email_on_third_party_signup,
@@ -7785,7 +7775,6 @@ interface AffiliateState {
   page: number;
   pageSize: number;
   search: string;
-  selected: number[];
   searchTimer: number | null;
 }
 
@@ -7796,13 +7785,9 @@ const affiliateState = reactive<AffiliateState>({
   page: 1,
   pageSize: 20,
   search: "",
-  selected: [],
   searchTimer: null,
 });
 
-// `rate` is typed as string|number because <input type="number"> makes Vue's
-// v-model auto-cast the bound value to a Number on every keystroke. We keep
-// both shapes and normalize at read time.
 interface AffiliateModalState {
   open: boolean;
   mode: "add" | "edit";
@@ -7812,7 +7797,6 @@ interface AffiliateModalState {
   selectedUser: AffiliateSimpleUser | null;
   editingEntry: AffiliateAdminEntry | null;
   code: string;
-  rate: string | number;
   searchTimer: number | null;
 }
 
@@ -7825,18 +7809,35 @@ const affiliateModal = reactive<AffiliateModalState>({
   selectedUser: null,
   editingEntry: null,
   code: "",
-  rate: "",
   searchTimer: null,
 });
 
-const affiliateBatchModal = reactive<{
-  open: boolean;
+type AffiliateBindTarget = "invitee" | "inviter";
+
+interface AffiliateBindState {
   saving: boolean;
-  rate: string | number;
-}>({
-  open: false,
+  inviteeQuery: string;
+  inviterQuery: string;
+  inviteeResults: AffiliateSimpleUser[];
+  inviterResults: AffiliateSimpleUser[];
+  invitee: AffiliateSimpleUser | null;
+  inviter: AffiliateSimpleUser | null;
+  resetValidity: boolean;
+  inviteeSearchTimer: number | null;
+  inviterSearchTimer: number | null;
+}
+
+const affiliateBindState = reactive<AffiliateBindState>({
   saving: false,
-  rate: "",
+  inviteeQuery: "",
+  inviterQuery: "",
+  inviteeResults: [],
+  inviterResults: [],
+  invitee: null,
+  inviter: null,
+  resetValidity: true,
+  inviteeSearchTimer: null,
+  inviterSearchTimer: null,
 });
 
 // affiliateConfirmDialog drives the project-standard <ConfirmDialog>. We can't
@@ -7896,25 +7897,6 @@ function debounceTimer(slot: { searchTimer: number | null }, delayMs: number, ru
   slot.searchTimer = window.setTimeout(run, delayMs);
 }
 
-// parseRebateRate validates 0-100 numeric input. Returns the parsed number on
-// success, null when the field is empty (caller decides empty semantics), or
-// undefined on invalid input (after surfacing a toast).
-//
-// Accepts unknown because <input type="number"> makes Vue's v-model coerce
-// the value to Number on each keystroke (e.g. typing "30" lands a `30: number`
-// in state, not a `"30": string`). String("") and (30).trim() would crash, so
-// we normalize here instead of forcing every caller to remember.
-function parseRebateRate(raw: unknown): number | null | undefined {
-  const s = String(raw ?? "").trim();
-  if (s === "") return null;
-  const parsed = Number(s);
-  if (Number.isNaN(parsed) || parsed < 0 || parsed > 100) {
-    appStore.showError(t("admin.settings.features.affiliate.modal.errorBadRate"));
-    return undefined;
-  }
-  return parsed;
-}
-
 async function loadAffiliateUsers() {
   affiliateState.loading = true;
   try {
@@ -7925,9 +7907,6 @@ async function loadAffiliateUsers() {
     });
     affiliateState.entries = res.items ?? [];
     affiliateState.total = res.total ?? 0;
-    // Drop selections that are no longer visible.
-    const visibleIds = new Set(affiliateState.entries.map((e) => e.user_id));
-    affiliateState.selected = affiliateState.selected.filter((id) => visibleIds.has(id));
   } catch (err) {
     appStore.showError(extractApiErrorMessage(err, t("common.error")));
   } finally {
@@ -7948,17 +7927,6 @@ function changeAffiliatePage(page: number) {
   loadAffiliateUsers();
 }
 
-function toggleAffiliateSelectAll(e: Event) {
-  const checked = (e.target as HTMLInputElement).checked;
-  affiliateState.selected = checked ? affiliateState.entries.map((entry) => entry.user_id) : [];
-}
-
-function toggleAffiliateSelect(userId: number) {
-  const idx = affiliateState.selected.indexOf(userId);
-  if (idx >= 0) affiliateState.selected.splice(idx, 1);
-  else affiliateState.selected.push(userId);
-}
-
 // openAffiliateModal opens the add/edit modal, prefilling fields from the
 // edited entry when present and resetting them otherwise.
 function openAffiliateModal(entry: AffiliateAdminEntry | null) {
@@ -7969,8 +7937,6 @@ function openAffiliateModal(entry: AffiliateAdminEntry | null) {
   affiliateModal.selectedUser = null;
   affiliateModal.editingEntry = entry;
   affiliateModal.code = entry?.aff_code_custom ? entry.aff_code : "";
-  affiliateModal.rate =
-    entry?.aff_rebate_rate_percent != null ? String(entry.aff_rebate_rate_percent) : "";
 }
 
 function closeAffiliateModal() {
@@ -8008,24 +7974,22 @@ function clearSelectedAffiliateUser() {
   affiliateModal.selectedUser = null;
 }
 
-// affiliateModalCanSubmit guards the Save button: must have a user picked AND
-// produce at least one field change. Without this the admin could "save" an
-// empty payload that silently does nothing — the user reported exactly that
-// confusion.
+// affiliateModalCanSubmit guards the Save button: must have a user picked and
+// a custom invite code to apply.
 const affiliateModalCanSubmit = computed(() => {
   if (affiliateModal.mode === "add") {
     if (!affiliateModal.selectedUser) return false;
   } else if (!affiliateModal.editingEntry) {
     return false;
   }
-  const codeFilled = affiliateModal.code.trim() !== "";
-  const rateFilled = String(affiliateModal.rate ?? "").trim() !== "";
-  if (codeFilled || rateFilled) return true;
-  // Edit mode + empty rate input is a meaningful "clear" only if the user
-  // currently has an exclusive rate to clear.
-  return (
-    affiliateModal.mode === "edit" &&
-    affiliateModal.editingEntry?.aff_rebate_rate_percent != null
+  return affiliateModal.code.trim() !== "";
+});
+
+const affiliateBindCanSubmit = computed(() => {
+  return Boolean(
+    affiliateBindState.invitee &&
+      affiliateBindState.inviter &&
+      affiliateBindState.invitee.id !== affiliateBindState.inviter.id,
   );
 });
 
@@ -8046,16 +8010,6 @@ async function submitAffiliateModal() {
   const payload: Parameters<typeof affiliatesAPI.updateUserSettings>[1] = {};
   const codeRaw = affiliateModal.code.trim();
   if (codeRaw) payload.aff_code = codeRaw.toUpperCase();
-
-  const rateInput = parseRebateRate(affiliateModal.rate);
-  if (rateInput === undefined) return; // toast already shown
-  if (rateInput === null) {
-    if (affiliateModal.mode === "edit" && affiliateModal.editingEntry?.aff_rebate_rate_percent != null) {
-      payload.clear_rebate_rate = true;
-    }
-  } else {
-    payload.aff_rebate_rate_percent = rateInput;
-  }
 
   affiliateModal.saving = true;
   try {
@@ -8085,32 +8039,90 @@ function askResetAffiliateUser(entry: AffiliateAdminEntry) {
   );
 }
 
-function openAffiliateBatchModal() {
-  if (affiliateState.selected.length === 0) return;
-  affiliateBatchModal.open = true;
-  affiliateBatchModal.rate = "";
+function affiliateBindTimerSlot(target: AffiliateBindTarget): { searchTimer: number | null } {
+  return {
+    get searchTimer() {
+      return target === "invitee" ? affiliateBindState.inviteeSearchTimer : affiliateBindState.inviterSearchTimer;
+    },
+    set searchTimer(value: number | null) {
+      if (target === "invitee") {
+        affiliateBindState.inviteeSearchTimer = value;
+      } else {
+        affiliateBindState.inviterSearchTimer = value;
+      }
+    },
+  };
 }
 
-async function submitAffiliateBatchModal() {
-  const rateInput = parseRebateRate(affiliateBatchModal.rate);
-  if (rateInput === undefined) return;
-  const userIDs = [...affiliateState.selected];
-  const payload: Parameters<typeof affiliatesAPI.batchSetRate>[0] =
-    rateInput === null
-      ? { user_ids: userIDs, clear: true }
-      : { user_ids: userIDs, aff_rebate_rate_percent: rateInput };
+function onAffiliateBindSearchInput(target: AffiliateBindTarget) {
+  const query = target === "invitee" ? affiliateBindState.inviteeQuery.trim() : affiliateBindState.inviterQuery.trim();
+  if (!query) {
+    if (target === "invitee") {
+      affiliateBindState.inviteeResults = [];
+    } else {
+      affiliateBindState.inviterResults = [];
+    }
+    return;
+  }
 
-  affiliateBatchModal.saving = true;
+  debounceTimer(affiliateBindTimerSlot(target), 300, async () => {
+    try {
+      const results = await affiliatesAPI.lookupUsers(query);
+      if (target === "invitee") {
+        affiliateBindState.inviteeResults = results;
+      } else {
+        affiliateBindState.inviterResults = results;
+      }
+    } catch (err) {
+      appStore.showError(extractApiErrorMessage(err, t("common.error")));
+    }
+  });
+}
+
+function selectAffiliateBindUser(target: AffiliateBindTarget, user: AffiliateSimpleUser) {
+  if (target === "invitee") {
+    affiliateBindState.invitee = user;
+    affiliateBindState.inviteeQuery = "";
+    affiliateBindState.inviteeResults = [];
+  } else {
+    affiliateBindState.inviter = user;
+    affiliateBindState.inviterQuery = "";
+    affiliateBindState.inviterResults = [];
+  }
+}
+
+function clearAffiliateBindUser(target: AffiliateBindTarget) {
+  if (target === "invitee") {
+    affiliateBindState.invitee = null;
+  } else {
+    affiliateBindState.inviter = null;
+  }
+}
+
+async function submitAffiliateBindInviter() {
+  if (!affiliateBindState.invitee || !affiliateBindState.inviter) return;
+  if (affiliateBindState.invitee.id === affiliateBindState.inviter.id) {
+    appStore.showError(t("admin.settings.features.affiliate.bindInviter.selfError"));
+    return;
+  }
+
+  affiliateBindState.saving = true;
   try {
-    await affiliatesAPI.batchSetRate(payload);
+    await affiliatesAPI.bindInviter(affiliateBindState.invitee.id, {
+      inviter_user_id: affiliateBindState.inviter.id,
+      reset_validity: affiliateBindState.resetValidity,
+    });
     appStore.showSuccess(t("common.saved"));
-    affiliateBatchModal.open = false;
-    affiliateState.selected = [];
-    await loadAffiliateUsers();
+    affiliateBindState.invitee = null;
+    affiliateBindState.inviter = null;
+    affiliateBindState.inviteeQuery = "";
+    affiliateBindState.inviterQuery = "";
+    affiliateBindState.inviteeResults = [];
+    affiliateBindState.inviterResults = [];
   } catch (err) {
     appStore.showError(extractApiErrorMessage(err, t("common.error")));
   } finally {
-    affiliateBatchModal.saving = false;
+    affiliateBindState.saving = false;
   }
 }
 

@@ -102,6 +102,7 @@ type AffiliateRepository interface {
 	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
 	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
+	AdminBindInviter(ctx context.Context, userID, inviterID int64, resetValidity bool) (*AffiliateSummary, error)
 	GetCurrentInviteSharePercent(ctx context.Context) (float64, error)
 	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int) (bool, error)
 	GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error)
@@ -498,6 +499,18 @@ func (s *AffiliateService) AdminBatchSetUserRebateRate(ctx context.Context, user
 		return nil
 	}
 	return s.repo.BatchSetUserRebateRate(ctx, cleaned, ratePercent)
+}
+
+// AdminBindInviter sets or replaces a user's inviter. resetValidity=true
+// starts a fresh invite validity window from the admin binding time.
+func (s *AffiliateService) AdminBindInviter(ctx context.Context, userID, inviterID int64, resetValidity bool) (*AffiliateSummary, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if userID <= 0 || inviterID <= 0 || userID == inviterID {
+		return nil, ErrAffiliateCodeInvalid
+	}
+	return s.repo.AdminBindInviter(ctx, userID, inviterID, resetValidity)
 }
 
 // AdminListCustomUsers 列出有专属配置的用户。

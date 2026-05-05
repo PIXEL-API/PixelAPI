@@ -118,6 +118,20 @@ func TestGroupRepository_DeleteCascade_RemovesAllowedGroupsAndClearsApiKeys(t *t
 		Status:  service.StatusActive,
 	}
 	require.NoError(t, apiKeyRepo.Create(ctx, key))
+	routeOnlyKey := &service.APIKey{
+		UserID: u.ID,
+		Key:    uniqueTestValue(t, "sk-test-delete-cascade-route"),
+		Name:   "route only key",
+		Status: service.StatusActive,
+		GroupRoutes: []service.APIKeyGroupRoute{{
+			GroupID:         targetGroup.ID,
+			Priority:        100,
+			Weight:          1,
+			Enabled:         true,
+			CooldownSeconds: 30,
+		}},
+	}
+	require.NoError(t, apiKeyRepo.Create(ctx, routeOnlyKey))
 
 	_, err = groupRepo.DeleteCascade(ctx, targetGroup.ID)
 	require.NoError(t, err)
@@ -142,4 +156,10 @@ func TestGroupRepository_DeleteCascade_RemovesAllowedGroupsAndClearsApiKeys(t *t
 	keyAfter, err := apiKeyRepo.GetByID(ctx, key.ID)
 	require.NoError(t, err)
 	require.Nil(t, keyAfter.GroupID)
+	routeOnlyKeyAfter, err := apiKeyRepo.GetByID(ctx, routeOnlyKey.ID)
+	require.NoError(t, err)
+	require.Empty(t, routeOnlyKeyAfter.GroupRoutes)
+	countAfter, err := apiKeyRepo.CountByGroupID(ctx, targetGroup.ID)
+	require.NoError(t, err)
+	require.Zero(t, countAfter)
 }

@@ -7,10 +7,10 @@
         </div>
         <div class="min-w-0">
           <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
-            {{ t('admin.accounts.quotaDashboard.title') }}
+            {{ panelTitle }}
           </h2>
           <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-            {{ t('admin.accounts.quotaDashboard.subtitle') }}
+            {{ panelSubtitle }}
           </p>
         </div>
       </div>
@@ -54,11 +54,11 @@
     </div>
 
     <div v-else-if="error" class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
-      {{ t('admin.accounts.quotaDashboard.loadFailed') }}
+      {{ loadFailedText }}
     </div>
 
     <div v-else-if="visibleSummaries.length === 0" class="mt-3 rounded-md border border-dashed border-gray-200 px-3 py-4 text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">
-      {{ t('admin.accounts.quotaDashboard.empty') }}
+      {{ emptyText }}
     </div>
 
     <div v-else class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -156,6 +156,10 @@ const props = defineProps<{
   dashboard: AccountQuotaDashboard | null
   loading: boolean
   error: boolean
+  title?: string
+  subtitle?: string
+  emptyMessage?: string
+  loadFailedMessage?: string
 }>()
 
 const emit = defineEmits<{
@@ -163,6 +167,11 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+const panelTitle = computed(() => props.title ?? t('admin.accounts.quotaDashboard.title'))
+const panelSubtitle = computed(() => props.subtitle ?? t('admin.accounts.quotaDashboard.subtitle'))
+const emptyText = computed(() => props.emptyMessage ?? t('admin.accounts.quotaDashboard.empty'))
+const loadFailedText = computed(() => props.loadFailedMessage ?? t('admin.accounts.quotaDashboard.loadFailed'))
 
 const emptyDimension: AccountQuotaDimensionSummary = {
   enabled_account_count: 0,

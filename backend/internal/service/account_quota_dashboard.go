@@ -17,6 +17,12 @@ type AccountQuotaDashboard struct {
 	Totals      AccountQuotaSummary   `json:"totals"`
 }
 
+type UserAccountQuotaPoolDashboard struct {
+	GeneratedAt time.Time             `json:"generated_at"`
+	Mine        AccountQuotaDashboard `json:"mine"`
+	Platform    AccountQuotaDashboard `json:"platform"`
+}
+
 type AccountQuotaSummary struct {
 	Platform                string                       `json:"platform"`
 	Type                    string                       `json:"type"`
@@ -60,23 +66,81 @@ type accountUsageWindowAccumulator struct {
 	utilizationSum float64
 }
 
+type accountQuotaDashboardBuilder struct {
+	generatedAt  time.Time
+	accumulators map[string]*accountQuotaSummaryAccumulator
+	total        *accountQuotaSummaryAccumulator
+}
+
 func (s *adminServiceImpl) GetAccountQuotaDashboard(ctx context.Context) (*AccountQuotaDashboard, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, fmt.Errorf("account repository is unavailable")
 	}
 
 	generatedAt := time.Now().UTC()
-	accumulators := make(map[string]*accountQuotaSummaryAccumulator)
-	total := &accountQuotaSummaryAccumulator{
-		summary: AccountQuotaSummary{
-			Platform: "all",
-			Type:     "all",
+	builder := newAccountQuotaDashboardBuilder(generatedAt)
+
+	if err := visitAccountQuotaDashboardAccounts(ctx, s.accountRepo, func(account Account) {
+		builder.addAccount(account)
+	}); err != nil {
+		return nil, err
+	}
+
+	dashboard := builder.finalize()
+	return &dashboard, nil
+}
+
+func (s *AccountService) GetQuotaPoolDashboard(ctx context.Context, ownerUserID int64) (*UserAccountQuotaPoolDashboard, error) {
+	if ownerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	if s == nil || s.accountRepo == nil {
+		return nil, fmt.Errorf("account repository is unavailable")
+	}
+
+	generatedAt := time.Now().UTC()
+	mine := newAccountQuotaDashboardBuilder(generatedAt)
+	platform := newAccountQuotaDashboardBuilder(generatedAt)
+
+	if err := visitAccountQuotaDashboardAccounts(ctx, s.accountRepo, func(account Account) {
+		if account.OwnerUserID != nil && *account.OwnerUserID == ownerUserID {
+			mine.addAccount(account)
+		}
+		if isPlatformQuotaPoolAccount(account) {
+			platform.addAccount(account)
+		}
+	}); err != nil {
+		return nil, err
+	}
+
+	return &UserAccountQuotaPoolDashboard{
+		GeneratedAt: generatedAt,
+		Mine:        mine.finalize(),
+		Platform:    platform.finalize(),
+	}, nil
+}
+
+func newAccountQuotaDashboardBuilder(generatedAt time.Time) *accountQuotaDashboardBuilder {
+	return &accountQuotaDashboardBuilder{
+		generatedAt:  generatedAt,
+		accumulators: make(map[string]*accountQuotaSummaryAccumulator),
+		total: &accountQuotaSummaryAccumulator{
+			summary: AccountQuotaSummary{
+				Platform: "all",
+				Type:     "all",
+			},
+			windowAggs: make(map[string]*accountUsageWindowAccumulator),
 		},
-		windowAggs: make(map[string]*accountUsageWindowAccumulator),
+	}
+}
+
+func visitAccountQuotaDashboardAccounts(ctx context.Context, repo AccountRepository, visit func(Account)) error {
+	if repo == nil {
+		return fmt.Errorf("account repository is unavailable")
 	}
 
 	for page := 1; ; page++ {
-		accounts, result, err := s.accountRepo.ListWithFilters(
+		accounts, result, err := repo.ListWithFilters(
 			ctx,
 			pagination.PaginationParams{
 				Page:      page,
@@ -92,28 +156,14 @@ func (s *adminServiceImpl) GetAccountQuotaDashboard(ctx context.Context) (*Accou
 			"",
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(accounts) == 0 {
 			break
 		}
 
 		for i := range accounts {
-			account := accounts[i]
-			key := account.Platform + "\x00" + account.Type
-			acc, ok := accumulators[key]
-			if !ok {
-				acc = &accountQuotaSummaryAccumulator{
-					summary: AccountQuotaSummary{
-						Platform: account.Platform,
-						Type:     account.Type,
-					},
-					windowAggs: make(map[string]*accountUsageWindowAccumulator),
-				}
-				accumulators[key] = acc
-			}
-			acc.addAccount(account, generatedAt)
-			total.addAccount(account, generatedAt)
+			visit(accounts[i])
 		}
 
 		if result == nil || int64(page*accountQuotaDashboardPageSize) >= result.Total {
@@ -121,8 +171,36 @@ func (s *adminServiceImpl) GetAccountQuotaDashboard(ctx context.Context) (*Accou
 		}
 	}
 
-	summaries := make([]AccountQuotaSummary, 0, len(accumulators))
-	for _, acc := range accumulators {
+	return nil
+}
+
+func (b *accountQuotaDashboardBuilder) addAccount(account Account) {
+	if b == nil {
+		return
+	}
+	key := account.Platform + "\x00" + account.Type
+	acc, ok := b.accumulators[key]
+	if !ok {
+		acc = &accountQuotaSummaryAccumulator{
+			summary: AccountQuotaSummary{
+				Platform: account.Platform,
+				Type:     account.Type,
+			},
+			windowAggs: make(map[string]*accountUsageWindowAccumulator),
+		}
+		b.accumulators[key] = acc
+	}
+	acc.addAccount(account, b.generatedAt)
+	b.total.addAccount(account, b.generatedAt)
+}
+
+func (b *accountQuotaDashboardBuilder) finalize() AccountQuotaDashboard {
+	if b == nil {
+		return AccountQuotaDashboard{}
+	}
+
+	summaries := make([]AccountQuotaSummary, 0, len(b.accumulators))
+	for _, acc := range b.accumulators {
 		summaries = append(summaries, acc.finalize())
 	}
 	sort.Slice(summaries, func(i, j int) bool {
@@ -132,11 +210,18 @@ func (s *adminServiceImpl) GetAccountQuotaDashboard(ctx context.Context) (*Accou
 		return summaries[i].Platform < summaries[j].Platform
 	})
 
-	return &AccountQuotaDashboard{
-		GeneratedAt: generatedAt,
+	return AccountQuotaDashboard{
+		GeneratedAt: b.generatedAt,
 		Summaries:   summaries,
-		Totals:      total.finalize(),
-	}, nil
+		Totals:      b.total.finalize(),
+	}
+}
+
+func isPlatformQuotaPoolAccount(account Account) bool {
+	if account.OwnerUserID == nil {
+		return true
+	}
+	return (&account).IsPublicShareApproved()
 }
 
 func (a *accountQuotaSummaryAccumulator) addAccount(account Account, now time.Time) {

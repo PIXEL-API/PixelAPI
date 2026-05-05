@@ -7936,6 +7936,10 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	cost := p.Cost
 
 	if p.IsSubscriptionBill {
+		if p.Subscription == nil {
+			slog.Error("subscription billing requested without subscription", "user_id", p.User.ID, "api_key_id", p.APIKey.ID)
+			return
+		}
 		// Subscription usage tracked by ActualCost so group rate multiplier
 		// consumes the quota at the expected speed.
 		if cost.ActualCost > 0 {
@@ -8018,9 +8022,13 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		AccountID:          p.Account.ID,
 		AccountType:        p.Account.Type,
 		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
+		UsageOccurredAt:    time.Now(),
 		UsageLog:           usageLog,
 	}
 	if usageLog != nil {
+		if !usageLog.CreatedAt.IsZero() {
+			cmd.UsageOccurredAt = usageLog.CreatedAt
+		}
 		cmd.Model = usageLog.Model
 		cmd.BillingType = usageLog.BillingType
 		cmd.InputTokens = usageLog.InputTokens
@@ -8046,9 +8054,11 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	// user-specific) rate multiplier consumes subscription quota at the expected
 	// speed. TotalCost remains the raw (pre-multiplier) value; downstream guards
 	// on "> 0" still correctly skip free subscriptions (RateMultiplier == 0).
-	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
-		cmd.SubscriptionID = &p.Subscription.ID
-		cmd.SubscriptionCost = p.Cost.ActualCost
+	if p.IsSubscriptionBill {
+		if p.Subscription != nil && p.Cost.TotalCost > 0 {
+			cmd.SubscriptionID = &p.Subscription.ID
+			cmd.SubscriptionCost = p.Cost.ActualCost
+		}
 	} else if p.Cost.ActualCost > 0 {
 		cmd.BalanceCost = p.Cost.ActualCost
 	}
@@ -8107,7 +8117,7 @@ func attachAccountShareBillingSnapshot(ctx context.Context, cmd *UsageBillingCom
 	if err != nil {
 		return fmt.Errorf("resolve account share policy snapshot: %w", err)
 	}
-	if policy == nil || policy.OwnerShareRatio <= 0 {
+	if policy == nil || (policy.OwnerShareRatio <= 0 && policy.InviteShareRatio <= 0) {
 		return nil
 	}
 	sharePolicyID := policy.ID
@@ -8476,8 +8486,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, opts)
 
-	// 判断计费方式：订阅模式 vs 余额模式
-	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	// 判断计费方式：订阅模式 vs 余额模式。订阅分组和余额相互独立，订阅缺失时必须失败，不能回退余额。
+	isSubscriptionBilling := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	if isSubscriptionBilling && subscription == nil {
+		return ErrSubscriptionNotFound
+	}
 	billingType := BillingTypeBalance
 	if isSubscriptionBilling {
 		billingType = BillingTypeSubscription

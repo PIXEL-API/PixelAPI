@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcement"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/apikeygrouproute"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitor"
@@ -60,6 +61,7 @@ const (
 
 	// Node types.
 	TypeAPIKey                        = "APIKey"
+	TypeAPIKeyGroupRoute              = "APIKeyGroupRoute"
 	TypeAccount                       = "Account"
 	TypeAccountGroup                  = "AccountGroup"
 	TypeAnnouncement                  = "Announcement"
@@ -98,51 +100,54 @@ const (
 // APIKeyMutation represents an operation that mutates the APIKey nodes in the graph.
 type APIKeyMutation struct {
 	config
-	op                 Op
-	typ                string
-	id                 *int64
-	created_at         *time.Time
-	updated_at         *time.Time
-	deleted_at         *time.Time
-	key                *string
-	name               *string
-	status             *string
-	last_used_at       *time.Time
-	ip_whitelist       *[]string
-	appendip_whitelist []string
-	ip_blacklist       *[]string
-	appendip_blacklist []string
-	quota              *float64
-	addquota           *float64
-	quota_used         *float64
-	addquota_used      *float64
-	expires_at         *time.Time
-	rate_limit_5h      *float64
-	addrate_limit_5h   *float64
-	rate_limit_1d      *float64
-	addrate_limit_1d   *float64
-	rate_limit_7d      *float64
-	addrate_limit_7d   *float64
-	usage_5h           *float64
-	addusage_5h        *float64
-	usage_1d           *float64
-	addusage_1d        *float64
-	usage_7d           *float64
-	addusage_7d        *float64
-	window_5h_start    *time.Time
-	window_1d_start    *time.Time
-	window_7d_start    *time.Time
-	clearedFields      map[string]struct{}
-	user               *int64
-	cleareduser        bool
-	group              *int64
-	clearedgroup       bool
-	usage_logs         map[int64]struct{}
-	removedusage_logs  map[int64]struct{}
-	clearedusage_logs  bool
-	done               bool
-	oldValue           func(context.Context) (*APIKey, error)
-	predicates         []predicate.APIKey
+	op                  Op
+	typ                 string
+	id                  *int64
+	created_at          *time.Time
+	updated_at          *time.Time
+	deleted_at          *time.Time
+	key                 *string
+	name                *string
+	status              *string
+	last_used_at        *time.Time
+	ip_whitelist        *[]string
+	appendip_whitelist  []string
+	ip_blacklist        *[]string
+	appendip_blacklist  []string
+	quota               *float64
+	addquota            *float64
+	quota_used          *float64
+	addquota_used       *float64
+	expires_at          *time.Time
+	rate_limit_5h       *float64
+	addrate_limit_5h    *float64
+	rate_limit_1d       *float64
+	addrate_limit_1d    *float64
+	rate_limit_7d       *float64
+	addrate_limit_7d    *float64
+	usage_5h            *float64
+	addusage_5h         *float64
+	usage_1d            *float64
+	addusage_1d         *float64
+	usage_7d            *float64
+	addusage_7d         *float64
+	window_5h_start     *time.Time
+	window_1d_start     *time.Time
+	window_7d_start     *time.Time
+	clearedFields       map[string]struct{}
+	user                *int64
+	cleareduser         bool
+	group               *int64
+	clearedgroup        bool
+	group_routes        map[int64]struct{}
+	removedgroup_routes map[int64]struct{}
+	clearedgroup_routes bool
+	usage_logs          map[int64]struct{}
+	removedusage_logs   map[int64]struct{}
+	clearedusage_logs   bool
+	done                bool
+	oldValue            func(context.Context) (*APIKey, error)
+	predicates          []predicate.APIKey
 }
 
 var _ ent.Mutation = (*APIKeyMutation)(nil)
@@ -1434,6 +1439,60 @@ func (m *APIKeyMutation) ResetGroup() {
 	m.clearedgroup = false
 }
 
+// AddGroupRouteIDs adds the "group_routes" edge to the APIKeyGroupRoute entity by ids.
+func (m *APIKeyMutation) AddGroupRouteIDs(ids ...int64) {
+	if m.group_routes == nil {
+		m.group_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.group_routes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearGroupRoutes clears the "group_routes" edge to the APIKeyGroupRoute entity.
+func (m *APIKeyMutation) ClearGroupRoutes() {
+	m.clearedgroup_routes = true
+}
+
+// GroupRoutesCleared reports if the "group_routes" edge to the APIKeyGroupRoute entity was cleared.
+func (m *APIKeyMutation) GroupRoutesCleared() bool {
+	return m.clearedgroup_routes
+}
+
+// RemoveGroupRouteIDs removes the "group_routes" edge to the APIKeyGroupRoute entity by IDs.
+func (m *APIKeyMutation) RemoveGroupRouteIDs(ids ...int64) {
+	if m.removedgroup_routes == nil {
+		m.removedgroup_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.group_routes, ids[i])
+		m.removedgroup_routes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedGroupRoutes returns the removed IDs of the "group_routes" edge to the APIKeyGroupRoute entity.
+func (m *APIKeyMutation) RemovedGroupRoutesIDs() (ids []int64) {
+	for id := range m.removedgroup_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// GroupRoutesIDs returns the "group_routes" edge IDs in the mutation.
+func (m *APIKeyMutation) GroupRoutesIDs() (ids []int64) {
+	for id := range m.group_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetGroupRoutes resets all changes to the "group_routes" edge.
+func (m *APIKeyMutation) ResetGroupRoutes() {
+	m.group_routes = nil
+	m.clearedgroup_routes = false
+	m.removedgroup_routes = nil
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by ids.
 func (m *APIKeyMutation) AddUsageLogIDs(ids ...int64) {
 	if m.usage_logs == nil {
@@ -2151,12 +2210,15 @@ func (m *APIKeyMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *APIKeyMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.user != nil {
 		edges = append(edges, apikey.EdgeUser)
 	}
 	if m.group != nil {
 		edges = append(edges, apikey.EdgeGroup)
+	}
+	if m.group_routes != nil {
+		edges = append(edges, apikey.EdgeGroupRoutes)
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, apikey.EdgeUsageLogs)
@@ -2176,6 +2238,12 @@ func (m *APIKeyMutation) AddedIDs(name string) []ent.Value {
 		if id := m.group; id != nil {
 			return []ent.Value{*id}
 		}
+	case apikey.EdgeGroupRoutes:
+		ids := make([]ent.Value, 0, len(m.group_routes))
+		for id := range m.group_routes {
+			ids = append(ids, id)
+		}
+		return ids
 	case apikey.EdgeUsageLogs:
 		ids := make([]ent.Value, 0, len(m.usage_logs))
 		for id := range m.usage_logs {
@@ -2188,7 +2256,10 @@ func (m *APIKeyMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *APIKeyMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
+	if m.removedgroup_routes != nil {
+		edges = append(edges, apikey.EdgeGroupRoutes)
+	}
 	if m.removedusage_logs != nil {
 		edges = append(edges, apikey.EdgeUsageLogs)
 	}
@@ -2199,6 +2270,12 @@ func (m *APIKeyMutation) RemovedEdges() []string {
 // the given name in this mutation.
 func (m *APIKeyMutation) RemovedIDs(name string) []ent.Value {
 	switch name {
+	case apikey.EdgeGroupRoutes:
+		ids := make([]ent.Value, 0, len(m.removedgroup_routes))
+		for id := range m.removedgroup_routes {
+			ids = append(ids, id)
+		}
+		return ids
 	case apikey.EdgeUsageLogs:
 		ids := make([]ent.Value, 0, len(m.removedusage_logs))
 		for id := range m.removedusage_logs {
@@ -2211,12 +2288,15 @@ func (m *APIKeyMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *APIKeyMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.cleareduser {
 		edges = append(edges, apikey.EdgeUser)
 	}
 	if m.clearedgroup {
 		edges = append(edges, apikey.EdgeGroup)
+	}
+	if m.clearedgroup_routes {
+		edges = append(edges, apikey.EdgeGroupRoutes)
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, apikey.EdgeUsageLogs)
@@ -2232,6 +2312,8 @@ func (m *APIKeyMutation) EdgeCleared(name string) bool {
 		return m.cleareduser
 	case apikey.EdgeGroup:
 		return m.clearedgroup
+	case apikey.EdgeGroupRoutes:
+		return m.clearedgroup_routes
 	case apikey.EdgeUsageLogs:
 		return m.clearedusage_logs
 	}
@@ -2262,11 +2344,920 @@ func (m *APIKeyMutation) ResetEdge(name string) error {
 	case apikey.EdgeGroup:
 		m.ResetGroup()
 		return nil
+	case apikey.EdgeGroupRoutes:
+		m.ResetGroupRoutes()
+		return nil
 	case apikey.EdgeUsageLogs:
 		m.ResetUsageLogs()
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey edge %s", name)
+}
+
+// APIKeyGroupRouteMutation represents an operation that mutates the APIKeyGroupRoute nodes in the graph.
+type APIKeyGroupRouteMutation struct {
+	config
+	op                  Op
+	typ                 string
+	id                  *int64
+	created_at          *time.Time
+	updated_at          *time.Time
+	priority            *int
+	addpriority         *int
+	weight              *int
+	addweight           *int
+	enabled             *bool
+	cooldown_seconds    *int
+	addcooldown_seconds *int
+	clearedFields       map[string]struct{}
+	api_key             *int64
+	clearedapi_key      bool
+	group               *int64
+	clearedgroup        bool
+	done                bool
+	oldValue            func(context.Context) (*APIKeyGroupRoute, error)
+	predicates          []predicate.APIKeyGroupRoute
+}
+
+var _ ent.Mutation = (*APIKeyGroupRouteMutation)(nil)
+
+// apikeygrouprouteOption allows management of the mutation configuration using functional options.
+type apikeygrouprouteOption func(*APIKeyGroupRouteMutation)
+
+// newAPIKeyGroupRouteMutation creates new mutation for the APIKeyGroupRoute entity.
+func newAPIKeyGroupRouteMutation(c config, op Op, opts ...apikeygrouprouteOption) *APIKeyGroupRouteMutation {
+	m := &APIKeyGroupRouteMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeAPIKeyGroupRoute,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withAPIKeyGroupRouteID sets the ID field of the mutation.
+func withAPIKeyGroupRouteID(id int64) apikeygrouprouteOption {
+	return func(m *APIKeyGroupRouteMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *APIKeyGroupRoute
+		)
+		m.oldValue = func(ctx context.Context) (*APIKeyGroupRoute, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().APIKeyGroupRoute.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withAPIKeyGroupRoute sets the old APIKeyGroupRoute of the mutation.
+func withAPIKeyGroupRoute(node *APIKeyGroupRoute) apikeygrouprouteOption {
+	return func(m *APIKeyGroupRouteMutation) {
+		m.oldValue = func(context.Context) (*APIKeyGroupRoute, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m APIKeyGroupRouteMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m APIKeyGroupRouteMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *APIKeyGroupRouteMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *APIKeyGroupRouteMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().APIKeyGroupRoute.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *APIKeyGroupRouteMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *APIKeyGroupRouteMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *APIKeyGroupRouteMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *APIKeyGroupRouteMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *APIKeyGroupRouteMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *APIKeyGroupRouteMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetAPIKeyID sets the "api_key_id" field.
+func (m *APIKeyGroupRouteMutation) SetAPIKeyID(i int64) {
+	m.api_key = &i
+}
+
+// APIKeyID returns the value of the "api_key_id" field in the mutation.
+func (m *APIKeyGroupRouteMutation) APIKeyID() (r int64, exists bool) {
+	v := m.api_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyID returns the old "api_key_id" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldAPIKeyID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyID: %w", err)
+	}
+	return oldValue.APIKeyID, nil
+}
+
+// ResetAPIKeyID resets all changes to the "api_key_id" field.
+func (m *APIKeyGroupRouteMutation) ResetAPIKeyID() {
+	m.api_key = nil
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *APIKeyGroupRouteMutation) SetGroupID(i int64) {
+	m.group = &i
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *APIKeyGroupRouteMutation) GroupID() (r int64, exists bool) {
+	v := m.group
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldGroupID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *APIKeyGroupRouteMutation) ResetGroupID() {
+	m.group = nil
+}
+
+// SetPriority sets the "priority" field.
+func (m *APIKeyGroupRouteMutation) SetPriority(i int) {
+	m.priority = &i
+	m.addpriority = nil
+}
+
+// Priority returns the value of the "priority" field in the mutation.
+func (m *APIKeyGroupRouteMutation) Priority() (r int, exists bool) {
+	v := m.priority
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPriority returns the old "priority" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldPriority(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPriority is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPriority requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPriority: %w", err)
+	}
+	return oldValue.Priority, nil
+}
+
+// AddPriority adds i to the "priority" field.
+func (m *APIKeyGroupRouteMutation) AddPriority(i int) {
+	if m.addpriority != nil {
+		*m.addpriority += i
+	} else {
+		m.addpriority = &i
+	}
+}
+
+// AddedPriority returns the value that was added to the "priority" field in this mutation.
+func (m *APIKeyGroupRouteMutation) AddedPriority() (r int, exists bool) {
+	v := m.addpriority
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetPriority resets all changes to the "priority" field.
+func (m *APIKeyGroupRouteMutation) ResetPriority() {
+	m.priority = nil
+	m.addpriority = nil
+}
+
+// SetWeight sets the "weight" field.
+func (m *APIKeyGroupRouteMutation) SetWeight(i int) {
+	m.weight = &i
+	m.addweight = nil
+}
+
+// Weight returns the value of the "weight" field in the mutation.
+func (m *APIKeyGroupRouteMutation) Weight() (r int, exists bool) {
+	v := m.weight
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWeight returns the old "weight" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldWeight(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWeight is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWeight requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWeight: %w", err)
+	}
+	return oldValue.Weight, nil
+}
+
+// AddWeight adds i to the "weight" field.
+func (m *APIKeyGroupRouteMutation) AddWeight(i int) {
+	if m.addweight != nil {
+		*m.addweight += i
+	} else {
+		m.addweight = &i
+	}
+}
+
+// AddedWeight returns the value that was added to the "weight" field in this mutation.
+func (m *APIKeyGroupRouteMutation) AddedWeight() (r int, exists bool) {
+	v := m.addweight
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWeight resets all changes to the "weight" field.
+func (m *APIKeyGroupRouteMutation) ResetWeight() {
+	m.weight = nil
+	m.addweight = nil
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *APIKeyGroupRouteMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *APIKeyGroupRouteMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *APIKeyGroupRouteMutation) ResetEnabled() {
+	m.enabled = nil
+}
+
+// SetCooldownSeconds sets the "cooldown_seconds" field.
+func (m *APIKeyGroupRouteMutation) SetCooldownSeconds(i int) {
+	m.cooldown_seconds = &i
+	m.addcooldown_seconds = nil
+}
+
+// CooldownSeconds returns the value of the "cooldown_seconds" field in the mutation.
+func (m *APIKeyGroupRouteMutation) CooldownSeconds() (r int, exists bool) {
+	v := m.cooldown_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCooldownSeconds returns the old "cooldown_seconds" field's value of the APIKeyGroupRoute entity.
+// If the APIKeyGroupRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyGroupRouteMutation) OldCooldownSeconds(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCooldownSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCooldownSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCooldownSeconds: %w", err)
+	}
+	return oldValue.CooldownSeconds, nil
+}
+
+// AddCooldownSeconds adds i to the "cooldown_seconds" field.
+func (m *APIKeyGroupRouteMutation) AddCooldownSeconds(i int) {
+	if m.addcooldown_seconds != nil {
+		*m.addcooldown_seconds += i
+	} else {
+		m.addcooldown_seconds = &i
+	}
+}
+
+// AddedCooldownSeconds returns the value that was added to the "cooldown_seconds" field in this mutation.
+func (m *APIKeyGroupRouteMutation) AddedCooldownSeconds() (r int, exists bool) {
+	v := m.addcooldown_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCooldownSeconds resets all changes to the "cooldown_seconds" field.
+func (m *APIKeyGroupRouteMutation) ResetCooldownSeconds() {
+	m.cooldown_seconds = nil
+	m.addcooldown_seconds = nil
+}
+
+// ClearAPIKey clears the "api_key" edge to the APIKey entity.
+func (m *APIKeyGroupRouteMutation) ClearAPIKey() {
+	m.clearedapi_key = true
+	m.clearedFields[apikeygrouproute.FieldAPIKeyID] = struct{}{}
+}
+
+// APIKeyCleared reports if the "api_key" edge to the APIKey entity was cleared.
+func (m *APIKeyGroupRouteMutation) APIKeyCleared() bool {
+	return m.clearedapi_key
+}
+
+// APIKeyIDs returns the "api_key" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// APIKeyID instead. It exists only for internal usage by the builders.
+func (m *APIKeyGroupRouteMutation) APIKeyIDs() (ids []int64) {
+	if id := m.api_key; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetAPIKey resets all changes to the "api_key" edge.
+func (m *APIKeyGroupRouteMutation) ResetAPIKey() {
+	m.api_key = nil
+	m.clearedapi_key = false
+}
+
+// ClearGroup clears the "group" edge to the Group entity.
+func (m *APIKeyGroupRouteMutation) ClearGroup() {
+	m.clearedgroup = true
+	m.clearedFields[apikeygrouproute.FieldGroupID] = struct{}{}
+}
+
+// GroupCleared reports if the "group" edge to the Group entity was cleared.
+func (m *APIKeyGroupRouteMutation) GroupCleared() bool {
+	return m.clearedgroup
+}
+
+// GroupIDs returns the "group" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// GroupID instead. It exists only for internal usage by the builders.
+func (m *APIKeyGroupRouteMutation) GroupIDs() (ids []int64) {
+	if id := m.group; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetGroup resets all changes to the "group" edge.
+func (m *APIKeyGroupRouteMutation) ResetGroup() {
+	m.group = nil
+	m.clearedgroup = false
+}
+
+// Where appends a list predicates to the APIKeyGroupRouteMutation builder.
+func (m *APIKeyGroupRouteMutation) Where(ps ...predicate.APIKeyGroupRoute) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the APIKeyGroupRouteMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *APIKeyGroupRouteMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.APIKeyGroupRoute, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *APIKeyGroupRouteMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *APIKeyGroupRouteMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (APIKeyGroupRoute).
+func (m *APIKeyGroupRouteMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *APIKeyGroupRouteMutation) Fields() []string {
+	fields := make([]string, 0, 8)
+	if m.created_at != nil {
+		fields = append(fields, apikeygrouproute.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, apikeygrouproute.FieldUpdatedAt)
+	}
+	if m.api_key != nil {
+		fields = append(fields, apikeygrouproute.FieldAPIKeyID)
+	}
+	if m.group != nil {
+		fields = append(fields, apikeygrouproute.FieldGroupID)
+	}
+	if m.priority != nil {
+		fields = append(fields, apikeygrouproute.FieldPriority)
+	}
+	if m.weight != nil {
+		fields = append(fields, apikeygrouproute.FieldWeight)
+	}
+	if m.enabled != nil {
+		fields = append(fields, apikeygrouproute.FieldEnabled)
+	}
+	if m.cooldown_seconds != nil {
+		fields = append(fields, apikeygrouproute.FieldCooldownSeconds)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *APIKeyGroupRouteMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case apikeygrouproute.FieldCreatedAt:
+		return m.CreatedAt()
+	case apikeygrouproute.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case apikeygrouproute.FieldAPIKeyID:
+		return m.APIKeyID()
+	case apikeygrouproute.FieldGroupID:
+		return m.GroupID()
+	case apikeygrouproute.FieldPriority:
+		return m.Priority()
+	case apikeygrouproute.FieldWeight:
+		return m.Weight()
+	case apikeygrouproute.FieldEnabled:
+		return m.Enabled()
+	case apikeygrouproute.FieldCooldownSeconds:
+		return m.CooldownSeconds()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *APIKeyGroupRouteMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case apikeygrouproute.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case apikeygrouproute.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case apikeygrouproute.FieldAPIKeyID:
+		return m.OldAPIKeyID(ctx)
+	case apikeygrouproute.FieldGroupID:
+		return m.OldGroupID(ctx)
+	case apikeygrouproute.FieldPriority:
+		return m.OldPriority(ctx)
+	case apikeygrouproute.FieldWeight:
+		return m.OldWeight(ctx)
+	case apikeygrouproute.FieldEnabled:
+		return m.OldEnabled(ctx)
+	case apikeygrouproute.FieldCooldownSeconds:
+		return m.OldCooldownSeconds(ctx)
+	}
+	return nil, fmt.Errorf("unknown APIKeyGroupRoute field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *APIKeyGroupRouteMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case apikeygrouproute.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case apikeygrouproute.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case apikeygrouproute.FieldAPIKeyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyID(v)
+		return nil
+	case apikeygrouproute.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
+		return nil
+	case apikeygrouproute.FieldPriority:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPriority(v)
+		return nil
+	case apikeygrouproute.FieldWeight:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWeight(v)
+		return nil
+	case apikeygrouproute.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
+		return nil
+	case apikeygrouproute.FieldCooldownSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCooldownSeconds(v)
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyGroupRoute field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *APIKeyGroupRouteMutation) AddedFields() []string {
+	var fields []string
+	if m.addpriority != nil {
+		fields = append(fields, apikeygrouproute.FieldPriority)
+	}
+	if m.addweight != nil {
+		fields = append(fields, apikeygrouproute.FieldWeight)
+	}
+	if m.addcooldown_seconds != nil {
+		fields = append(fields, apikeygrouproute.FieldCooldownSeconds)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *APIKeyGroupRouteMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case apikeygrouproute.FieldPriority:
+		return m.AddedPriority()
+	case apikeygrouproute.FieldWeight:
+		return m.AddedWeight()
+	case apikeygrouproute.FieldCooldownSeconds:
+		return m.AddedCooldownSeconds()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *APIKeyGroupRouteMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case apikeygrouproute.FieldPriority:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPriority(v)
+		return nil
+	case apikeygrouproute.FieldWeight:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWeight(v)
+		return nil
+	case apikeygrouproute.FieldCooldownSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCooldownSeconds(v)
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyGroupRoute numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *APIKeyGroupRouteMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *APIKeyGroupRouteMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *APIKeyGroupRouteMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown APIKeyGroupRoute nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *APIKeyGroupRouteMutation) ResetField(name string) error {
+	switch name {
+	case apikeygrouproute.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case apikeygrouproute.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case apikeygrouproute.FieldAPIKeyID:
+		m.ResetAPIKeyID()
+		return nil
+	case apikeygrouproute.FieldGroupID:
+		m.ResetGroupID()
+		return nil
+	case apikeygrouproute.FieldPriority:
+		m.ResetPriority()
+		return nil
+	case apikeygrouproute.FieldWeight:
+		m.ResetWeight()
+		return nil
+	case apikeygrouproute.FieldEnabled:
+		m.ResetEnabled()
+		return nil
+	case apikeygrouproute.FieldCooldownSeconds:
+		m.ResetCooldownSeconds()
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyGroupRoute field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *APIKeyGroupRouteMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.api_key != nil {
+		edges = append(edges, apikeygrouproute.EdgeAPIKey)
+	}
+	if m.group != nil {
+		edges = append(edges, apikeygrouproute.EdgeGroup)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *APIKeyGroupRouteMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case apikeygrouproute.EdgeAPIKey:
+		if id := m.api_key; id != nil {
+			return []ent.Value{*id}
+		}
+	case apikeygrouproute.EdgeGroup:
+		if id := m.group; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *APIKeyGroupRouteMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *APIKeyGroupRouteMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *APIKeyGroupRouteMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedapi_key {
+		edges = append(edges, apikeygrouproute.EdgeAPIKey)
+	}
+	if m.clearedgroup {
+		edges = append(edges, apikeygrouproute.EdgeGroup)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *APIKeyGroupRouteMutation) EdgeCleared(name string) bool {
+	switch name {
+	case apikeygrouproute.EdgeAPIKey:
+		return m.clearedapi_key
+	case apikeygrouproute.EdgeGroup:
+		return m.clearedgroup
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *APIKeyGroupRouteMutation) ClearEdge(name string) error {
+	switch name {
+	case apikeygrouproute.EdgeAPIKey:
+		m.ClearAPIKey()
+		return nil
+	case apikeygrouproute.EdgeGroup:
+		m.ClearGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyGroupRoute unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *APIKeyGroupRouteMutation) ResetEdge(name string) error {
+	switch name {
+	case apikeygrouproute.EdgeAPIKey:
+		m.ResetAPIKey()
+		return nil
+	case apikeygrouproute.EdgeGroup:
+		m.ResetGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyGroupRoute edge %s", name)
 }
 
 // AccountMutation represents an operation that mutates the Account nodes in the graph.
@@ -2279,6 +3270,7 @@ type AccountMutation struct {
 	updated_at                *time.Time
 	deleted_at                *time.Time
 	name                      *string
+	account_level             *string
 	notes                     *string
 	platform                  *string
 	_type                     *string
@@ -2579,6 +3571,42 @@ func (m *AccountMutation) OldName(ctx context.Context) (v string, err error) {
 // ResetName resets all changes to the "name" field.
 func (m *AccountMutation) ResetName() {
 	m.name = nil
+}
+
+// SetAccountLevel sets the "account_level" field.
+func (m *AccountMutation) SetAccountLevel(s string) {
+	m.account_level = &s
+}
+
+// AccountLevel returns the value of the "account_level" field in the mutation.
+func (m *AccountMutation) AccountLevel() (r string, exists bool) {
+	v := m.account_level
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccountLevel returns the old "account_level" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldAccountLevel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccountLevel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccountLevel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccountLevel: %w", err)
+	}
+	return oldValue.AccountLevel, nil
+}
+
+// ResetAccountLevel resets all changes to the "account_level" field.
+func (m *AccountMutation) ResetAccountLevel() {
+	m.account_level = nil
 }
 
 // SetNotes sets the "notes" field.
@@ -4108,7 +5136,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 32)
+	fields := make([]string, 0, 33)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -4120,6 +5148,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.name != nil {
 		fields = append(fields, account.FieldName)
+	}
+	if m.account_level != nil {
+		fields = append(fields, account.FieldAccountLevel)
 	}
 	if m.notes != nil {
 		fields = append(fields, account.FieldNotes)
@@ -4221,6 +5252,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.DeletedAt()
 	case account.FieldName:
 		return m.Name()
+	case account.FieldAccountLevel:
+		return m.AccountLevel()
 	case account.FieldNotes:
 		return m.Notes()
 	case account.FieldPlatform:
@@ -4294,6 +5327,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldDeletedAt(ctx)
 	case account.FieldName:
 		return m.OldName(ctx)
+	case account.FieldAccountLevel:
+		return m.OldAccountLevel(ctx)
 	case account.FieldNotes:
 		return m.OldNotes(ctx)
 	case account.FieldPlatform:
@@ -4386,6 +5421,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetName(v)
+		return nil
+	case account.FieldAccountLevel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccountLevel(v)
 		return nil
 	case account.FieldNotes:
 		v, ok := value.(string)
@@ -4811,6 +5853,9 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldName:
 		m.ResetName()
+		return nil
+	case account.FieldAccountLevel:
+		m.ResetAccountLevel()
 		return nil
 	case account.FieldNotes:
 		m.ResetNotes()
@@ -15105,6 +16150,7 @@ type GroupMutation struct {
 	addowner_user_id                        *int64
 	scope                                   *string
 	platform                                *string
+	required_account_level                  *string
 	subscription_type                       *string
 	daily_limit_usd                         *float64
 	adddaily_limit_usd                      *float64
@@ -15143,6 +16189,9 @@ type GroupMutation struct {
 	api_keys                                map[int64]struct{}
 	removedapi_keys                         map[int64]struct{}
 	clearedapi_keys                         bool
+	api_key_group_routes                    map[int64]struct{}
+	removedapi_key_group_routes             map[int64]struct{}
+	clearedapi_key_group_routes             bool
 	redeem_codes                            map[int64]struct{}
 	removedredeem_codes                     map[int64]struct{}
 	clearedredeem_codes                     bool
@@ -15735,6 +16784,42 @@ func (m *GroupMutation) OldPlatform(ctx context.Context) (v string, err error) {
 // ResetPlatform resets all changes to the "platform" field.
 func (m *GroupMutation) ResetPlatform() {
 	m.platform = nil
+}
+
+// SetRequiredAccountLevel sets the "required_account_level" field.
+func (m *GroupMutation) SetRequiredAccountLevel(s string) {
+	m.required_account_level = &s
+}
+
+// RequiredAccountLevel returns the value of the "required_account_level" field in the mutation.
+func (m *GroupMutation) RequiredAccountLevel() (r string, exists bool) {
+	v := m.required_account_level
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequiredAccountLevel returns the old "required_account_level" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldRequiredAccountLevel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequiredAccountLevel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequiredAccountLevel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequiredAccountLevel: %w", err)
+	}
+	return oldValue.RequiredAccountLevel, nil
+}
+
+// ResetRequiredAccountLevel resets all changes to the "required_account_level" field.
+func (m *GroupMutation) ResetRequiredAccountLevel() {
+	m.required_account_level = nil
 }
 
 // SetSubscriptionType sets the "subscription_type" field.
@@ -16943,6 +18028,60 @@ func (m *GroupMutation) ResetAPIKeys() {
 	m.removedapi_keys = nil
 }
 
+// AddAPIKeyGroupRouteIDs adds the "api_key_group_routes" edge to the APIKeyGroupRoute entity by ids.
+func (m *GroupMutation) AddAPIKeyGroupRouteIDs(ids ...int64) {
+	if m.api_key_group_routes == nil {
+		m.api_key_group_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.api_key_group_routes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearAPIKeyGroupRoutes clears the "api_key_group_routes" edge to the APIKeyGroupRoute entity.
+func (m *GroupMutation) ClearAPIKeyGroupRoutes() {
+	m.clearedapi_key_group_routes = true
+}
+
+// APIKeyGroupRoutesCleared reports if the "api_key_group_routes" edge to the APIKeyGroupRoute entity was cleared.
+func (m *GroupMutation) APIKeyGroupRoutesCleared() bool {
+	return m.clearedapi_key_group_routes
+}
+
+// RemoveAPIKeyGroupRouteIDs removes the "api_key_group_routes" edge to the APIKeyGroupRoute entity by IDs.
+func (m *GroupMutation) RemoveAPIKeyGroupRouteIDs(ids ...int64) {
+	if m.removedapi_key_group_routes == nil {
+		m.removedapi_key_group_routes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.api_key_group_routes, ids[i])
+		m.removedapi_key_group_routes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedAPIKeyGroupRoutes returns the removed IDs of the "api_key_group_routes" edge to the APIKeyGroupRoute entity.
+func (m *GroupMutation) RemovedAPIKeyGroupRoutesIDs() (ids []int64) {
+	for id := range m.removedapi_key_group_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// APIKeyGroupRoutesIDs returns the "api_key_group_routes" edge IDs in the mutation.
+func (m *GroupMutation) APIKeyGroupRoutesIDs() (ids []int64) {
+	for id := range m.api_key_group_routes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetAPIKeyGroupRoutes resets all changes to the "api_key_group_routes" edge.
+func (m *GroupMutation) ResetAPIKeyGroupRoutes() {
+	m.api_key_group_routes = nil
+	m.clearedapi_key_group_routes = false
+	m.removedapi_key_group_routes = nil
+}
+
 // AddRedeemCodeIDs adds the "redeem_codes" edge to the RedeemCode entity by ids.
 func (m *GroupMutation) AddRedeemCodeIDs(ids ...int64) {
 	if m.redeem_codes == nil {
@@ -17247,7 +18386,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 33)
+	fields := make([]string, 0, 34)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -17280,6 +18419,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.platform != nil {
 		fields = append(fields, group.FieldPlatform)
+	}
+	if m.required_account_level != nil {
+		fields = append(fields, group.FieldRequiredAccountLevel)
 	}
 	if m.subscription_type != nil {
 		fields = append(fields, group.FieldSubscriptionType)
@@ -17377,6 +18519,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Scope()
 	case group.FieldPlatform:
 		return m.Platform()
+	case group.FieldRequiredAccountLevel:
+		return m.RequiredAccountLevel()
 	case group.FieldSubscriptionType:
 		return m.SubscriptionType()
 	case group.FieldDailyLimitUsd:
@@ -17452,6 +18596,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldScope(ctx)
 	case group.FieldPlatform:
 		return m.OldPlatform(ctx)
+	case group.FieldRequiredAccountLevel:
+		return m.OldRequiredAccountLevel(ctx)
 	case group.FieldSubscriptionType:
 		return m.OldSubscriptionType(ctx)
 	case group.FieldDailyLimitUsd:
@@ -17581,6 +18727,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPlatform(v)
+		return nil
+	case group.FieldRequiredAccountLevel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequiredAccountLevel(v)
 		return nil
 	case group.FieldSubscriptionType:
 		v, ok := value.(string)
@@ -18052,6 +19205,9 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldPlatform:
 		m.ResetPlatform()
 		return nil
+	case group.FieldRequiredAccountLevel:
+		m.ResetRequiredAccountLevel()
+		return nil
 	case group.FieldSubscriptionType:
 		m.ResetSubscriptionType()
 		return nil
@@ -18124,9 +19280,12 @@ func (m *GroupMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *GroupMutation) AddedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.api_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
+	}
+	if m.api_key_group_routes != nil {
+		edges = append(edges, group.EdgeAPIKeyGroupRoutes)
 	}
 	if m.redeem_codes != nil {
 		edges = append(edges, group.EdgeRedeemCodes)
@@ -18153,6 +19312,12 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 	case group.EdgeAPIKeys:
 		ids := make([]ent.Value, 0, len(m.api_keys))
 		for id := range m.api_keys {
+			ids = append(ids, id)
+		}
+		return ids
+	case group.EdgeAPIKeyGroupRoutes:
+		ids := make([]ent.Value, 0, len(m.api_key_group_routes))
+		for id := range m.api_key_group_routes {
 			ids = append(ids, id)
 		}
 		return ids
@@ -18192,9 +19357,12 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *GroupMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.removedapi_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
+	}
+	if m.removedapi_key_group_routes != nil {
+		edges = append(edges, group.EdgeAPIKeyGroupRoutes)
 	}
 	if m.removedredeem_codes != nil {
 		edges = append(edges, group.EdgeRedeemCodes)
@@ -18221,6 +19389,12 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 	case group.EdgeAPIKeys:
 		ids := make([]ent.Value, 0, len(m.removedapi_keys))
 		for id := range m.removedapi_keys {
+			ids = append(ids, id)
+		}
+		return ids
+	case group.EdgeAPIKeyGroupRoutes:
+		ids := make([]ent.Value, 0, len(m.removedapi_key_group_routes))
+		for id := range m.removedapi_key_group_routes {
 			ids = append(ids, id)
 		}
 		return ids
@@ -18260,9 +19434,12 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *GroupMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.clearedapi_keys {
 		edges = append(edges, group.EdgeAPIKeys)
+	}
+	if m.clearedapi_key_group_routes {
+		edges = append(edges, group.EdgeAPIKeyGroupRoutes)
 	}
 	if m.clearedredeem_codes {
 		edges = append(edges, group.EdgeRedeemCodes)
@@ -18288,6 +19465,8 @@ func (m *GroupMutation) EdgeCleared(name string) bool {
 	switch name {
 	case group.EdgeAPIKeys:
 		return m.clearedapi_keys
+	case group.EdgeAPIKeyGroupRoutes:
+		return m.clearedapi_key_group_routes
 	case group.EdgeRedeemCodes:
 		return m.clearedredeem_codes
 	case group.EdgeSubscriptions:
@@ -18316,6 +19495,9 @@ func (m *GroupMutation) ResetEdge(name string) error {
 	switch name {
 	case group.EdgeAPIKeys:
 		m.ResetAPIKeys()
+		return nil
+	case group.EdgeAPIKeyGroupRoutes:
+		m.ResetAPIKeyGroupRoutes()
 		return nil
 	case group.EdgeRedeemCodes:
 		m.ResetRedeemCodes()

@@ -7,12 +7,13 @@ import (
 
 // CustomMenuItem represents a user-configured custom menu entry.
 type CustomMenuItem struct {
-	ID         string `json:"id"`
-	Label      string `json:"label"`
-	IconSVG    string `json:"icon_svg"`
-	URL        string `json:"url"`
-	Visibility string `json:"visibility"` // "user" or "admin"
-	SortOrder  int    `json:"sort_order"`
+	ID              string `json:"id"`
+	Label           string `json:"label"`
+	IconSVG         string `json:"icon_svg"`
+	URL             string `json:"url"`
+	Visibility      string `json:"visibility"` // "user" or "admin"
+	SortOrder       int    `json:"sort_order"`
+	OpenInNewWindow bool   `json:"open_in_new_window"`
 }
 
 // CustomEndpoint represents an admin-configured API endpoint for quick copy.

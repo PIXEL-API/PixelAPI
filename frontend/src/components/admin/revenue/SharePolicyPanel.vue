@@ -39,7 +39,7 @@
             </span>
           </div>
 
-          <dl class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <dl class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
               <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">
                 {{ t('admin.revenue.sharePolicy.ownerShare') }}
@@ -50,10 +50,18 @@
             </div>
             <div>
               <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.inviteShare') }}
+              </dt>
+              <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
+                {{ effectivePolicy ? formatPolicyPercent(effectivePolicy.invite_share_ratio ?? 0) : '--' }}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">
                 {{ t('admin.revenue.sharePolicy.platformShare') }}
               </dt>
               <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
-                {{ effectivePolicy ? formatPolicyPercent(1 - effectivePolicy.owner_share_ratio) : '--' }}
+                {{ effectivePolicy ? formatPolicyPercent(platformShareRatio(effectivePolicy)) : '--' }}
               </dd>
             </div>
             <div>
@@ -114,6 +122,27 @@
 
             <div>
               <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.inviteSharePercent') }}
+              </label>
+              <div class="relative">
+                <input
+                  v-model="form.inviteSharePercent"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  class="input w-full pr-10"
+                  @blur="normalizeFormPercent"
+                />
+                <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-gray-400">%</span>
+              </div>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.inviteShareHint') }}
+              </p>
+            </div>
+
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
                 {{ t('admin.revenue.sharePolicy.platformSharePercent') }}
               </label>
               <div class="input flex h-10 items-center bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-gray-300">
@@ -161,6 +190,9 @@
                 {{ t('admin.revenue.sharePolicy.ownerShare') }}
               </th>
               <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.inviteShare') }}
+              </th>
+              <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 {{ t('admin.revenue.sharePolicy.platformShare') }}
               </th>
               <th class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -191,7 +223,10 @@
                 {{ formatPolicyPercent(policy.owner_share_ratio) }}
               </td>
               <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">
-                {{ formatPolicyPercent(1 - policy.owner_share_ratio) }}
+                {{ formatPolicyPercent(policy.invite_share_ratio ?? 0) }}
+              </td>
+              <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">
+                {{ formatPolicyPercent(platformShareRatio(policy)) }}
               </td>
               <td class="px-3 py-3 text-right text-sm text-gray-700 dark:text-gray-300">
                 {{ policy.version }}
@@ -231,6 +266,7 @@ const saving = ref(false)
 const policies = ref<AccountSharePolicy[]>([])
 const form = reactive({
   ownerSharePercent: 70 as number | string,
+  inviteSharePercent: 0 as number | string,
   enabled: true
 })
 
@@ -247,7 +283,13 @@ const normalizedOwnerSharePercentValue = computed(() => {
   return clampPercent(value)
 })
 
-const platformSharePercent = computed(() => 100 - normalizedOwnerSharePercentValue.value)
+const normalizedInviteSharePercentValue = computed(() => {
+  const value = Number(form.inviteSharePercent)
+  if (!Number.isFinite(value)) return 0
+  return clampPercent(value)
+})
+
+const platformSharePercent = computed(() => clampPercent(100 - normalizedOwnerSharePercentValue.value - normalizedInviteSharePercentValue.value))
 
 async function loadPolicies() {
   loading.value = true
@@ -267,8 +309,9 @@ async function loadPolicies() {
 }
 
 async function savePolicy() {
-  const value = Number(form.ownerSharePercent)
-  if (!Number.isFinite(value) || value < 0 || value > 100) {
+  const ownerValue = Number(form.ownerSharePercent)
+  const inviteValue = Number(form.inviteSharePercent)
+  if (!Number.isFinite(ownerValue) || ownerValue < 0 || ownerValue > 100 || !Number.isFinite(inviteValue) || inviteValue < 0 || inviteValue > 100 || ownerValue + inviteValue > 100) {
     appStore.showError(t('admin.revenue.sharePolicy.invalidRatio'))
     return
   }
@@ -277,7 +320,8 @@ async function savePolicy() {
   try {
     const payload = {
       scope_type: 'global' as const,
-      owner_share_ratio: clampPercent(value) / 100,
+      owner_share_ratio: clampPercent(ownerValue) / 100,
+      invite_share_ratio: clampPercent(inviteValue) / 100,
       enabled: form.enabled,
       effective_at: new Date().toISOString()
     }
@@ -300,20 +344,29 @@ function syncFormFromPolicy() {
   const target = editablePolicy.value
   if (!target) {
     form.ownerSharePercent = 70
+    form.inviteSharePercent = 0
     form.enabled = true
     return
   }
   form.ownerSharePercent = roundPercent(target.owner_share_ratio * 100)
+  form.inviteSharePercent = roundPercent((target.invite_share_ratio ?? 0) * 100)
   form.enabled = target.enabled
 }
 
 function normalizeFormPercent() {
-  const value = Number(form.ownerSharePercent)
-  if (!Number.isFinite(value)) {
+  const ownerValue = Number(form.ownerSharePercent)
+  if (!Number.isFinite(ownerValue)) {
     form.ownerSharePercent = 0
-    return
+  } else {
+    form.ownerSharePercent = roundPercent(clampPercent(ownerValue))
   }
-  form.ownerSharePercent = roundPercent(clampPercent(value))
+
+  const inviteValue = Number(form.inviteSharePercent)
+  if (!Number.isFinite(inviteValue)) {
+    form.inviteSharePercent = 0
+  } else {
+    form.inviteSharePercent = roundPercent(clampPercent(inviteValue))
+  }
 }
 
 function comparePolicyByEffectiveAtDesc(a: AccountSharePolicy, b: AccountSharePolicy) {
@@ -337,6 +390,10 @@ function parseDate(value: string): number {
 
 function formatPolicyPercent(ratio: number): string {
   return formatPercentFromNumber(ratio * 100)
+}
+
+function platformShareRatio(policy: AccountSharePolicy): number {
+  return Math.max(0, 1 - policy.owner_share_ratio - (policy.invite_share_ratio ?? 0))
 }
 
 function formatPercentFromNumber(value: number): string {

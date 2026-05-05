@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcement"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/apikeygrouproute"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitor"
@@ -60,6 +61,8 @@ type Client struct {
 	Schema *migrate.Schema
 	// APIKey is the client for interacting with the APIKey builders.
 	APIKey *APIKeyClient
+	// APIKeyGroupRoute is the client for interacting with the APIKeyGroupRoute builders.
+	APIKeyGroupRoute *APIKeyGroupRouteClient
 	// Account is the client for interacting with the Account builders.
 	Account *AccountClient
 	// AccountGroup is the client for interacting with the AccountGroup builders.
@@ -138,6 +141,7 @@ func NewClient(opts ...Option) *Client {
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.APIKey = NewAPIKeyClient(c.config)
+	c.APIKeyGroupRoute = NewAPIKeyGroupRouteClient(c.config)
 	c.Account = NewAccountClient(c.config)
 	c.AccountGroup = NewAccountGroupClient(c.config)
 	c.Announcement = NewAnnouncementClient(c.config)
@@ -264,6 +268,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ctx:                           ctx,
 		config:                        cfg,
 		APIKey:                        NewAPIKeyClient(cfg),
+		APIKeyGroupRoute:              NewAPIKeyGroupRouteClient(cfg),
 		Account:                       NewAccountClient(cfg),
 		AccountGroup:                  NewAccountGroupClient(cfg),
 		Announcement:                  NewAnnouncementClient(cfg),
@@ -317,6 +322,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ctx:                           ctx,
 		config:                        cfg,
 		APIKey:                        NewAPIKeyClient(cfg),
+		APIKeyGroupRoute:              NewAPIKeyGroupRouteClient(cfg),
 		Account:                       NewAccountClient(cfg),
 		AccountGroup:                  NewAccountGroupClient(cfg),
 		Announcement:                  NewAnnouncementClient(cfg),
@@ -379,8 +385,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
-		c.AuthIdentity, c.AuthIdentityChannel, c.ChannelMonitor,
+		c.APIKey, c.APIKeyGroupRoute, c.Account, c.AccountGroup, c.Announcement,
+		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.ChannelMonitor,
 		c.ChannelMonitorDailyRollup, c.ChannelMonitorHistory,
 		c.ChannelMonitorRequestTemplate, c.ErrorPassthroughRule, c.Group,
 		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
@@ -398,8 +404,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
-		c.AuthIdentity, c.AuthIdentityChannel, c.ChannelMonitor,
+		c.APIKey, c.APIKeyGroupRoute, c.Account, c.AccountGroup, c.Announcement,
+		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.ChannelMonitor,
 		c.ChannelMonitorDailyRollup, c.ChannelMonitorHistory,
 		c.ChannelMonitorRequestTemplate, c.ErrorPassthroughRule, c.Group,
 		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
@@ -418,6 +424,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
 	case *APIKeyMutation:
 		return c.APIKey.mutate(ctx, m)
+	case *APIKeyGroupRouteMutation:
+		return c.APIKeyGroupRoute.mutate(ctx, m)
 	case *AccountMutation:
 		return c.Account.mutate(ctx, m)
 	case *AccountGroupMutation:
@@ -629,6 +637,22 @@ func (c *APIKeyClient) QueryGroup(_m *APIKey) *GroupQuery {
 	return query
 }
 
+// QueryGroupRoutes queries the group_routes edge of a APIKey.
+func (c *APIKeyClient) QueryGroupRoutes(_m *APIKey) *APIKeyGroupRouteQuery {
+	query := (&APIKeyGroupRouteClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikey.Table, apikey.FieldID, id),
+			sqlgraph.To(apikeygrouproute.Table, apikeygrouproute.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, apikey.GroupRoutesTable, apikey.GroupRoutesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryUsageLogs queries the usage_logs edge of a APIKey.
 func (c *APIKeyClient) QueryUsageLogs(_m *APIKey) *UsageLogQuery {
 	query := (&UsageLogClient{config: c.config}).Query()
@@ -669,6 +693,171 @@ func (c *APIKeyClient) mutate(ctx context.Context, m *APIKeyMutation) (Value, er
 		return (&APIKeyDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown APIKey mutation op: %q", m.Op())
+	}
+}
+
+// APIKeyGroupRouteClient is a client for the APIKeyGroupRoute schema.
+type APIKeyGroupRouteClient struct {
+	config
+}
+
+// NewAPIKeyGroupRouteClient returns a client for the APIKeyGroupRoute from the given config.
+func NewAPIKeyGroupRouteClient(c config) *APIKeyGroupRouteClient {
+	return &APIKeyGroupRouteClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `apikeygrouproute.Hooks(f(g(h())))`.
+func (c *APIKeyGroupRouteClient) Use(hooks ...Hook) {
+	c.hooks.APIKeyGroupRoute = append(c.hooks.APIKeyGroupRoute, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `apikeygrouproute.Intercept(f(g(h())))`.
+func (c *APIKeyGroupRouteClient) Intercept(interceptors ...Interceptor) {
+	c.inters.APIKeyGroupRoute = append(c.inters.APIKeyGroupRoute, interceptors...)
+}
+
+// Create returns a builder for creating a APIKeyGroupRoute entity.
+func (c *APIKeyGroupRouteClient) Create() *APIKeyGroupRouteCreate {
+	mutation := newAPIKeyGroupRouteMutation(c.config, OpCreate)
+	return &APIKeyGroupRouteCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of APIKeyGroupRoute entities.
+func (c *APIKeyGroupRouteClient) CreateBulk(builders ...*APIKeyGroupRouteCreate) *APIKeyGroupRouteCreateBulk {
+	return &APIKeyGroupRouteCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *APIKeyGroupRouteClient) MapCreateBulk(slice any, setFunc func(*APIKeyGroupRouteCreate, int)) *APIKeyGroupRouteCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &APIKeyGroupRouteCreateBulk{err: fmt.Errorf("calling to APIKeyGroupRouteClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*APIKeyGroupRouteCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &APIKeyGroupRouteCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for APIKeyGroupRoute.
+func (c *APIKeyGroupRouteClient) Update() *APIKeyGroupRouteUpdate {
+	mutation := newAPIKeyGroupRouteMutation(c.config, OpUpdate)
+	return &APIKeyGroupRouteUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *APIKeyGroupRouteClient) UpdateOne(_m *APIKeyGroupRoute) *APIKeyGroupRouteUpdateOne {
+	mutation := newAPIKeyGroupRouteMutation(c.config, OpUpdateOne, withAPIKeyGroupRoute(_m))
+	return &APIKeyGroupRouteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *APIKeyGroupRouteClient) UpdateOneID(id int64) *APIKeyGroupRouteUpdateOne {
+	mutation := newAPIKeyGroupRouteMutation(c.config, OpUpdateOne, withAPIKeyGroupRouteID(id))
+	return &APIKeyGroupRouteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for APIKeyGroupRoute.
+func (c *APIKeyGroupRouteClient) Delete() *APIKeyGroupRouteDelete {
+	mutation := newAPIKeyGroupRouteMutation(c.config, OpDelete)
+	return &APIKeyGroupRouteDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *APIKeyGroupRouteClient) DeleteOne(_m *APIKeyGroupRoute) *APIKeyGroupRouteDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *APIKeyGroupRouteClient) DeleteOneID(id int64) *APIKeyGroupRouteDeleteOne {
+	builder := c.Delete().Where(apikeygrouproute.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &APIKeyGroupRouteDeleteOne{builder}
+}
+
+// Query returns a query builder for APIKeyGroupRoute.
+func (c *APIKeyGroupRouteClient) Query() *APIKeyGroupRouteQuery {
+	return &APIKeyGroupRouteQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeAPIKeyGroupRoute},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a APIKeyGroupRoute entity by its id.
+func (c *APIKeyGroupRouteClient) Get(ctx context.Context, id int64) (*APIKeyGroupRoute, error) {
+	return c.Query().Where(apikeygrouproute.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *APIKeyGroupRouteClient) GetX(ctx context.Context, id int64) *APIKeyGroupRoute {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryAPIKey queries the api_key edge of a APIKeyGroupRoute.
+func (c *APIKeyGroupRouteClient) QueryAPIKey(_m *APIKeyGroupRoute) *APIKeyQuery {
+	query := (&APIKeyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikeygrouproute.Table, apikeygrouproute.FieldID, id),
+			sqlgraph.To(apikey.Table, apikey.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, apikeygrouproute.APIKeyTable, apikeygrouproute.APIKeyColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryGroup queries the group edge of a APIKeyGroupRoute.
+func (c *APIKeyGroupRouteClient) QueryGroup(_m *APIKeyGroupRoute) *GroupQuery {
+	query := (&GroupClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikeygrouproute.Table, apikeygrouproute.FieldID, id),
+			sqlgraph.To(group.Table, group.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, apikeygrouproute.GroupTable, apikeygrouproute.GroupColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *APIKeyGroupRouteClient) Hooks() []Hook {
+	return c.hooks.APIKeyGroupRoute
+}
+
+// Interceptors returns the client interceptors.
+func (c *APIKeyGroupRouteClient) Interceptors() []Interceptor {
+	return c.inters.APIKeyGroupRoute
+}
+
+func (c *APIKeyGroupRouteClient) mutate(ctx context.Context, m *APIKeyGroupRouteMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&APIKeyGroupRouteCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&APIKeyGroupRouteUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&APIKeyGroupRouteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&APIKeyGroupRouteDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown APIKeyGroupRoute mutation op: %q", m.Op())
 	}
 }
 
@@ -2525,6 +2714,22 @@ func (c *GroupClient) QueryAPIKeys(_m *Group) *APIKeyQuery {
 			sqlgraph.From(group.Table, group.FieldID, id),
 			sqlgraph.To(apikey.Table, apikey.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, group.APIKeysTable, group.APIKeysColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryAPIKeyGroupRoutes queries the api_key_group_routes edge of a Group.
+func (c *GroupClient) QueryAPIKeyGroupRoutes(_m *Group) *APIKeyGroupRouteQuery {
+	query := (&APIKeyGroupRouteClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(group.Table, group.FieldID, id),
+			sqlgraph.To(apikeygrouproute.Table, apikeygrouproute.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, group.APIKeyGroupRoutesTable, group.APIKeyGroupRoutesColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -6050,8 +6255,8 @@ func (c *UserSubscriptionClient) mutate(ctx context.Context, m *UserSubscription
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
-		AuthIdentityChannel, ChannelMonitor, ChannelMonitorDailyRollup,
+		APIKey, APIKeyGroupRoute, Account, AccountGroup, Announcement, AnnouncementRead,
+		AuthIdentity, AuthIdentityChannel, ChannelMonitor, ChannelMonitorDailyRollup,
 		ChannelMonitorHistory, ChannelMonitorRequestTemplate, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
@@ -6060,8 +6265,8 @@ type (
 		UserAttributeDefinition, UserAttributeValue, UserSubscription []ent.Hook
 	}
 	inters struct {
-		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
-		AuthIdentityChannel, ChannelMonitor, ChannelMonitorDailyRollup,
+		APIKey, APIKeyGroupRoute, Account, AccountGroup, Announcement, AnnouncementRead,
+		AuthIdentity, AuthIdentityChannel, ChannelMonitor, ChannelMonitorDailyRollup,
 		ChannelMonitorHistory, ChannelMonitorRequestTemplate, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,

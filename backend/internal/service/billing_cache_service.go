@@ -671,10 +671,10 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 		return ErrBillingServiceUnavailable
 	}
 
-	// 判断计费模式
-	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
-
-	if isSubscriptionMode {
+	if group != nil && group.IsSubscriptionType() {
+		if subscription == nil {
+			return ErrSubscriptionNotFound
+		}
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
 			return err
 		}

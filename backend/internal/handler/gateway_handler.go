@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +35,8 @@ import (
 const gatewayCompatibilityMetricsLogInterval = 1024
 
 var gatewayCompatibilityMetricsLogCounter atomic.Uint64
+
+var apiKeyGroupRouteBreaker = newAPIKeyGroupRouteCircuitBreaker()
 
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
@@ -241,16 +245,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 
 	// 2. 【新增】Wait后二次检查余额/订阅
-	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
-		reqLog.Info("gateway.billing_eligibility_check_failed", zap.Error(err))
-		status, code, message, retryAfter := billingErrorDetails(err)
-		if retryAfter > 0 {
-			c.Header("Retry-After", strconv.Itoa(retryAfter))
-		}
-		h.handleStreamingAwareError(c, status, code, message, streamStarted)
-		return
-	}
-
 	// 设置请求所属分组 ID（用于渠道级功能判断，如 WebSearch 模拟）
 	parsedReq.GroupID = apiKey.GroupID
 
@@ -260,6 +254,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		UserAgent: c.GetHeader("User-Agent"),
 		APIKeyID:  apiKey.ID,
 	}
+	baseBody := body
+	baseSessionContext := parsedReq.SessionContext
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// [DEBUG-STICKY] 打印会话 hash 生成结果
@@ -304,6 +300,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	hasBoundSession := sessionKey != "" && sessionBoundAccountID > 0
 
 	if platform == service.PlatformGemini {
+		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
+			reqLog.Info("gateway.billing_eligibility_check_failed", zap.Error(err))
+			status, code, message, retryAfter := billingErrorDetails(err)
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+			}
+			h.handleStreamingAwareError(c, status, code, message, streamStarted)
+			return
+		}
+
 		fs := NewFailoverState(h.maxAccountSwitchesGemini, hasBoundSession)
 
 		// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
@@ -530,9 +536,26 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	currentAPIKey := apiKey
 	currentSubscription := subscription
+	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
+	if routeCandidate, ok := routeCursor.current(); ok {
+		currentAPIKey = routeCandidate.APIKey
+		var resolveErr error
+		currentSubscription, resolveErr = h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
+		if resolveErr != nil {
+			status, code, message, retryAfter := billingErrorDetails(resolveErr)
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+			}
+			h.handleStreamingAwareError(c, status, code, message, streamStarted)
+			return
+		}
+	} else {
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes", streamStarted)
+		return
+	}
 	var fallbackGroupID *int64
-	if apiKey.Group != nil {
-		fallbackGroupID = apiKey.Group.FallbackGroupIDOnInvalidRequest
+	if currentAPIKey.Group != nil {
+		fallbackGroupID = currentAPIKey.Group.FallbackGroupIDOnInvalidRequest
 	}
 	fallbackUsed := false
 
@@ -543,16 +566,76 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		c.Request = c.Request.WithContext(ctx)
 	}
 
+routeLoop:
 	for {
-		fs := NewFailoverState(h.maxAccountSwitches, hasBoundSession)
+		routeBackedRequest := !fallbackUsed
+		if routeBackedRequest {
+			routeCandidate, ok := routeCursor.current()
+			if !ok {
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes", streamStarted)
+				return
+			}
+			currentAPIKey = routeCandidate.APIKey
+			var resolveErr error
+			currentSubscription, resolveErr = h.gatewayService.ResolveRouteSubscription(c.Request.Context(), currentAPIKey, subscription)
+			if resolveErr != nil {
+				reqLog.Info("gateway.route_subscription_resolve_failed",
+					zap.Error(resolveErr),
+					zap.Int64p("group_id", currentAPIKey.GroupID),
+				)
+				status, code, message, retryAfter := billingErrorDetails(resolveErr)
+				if retryAfter > 0 {
+					c.Header("Retry-After", strconv.Itoa(retryAfter))
+				}
+				h.handleStreamingAwareError(c, status, code, message, streamStarted)
+				return
+			}
+			if currentAPIKey.Group != nil {
+				fallbackGroupID = currentAPIKey.Group.FallbackGroupIDOnInvalidRequest
+			} else {
+				fallbackGroupID = nil
+			}
+		}
+		routeBody := baseBody
+		channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), currentAPIKey.GroupID, reqModel)
+		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), currentAPIKey.User, currentAPIKey, currentAPIKey.Group, currentSubscription); err != nil {
+			reqLog.Info("gateway.billing_eligibility_check_failed",
+				zap.Error(err),
+				zap.Int64p("group_id", currentAPIKey.GroupID),
+			)
+			status, code, message, retryAfter := billingErrorDetails(err)
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+			}
+			h.handleStreamingAwareError(c, status, code, message, streamStarted)
+			return
+		}
+		parsedReqForRoute, parseErr := service.ParseGatewayRequest(routeBody, domain.PlatformAnthropic)
+		if parseErr != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+			return
+		}
+		parsedReqForRoute.GroupID = currentAPIKey.GroupID
+		parsedReqForRoute.SessionContext = baseSessionContext
+		parsedReq = parsedReqForRoute
+		currentSessionBoundAccountID := int64(0)
+		if sessionKey != "" {
+			if apiKeyGroupIDValue(currentAPIKey) == apiKeyGroupIDValue(apiKey) {
+				currentSessionBoundAccountID = sessionBoundAccountID
+			} else {
+				currentSessionBoundAccountID, _ = h.gatewayService.GetCachedSessionAccountID(c.Request.Context(), currentAPIKey.GroupID, sessionKey)
+			}
+		}
+		currentHasBoundSession := sessionKey != "" && currentSessionBoundAccountID > 0
+		fs := NewFailoverState(h.maxAccountSwitches, currentHasBoundSession)
 		retryWithFallback := false
 
 		for {
 			// 选择支持该模型的账号
 			reqLog.Info("sticky.selecting_account",
 				zap.String("session_key", sessionKey),
-				zap.Int64("sticky_bound_account_id", sessionBoundAccountID),
-				zap.Bool("has_bound_session", hasBoundSession),
+				zap.Int64("sticky_bound_account_id", currentSessionBoundAccountID),
+				zap.Bool("has_bound_session", currentHasBoundSession),
 				zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
 			)
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
@@ -565,6 +648,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Bool("fallback_used", fallbackUsed),
 						zap.Error(err),
 					)
+					if routeBackedRequest && routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
+						continue routeLoop
+					}
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error(), streamStarted)
 					return
 				}
@@ -578,6 +664,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					return
 				default: // FailoverExhausted
 					if fs.LastFailoverErr != nil {
+						if routeBackedRequest && !streamStarted && shouldSwitchAPIKeyGroupRoute(fs.LastFailoverErr) &&
+							routeCursor.switchToNext(apiKey.ID, "account_selection_exhausted", reqLog, zap.Int("upstream_status", fs.LastFailoverErr.StatusCode)) {
+							continue routeLoop
+						}
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, platform, streamStarted)
 					} else {
 						h.handleFailoverExhaustedSimple(c, 502, streamStarted)
@@ -594,13 +684,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				zap.String("account_name", account.Name),
 				zap.Bool("slot_acquired", selection.Acquired),
 				zap.Bool("has_wait_plan", selection.WaitPlan != nil),
-				zap.Int64("sticky_bound_account_id", sessionBoundAccountID),
-				zap.Bool("sticky_honored", sessionBoundAccountID > 0 && sessionBoundAccountID == account.ID),
+				zap.Int64("sticky_bound_account_id", currentSessionBoundAccountID),
+				zap.Bool("sticky_honored", currentSessionBoundAccountID > 0 && currentSessionBoundAccountID == account.ID),
 			)
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
 			if account.IsInterceptWarmupEnabled() {
-				interceptType := detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient)
+				interceptType := detectInterceptType(routeBody, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient)
 				if interceptType != InterceptTypeNone {
 					if selection.Acquired && selection.ReleaseFunc != nil {
 						selection.ReleaseFunc()
@@ -731,7 +821,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if channelMapping.Mapped {
 				parsedReq.Model = channelMapping.MappedModel
 				parsedReq.Body = h.gatewayService.ReplaceModelInBody(parsedReq.Body, channelMapping.MappedModel)
-				body = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
+				routeBody = h.gatewayService.ReplaceModelInBody(routeBody, channelMapping.MappedModel)
 			}
 
 			// 转发请求 - 根据账号平台分流
@@ -744,7 +834,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
 			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
-				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, body, hasBoundSession)
+				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, routeBody, currentHasBoundSession)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)
 			}
@@ -825,6 +915,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					case FailoverContinue:
 						continue
 					case FailoverExhausted:
+						if routeBackedRequest && canSwitchAPIKeyGroupRouteAfterForward(c, routeCursor, fs.LastFailoverErr, streamStarted, writerSizeBeforeForward) &&
+							routeCursor.switchToNext(apiKey.ID, "upstream_failover_exhausted", reqLog, zap.Int("upstream_status", fs.LastFailoverErr.StatusCode)) {
+							continue routeLoop
+						}
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, account.Platform, streamStarted)
 						return
 					case FailoverCanceled:
@@ -867,7 +961,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// - 选中账号与粘性账号一致：刷新 TTL
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
-			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID) {
+			if routeBackedRequest {
+				routeCursor.recordSuccess(apiKey.ID)
+			}
+			if sessionKey != "" && (currentSessionBoundAccountID == 0 || currentSessionBoundAccountID == account.ID) {
 				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
@@ -876,7 +973,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
 			userAgent := c.GetHeader("User-Agent")
 			clientIP := ip.GetClientIP(c)
-			requestPayloadHash := service.HashUsageRequestPayload(body)
+			requestPayloadHash := service.HashUsageRequestPayload(routeBody)
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 
@@ -992,6 +1089,254 @@ func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service
 	cloned.GroupID = &groupID
 	cloned.Group = group
 	return &cloned
+}
+
+func apiKeyGroupIDValue(apiKey *service.APIKey) int64 {
+	if apiKey == nil || apiKey.GroupID == nil {
+		return 0
+	}
+	return *apiKey.GroupID
+}
+
+type apiKeyGroupRouteCandidate struct {
+	APIKey *service.APIKey
+	Route  service.APIKeyGroupRoute
+}
+
+type apiKeyGroupRouteCursor struct {
+	candidates []apiKeyGroupRouteCandidate
+	index      int
+	available  bool
+}
+
+type apiKeyGroupRouteCircuitBreaker struct {
+	mu     sync.Mutex
+	states map[string]apiKeyGroupRouteBreakerState
+}
+
+type apiKeyGroupRouteBreakerState struct {
+	cooldownUntil time.Time
+	failures      int
+}
+
+func newAPIKeyGroupRouteCircuitBreaker() *apiKeyGroupRouteCircuitBreaker {
+	return &apiKeyGroupRouteCircuitBreaker{states: make(map[string]apiKeyGroupRouteBreakerState)}
+}
+
+func apiKeyGroupRouteBreakerKey(apiKeyID, groupID int64) string {
+	return strconv.FormatInt(apiKeyID, 10) + ":" + strconv.FormatInt(groupID, 10)
+}
+
+func (b *apiKeyGroupRouteCircuitBreaker) available(apiKeyID, groupID int64, now time.Time) bool {
+	if b == nil || apiKeyID <= 0 || groupID <= 0 {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	key := apiKeyGroupRouteBreakerKey(apiKeyID, groupID)
+	state, ok := b.states[key]
+	if !ok || state.cooldownUntil.IsZero() || !now.Before(state.cooldownUntil) {
+		if ok && !state.cooldownUntil.IsZero() {
+			delete(b.states, key)
+		}
+		return true
+	}
+	return false
+}
+
+func (b *apiKeyGroupRouteCircuitBreaker) recordFailure(apiKeyID, groupID int64, cooldownSeconds int) {
+	if b == nil || apiKeyID <= 0 || groupID <= 0 {
+		return
+	}
+	if cooldownSeconds <= 0 {
+		cooldownSeconds = 30
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	key := apiKeyGroupRouteBreakerKey(apiKeyID, groupID)
+	state := b.states[key]
+	state.failures++
+	multiplier := 1 << min(state.failures-1, 4)
+	state.cooldownUntil = time.Now().Add(time.Duration(cooldownSeconds*multiplier) * time.Second)
+	b.states[key] = state
+}
+
+func (b *apiKeyGroupRouteCircuitBreaker) recordSuccess(apiKeyID, groupID int64) {
+	if b == nil || apiKeyID <= 0 || groupID <= 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.states, apiKeyGroupRouteBreakerKey(apiKeyID, groupID))
+}
+
+func newAPIKeyGroupRouteCursor(apiKey *service.APIKey) *apiKeyGroupRouteCursor {
+	candidates, available := buildAPIKeyGroupRouteCandidates(apiKey)
+	return newAPIKeyGroupRouteCursorFromCandidates(candidates, available)
+}
+
+func newAPIKeyGroupRouteCursorFromCandidates(candidates []apiKeyGroupRouteCandidate, available bool) *apiKeyGroupRouteCursor {
+	return &apiKeyGroupRouteCursor{candidates: candidates, available: available}
+}
+
+func (c *apiKeyGroupRouteCursor) current() (apiKeyGroupRouteCandidate, bool) {
+	if c == nil || !c.available || c.index < 0 || c.index >= len(c.candidates) {
+		return apiKeyGroupRouteCandidate{}, false
+	}
+	candidate := c.candidates[c.index]
+	return candidate, candidate.APIKey != nil
+}
+
+func (c *apiKeyGroupRouteCursor) hasNext() bool {
+	return c != nil && c.available && c.index+1 < len(c.candidates)
+}
+
+func (c *apiKeyGroupRouteCursor) switchToNext(apiKeyID int64, reason string, reqLog *zap.Logger, fields ...zap.Field) bool {
+	if c == nil || !c.hasNext() {
+		return false
+	}
+	current, ok := c.current()
+	if !ok {
+		return false
+	}
+	apiKeyGroupRouteBreaker.recordFailure(apiKeyID, current.Route.GroupID, current.Route.CooldownSeconds)
+	c.index++
+	next, _ := c.current()
+	if reqLog != nil {
+		logFields := []zap.Field{
+			zap.String("reason", reason),
+			zap.Int64("from_group_id", current.Route.GroupID),
+			zap.Int("from_priority", current.Route.Priority),
+			zap.Int64("to_group_id", next.Route.GroupID),
+			zap.Int("to_priority", next.Route.Priority),
+		}
+		logFields = append(logFields, fields...)
+		reqLog.Warn("api_key_group_route.switching", logFields...)
+	}
+	return true
+}
+
+func (c *apiKeyGroupRouteCursor) skipToNext(reason string, reqLog *zap.Logger, fields ...zap.Field) bool {
+	if c == nil || !c.hasNext() {
+		return false
+	}
+	current, ok := c.current()
+	if !ok {
+		return false
+	}
+	c.index++
+	next, _ := c.current()
+	if reqLog != nil {
+		logFields := []zap.Field{
+			zap.String("reason", reason),
+			zap.Int64("from_group_id", current.Route.GroupID),
+			zap.Int("from_priority", current.Route.Priority),
+			zap.Int64("to_group_id", next.Route.GroupID),
+			zap.Int("to_priority", next.Route.Priority),
+		}
+		logFields = append(logFields, fields...)
+		reqLog.Info("api_key_group_route.skipping", logFields...)
+	}
+	return true
+}
+
+func (c *apiKeyGroupRouteCursor) recordSuccess(apiKeyID int64) {
+	current, ok := c.current()
+	if !ok {
+		return
+	}
+	apiKeyGroupRouteBreaker.recordSuccess(apiKeyID, current.Route.GroupID)
+}
+
+func canSwitchAPIKeyGroupRouteAfterForward(c *gin.Context, cursor *apiKeyGroupRouteCursor, failoverErr *service.UpstreamFailoverError, streamStarted bool, writerSizeBeforeForward int) bool {
+	if cursor == nil || !cursor.hasNext() || !shouldSwitchAPIKeyGroupRoute(failoverErr) || streamStarted {
+		return false
+	}
+	if c != nil && c.Writer != nil && c.Writer.Size() != writerSizeBeforeForward {
+		return false
+	}
+	return true
+}
+
+func buildAPIKeyGroupRouteCandidates(apiKey *service.APIKey) ([]apiKeyGroupRouteCandidate, bool) {
+	if apiKey == nil {
+		return nil, false
+	}
+	routes := apiKey.GroupRoutes
+	hasConfiguredRoutes := len(routes) > 0
+	if len(routes) == 0 && apiKey.GroupID != nil && apiKey.Group != nil {
+		routes = []service.APIKeyGroupRoute{{
+			GroupID:         *apiKey.GroupID,
+			Priority:        100,
+			Weight:          1,
+			Enabled:         true,
+			CooldownSeconds: 30,
+			Group:           apiKey.Group,
+		}}
+	}
+	sort.SliceStable(routes, func(i, j int) bool {
+		if routes[i].Priority != routes[j].Priority {
+			return routes[i].Priority < routes[j].Priority
+		}
+		if routes[i].Weight != routes[j].Weight {
+			return routes[i].Weight > routes[j].Weight
+		}
+		return routes[i].GroupID < routes[j].GroupID
+	})
+	now := time.Now()
+	candidates := make([]apiKeyGroupRouteCandidate, 0, len(routes))
+	for _, route := range routes {
+		if !route.Enabled || route.Group == nil || route.GroupID <= 0 {
+			continue
+		}
+		if !apiKeyGroupRouteBreaker.available(apiKey.ID, route.GroupID, now) {
+			continue
+		}
+		candidates = append(candidates, apiKeyGroupRouteCandidate{
+			APIKey: cloneAPIKeyWithGroup(apiKey, route.Group),
+			Route:  route,
+		})
+	}
+	if len(candidates) == 0 && apiKey.GroupID != nil && apiKey.Group != nil {
+		if hasConfiguredRoutes {
+			return nil, false
+		}
+		candidates = append(candidates, apiKeyGroupRouteCandidate{
+			APIKey: cloneAPIKeyWithGroup(apiKey, apiKey.Group),
+			Route: service.APIKeyGroupRoute{
+				GroupID:         *apiKey.GroupID,
+				Priority:        100,
+				Weight:          1,
+				Enabled:         true,
+				CooldownSeconds: 30,
+				Group:           apiKey.Group,
+			},
+		})
+	}
+	if len(candidates) == 0 && apiKey.GroupID == nil {
+		candidates = append(candidates, apiKeyGroupRouteCandidate{
+			APIKey: apiKey,
+			Route: service.APIKeyGroupRoute{
+				Priority:        100,
+				Weight:          1,
+				Enabled:         true,
+				CooldownSeconds: 30,
+			},
+		})
+	}
+	return candidates, len(candidates) > 0
+}
+
+func shouldSwitchAPIKeyGroupRoute(failoverErr *service.UpstreamFailoverError) bool {
+	if failoverErr == nil {
+		return false
+	}
+	switch failoverErr.StatusCode {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
+		return true
+	default:
+		return failoverErr.StatusCode >= 500
+	}
 }
 
 // Usage handles getting account balance and usage statistics for CC Switch integration
@@ -1786,6 +2131,22 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 		msg := pkgerrors.Message(err)
 		retrySeconds := 60 - int(time.Now().Unix()%60)
 		return http.StatusTooManyRequests, "rate_limit_exceeded", msg, retrySeconds
+	}
+	if errors.Is(err, service.ErrSubscriptionNotFound) {
+		msg := pkgerrors.Message(err)
+		if msg == "" {
+			msg = "subscription not found"
+		}
+		return http.StatusForbidden, "subscription_not_found", msg, 0
+	}
+	if errors.Is(err, service.ErrSubscriptionInvalid) ||
+		errors.Is(err, service.ErrSubscriptionExpired) ||
+		errors.Is(err, service.ErrSubscriptionSuspended) {
+		msg := pkgerrors.Message(err)
+		if msg == "" {
+			msg = "subscription is invalid or expired"
+		}
+		return http.StatusForbidden, "subscription_invalid", msg, 0
 	}
 	msg := pkgerrors.Message(err)
 	if msg == "" {

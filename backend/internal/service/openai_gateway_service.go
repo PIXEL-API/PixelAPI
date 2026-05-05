@@ -5135,8 +5135,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		cost = &CostBreakdown{ActualCost: 0}
 	}
 
-	// Determine billing type
-	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	// Determine billing type. Subscription groups never fall back to balance billing.
+	isSubscriptionBilling := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	if isSubscriptionBilling && subscription == nil {
+		return ErrSubscriptionNotFound
+	}
 	billingType := BillingTypeBalance
 	if isSubscriptionBilling {
 		billingType = BillingTypeSubscription

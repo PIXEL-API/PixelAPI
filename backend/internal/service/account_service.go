@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
@@ -26,6 +27,13 @@ var (
 
 const AccountListGroupUngrouped int64 = -1
 const AccountPrivacyModeUnsetFilter = "__unset__"
+
+const (
+	AccountLevelUnknown = domain.AccountLevelUnknown
+	AccountLevelFree    = domain.AccountLevelFree
+	AccountLevelPlus    = domain.AccountLevelPlus
+	AccountLevelPro     = domain.AccountLevelPro
+)
 
 type AccountRepository interface {
 	Create(ctx context.Context, account *Account) error
@@ -97,6 +105,7 @@ type AccountBulkUpdate struct {
 	LoadFactor     *int
 	Status         *string
 	Schedulable    *bool
+	AccountLevel   *string
 	Credentials    map[string]any
 	Extra          map[string]any
 }

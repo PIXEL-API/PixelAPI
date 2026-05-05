@@ -46,20 +46,21 @@ type AdminUser struct {
 }
 
 type APIKey struct {
-	ID          int64      `json:"id"`
-	UserID      int64      `json:"user_id"`
-	Key         string     `json:"key"`
-	Name        string     `json:"name"`
-	GroupID     *int64     `json:"group_id"`
-	Status      string     `json:"status"`
-	IPWhitelist []string   `json:"ip_whitelist"`
-	IPBlacklist []string   `json:"ip_blacklist"`
-	LastUsedAt  *time.Time `json:"last_used_at"`
-	Quota       float64    `json:"quota"`      // Quota limit in USD (0 = unlimited)
-	QuotaUsed   float64    `json:"quota_used"` // Used quota amount in USD
-	ExpiresAt   *time.Time `json:"expires_at"` // Expiration time (nil = never expires)
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID          int64              `json:"id"`
+	UserID      int64              `json:"user_id"`
+	Key         string             `json:"key"`
+	Name        string             `json:"name"`
+	GroupID     *int64             `json:"group_id"`
+	GroupRoutes []APIKeyGroupRoute `json:"group_routes,omitempty"`
+	Status      string             `json:"status"`
+	IPWhitelist []string           `json:"ip_whitelist"`
+	IPBlacklist []string           `json:"ip_blacklist"`
+	LastUsedAt  *time.Time         `json:"last_used_at"`
+	Quota       float64            `json:"quota"`      // Quota limit in USD (0 = unlimited)
+	QuotaUsed   float64            `json:"quota_used"` // Used quota amount in USD
+	ExpiresAt   *time.Time         `json:"expires_at"` // Expiration time (nil = never expires)
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
 
 	// Rate limit fields
 	RateLimit5h   float64    `json:"rate_limit_5h"`
@@ -79,16 +80,30 @@ type APIKey struct {
 	Group *Group `json:"group,omitempty"`
 }
 
+type APIKeyGroupRoute struct {
+	ID              int64      `json:"id,omitempty"`
+	APIKeyID        int64      `json:"api_key_id,omitempty"`
+	GroupID         int64      `json:"group_id"`
+	Priority        int        `json:"priority"`
+	Weight          int        `json:"weight"`
+	Enabled         bool       `json:"enabled"`
+	CooldownSeconds int        `json:"cooldown_seconds"`
+	CreatedAt       *time.Time `json:"created_at,omitempty"`
+	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
+	Group           *Group     `json:"group,omitempty"`
+}
+
 type Group struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	Description    string  `json:"description"`
-	Platform       string  `json:"platform"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	IsExclusive    bool    `json:"is_exclusive"`
-	Status         string  `json:"status"`
-	OwnerUserID    *int64  `json:"owner_user_id,omitempty"`
-	Scope          string  `json:"scope"`
+	ID                   int64   `json:"id"`
+	Name                 string  `json:"name"`
+	Description          string  `json:"description"`
+	Platform             string  `json:"platform"`
+	RequiredAccountLevel string  `json:"required_account_level"`
+	RateMultiplier       float64 `json:"rate_multiplier"`
+	IsExclusive          bool    `json:"is_exclusive"`
+	Status               string  `json:"status"`
+	OwnerUserID          *int64  `json:"owner_user_id,omitempty"`
+	Scope                string  `json:"scope"`
 
 	SubscriptionType string   `json:"subscription_type"`
 	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
@@ -152,6 +167,7 @@ type Account struct {
 	Name               string         `json:"name"`
 	Notes              *string        `json:"notes"`
 	Platform           string         `json:"platform"`
+	AccountLevel       string         `json:"account_level"`
 	Type               string         `json:"type"`
 	Credentials        map[string]any `json:"credentials"`
 	Extra              map[string]any `json:"extra"`

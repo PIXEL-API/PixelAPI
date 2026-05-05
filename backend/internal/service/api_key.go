@@ -44,6 +44,7 @@ type APIKey struct {
 	UpdatedAt           time.Time
 	User                *User
 	Group               *Group
+	GroupRoutes         []APIKeyGroupRoute
 
 	// Quota fields
 	Quota     float64    // Quota limit in USD (0 = unlimited)
@@ -60,6 +61,19 @@ type APIKey struct {
 	Window5hStart *time.Time // Start of current 5h window
 	Window1dStart *time.Time // Start of current 1d window
 	Window7dStart *time.Time // Start of current 7d window
+}
+
+type APIKeyGroupRoute struct {
+	ID              int64
+	APIKeyID        int64
+	GroupID         int64
+	Priority        int
+	Weight          int
+	Enabled         bool
+	CooldownSeconds int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	Group           *Group
 }
 
 func (k *APIKey) IsActive() bool {

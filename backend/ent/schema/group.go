@@ -63,6 +63,10 @@ func (Group) Fields() []ent.Field {
 		field.String("platform").
 			MaxLen(50).
 			Default(domain.PlatformAnthropic),
+		field.String("required_account_level").
+			MaxLen(20).
+			Default("").
+			Comment("Required account capability level for this group: empty/free/plus/pro."),
 		field.String("subscription_type").
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),
@@ -164,6 +168,7 @@ func (Group) Fields() []ent.Field {
 func (Group) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.To("api_keys", APIKey.Type),
+		edge.To("api_key_group_routes", APIKeyGroupRoute.Type),
 		edge.To("redeem_codes", RedeemCode.Type),
 		edge.To("subscriptions", UserSubscription.Type),
 		edge.To("usage_logs", UsageLog.Type),

@@ -28,18 +28,18 @@
             </p>
           </div>
           <div class="card p-5">
-            <p class="text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.stats.availableQuota') }}</p>
+            <p class="text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.stats.settlementMode') }}</p>
             <p class="mt-2 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
-              {{ formatCurrency(detail.aff_quota) }}
+              {{ t('affiliate.stats.realtimeBalance') }}
+            </p>
+            <p class="mt-1 text-xs text-gray-400 dark:text-dark-500">
+              {{ t('affiliate.stats.realtimeBalanceHint') }}
             </p>
           </div>
           <div class="card p-5">
             <p class="text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.stats.totalQuota') }}</p>
             <p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
               {{ formatCurrency(detail.aff_history_quota) }}
-            </p>
-            <p v-if="detail.aff_frozen_quota > 0" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {{ t('affiliate.stats.frozenQuota') }}: {{ formatCurrency(detail.aff_frozen_quota) }}
             </p>
           </div>
         </div>
@@ -78,30 +78,8 @@
               <li>1. {{ t('affiliate.tips.line1') }}</li>
               <li>2. {{ t('affiliate.tips.line2', { rate: `${formattedRebateRate}%` }) }}</li>
               <li>3. {{ t('affiliate.tips.line3') }}</li>
-              <li v-if="detail.aff_frozen_quota > 0">4. {{ t('affiliate.tips.line4') }}</li>
             </ul>
           </div>
-        </div>
-
-        <div class="card p-6">
-          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('affiliate.transfer.title') }}</h3>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.transfer.description') }}</p>
-            </div>
-            <button
-              class="btn btn-primary"
-              :disabled="transferring || detail.aff_quota <= 0"
-              @click="transferQuota"
-            >
-              <Icon v-if="transferring" name="refresh" size="sm" class="animate-spin" />
-              <Icon v-else name="dollar" size="sm" />
-              <span>{{ transferring ? t('affiliate.transfer.transferring') : t('affiliate.transfer.button') }}</span>
-            </button>
-          </div>
-          <p v-if="detail.aff_quota <= 0" class="mt-3 text-sm text-amber-600 dark:text-amber-400">
-            {{ t('affiliate.transfer.empty') }}
-          </p>
         </div>
 
         <div class="card p-6">
@@ -147,18 +125,15 @@ import Icon from '@/components/icons/Icon.vue'
 import userAPI from '@/api/user'
 import type { UserAffiliateDetail } from '@/types'
 import { useAppStore } from '@/stores/app'
-import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
 import { formatCurrency, formatDateTime } from '@/utils/format'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const authStore = useAuthStore()
 const { copyToClipboard } = useClipboard()
 
 const loading = ref(true)
-const transferring = ref(false)
 const detail = ref<UserAffiliateDetail | null>(null)
 
 const inviteLink = computed(() => {
@@ -202,23 +177,6 @@ async function copyCode(): Promise<void> {
 async function copyInviteLink(): Promise<void> {
   if (!inviteLink.value) return
   await copyToClipboard(inviteLink.value, t('affiliate.linkCopied'))
-}
-
-async function transferQuota(): Promise<void> {
-  if (!detail.value || detail.value.aff_quota <= 0 || transferring.value) return
-  transferring.value = true
-  try {
-    const resp = await userAPI.transferAffiliateQuota()
-    appStore.showSuccess(t('affiliate.transfer.success', { amount: formatCurrency(resp.transferred_quota) }))
-    await Promise.all([
-      loadAffiliateDetail(true),
-      authStore.refreshUser().catch(() => undefined),
-    ])
-  } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, t('affiliate.transferFailed')))
-  } finally {
-    transferring.value = false
-  }
 }
 
 onMounted(() => {
