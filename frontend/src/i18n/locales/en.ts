@@ -2847,7 +2847,8 @@ export default {
         unknown: 'Unknown',
         free: 'Free',
         plus: 'Plus',
-        pro: 'Pro'
+        pro: 'Pro',
+        team: 'Team'
       },
       syncFromCrs: 'Sync from CRS',
       dataExport: 'Export',

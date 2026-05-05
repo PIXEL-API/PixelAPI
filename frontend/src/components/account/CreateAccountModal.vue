@@ -3397,7 +3397,8 @@ const accountLevelOptions = computed(() => [
   { value: 'unknown', label: t('admin.accounts.accountLevel.unknown') },
   { value: 'free', label: t('admin.accounts.accountLevel.free') },
   { value: 'plus', label: t('admin.accounts.accountLevel.plus') },
-  { value: 'pro', label: t('admin.accounts.accountLevel.pro') }
+  { value: 'pro', label: t('admin.accounts.accountLevel.pro') },
+  { value: 'team', label: t('admin.accounts.accountLevel.team') }
 ])
 
 function buildAntigravityExtra(): Record<string, unknown> | undefined {

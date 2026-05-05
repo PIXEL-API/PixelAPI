@@ -33,6 +33,7 @@ const (
 	AccountLevelFree    = domain.AccountLevelFree
 	AccountLevelPlus    = domain.AccountLevelPlus
 	AccountLevelPro     = domain.AccountLevelPro
+	AccountLevelTeam    = domain.AccountLevelTeam
 )
 
 type AccountRepository interface {

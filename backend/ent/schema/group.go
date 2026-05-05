@@ -66,7 +66,7 @@ func (Group) Fields() []ent.Field {
 		field.String("required_account_level").
 			MaxLen(20).
 			Default("").
-			Comment("Required account capability level for this group: empty/free/plus/pro."),
+			Comment("Required account capability level for this group: empty/free/plus/pro/team."),
 		field.String("subscription_type").
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),

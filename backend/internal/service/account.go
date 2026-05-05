@@ -88,6 +88,8 @@ func NormalizeAccountLevel(level string) string {
 		return AccountLevelPlus
 	case AccountLevelPro:
 		return AccountLevelPro
+	case AccountLevelTeam:
+		return AccountLevelTeam
 	default:
 		return AccountLevelUnknown
 	}
@@ -95,7 +97,7 @@ func NormalizeAccountLevel(level string) string {
 
 func IsConcreteAccountLevel(level string) bool {
 	switch NormalizeAccountLevel(level) {
-	case AccountLevelFree, AccountLevelPlus, AccountLevelPro:
+	case AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam:
 		return true
 	default:
 		return false

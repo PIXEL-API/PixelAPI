@@ -2923,7 +2923,8 @@ export default {
         unknown: '未知',
         free: 'Free',
         plus: 'Plus',
-        pro: 'Pro'
+        pro: 'Pro',
+        team: 'Team'
       },
       syncFromCrs: '从 CRS 同步',
       dataExport: '导出',

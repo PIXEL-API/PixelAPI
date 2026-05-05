@@ -40,6 +40,7 @@ const (
 	AccountLevelFree    = "free"
 	AccountLevelPlus    = "plus"
 	AccountLevelPro     = "pro"
+	AccountLevelTeam    = "team"
 )
 
 // Redeem type constants

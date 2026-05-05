@@ -388,7 +388,7 @@
     <BaseDialog
       :show="showCreateModal || showEditModal"
       :title="showEditModal ? t('keys.editKey') : t('keys.createKey')"
-      width="normal"
+      width="wide"
       @close="closeModals"
     >
       <form id="key-form" @submit.prevent="handleSubmit" class="space-y-5">
@@ -441,11 +441,11 @@
           </Select>
         </div>
 
-        <div class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
-          <div class="flex items-center justify-between gap-4">
-            <div>
+        <div class="space-y-4 rounded-xl border border-gray-200 bg-gray-50/60 p-4 dark:border-dark-700 dark:bg-dark-900/20 sm:p-5">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
               <label class="text-sm font-medium text-gray-700 dark:text-dark-200">多分组路由</label>
-              <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+              <p class="mt-1 max-w-2xl text-xs leading-5 text-gray-500 dark:text-dark-400">
                 开启后可按优先级和权重为同一个 Key 配置多个分组
               </p>
             </div>
@@ -470,10 +470,37 @@
             <div
               v-for="(route, index) in formData.group_routes"
               :key="index"
-              class="rounded-lg border border-gray-100 p-3 dark:border-dark-700"
+              class="space-y-3 rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-dark-700 dark:bg-dark-800/70 sm:p-4"
             >
-              <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_90px_90px_120px_72px]">
-                <div>
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-primary-50 px-2 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
+                    {{ index + 1 }}
+                  </span>
+                  <span class="text-sm font-medium text-gray-700 dark:text-dark-200">路由配置</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <label class="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-600 dark:border-dark-600 dark:bg-dark-700/60 dark:text-dark-300">
+                    <input
+                      v-model="route.enabled"
+                      type="checkbox"
+                      class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    启用
+                  </label>
+                  <button
+                    type="button"
+                    class="btn btn-secondary h-10 px-3"
+                    :disabled="formData.group_routes.length <= 1"
+                    @click="removeGroupRoute(index)"
+                  >
+                    <Icon name="trash" size="sm" />
+                  </button>
+                </div>
+              </div>
+
+              <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_8rem_8rem_9rem]">
+                <div class="md:col-span-2 lg:col-span-1">
                   <label class="mb-1 block text-xs text-gray-500 dark:text-dark-400">分组</label>
                   <Select
                     v-model="route.group_id"
@@ -537,27 +564,9 @@
                     class="input"
                   />
                 </div>
-                <div class="flex items-end gap-2">
-                  <label class="flex h-10 items-center gap-2 text-sm text-gray-600 dark:text-dark-300">
-                    <input
-                      v-model="route.enabled"
-                      type="checkbox"
-                      class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                    />
-                    启用
-                  </label>
-                  <button
-                    type="button"
-                    class="btn btn-secondary h-10 px-3"
-                    :disabled="formData.group_routes.length <= 1"
-                    @click="removeGroupRoute(index)"
-                  >
-                    <Icon name="trash" size="sm" />
-                  </button>
-                </div>
               </div>
             </div>
-            <button type="button" class="btn btn-secondary" @click="addGroupRoute">
+            <button type="button" class="btn btn-secondary w-full sm:w-auto" @click="addGroupRoute">
               <Icon name="plus" size="sm" class="mr-2" />
               添加路由
             </button>

@@ -98,7 +98,7 @@ type CreateAccountRequest struct {
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
-	AccountLevel            string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro"`
+	AccountLevel            string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
 	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
@@ -123,7 +123,7 @@ type UpdateAccountRequest struct {
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
 	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
-	AccountLevel            *string        `json:"account_level" binding:"omitempty,oneof=unknown free plus pro"`
+	AccountLevel            *string        `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
 	Credentials             map[string]any `json:"credentials"`
 	Extra                   map[string]any `json:"extra"`
 	OwnerUserID             *int64         `json:"owner_user_id"`
@@ -154,7 +154,7 @@ type BulkUpdateAccountsRequest struct {
 	LoadFactor              *int                      `json:"load_factor"`
 	Status                  string                    `json:"status" binding:"omitempty,oneof=active inactive error"`
 	Schedulable             *bool                     `json:"schedulable"`
-	AccountLevel            *string                   `json:"account_level" binding:"omitempty,oneof=unknown free plus pro"`
+	AccountLevel            *string                   `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
 	GroupIDs                *[]int64                  `json:"group_ids"`
 	Credentials             map[string]any            `json:"credentials"`
 	Extra                   map[string]any            `json:"extra"`

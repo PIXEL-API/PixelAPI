@@ -1405,7 +1405,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
 	if !IsValidRequiredAccountLevel(input.RequiredAccountLevel) {
-		return nil, errors.New("required_account_level must be empty, free, plus, or pro")
+		return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
 	}
 
 	platform := input.Platform
@@ -1651,7 +1651,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.RequiredAccountLevel != nil {
 		if !IsValidRequiredAccountLevel(*input.RequiredAccountLevel) {
-			return nil, errors.New("required_account_level must be empty, free, plus, or pro")
+			return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
 		}
 		group.RequiredAccountLevel = NormalizeRequiredAccountLevel(*input.RequiredAccountLevel)
 	}

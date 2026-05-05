@@ -666,7 +666,7 @@ export interface UpdateGroupRequest {
 
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
-export type AccountLevel = 'unknown' | 'free' | 'plus' | 'pro'
+export type AccountLevel = 'unknown' | 'free' | 'plus' | 'pro' | 'team'
 export type AccountShareMode = 'private' | 'public'
 export type AccountShareStatus = 'pending' | 'approved' | 'suspended'
 export type AccountStatus = 'active' | 'inactive' | 'disabled' | 'error'
