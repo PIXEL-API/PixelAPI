@@ -1065,7 +1065,7 @@ const selectedTypesAllowOAuthOnlyGroups = computed(
     targetSelectedTypes.value.length > 0 &&
     targetSelectedTypes.value.every(type => type === 'oauth' || type === 'setup-token')
 )
-const canManageGroups = computed(() => !isUserScope.value || Boolean(bulkGroupPlatform.value))
+const canManageGroups = computed(() => !isUserScope.value)
 const bulkEditableGroups = computed<AdminGroup[]>(() => {
   if (!isUserScope.value) {
     return props.groups

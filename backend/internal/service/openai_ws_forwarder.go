@@ -2220,7 +2220,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			if !wroteDownstream && canFallback {
 				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
 			}
-			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
+			statusCode := openAIWSErrorHTTPStatusFromRawWithMessage(errCodeRaw, errTypeRaw, errMsgRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
@@ -2235,6 +2235,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				})
 			}
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
+		}
+
+		if eventType == "response.failed" {
+			failedMsg := extractOpenAISSEErrorMessage(message)
+			if failedMsg == "" {
+				failedMsg = "OpenAI model capacity temporarily unavailable"
+			}
+			if s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusServiceUnavailable, lease.HandshakeHeaders(), message, failedMsg) {
+				lease.MarkBroken()
+				if !wroteDownstream {
+					return nil, wrapOpenAIWSFallback("upstream_capacity", errors.New(failedMsg))
+				}
+			}
 		}
 
 		if reqStream {
@@ -2918,6 +2931,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						errors.New(errMsg),
 						false,
 					)
+				}
+			}
+			if eventType == "response.failed" {
+				failedMsg := extractOpenAISSEErrorMessage(upstreamMessage)
+				if failedMsg == "" {
+					failedMsg = "OpenAI model capacity temporarily unavailable"
+				}
+				if s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusServiceUnavailable, lease.HandshakeHeaders(), upstreamMessage, failedMsg) {
+					lease.MarkBroken()
+					if !wroteDownstream {
+						return nil, NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, failedMsg, errors.New(failedMsg))
+					}
 				}
 			}
 			isTokenEvent := isOpenAIWSTokenEvent(eventType)
@@ -3730,6 +3755,24 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			return wrapOpenAIWSFallback("prewarm_error_event", errors.New(errMsg))
 		}
 
+		if eventType == "response.failed" {
+			failedMsg := extractOpenAISSEErrorMessage(message)
+			if failedMsg == "" {
+				failedMsg = "OpenAI websocket prewarm failed"
+			}
+			if s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusServiceUnavailable, lease.HandshakeHeaders(), message, failedMsg) {
+				lease.MarkBroken()
+				logOpenAIWSModeInfo(
+					"prewarm_capacity_event account_id=%d conn_id=%s idx=%d message=%s",
+					account.ID,
+					connID,
+					prewarmEventCount,
+					truncateOpenAIWSLogValue(failedMsg, openAIWSLogValueMaxLen),
+				)
+				return wrapOpenAIWSFallback("prewarm_upstream_capacity", errors.New(failedMsg))
+			}
+		}
+
 		if isOpenAIWSTerminalEvent(eventType) {
 			prewarmTerminalCount++
 			break
@@ -4004,6 +4047,10 @@ func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Contex
 	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
 		return
 	}
+	if isOpenAIModelCapacityError(http.StatusServiceUnavailable, strings.TrimSpace(msgRaw+" "+codeRaw+" "+errTypeRaw), responseBody) {
+		s.rateLimitService.HandleUpstreamError(ctx, account, http.StatusServiceUnavailable, headers, responseBody)
+		return
+	}
 	if !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
 		return
 	}
@@ -4026,6 +4073,9 @@ func classifyOpenAIWSErrorEventFromRaw(codeRaw, errTypeRaw, msgRaw string) (stri
 		return "invalid_encrypted_content", true
 	case "previous_response_not_found":
 		return "previous_response_not_found", true
+	}
+	if isOpenAIModelCapacityText(strings.Join([]string{msg, code, errType}, " ")) {
+		return "upstream_capacity", true
 	}
 	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
 		return "upstream_rate_limited", false
@@ -4064,9 +4114,16 @@ func classifyOpenAIWSErrorEvent(message []byte) (string, bool) {
 }
 
 func openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw string) int {
+	return openAIWSErrorHTTPStatusFromRawWithMessage(codeRaw, errTypeRaw, "")
+}
+
+func openAIWSErrorHTTPStatusFromRawWithMessage(codeRaw, errTypeRaw, msgRaw string) int {
 	code := strings.ToLower(strings.TrimSpace(codeRaw))
 	errType := strings.ToLower(strings.TrimSpace(errTypeRaw))
+	msg := strings.ToLower(strings.TrimSpace(msgRaw))
 	switch {
+	case isOpenAIModelCapacityText(strings.Join([]string{msg, code, errType}, " ")):
+		return http.StatusServiceUnavailable
 	case strings.Contains(errType, "invalid_request"),
 		strings.Contains(code, "invalid_request"),
 		strings.Contains(code, "bad_request"),
@@ -4091,8 +4148,8 @@ func openAIWSErrorHTTPStatus(message []byte) int {
 	if len(message) == 0 {
 		return http.StatusBadGateway
 	}
-	codeRaw, errTypeRaw, _ := parseOpenAIWSErrorEventFields(message)
-	return openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	codeRaw, errTypeRaw, msgRaw := parseOpenAIWSErrorEventFields(message)
+	return openAIWSErrorHTTPStatusFromRawWithMessage(codeRaw, errTypeRaw, msgRaw)
 }
 
 func (s *OpenAIGatewayService) openAIWSFallbackCooldown() time.Duration {

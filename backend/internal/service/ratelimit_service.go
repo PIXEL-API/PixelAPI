@@ -59,6 +59,7 @@ const (
 	openAI403CooldownMinutesDefault = 10
 	openAI403DisableThreshold       = 3
 	openAI403CounterWindowMinutes   = 180
+	openAIModelCapacityCooldown     = time.Minute
 )
 
 // NewRateLimitService 创建RateLimitService实例
@@ -125,6 +126,10 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) (shouldDisable bool) {
+	if account != nil && account.Platform == PlatformOpenAI && isOpenAIModelCapacityError(statusCode, "", responseBody) {
+		return s.handleOpenAIModelCapacityError(ctx, account, statusCode, responseBody)
+	}
+
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 
 	// 池模式默认不标记本地账号状态；仅当用户显式配置自定义错误码时按本地策略处理。
@@ -288,6 +293,44 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	}
 
 	return shouldDisable
+}
+
+func (s *RateLimitService) handleOpenAIModelCapacityError(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {
+	if s == nil || s.accountRepo == nil || account == nil || account.Platform != PlatformOpenAI {
+		return false
+	}
+
+	now := time.Now()
+	until := now.Add(openAIModelCapacityCooldown)
+	state := &TempUnschedState{
+		UntilUnix:       until.Unix(),
+		TriggeredAtUnix: now.Unix(),
+		StatusCode:      statusCode,
+		MatchedKeyword:  "openai_model_capacity",
+		RuleIndex:       -1,
+		ErrorMessage:    truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
+	}
+
+	reason := ""
+	if raw, err := json.Marshal(state); err == nil {
+		reason = string(raw)
+	}
+	if reason == "" {
+		reason = "OpenAI model capacity temporarily unavailable"
+	}
+
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("openai_model_capacity_temp_unsched_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		return false
+	}
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
+			slog.Warn("openai_model_capacity_temp_unsched_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
+	slog.Info("openai_model_capacity_temp_unscheduled", "account_id", account.ID, "status_code", statusCode, "until", until)
+	return true
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.

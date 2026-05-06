@@ -20,7 +20,7 @@ var (
 	ErrOwnedAccountCredentialsNotAllowed      = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
 	ErrOwnedAccountGroupPlatformMismatch      = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
 	ErrOwnedAccountGroupValidationUnavailable = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
-	ErrOwnedAccountPublicPoolUnavailable      = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "Plus shared account pool group is not configured for this account platform")
+	ErrOwnedAccountPublicPoolUnavailable      = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "public shared account pool group is not configured for this account platform")
 	ErrOwnedAccountPublicPolicyUnavailable    = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE", "account share policy is not configured for this public account pool")
 	ErrOwnedAccountPublicValidationFailed     = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
 )
@@ -116,6 +116,7 @@ type CreateAccountRequest struct {
 	Name               string         `json:"name"`
 	Notes              *string        `json:"notes"`
 	Platform           string         `json:"platform"`
+	AccountLevel       string         `json:"account_level"`
 	Type               string         `json:"type"`
 	Credentials        map[string]any `json:"credentials"`
 	Extra              map[string]any `json:"extra"`
@@ -133,6 +134,7 @@ type CreateAccountRequest struct {
 type UpdateAccountRequest struct {
 	Name               *string         `json:"name"`
 	Notes              *string         `json:"notes"`
+	AccountLevel       *string         `json:"account_level"`
 	Credentials        *map[string]any `json:"credentials"`
 	Extra              *map[string]any `json:"extra"`
 	ShareMode          *string         `json:"share_mode"`
@@ -188,15 +190,16 @@ type AccountListFilters struct {
 }
 
 type BulkUpdateOwnedAccountsInput struct {
-	AccountIDs  []int64
-	Concurrency *int
-	Priority    *int
-	LoadFactor  *int
-	Status      string
-	Schedulable *bool
-	GroupIDs    *[]int64
-	Credentials map[string]any
-	Extra       map[string]any
+	AccountIDs   []int64
+	Concurrency  *int
+	Priority     *int
+	LoadFactor   *int
+	Status       string
+	Schedulable  *bool
+	AccountLevel *string
+	GroupIDs     *[]int64
+	Credentials  map[string]any
+	Extra        map[string]any
 }
 
 // NewAccountService 创建账号服务实例
@@ -242,7 +245,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Name:         req.Name,
 		Notes:        normalizeAccountNotes(req.Notes),
 		Platform:     req.Platform,
-		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, "", req.Credentials, req.Extra),
+		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
 		Type:         req.Type,
 		Credentials:  req.Credentials,
 		Extra:        req.Extra,
@@ -372,7 +375,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		Name:               req.Name,
 		Notes:              normalizeAccountNotes(req.Notes),
 		Platform:           req.Platform,
-		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, "", req.Credentials, req.Extra),
+		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
 		Type:               req.Type,
 		Credentials:        req.Credentials,
 		Extra:              req.Extra,
@@ -503,6 +506,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if req.Extra != nil {
 		account.Extra = *req.Extra
 	}
+	if req.AccountLevel != nil {
+		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
+	}
 
 	if req.ProxyID != nil {
 		account.ProxyID = req.ProxyID
@@ -598,6 +604,9 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if req.Extra != nil {
 		account.Extra = *req.Extra
 	}
+	if req.AccountLevel != nil {
+		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
+	}
 	if req.ProxyID != nil {
 		account.ProxyID = req.ProxyID
 	}
@@ -662,8 +671,14 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	}
 
 	if !shouldBindGroups && req.GroupIDs != nil {
-		var err error
-		groupIDs, err = s.validateOwnedAccountGroupBinding(ctx, ownerUserID, account.Platform, account.Type, *req.GroupIDs)
+		return nil, ErrGroupNotAllowed
+	}
+	if !shouldBindGroups && account.IsPublicShareApproved() && (req.AccountLevel != nil || req.Credentials != nil || req.Extra != nil) {
+		publicGroup, err := s.resolveOwnedPublicShareGroup(ctx, account)
+		if err != nil {
+			return nil, err
+		}
+		groupIDs, err = s.publicOwnedAccountGroupIDs(ctx, ownerUserID, account, publicGroup)
 		if err != nil {
 			return nil, err
 		}
@@ -770,6 +785,9 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	if input.LoadFactor != nil && *input.LoadFactor > 10000 {
 		return nil, fmt.Errorf("load_factor must be <= 10000")
 	}
+	if input.GroupIDs != nil {
+		return nil, ErrGroupNotAllowed
+	}
 	status, err := normalizeOwnedBulkStatus(input.Status)
 	if err != nil {
 		return nil, err
@@ -786,7 +804,6 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		}
 	}
 
-	validatedGroupIDsByAccount := make(map[int64][]int64, len(accountIDs))
 	for _, accountID := range accountIDs {
 		account := accountsByID[accountID]
 		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
@@ -807,6 +824,9 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			nextLoadFactor = normalizeLoadFactor(input.LoadFactor)
 		}
 		nextAccountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, nextCredentials, nextExtra)
+		if input.AccountLevel != nil {
+			nextAccountLevel = NormalizeAccountLevel(*input.AccountLevel)
+		}
 		if err := ValidateOpenAIPlusConcurrency(account.Platform, nextAccountLevel, nextConcurrency); err != nil {
 			return nil, err
 		}
@@ -814,13 +834,6 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			return nil, err
 		}
 
-		if input.GroupIDs != nil {
-			groupIDs, err := s.validateOwnedAccountGroupBinding(ctx, ownerUserID, account.Platform, account.Type, *input.GroupIDs)
-			if err != nil {
-				return nil, err
-			}
-			validatedGroupIDsByAccount[accountID] = groupIDs
-		}
 	}
 
 	repoUpdates := AccountBulkUpdate{
@@ -830,6 +843,10 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		Schedulable: input.Schedulable,
 		Credentials: input.Credentials,
 		Extra:       input.Extra,
+	}
+	if input.AccountLevel != nil {
+		level := NormalizeAccountLevel(*input.AccountLevel)
+		repoUpdates.AccountLevel = &level
 	}
 	if status != "" {
 		repoUpdates.Status = &status
@@ -841,16 +858,6 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 
 	for _, accountID := range accountIDs {
 		entry := BulkUpdateAccountResult{AccountID: accountID}
-		if input.GroupIDs != nil {
-			if err := s.accountRepo.BindGroups(ctx, accountID, validatedGroupIDsByAccount[accountID]); err != nil {
-				entry.Success = false
-				entry.Error = err.Error()
-				result.Failed++
-				result.FailedIDs = append(result.FailedIDs, accountID)
-				result.Results = append(result.Results, entry)
-				continue
-			}
-		}
 		entry.Success = true
 		result.Success++
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
@@ -933,14 +940,11 @@ func (s *AccountService) getPrivateGroupForOwnedAccount(ctx context.Context, own
 }
 
 func (s *AccountService) initialOwnedAccountGroupIDs(ctx context.Context, ownerUserID int64, platform, accountType, shareMode string, requestedGroupIDs []int64) ([]int64, error) {
-	if NormalizeAccountShareMode(shareMode) == AccountShareModePublic || len(requestedGroupIDs) == 0 {
-		privateGroup, err := s.getPrivateGroupForOwnedAccount(ctx, ownerUserID, platform)
-		if err != nil {
-			return nil, err
-		}
-		return []int64{privateGroup.ID}, nil
+	privateGroup, err := s.getPrivateGroupForOwnedAccount(ctx, ownerUserID, platform)
+	if err != nil {
+		return nil, err
 	}
-	return s.validateOwnedAccountGroupBinding(ctx, ownerUserID, platform, accountType, requestedGroupIDs)
+	return []int64{privateGroup.ID}, nil
 }
 
 func (s *AccountService) managedOwnedAccountGroupIDsForShareMode(ctx context.Context, ownerUserID int64, account *Account, nextMode string) ([]int64, error) {
@@ -1050,9 +1054,28 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 	if err != nil {
 		return nil, fmt.Errorf("list public share groups: %w", err)
 	}
+	if account.Platform == PlatformOpenAI {
+		accountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+		if !IsConcreteAccountLevel(accountLevel) {
+			return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
+				"platform":      platform,
+				"account_level": accountLevel,
+			})
+		}
+		for i := range groups {
+			group := groups[i]
+			if isOwnedPublicSharePoolGroup(&group, platform) && NormalizeRequiredAccountLevel(group.RequiredAccountLevel) == accountLevel {
+				return &group, nil
+			}
+		}
+		return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
+			"platform":      platform,
+			"account_level": accountLevel,
+		})
+	}
 	for i := range groups {
 		group := groups[i]
-		if isOwnedPublicSharePoolGroup(&group, platform) {
+		if isOwnedPublicSharePoolGroup(&group, platform) && NormalizeRequiredAccountLevel(group.RequiredAccountLevel) == "" {
 			return &group, nil
 		}
 	}
@@ -1071,22 +1094,7 @@ func isOwnedPublicSharePoolGroup(group *Group, platform string) bool {
 	if !strings.EqualFold(strings.TrimSpace(group.Platform), strings.TrimSpace(platform)) {
 		return false
 	}
-	return isPlusSharedPoolGroupName(group.Name)
-}
-
-func isPlusSharedPoolGroupName(name string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(name))
-	normalized = strings.NewReplacer(" ", "", "-", "", "_", "", "（", "(", "）", ")", "【", "", "】", "").Replace(normalized)
-	if normalized == "plus" || normalized == "pluspool" || normalized == "plussharedpool" || normalized == "plus共享池" || normalized == "plus共享号池" {
-		return true
-	}
-	if !strings.Contains(normalized, "plus") {
-		return false
-	}
-	return strings.Contains(normalized, "shared") ||
-		strings.Contains(normalized, "pool") ||
-		strings.Contains(normalized, "共享") ||
-		strings.Contains(normalized, "号池")
+	return true
 }
 
 func (s *AccountService) validateOwnedPublicSharePolicy(ctx context.Context, account *Account, group *Group) error {

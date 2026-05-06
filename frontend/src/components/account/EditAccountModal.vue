@@ -2092,7 +2092,7 @@
 
       <!-- Group Selection - 仅标准模式显示 -->
       <GroupSelector
-        v-if="!authStore.isSimpleMode"
+        v-if="!authStore.isSimpleMode && !isUserScope"
         v-model="form.group_ids"
         :groups="groups"
         :platform="account?.platform"
@@ -3277,6 +3277,9 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
   }
   if (!canManageBillingRate.value) {
     delete next.rate_multiplier
+  }
+  if (isUserScope.value) {
+    delete next.group_ids
   }
   return next
 }

@@ -20,6 +20,8 @@ import (
 type openAIWSRateLimitSignalRepo struct {
 	stubOpenAIAccountRepo
 	rateLimitCalls []time.Time
+	tempCalls      []time.Time
+	tempReasons    []string
 	updateExtra    []map[string]any
 }
 
@@ -36,6 +38,12 @@ type openAICodexExtraListRepo struct {
 
 func (r *openAIWSRateLimitSignalRepo) SetRateLimited(_ context.Context, _ int64, resetAt time.Time) error {
 	r.rateLimitCalls = append(r.rateLimitCalls, resetAt)
+	return nil
+}
+
+func (r *openAIWSRateLimitSignalRepo) SetTempUnschedulable(_ context.Context, _ int64, until time.Time, reason string) error {
+	r.tempCalls = append(r.tempCalls, until)
+	r.tempReasons = append(r.tempReasons, reason)
 	return nil
 }
 
@@ -237,6 +245,29 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testi
 	require.Len(t, repo.rateLimitCalls, 1)
 	require.NotEmpty(t, repo.updateExtra, "握手 429 的 x-codex 头应立即落库")
 	require.Contains(t, repo.updateExtra[0], "codex_usage_updated_at")
+}
+
+func TestOpenAIGatewayService_WSv2ErrorEventCapacityPersistsTempUnsched(t *testing.T) {
+	repo := &openAIWSRateLimitSignalRepo{}
+	rateSvc := &RateLimitService{accountRepo: repo}
+	svc := &OpenAIGatewayService{rateLimitService: rateSvc}
+	account := &Account{
+		ID:       504,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"pool_mode": true,
+		},
+	}
+	body := []byte(`{"type":"error","error":{"code":"server_error","type":"server_error","message":"Selected model is at capacity. Please try a different model."}}`)
+
+	start := time.Now()
+	svc.persistOpenAIWSRateLimitSignal(context.Background(), account, http.Header{}, body, "server_error", "server_error", "Selected model is at capacity. Please try a different model.")
+
+	require.Empty(t, repo.rateLimitCalls)
+	require.Len(t, repo.tempCalls, 1)
+	require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
+	require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventUsageLimitPersistsRateLimit(t *testing.T) {

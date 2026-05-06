@@ -67,6 +67,24 @@ end
 
 return 1
 `)
+	clearEmptySnapshotScript = redis.NewScript(`
+local currentActive = redis.call('GET', KEYS[1])
+local newVersion = tonumber(ARGV[1])
+
+if currentActive ~= false then
+	local curVersion = tonumber(currentActive)
+	if curVersion and newVersion < curVersion then
+		return 0
+	end
+	redis.call('EXPIRE', ARGV[3] .. currentActive, tonumber(ARGV[4]))
+end
+
+redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
+redis.call('SREM', KEYS[3], ARGV[2])
+
+return 1
+`)
 )
 
 type schedulerCache struct {
@@ -167,26 +185,28 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 		return err
 	}
 
-	if len(accounts) > 0 {
-		// 使用序号作为 score，保持数据库返回的排序语义。
-		members := make([]redis.Z, 0, len(accounts))
-		for idx, account := range accounts {
-			members = append(members, redis.Z{
-				Score:  float64(idx),
-				Member: strconv.FormatInt(account.ID, 10),
-			})
+	if len(accounts) == 0 {
+		return c.clearEmptySnapshot(ctx, bucket, versionStr)
+	}
+
+	// 使用序号作为 score，保持数据库返回的排序语义。
+	members := make([]redis.Z, 0, len(accounts))
+	for idx, account := range accounts {
+		members = append(members, redis.Z{
+			Score:  float64(idx),
+			Member: strconv.FormatInt(account.ID, 10),
+		})
+	}
+	pipe := c.rdb.Pipeline()
+	for start := 0; start < len(members); start += c.writeChunkSize {
+		end := start + c.writeChunkSize
+		if end > len(members) {
+			end = len(members)
 		}
-		pipe := c.rdb.Pipeline()
-		for start := 0; start < len(members); start += c.writeChunkSize {
-			end := start + c.writeChunkSize
-			if end > len(members) {
-				end = len(members)
-			}
-			pipe.ZAdd(ctx, snapshotKey, members[start:end]...)
-		}
-		if _, err := pipe.Exec(ctx); err != nil {
-			return err
-		}
+		pipe.ZAdd(ctx, snapshotKey, members[start:end]...)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
 	}
 
 	// Phase 2: 原子 CAS 激活版本。
@@ -206,6 +226,18 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 	}
 
 	return nil
+}
+
+func (c *schedulerCache) clearEmptySnapshot(ctx context.Context, bucket service.SchedulerBucket, versionStr string) error {
+	activeKey := schedulerBucketKey(schedulerActivePrefix, bucket)
+	readyKey := schedulerBucketKey(schedulerReadyPrefix, bucket)
+	snapshotKeyPrefix := fmt.Sprintf("%s%d:%s:%s:v", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode)
+
+	keys := []string{activeKey, readyKey, schedulerBucketSetKey}
+	args := []any{versionStr, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds}
+
+	_, err := clearEmptySnapshotScript.Run(ctx, c.rdb, keys, args...).Result()
+	return err
 }
 
 func (c *schedulerCache) GetAccount(ctx context.Context, accountID int64) (*service.Account, error) {

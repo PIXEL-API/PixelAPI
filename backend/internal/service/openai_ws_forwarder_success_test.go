@@ -854,6 +854,62 @@ func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
 	require.False(t, gjson.Get(secondWrite, "generate").Exists())
 }
 
+func TestOpenAIGatewayService_GeneratePrewarmResponseFailedCapacityTempUnscheds(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = true
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	repo := &openAIWSRateLimitSignalRepo{}
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		rateLimitService: &RateLimitService{accountRepo: repo},
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          602,
+		Name:        "openai-prewarm-capacity",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra:       map[string]any{"pool_mode": true},
+	}
+	conn := newOpenAIWSConn("prewarm_capacity_conn", account.ID, &openAIWSCaptureConn{
+		events: [][]byte{
+			[]byte(`{"type":"response.failed","error":{"code":"model_capacity_exhausted","message":"Selected model is at capacity. Please try a different model."}}`),
+		},
+	}, nil)
+	lease := &openAIWSConnLease{
+		accountID: account.ID,
+		conn:      conn,
+	}
+	payload := map[string]any{
+		"type":  "response.create",
+		"model": "gpt-5.1",
+	}
+
+	start := time.Now()
+	err := svc.performOpenAIWSGeneratePrewarm(
+		context.Background(),
+		lease,
+		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+		payload,
+		"",
+		map[string]any{"model": "gpt-5.1"},
+		account,
+		nil,
+		0,
+	)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "prewarm_upstream_capacity")
+	require.False(t, lease.IsPrewarmed())
+	require.Len(t, repo.tempCalls, 1)
+	require.WithinDuration(t, start.Add(openAIModelCapacityCooldown), repo.tempCalls[0], 5*time.Second)
+	require.Contains(t, repo.tempReasons[0], "openai_model_capacity")
+}
+
 func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = true

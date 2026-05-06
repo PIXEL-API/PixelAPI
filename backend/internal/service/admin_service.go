@@ -2166,6 +2166,14 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := s.validateAccountLevelGroupBinding(ctx, input.Platform, accountLevel, groupIDs); err != nil {
 		return nil, err
 	}
+	if err := s.validateAccountShareGroupBinding(ctx, &Account{
+		Platform:    input.Platform,
+		OwnerUserID: input.OwnerUserID,
+		ShareMode:   NormalizeAccountShareMode(input.ShareMode),
+		ShareStatus: NormalizeAccountShareStatus(input.ShareStatus),
+	}, groupIDs); err != nil {
+		return nil, err
+	}
 	concurrency, err := NormalizeOpenAIPlusConcurrency(input.Platform, accountLevel, input.Concurrency)
 	if err != nil {
 		return nil, err
@@ -2397,8 +2405,16 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, account.AccountLevel, *input.GroupIDs); err != nil {
 			return nil, err
 		}
+		if err := s.validateAccountShareGroupBinding(ctx, account, *input.GroupIDs); err != nil {
+			return nil, err
+		}
 	} else if input.AccountLevel != nil {
 		if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, account.AccountLevel, account.GroupIDs); err != nil {
+			return nil, err
+		}
+	}
+	if input.GroupIDs == nil && (input.OwnerUserID != nil || input.ShareMode != "" || input.ShareStatus != "") {
+		if err := s.validateAccountShareGroupBinding(ctx, account, account.GroupIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -2482,6 +2498,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			}
 			if err := s.validateAccountLevelGroupBinding(ctx, account.Platform, level, groupIDs); err != nil {
 				return nil, err
+			}
+			if input.GroupIDs != nil {
+				if err := s.validateAccountShareGroupBinding(ctx, account, groupIDs); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -3385,6 +3406,45 @@ func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context,
 		}
 		if level != required {
 			return fmt.Errorf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s", level, group.Name, required)
+		}
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) validateAccountShareGroupBinding(ctx context.Context, account *Account, groupIDs []int64) error {
+	if len(groupIDs) == 0 || account == nil {
+		return nil
+	}
+	if s.groupRepo == nil {
+		return errors.New("group repository not configured")
+	}
+	for _, groupID := range groupIDs {
+		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+		if err != nil {
+			return fmt.Errorf("get group: %w", err)
+		}
+		if group == nil || group.ID <= 0 {
+			return ErrGroupNotFound
+		}
+
+		scope := NormalizeGroupScope(group.Scope)
+		if account.OwnerUserID == nil {
+			if scope == GroupScopeUserPrivate {
+				return fmt.Errorf("platform account cannot bind to user private group %s", group.Name)
+			}
+			continue
+		}
+
+		if scope == GroupScopeUserPrivate {
+			if group.OwnerUserID == nil || *group.OwnerUserID != *account.OwnerUserID {
+				return fmt.Errorf("owned account cannot bind to another user's private group %s", group.Name)
+			}
+			continue
+		}
+
+		if NormalizeAccountShareMode(account.ShareMode) != AccountShareModePublic ||
+			NormalizeAccountShareStatus(account.ShareStatus) != AccountShareStatusApproved {
+			return fmt.Errorf("owned account must be approved public share before binding to public group %s", group.Name)
 		}
 	}
 	return nil

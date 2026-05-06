@@ -220,20 +220,34 @@ func TestAccountServiceResolveOwnedPublicShareGroup(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
-				{ID: 10, Name: "OpenAI Standard", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic},
-				{ID: 11, Name: "OpenAI Plus 共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic},
-				{ID: 12, Name: "Gemini Plus 共享号池", Platform: PlatformGemini, Status: StatusActive, Scope: GroupScopePublic},
+				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+				{ID: 11, Name: "PLUS共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelPlus},
+				{ID: 12, Name: "TEAM共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelTeam},
 			},
 		},
 	}
 
-	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI})
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPlus})
 
 	require.NoError(t, err)
 	require.Equal(t, int64(11), group.ID)
 }
 
-func TestAccountServiceResolveOwnedPublicShareGroupRequiresPlusPool(t *testing.T) {
+func TestAccountServiceResolveOwnedPublicShareGroupRequiresMatchingLevelPool(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+			},
+		},
+	}
+
+	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPlus})
+
+	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupRejectsUnknownOpenAILevel(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
@@ -242,7 +256,7 @@ func TestAccountServiceResolveOwnedPublicShareGroupRequiresPlusPool(t *testing.T
 		},
 	}
 
-	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI})
+	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelUnknown})
 
 	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
 }
@@ -297,6 +311,19 @@ func TestAccountServiceInitialOwnedAccountGroupIDsUsesPrivateGroupForPublicMode(
 	require.Equal(t, []int64{99}, groupIDs)
 }
 
+func TestAccountServiceInitialOwnedAccountGroupIDsIgnoresRequestedGroupsForPrivateMode(t *testing.T) {
+	svc := &AccountService{
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	groupIDs, err := svc.initialOwnedAccountGroupIDs(context.Background(), 101, PlatformOpenAI, AccountTypeOAuth, AccountShareModePrivate, []int64{11})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{99}, groupIDs)
+}
+
 func TestAccountServiceGetPrivateGroupForOwnedAccountProvisionsMissingPrivateGroup(t *testing.T) {
 	provisioner := &ownedPrivateGroupProvisionerStub{
 		group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
@@ -319,17 +346,18 @@ func TestAccountServiceManagedGroupIDsKeepsApprovedPublicAccountInPublicPool(t *
 		},
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
-				{ID: 18, Name: "Plus Shared Pool", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic},
+				{ID: 18, Name: "Plus Shared Pool", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelPlus},
 			},
 		},
 	}
 	account := &Account{
-		ID:          20,
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeOAuth,
-		OwnerUserID: &ownerID,
-		ShareMode:   AccountShareModePublic,
-		ShareStatus: AccountShareStatusApproved,
+		ID:           20,
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		OwnerUserID:  &ownerID,
+		ShareMode:    AccountShareModePublic,
+		ShareStatus:  AccountShareStatusApproved,
+		AccountLevel: AccountLevelPlus,
 	}
 
 	groupIDs, err := svc.managedOwnedAccountGroupIDsForShareMode(context.Background(), ownerID, account, AccountShareModePublic)

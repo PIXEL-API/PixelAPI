@@ -252,6 +252,73 @@ func TestAdminService_BulkUpdateAccountLevel_ValidatesExistingGroups(t *testing.
 	require.Empty(t, repo.bulkUpdateIDs)
 }
 
+func TestAdminService_UpdateOwnedPrivateAccountRejectsPublicGroupBinding(t *testing.T) {
+	ownerID := int64(101)
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDAccounts: map[int64]*Account{
+			1: {
+				ID:          1,
+				Name:        "owned-private",
+				Platform:    PlatformOpenAI,
+				OwnerUserID: &ownerID,
+				ShareMode:   AccountShareModePrivate,
+				ShareStatus: AccountShareStatusApproved,
+			},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{ID: 10, Name: "PLUS共享号池", Platform: PlatformOpenAI, Scope: GroupScopePublic, Status: StatusActive},
+		},
+	}
+
+	groupIDs := []int64{10}
+	result, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{
+		GroupIDs:              &groupIDs,
+		SkipMixedChannelCheck: true,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "approved public share")
+	require.Nil(t, repo.updatedAccount)
+}
+
+func TestAdminService_BulkUpdateOwnedPrivateAccountRejectsPublicGroupBinding(t *testing.T) {
+	ownerID := int64(101)
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{
+				ID:          1,
+				Name:        "owned-private",
+				Platform:    PlatformOpenAI,
+				OwnerUserID: &ownerID,
+				ShareMode:   AccountShareModePrivate,
+				ShareStatus: AccountShareStatusApproved,
+			},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{ID: 10, Name: "PLUS共享号池", Platform: PlatformOpenAI, Scope: GroupScopePublic, Status: StatusActive},
+		},
+	}
+
+	groupIDs := []int64{10}
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:            []int64{1},
+		GroupIDs:              &groupIDs,
+		SkipMixedChannelCheck: true,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "approved public share")
+	require.Empty(t, repo.bulkUpdateIDs)
+}
+
 // TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingConflict verifies
 // that the global pre-check detects a conflict with existing group members and returns an
 // error before any DB write is performed.

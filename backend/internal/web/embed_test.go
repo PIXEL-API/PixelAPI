@@ -5,6 +5,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -534,12 +535,13 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		router.Use(server.Middleware())
 
 		// Request for existing static file
+		staticPath := firstEmbeddedStaticFile(t, server.distFS)
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/"+staticPath, nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.NotContains(t, w.Header().Get("Content-Type"), "text/html")
 	})
 }
 
@@ -588,12 +590,16 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 		router := gin.New()
 		router.Use(middleware)
 
+		distFS, err := fs.Sub(frontendFS, "dist")
+		require.NoError(t, err)
+		staticPath := firstEmbeddedStaticFile(t, distFS)
+
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/"+staticPath, nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.NotContains(t, w.Header().Get("Content-Type"), "text/html")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {
@@ -665,6 +671,25 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 			})
 		}
 	})
+}
+
+func firstEmbeddedStaticFile(t *testing.T, distFS fs.FS) string {
+	t.Helper()
+
+	var out string
+	err := fs.WalkDir(distFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || path == "index.html" {
+			return nil
+		}
+		out = path
+		return fs.SkipAll
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out)
+	return out
 }
 
 // Tests for HTMLCache

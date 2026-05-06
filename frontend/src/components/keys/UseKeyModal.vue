@@ -530,21 +530,7 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
   // config.toml content
-  const configContent = `model_provider = "OpenAI"
-model = "gpt-5.4"
-review_model = "gpt-5.4"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-model_context_window = 1000000
-model_auto_compact_token_limit = 900000
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl}"
-wire_api = "responses"
-requires_openai_auth = true`
+  const configContent = generateCodexConfigContent(baseUrl)
 
   // auth.json content
   const authContent = `{
@@ -569,25 +555,7 @@ function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
   // config.toml content with WebSocket v2
-  const configContent = `model_provider = "OpenAI"
-model = "gpt-5.4"
-review_model = "gpt-5.4"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-model_context_window = 1000000
-model_auto_compact_token_limit = 900000
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl}"
-wire_api = "responses"
-supports_websockets = true
-requires_openai_auth = true
-
-[features]
-responses_websockets_v2 = true`
+  const configContent = generateCodexConfigContent(baseUrl, { supportsWebsockets: true })
 
   // auth.json content
   const authContent = `{
@@ -605,6 +573,46 @@ responses_websockets_v2 = true`
       content: authContent
     }
   ]
+}
+
+function generateCodexConfigContent(
+  baseUrl: string,
+  options: { supportsWebsockets?: boolean } = {}
+): string {
+  const providerConfig = generateCodexProviderConfig(baseUrl, options)
+  const featureConfig = options.supportsWebsockets
+    ? `
+[features]
+responses_websockets_v2 = true`
+    : ''
+
+  return `model_provider = "OpenAI"
+model = "gpt-5.4"
+review_model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+disable_response_storage = true
+network_access = "enabled"
+windows_wsl_setup_acknowledged = true
+model_context_window = 1000000
+model_auto_compact_token_limit = 900000
+
+[model_providers.OpenAI]
+${providerConfig}
+
+[model_providers.codex_local_access]
+${providerConfig}${featureConfig}`
+}
+
+function generateCodexProviderConfig(
+  baseUrl: string,
+  options: { supportsWebsockets?: boolean } = {}
+): string {
+  const websocketConfig = options.supportsWebsockets ? '\nsupports_websockets = true' : ''
+
+  return `name = "OpenAI"
+base_url = "${baseUrl}"
+wire_api = "responses"${websocketConfig}
+requires_openai_auth = true`
 }
 
 function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: string, pathLabel?: string): FileConfig {

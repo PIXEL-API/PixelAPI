@@ -321,6 +321,62 @@ func TestGeminiMessagesCompatService_SelectAccountForModelWithExclusions_GeminiP
 	require.Equal(t, PlatformGemini, acc.Platform, "无分组时应只返回 gemini 平台账户")
 }
 
+func TestGeminiMessagesCompatService_SelectAccountForModelFiltersInvisibleOwnedAccounts(t *testing.T) {
+	ownerID := int64(101)
+	ctx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(999))
+	repo := &mockAccountRepoForGemini{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformGemini, Priority: 2, Status: StatusActive, Schedulable: true},
+			{ID: 2, Platform: PlatformGemini, Priority: 1, Status: StatusActive, Schedulable: true, OwnerUserID: &ownerID, ShareMode: AccountShareModePrivate, ShareStatus: AccountShareStatusApproved},
+		},
+		accountsByID: map[int64]*Account{},
+	}
+	for i := range repo.accounts {
+		repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+	}
+	svc := &GeminiMessagesCompatService{
+		accountRepo: repo,
+		groupRepo:   &mockGroupRepoForGemini{groups: map[int64]*Group{}},
+		cache:       &mockGatewayCacheForGemini{},
+	}
+
+	acc, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gemini-2.5-flash", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, acc)
+	require.Equal(t, int64(1), acc.ID)
+}
+
+func TestGeminiMessagesCompatService_StickySessionClearsInvisibleOwnedAccount(t *testing.T) {
+	ownerID := int64(101)
+	ctx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(999))
+	repo := &mockAccountRepoForGemini{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformGemini, Priority: 1, Status: StatusActive, Schedulable: true, OwnerUserID: &ownerID, ShareMode: AccountShareModePrivate, ShareStatus: AccountShareStatusApproved},
+			{ID: 2, Platform: PlatformGemini, Priority: 2, Status: StatusActive, Schedulable: true},
+		},
+		accountsByID: map[int64]*Account{},
+	}
+	for i := range repo.accounts {
+		repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+	}
+	cache := &mockGatewayCacheForGemini{
+		sessionBindings: map[string]int64{"gemini:session-private": 1},
+	}
+	svc := &GeminiMessagesCompatService{
+		accountRepo: repo,
+		groupRepo:   &mockGroupRepoForGemini{groups: map[int64]*Group{}},
+		cache:       cache,
+	}
+
+	acc, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "session-private", "gemini-2.5-flash", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, acc)
+	require.Equal(t, int64(2), acc.ID)
+	require.Equal(t, 1, cache.deletedSessions["gemini:session-private"])
+}
+
 func TestGeminiMessagesCompatService_GroupResolution_ReusesContextGroup(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(7)

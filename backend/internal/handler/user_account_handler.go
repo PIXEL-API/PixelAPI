@@ -54,6 +54,7 @@ type createUserAccountRequest struct {
 	Name               string         `json:"name" binding:"required"`
 	Notes              *string        `json:"notes"`
 	Platform           string         `json:"platform" binding:"required"`
+	AccountLevel       string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
 	Type               string         `json:"type" binding:"required,oneof=oauth"`
 	Credentials        map[string]any `json:"credentials" binding:"required"`
 	Extra              map[string]any `json:"extra"`
@@ -81,6 +82,7 @@ type importUserAccountCredentialsRequest struct {
 type updateUserAccountRequest struct {
 	Name               *string         `json:"name"`
 	Notes              *string         `json:"notes"`
+	AccountLevel       *string         `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
 	Credentials        *map[string]any `json:"credentials"`
 	Extra              *map[string]any `json:"extra"`
 	ShareMode          *string         `json:"share_mode" binding:"omitempty,oneof=private public"`
@@ -104,6 +106,7 @@ type bulkUpdateUserAccountsRequest struct {
 	RateMultiplier *float64       `json:"rate_multiplier"`
 	Status         string         `json:"status" binding:"omitempty,oneof=active disabled inactive"`
 	Schedulable    *bool          `json:"schedulable"`
+	AccountLevel   *string        `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
 	GroupIDs       *[]int64       `json:"group_ids"`
 	Credentials    map[string]any `json:"credentials"`
 	Extra          map[string]any `json:"extra"`
@@ -493,6 +496,7 @@ func (h *UserAccountHandler) Create(c *gin.Context) {
 			Name:               req.Name,
 			Notes:              req.Notes,
 			Platform:           req.Platform,
+			AccountLevel:       req.AccountLevel,
 			Type:               req.Type,
 			Credentials:        req.Credentials,
 			Extra:              req.Extra,
@@ -542,6 +546,7 @@ func (h *UserAccountHandler) Import(c *gin.Context) {
 			Name:               req.Name,
 			Notes:              req.Notes,
 			Platform:           req.Platform,
+			AccountLevel:       req.AccountLevel,
 			Type:               req.Type,
 			Credentials:        req.Credentials,
 			Extra:              req.Extra,
@@ -724,6 +729,7 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 	account, err := h.accountService.UpdateOwned(c.Request.Context(), subject.UserID, accountID, service.UpdateAccountRequest{
 		Name:               req.Name,
 		Notes:              req.Notes,
+		AccountLevel:       req.AccountLevel,
 		Credentials:        req.Credentials,
 		Extra:              req.Extra,
 		ShareMode:          req.ShareMode,
@@ -799,6 +805,7 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		req.Priority != nil ||
 		status != "" ||
 		req.Schedulable != nil ||
+		req.AccountLevel != nil ||
 		req.GroupIDs != nil ||
 		len(req.Credentials) > 0 ||
 		len(req.Extra) > 0
@@ -808,15 +815,16 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 	}
 
 	result, err := h.accountService.BulkUpdateOwned(c.Request.Context(), subject.UserID, &service.BulkUpdateOwnedAccountsInput{
-		AccountIDs:  accountIDs,
-		Concurrency: req.Concurrency,
-		LoadFactor:  req.LoadFactor,
-		Priority:    req.Priority,
-		Status:      status,
-		Schedulable: req.Schedulable,
-		GroupIDs:    req.GroupIDs,
-		Credentials: req.Credentials,
-		Extra:       req.Extra,
+		AccountIDs:   accountIDs,
+		Concurrency:  req.Concurrency,
+		LoadFactor:   req.LoadFactor,
+		Priority:     req.Priority,
+		Status:       status,
+		Schedulable:  req.Schedulable,
+		AccountLevel: req.AccountLevel,
+		GroupIDs:     req.GroupIDs,
+		Credentials:  req.Credentials,
+		Extra:        req.Extra,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
