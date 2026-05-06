@@ -239,24 +239,33 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 
 	// 创建账号
 	account := &Account{
-		Name:        req.Name,
-		Notes:       normalizeAccountNotes(req.Notes),
-		Platform:    req.Platform,
-		Type:        req.Type,
-		Credentials: req.Credentials,
-		Extra:       req.Extra,
-		ShareMode:   NormalizeAccountShareMode(req.ShareMode),
-		ProxyID:     req.ProxyID,
-		Concurrency: req.Concurrency,
-		LoadFactor:  normalizeLoadFactor(req.LoadFactor),
-		Priority:    req.Priority,
-		Status:      StatusActive,
-		ExpiresAt:   req.ExpiresAt,
+		Name:         req.Name,
+		Notes:        normalizeAccountNotes(req.Notes),
+		Platform:     req.Platform,
+		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, "", req.Credentials, req.Extra),
+		Type:         req.Type,
+		Credentials:  req.Credentials,
+		Extra:        req.Extra,
+		ShareMode:    NormalizeAccountShareMode(req.ShareMode),
+		ProxyID:      req.ProxyID,
+		Concurrency:  req.Concurrency,
+		LoadFactor:   normalizeLoadFactor(req.LoadFactor),
+		Priority:     req.Priority,
+		Status:       StatusActive,
+		ExpiresAt:    req.ExpiresAt,
 	}
 	if req.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
 	} else {
 		account.AutoPauseOnExpired = true
+	}
+	concurrency, err := NormalizeOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency)
+	if err != nil {
+		return nil, err
+	}
+	account.Concurrency = concurrency
+	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+		return nil, err
 	}
 
 	// require_oauth_only 检查：apikey 类型账号不可加入限制分组
@@ -363,6 +372,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		Name:               req.Name,
 		Notes:              normalizeAccountNotes(req.Notes),
 		Platform:           req.Platform,
+		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, "", req.Credentials, req.Extra),
 		Type:               req.Type,
 		Credentials:        req.Credentials,
 		Extra:              req.Extra,
@@ -380,6 +390,14 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	}
 	if req.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
+	}
+	concurrency, err := NormalizeOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency)
+	if err != nil {
+		return nil, err
+	}
+	account.Concurrency = concurrency
+	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+		return nil, err
 	}
 
 	if err := s.accountRepo.Create(ctx, account); err != nil {
@@ -497,6 +515,13 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if req.LoadFactor != nil {
 		account.LoadFactor = normalizeLoadFactor(req.LoadFactor)
 	}
+	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
+		return nil, err
+	}
+	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+		return nil, err
+	}
 
 	if req.Priority != nil {
 		account.Priority = *req.Priority
@@ -581,6 +606,13 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	}
 	if req.LoadFactor != nil {
 		account.LoadFactor = normalizeLoadFactor(req.LoadFactor)
+	}
+	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
+		return nil, err
+	}
+	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+		return nil, err
 	}
 	if req.Priority != nil {
 		account.Priority = *req.Priority
@@ -764,6 +796,21 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		nextCredentials := mergeAccountMap(account.Credentials, input.Credentials)
 		nextExtra := mergeAccountMap(account.Extra, input.Extra)
 		if err := validateOwnedAccountSource(account.Type, nextCredentials, nextExtra); err != nil {
+			return nil, err
+		}
+		nextConcurrency := account.Concurrency
+		if input.Concurrency != nil {
+			nextConcurrency = *input.Concurrency
+		}
+		nextLoadFactor := account.LoadFactor
+		if input.LoadFactor != nil {
+			nextLoadFactor = normalizeLoadFactor(input.LoadFactor)
+		}
+		nextAccountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, nextCredentials, nextExtra)
+		if err := ValidateOpenAIPlusConcurrency(account.Platform, nextAccountLevel, nextConcurrency); err != nil {
+			return nil, err
+		}
+		if err := ValidateOpenAIPlusLoadFactor(account.Platform, nextAccountLevel, nextLoadFactor); err != nil {
 			return nil, err
 		}
 

@@ -35,7 +35,6 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
   return accountsAPI.importCredentialContents({
     contents,
     share_mode: 'private',
-    concurrency: 3,
     priority: 50,
     group_ids: [],
     auto_pause_on_expired: true

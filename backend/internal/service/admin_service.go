@@ -2162,7 +2162,15 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 	}
-	if err := s.validateAccountLevelGroupBinding(ctx, input.Platform, NormalizeAccountLevel(input.AccountLevel), groupIDs); err != nil {
+	accountLevel := NormalizeOpenAIAccountLevel(input.Platform, input.AccountLevel, input.Credentials, input.Extra)
+	if err := s.validateAccountLevelGroupBinding(ctx, input.Platform, accountLevel, groupIDs); err != nil {
+		return nil, err
+	}
+	concurrency, err := NormalizeOpenAIPlusConcurrency(input.Platform, accountLevel, input.Concurrency)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateOpenAIPlusLoadFactor(input.Platform, accountLevel, input.LoadFactor); err != nil {
 		return nil, err
 	}
 
@@ -2170,7 +2178,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		Name:          input.Name,
 		Notes:         normalizeAccountNotes(input.Notes),
 		Platform:      input.Platform,
-		AccountLevel:  NormalizeAccountLevel(input.AccountLevel),
+		AccountLevel:  accountLevel,
 		Type:          input.Type,
 		Credentials:   input.Credentials,
 		Extra:         input.Extra,
@@ -2179,7 +2187,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		ShareStatus:   NormalizeAccountShareStatus(input.ShareStatus),
 		SharePolicyID: input.SharePolicyID,
 		ProxyID:       input.ProxyID,
-		Concurrency:   input.Concurrency,
+		Concurrency:   concurrency,
 		Priority:      input.Priority,
 		Status:        StatusActive,
 		Schedulable:   true,
@@ -2300,6 +2308,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		ComputeQuotaResetAt(account.Extra)
 	}
+	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
 	if input.ProxyID != nil {
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *input.ProxyID == 0 {
@@ -2331,6 +2340,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		} else {
 			account.LoadFactor = input.LoadFactor
 		}
+	}
+	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
+		return nil, err
+	}
+	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+		return nil, err
 	}
 	if input.Status != "" {
 		account.Status = input.Status
@@ -2446,7 +2461,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return preflightAccounts, nil
 	}
 
-	if input.GroupIDs != nil || input.AccountLevel != nil {
+	if input.GroupIDs != nil || input.AccountLevel != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 {
 		accounts, err := loadPreflightAccounts()
 		if err != nil {
 			return nil, err
@@ -2455,7 +2470,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if account == nil {
 				continue
 			}
-			level := account.AccountLevel
+			credentials := mergeAccountMap(account.Credentials, input.Credentials)
+			extra := mergeAccountMap(account.Extra, input.Extra)
+			level := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, credentials, extra)
 			if input.AccountLevel != nil {
 				level = NormalizeAccountLevel(*input.AccountLevel)
 			}
@@ -2501,6 +2518,41 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier < 0 {
 			return nil, errors.New("rate_multiplier must be >= 0")
+		}
+	}
+	if input.Concurrency != nil || input.LoadFactor != nil || input.AccountLevel != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 {
+		accounts, err := loadPreflightAccounts()
+		if err != nil {
+			return nil, err
+		}
+		for _, account := range accounts {
+			if account == nil {
+				continue
+			}
+			credentials := mergeAccountMap(account.Credentials, input.Credentials)
+			extra := mergeAccountMap(account.Extra, input.Extra)
+			level := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, credentials, extra)
+			if input.AccountLevel != nil {
+				level = NormalizeAccountLevel(*input.AccountLevel)
+			}
+			concurrency := account.Concurrency
+			if input.Concurrency != nil {
+				concurrency = *input.Concurrency
+			}
+			loadFactor := account.LoadFactor
+			if input.LoadFactor != nil {
+				if *input.LoadFactor <= 0 {
+					loadFactor = nil
+				} else {
+					loadFactor = input.LoadFactor
+				}
+			}
+			if err := ValidateOpenAIPlusConcurrency(account.Platform, level, concurrency); err != nil {
+				return nil, err
+			}
+			if err := ValidateOpenAIPlusLoadFactor(account.Platform, level, loadFactor); err != nil {
+				return nil, err
+			}
 		}
 	}
 

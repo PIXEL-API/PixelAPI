@@ -28,6 +28,12 @@ const (
 	openAIAdvancedSchedulerSettingDBTimeout = 2 * time.Second
 )
 
+const (
+	openAIHybridFairnessRatio    = 0.30
+	openAIHybridMaxFairShare     = 0.50
+	openAIHybridOverflowProbeMax = 32
+)
+
 type cachedOpenAIAdvancedSchedulerSetting struct {
 	enabled   bool
 	expiresAt int64
@@ -371,6 +377,10 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	cfg := s.service.schedulingConfig()
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
+		waitingCount, _ := s.service.concurrencyService.GetAccountWaitingCount(ctx, accountID)
+		if waitingCount >= cfg.StickySessionMaxWaiting {
+			return nil, nil
+		}
 		return &AccountSelectionResult{
 			Account: account,
 			WaitPlan: &AccountWaitPlan{
@@ -428,14 +438,20 @@ func isOpenAIAccountCandidateBetter(left openAIAccountCandidateScore, right open
 	if left.score != right.score {
 		return left.score > right.score
 	}
+	if left.account == nil || right.account == nil {
+		return left.account != nil
+	}
 	if left.account.Priority != right.account.Priority {
 		return left.account.Priority < right.account.Priority
 	}
-	if left.loadInfo.LoadRate != right.loadInfo.LoadRate {
-		return left.loadInfo.LoadRate < right.loadInfo.LoadRate
+	if loadA, loadB := openAICandidateLoadRate(left.loadInfo), openAICandidateLoadRate(right.loadInfo); loadA != loadB {
+		return loadA < loadB
 	}
-	if left.loadInfo.WaitingCount != right.loadInfo.WaitingCount {
-		return left.loadInfo.WaitingCount < right.loadInfo.WaitingCount
+	if waitingA, waitingB := openAICandidateWaitingCount(left.loadInfo), openAICandidateWaitingCount(right.loadInfo); waitingA != waitingB {
+		return waitingA < waitingB
+	}
+	if cmp := compareOpenAIAccountLastUsed(left.account, right.account); cmp != 0 {
+		return cmp < 0
 	}
 	return left.account.ID < right.account.ID
 }
@@ -473,6 +489,236 @@ func selectTopKOpenAICandidates(candidates []openAIAccountCandidateScore, topK i
 		return isOpenAIAccountCandidateBetter(ranked[i], ranked[j])
 	})
 	return ranked
+}
+
+func selectHybridTopKOpenAICandidates(candidates []openAIAccountCandidateScore, topK int, req OpenAIAccountScheduleRequest) []openAIAccountCandidateScore {
+	if len(candidates) == 0 {
+		return nil
+	}
+	if topK <= 0 {
+		topK = 1
+	}
+	if topK >= len(candidates) {
+		return selectTopKOpenAICandidates(candidates, topK)
+	}
+
+	fairCount := openAIHybridFairCandidateCount(topK, len(candidates))
+	performanceCount := topK - fairCount
+	if performanceCount <= 0 {
+		performanceCount = 1
+		fairCount = topK - performanceCount
+	}
+
+	performance := selectTopKOpenAICandidates(candidates, performanceCount)
+	selectedIDs := make(map[int64]struct{}, len(performance))
+	for _, candidate := range performance {
+		if candidate.account != nil {
+			selectedIDs[candidate.account.ID] = struct{}{}
+		}
+	}
+
+	fairPool := make([]openAIAccountCandidateScore, 0, len(candidates)-len(performance))
+	for _, candidate := range candidates {
+		if candidate.account == nil {
+			continue
+		}
+		if _, selected := selectedIDs[candidate.account.ID]; selected {
+			continue
+		}
+		fairPool = append(fairPool, candidate)
+	}
+
+	fair := selectFairOpenAICandidates(fairPool, fairCount, deriveOpenAISelectionSeed(req))
+	out := make([]openAIAccountCandidateScore, 0, len(performance)+len(fair))
+	out = append(out, performance...)
+	out = append(out, fair...)
+	return out
+}
+
+func selectOpenAIOverflowProbeCandidates(candidates, selected []openAIAccountCandidateScore, limit int, req OpenAIAccountScheduleRequest) []openAIAccountCandidateScore {
+	if limit <= 0 || len(candidates) == 0 {
+		return nil
+	}
+	selectedIDs := make(map[int64]struct{}, len(selected))
+	for _, candidate := range selected {
+		if candidate.account != nil {
+			selectedIDs[candidate.account.ID] = struct{}{}
+		}
+	}
+	remaining := make([]openAIAccountCandidateScore, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.account == nil {
+			continue
+		}
+		if _, ok := selectedIDs[candidate.account.ID]; ok {
+			continue
+		}
+		remaining = append(remaining, candidate)
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	if limit > len(remaining) {
+		limit = len(remaining)
+	}
+	return selectHybridTopKOpenAICandidates(remaining, limit, req)
+}
+
+func openAIHybridFairCandidateCount(topK, candidateCount int) int {
+	if topK <= 1 || candidateCount <= topK {
+		return 0
+	}
+	count := int(math.Floor(float64(topK) * openAIHybridFairnessRatio))
+	if count < 1 {
+		count = 1
+	}
+	maxFair := int(math.Floor(float64(topK) * openAIHybridMaxFairShare))
+	if maxFair < 1 {
+		maxFair = 1
+	}
+	if count > maxFair {
+		count = maxFair
+	}
+	if count >= topK {
+		count = topK - 1
+	}
+	return count
+}
+
+func openAIHybridOverflowProbeCount(topK, candidateCount int) int {
+	if topK <= 0 || candidateCount <= topK {
+		return 0
+	}
+	count := topK
+	if count > openAIHybridOverflowProbeMax {
+		count = openAIHybridOverflowProbeMax
+	}
+	remaining := candidateCount - topK
+	if count > remaining {
+		count = remaining
+	}
+	return count
+}
+
+func selectFairOpenAICandidates(candidates []openAIAccountCandidateScore, count int, seed uint64) []openAIAccountCandidateScore {
+	if count <= 0 || len(candidates) == 0 {
+		return nil
+	}
+	ranked := append([]openAIAccountCandidateScore(nil), candidates...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		a, b := ranked[i], ranked[j]
+		if a.account == nil || b.account == nil {
+			return a.account != nil
+		}
+		if a.account.Priority != b.account.Priority {
+			return a.account.Priority < b.account.Priority
+		}
+		if bucketA, bucketB := openAICandidateLoadBucket(a.loadInfo), openAICandidateLoadBucket(b.loadInfo); bucketA != bucketB {
+			return bucketA < bucketB
+		}
+		if cmp := compareOpenAIAccountLastUsed(a.account, b.account); cmp != 0 {
+			return cmp < 0
+		}
+		if waitingA, waitingB := openAICandidateWaitingCount(a.loadInfo), openAICandidateWaitingCount(b.loadInfo); waitingA != waitingB {
+			return waitingA < waitingB
+		}
+		if loadA, loadB := openAICandidateLoadRate(a.loadInfo), openAICandidateLoadRate(b.loadInfo); loadA != loadB {
+			return loadA < loadB
+		}
+		if a.score != b.score {
+			return a.score > b.score
+		}
+		return openAIAccountSeedRank(seed, a.account.ID) < openAIAccountSeedRank(seed, b.account.ID)
+	})
+	if count > len(ranked) {
+		count = len(ranked)
+	}
+	return ranked[:count]
+}
+
+func openAICandidateLoadBucket(loadInfo *AccountLoadInfo) int {
+	if loadInfo == nil {
+		return 0
+	}
+	switch {
+	case loadInfo.LoadRate >= 100:
+		return 2
+	case loadInfo.LoadRate >= 80:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func openAICandidateWaitingCount(loadInfo *AccountLoadInfo) int {
+	if loadInfo == nil {
+		return 0
+	}
+	return loadInfo.WaitingCount
+}
+
+func openAICandidateLoadRate(loadInfo *AccountLoadInfo) int {
+	if loadInfo == nil {
+		return 0
+	}
+	return loadInfo.LoadRate
+}
+
+func compareOpenAIAccountLastUsed(left, right *Account) int {
+	switch {
+	case left == nil && right == nil:
+		return 0
+	case left == nil:
+		return 1
+	case right == nil:
+		return -1
+	case left.LastUsedAt == nil && right.LastUsedAt != nil:
+		return -1
+	case left.LastUsedAt != nil && right.LastUsedAt == nil:
+		return 1
+	case left.LastUsedAt == nil && right.LastUsedAt == nil:
+		return 0
+	case left.LastUsedAt.Before(*right.LastUsedAt):
+		return -1
+	case right.LastUsedAt.Before(*left.LastUsedAt):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func openAIAccountSeedRank(seed uint64, accountID int64) uint64 {
+	x := seed ^ (uint64(accountID) + 0x9e3779b97f4a7c15)
+	x ^= x >> 30
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 27
+	x *= 0x94d049bb133111eb
+	x ^= x >> 31
+	return x
+}
+
+func effectiveOpenAIHybridTopK(configuredTopK, candidateCount int) int {
+	if candidateCount <= 0 {
+		return 0
+	}
+	if configuredTopK <= 0 {
+		configuredTopK = 1
+	}
+	topK := configuredTopK
+	switch {
+	case candidateCount > 500 && topK < 32:
+		topK = 32
+	case candidateCount > 100 && topK < 24:
+		topK = 24
+	case candidateCount > 20 && topK < 16:
+		topK = 16
+	case candidateCount > 12 && topK < 12:
+		topK = 12
+	}
+	if topK > candidateCount {
+		topK = candidateCount
+	}
+	return topK
 }
 
 type openAISelectionRNG struct {
@@ -741,13 +987,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 
 	topK := 0
 	if len(candidates) > 0 {
-		topK = s.service.openAIWSLBTopK()
-		if topK > len(candidates) {
-			topK = len(candidates)
-		}
-		if topK <= 0 {
-			topK = 1
-		}
+		topK = effectiveOpenAIHybridTopK(s.service.openAIWSLBTopK(), len(candidates))
 	}
 
 	buildSelectionOrder := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
@@ -758,7 +998,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		if groupTopK > len(pool) {
 			groupTopK = len(pool)
 		}
-		ranked := selectTopKOpenAICandidates(pool, groupTopK)
+		ranked := selectHybridTopKOpenAICandidates(pool, groupTopK, req)
 		return buildOpenAIWeightedSelectionOrder(ranked, req)
 	}
 	sortCompactRetryCandidates := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
@@ -818,9 +1058,16 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, req.RequireCompact && len(allCandidates) > 0)
 	}
 
+	acquireOrder := selectionOrder
+	if overflowLimit := openAIHybridOverflowProbeCount(topK, len(candidates)); overflowLimit > 0 {
+		if overflow := selectOpenAIOverflowProbeCandidates(candidates, selectionOrder, overflowLimit, req); len(overflow) > 0 {
+			acquireOrder = append(append([]openAIAccountCandidateScore(nil), selectionOrder...), overflow...)
+		}
+	}
+
 	compactBlocked := false
-	for i := 0; i < len(selectionOrder); i++ {
-		candidate := selectionOrder[i]
+	for i := 0; i < len(acquireOrder); i++ {
+		candidate := acquireOrder[i]
 		fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.RequestedModel, false)
 		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport) || !s.isAccountRequestCompatible(fresh, req) {
 			continue

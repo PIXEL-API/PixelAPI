@@ -482,7 +482,7 @@ func (h *UserAccountHandler) Create(c *gin.Context) {
 		return
 	}
 	if req.Concurrency <= 0 {
-		req.Concurrency = 3
+		req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
 	}
 	if req.Priority <= 0 {
 		req.Priority = 50
@@ -531,7 +531,7 @@ func (h *UserAccountHandler) Import(c *gin.Context) {
 		return
 	}
 	if req.Concurrency <= 0 {
-		req.Concurrency = 3
+		req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
 	}
 	if req.Priority <= 0 {
 		req.Priority = 50
@@ -576,9 +576,6 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
-	}
-	if req.Concurrency <= 0 {
-		req.Concurrency = 3
 	}
 	if req.Priority <= 0 {
 		req.Priority = 50
@@ -643,6 +640,9 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		ExpiresAt:          userUnixSecondsToTime(defaults.ExpiresAt),
 		AutoPauseOnExpired: defaults.AutoPauseOnExpired,
 	}
+	if req.Concurrency <= 0 {
+		req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+	}
 
 	switch source.Kind {
 	case service.AccountCredentialImportKindOAuthCredentials:
@@ -657,6 +657,9 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		req.Platform = service.PlatformOpenAI
 		req.Credentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 		req.Extra = service.BuildOpenAIAccountCredentialImportExtra(tokenInfo)
+		if defaults.Concurrency <= 0 {
+			req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+		}
 		if req.Name == "" {
 			req.Name = strings.TrimSpace(tokenInfo.Email)
 		}
@@ -675,6 +678,9 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		req.Platform = service.PlatformAnthropic
 		req.Credentials = service.BuildClaudeAccountCredentials(tokenInfo)
 		req.Extra = service.BuildClaudeAccountCredentialImportExtra(tokenInfo)
+		if defaults.Concurrency <= 0 {
+			req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+		}
 		if req.Name == "" {
 			req.Name = strings.TrimSpace(tokenInfo.EmailAddress)
 		}

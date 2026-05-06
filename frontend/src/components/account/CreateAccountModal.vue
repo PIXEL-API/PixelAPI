@@ -2491,8 +2491,8 @@
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
-            @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
+          <input v-model.number="form.concurrency" type="number" min="1" :max="concurrencyMax" class="input"
+            @input="normalizeConcurrencyInput" />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
@@ -3549,6 +3549,10 @@ const tempUnschedPresets = computed(() => [
   }
 ])
 
+const DEFAULT_ACCOUNT_CONCURRENCY = 10
+const OPENAI_PLUS_DEFAULT_CONCURRENCY = 2
+const OPENAI_PLUS_MAX_CONCURRENCY = 3
+
 const form = reactive({
   name: '',
   notes: '',
@@ -3558,13 +3562,35 @@ const form = reactive({
   share_mode: 'private' as AccountShareMode,
   credentials: {} as Record<string, unknown>,
   proxy_id: null as number | null,
-  concurrency: 10,
+  concurrency: DEFAULT_ACCOUNT_CONCURRENCY,
   load_factor: null as number | null,
   priority: 1,
   rate_multiplier: 1,
   group_ids: [] as number[],
   expires_at: null as number | null
 })
+
+const isOpenAIPlusForm = computed(() => form.platform === 'openai' && form.account_level === 'plus')
+const concurrencyMax = computed(() => isOpenAIPlusForm.value ? OPENAI_PLUS_MAX_CONCURRENCY : undefined)
+
+const normalizeConcurrencyInput = () => {
+  const minConcurrency = Math.max(1, form.concurrency || 1)
+  form.concurrency = isOpenAIPlusForm.value
+    ? Math.min(OPENAI_PLUS_MAX_CONCURRENCY, minConcurrency)
+    : minConcurrency
+}
+
+const applyOpenAIPlusConcurrencyDefaults = () => {
+  if (!isOpenAIPlusForm.value) return
+  if (!form.concurrency || form.concurrency > OPENAI_PLUS_MAX_CONCURRENCY || form.concurrency === DEFAULT_ACCOUNT_CONCURRENCY) {
+    form.concurrency = OPENAI_PLUS_DEFAULT_CONCURRENCY
+  }
+  if (form.load_factor && form.load_factor > OPENAI_PLUS_MAX_CONCURRENCY) {
+    form.load_factor = OPENAI_PLUS_MAX_CONCURRENCY
+  }
+}
+
+watch(() => [form.platform, form.account_level], applyOpenAIPlusConcurrencyDefaults)
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
@@ -4118,7 +4144,7 @@ const resetForm = () => {
   form.account_level = 'unknown'
   form.credentials = {}
   form.proxy_id = null
-  form.concurrency = 10
+  form.concurrency = DEFAULT_ACCOUNT_CONCURRENCY
   form.load_factor = null
   form.priority = 1
   form.rate_multiplier = 1

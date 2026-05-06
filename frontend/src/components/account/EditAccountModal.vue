@@ -1292,8 +1292,8 @@
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
-            @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
+          <input v-model.number="form.concurrency" type="number" min="1" :max="concurrencyMax" class="input"
+            @input="normalizeConcurrencyInput" />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
@@ -2465,6 +2465,29 @@ const form = reactive({
   group_ids: [] as number[],
   expires_at: null as number | null
 })
+
+const OPENAI_PLUS_MAX_CONCURRENCY = 3
+const isOpenAIPlusForm = computed(() => props.account?.platform === 'openai' && form.account_level === 'plus')
+const concurrencyMax = computed(() => isOpenAIPlusForm.value ? OPENAI_PLUS_MAX_CONCURRENCY : undefined)
+
+const normalizeConcurrencyInput = () => {
+  const minConcurrency = Math.max(1, form.concurrency || 1)
+  form.concurrency = isOpenAIPlusForm.value
+    ? Math.min(OPENAI_PLUS_MAX_CONCURRENCY, minConcurrency)
+    : minConcurrency
+}
+
+const applyOpenAIPlusConcurrencyLimit = () => {
+  if (!isOpenAIPlusForm.value) return
+  if (form.concurrency > OPENAI_PLUS_MAX_CONCURRENCY) {
+    form.concurrency = OPENAI_PLUS_MAX_CONCURRENCY
+  }
+  if (form.load_factor && form.load_factor > OPENAI_PLUS_MAX_CONCURRENCY) {
+    form.load_factor = OPENAI_PLUS_MAX_CONCURRENCY
+  }
+}
+
+watch(() => [props.account?.platform, form.account_level], applyOpenAIPlusConcurrencyLimit)
 
 const statusOptions = computed(() => {
   if (isUserScope.value) {

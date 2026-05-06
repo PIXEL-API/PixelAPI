@@ -242,6 +242,9 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 	if name == "" {
 		name = "OpenAI OAuth Account"
 	}
+	if req.Concurrency <= 0 {
+		req.Concurrency = service.OpenAIPlusDefaultConcurrency
+	}
 
 	// Create account
 	account, err := h.adminService.CreateAccount(c.Request.Context(), &service.CreateAccountInput{

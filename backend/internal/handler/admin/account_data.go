@@ -225,9 +225,6 @@ func (h *AccountHandler) ImportCredentials(c *gin.Context) {
 		response.BadRequest(c, "rate_multiplier must be >= 0")
 		return
 	}
-	if req.Concurrency <= 0 {
-		req.Concurrency = 3
-	}
 	if req.Priority <= 0 {
 		req.Priority = 50
 	}
@@ -313,6 +310,9 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 		SkipDefaultGroupBind:  skipDefaultGroupBind,
 		SkipMixedChannelCheck: skipMixedChannelCheck,
 	}
+	if input.Concurrency <= 0 {
+		input.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(input.Platform)
+	}
 
 	switch source.Kind {
 	case service.AccountCredentialImportKindOAuthCredentials:
@@ -335,6 +335,9 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 		input.Platform = service.PlatformOpenAI
 		input.Credentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 		input.Extra = service.BuildOpenAIAccountCredentialImportExtra(tokenInfo)
+		if input.Concurrency <= 0 || defaults.Concurrency <= 0 {
+			input.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(input.Platform)
+		}
 		if input.Name == "" {
 			input.Name = strings.TrimSpace(tokenInfo.Email)
 		}
@@ -353,6 +356,9 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 		input.Platform = service.PlatformAnthropic
 		input.Credentials = service.BuildClaudeAccountCredentials(tokenInfo)
 		input.Extra = service.BuildClaudeAccountCredentialImportExtra(tokenInfo)
+		if input.Concurrency <= 0 || defaults.Concurrency <= 0 {
+			input.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(input.Platform)
+		}
 		if input.Name == "" {
 			input.Name = strings.TrimSpace(tokenInfo.EmailAddress)
 		}

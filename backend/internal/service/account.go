@@ -4,6 +4,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"reflect"
@@ -80,6 +81,12 @@ const (
 	AccountShareStatusSuspended = "suspended"
 )
 
+const (
+	OAuthAccountDefaultConcurrency = 3
+	OpenAIPlusDefaultConcurrency   = 2
+	OpenAIPlusMaxConcurrency       = 3
+)
+
 func NormalizeAccountLevel(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case AccountLevelFree:
@@ -102,6 +109,92 @@ func IsConcreteAccountLevel(level string) bool {
 	default:
 		return false
 	}
+}
+
+func IsOpenAIPlusAccount(platform, accountLevel string) bool {
+	return platform == PlatformOpenAI && NormalizeAccountLevel(accountLevel) == AccountLevelPlus
+}
+
+func NormalizeOpenAIAccountLevel(platform, accountLevel string, credentials, extra map[string]any) string {
+	level := NormalizeAccountLevel(accountLevel)
+	if platform != PlatformOpenAI || IsConcreteAccountLevel(level) {
+		return level
+	}
+	for _, values := range []map[string]any{credentials, extra} {
+		for _, key := range []string{"account_level", "plan_type", "chatgpt_plan_type", "subscription_plan"} {
+			raw, ok := values[key].(string)
+			if !ok {
+				continue
+			}
+			if inferred := NormalizeOpenAIPlanAccountLevel(raw); inferred != AccountLevelUnknown {
+				return inferred
+			}
+		}
+	}
+	return level
+}
+
+func NormalizeOpenAIPlanAccountLevel(planType string) string {
+	if level := NormalizeAccountLevel(planType); IsConcreteAccountLevel(level) {
+		return level
+	}
+	normalized := strings.ToLower(strings.TrimSpace(planType))
+	normalized = strings.NewReplacer(" ", "", "-", "", "_", "").Replace(normalized)
+	switch {
+	case normalized == "chatgptfree":
+		return AccountLevelFree
+	case normalized == "chatgptplus" || strings.HasPrefix(normalized, "plus"):
+		return AccountLevelPlus
+	case normalized == "chatgptpro":
+		return AccountLevelPro
+	case normalized == "chatgptteam":
+		return AccountLevelTeam
+	default:
+		return AccountLevelUnknown
+	}
+}
+
+func DefaultOAuthAccountConcurrencyForPlatform(platform string) int {
+	if platform == PlatformOpenAI {
+		return OpenAIPlusDefaultConcurrency
+	}
+	return OAuthAccountDefaultConcurrency
+}
+
+func NormalizeOpenAIPlusConcurrency(platform, accountLevel string, concurrency int) (int, error) {
+	if !IsOpenAIPlusAccount(platform, accountLevel) {
+		return concurrency, nil
+	}
+	if concurrency <= 0 {
+		return OpenAIPlusDefaultConcurrency, nil
+	}
+	if concurrency > OpenAIPlusMaxConcurrency {
+		return 0, fmt.Errorf("openai plus account concurrency must be <= %d", OpenAIPlusMaxConcurrency)
+	}
+	return concurrency, nil
+}
+
+func ValidateOpenAIPlusConcurrency(platform, accountLevel string, concurrency int) error {
+	if !IsOpenAIPlusAccount(platform, accountLevel) {
+		return nil
+	}
+	if concurrency <= 0 {
+		return fmt.Errorf("openai plus account concurrency must be > 0")
+	}
+	if concurrency > OpenAIPlusMaxConcurrency {
+		return fmt.Errorf("openai plus account concurrency must be <= %d", OpenAIPlusMaxConcurrency)
+	}
+	return nil
+}
+
+func ValidateOpenAIPlusLoadFactor(platform, accountLevel string, loadFactor *int) error {
+	if !IsOpenAIPlusAccount(platform, accountLevel) || loadFactor == nil || *loadFactor <= 0 {
+		return nil
+	}
+	if *loadFactor > OpenAIPlusMaxConcurrency {
+		return fmt.Errorf("openai plus account load_factor must be <= %d", OpenAIPlusMaxConcurrency)
+	}
+	return nil
 }
 
 func NormalizeAccountShareMode(mode string) string {

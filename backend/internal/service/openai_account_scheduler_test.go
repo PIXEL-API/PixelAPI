@@ -680,7 +680,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky(t *testin
 	}
 }
 
-func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyKeepsSticky(t *testing.T) {
+func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyEscapesWhenQueueFull(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10100)
 	accounts := []Account{
@@ -719,7 +719,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyKeepsS
 	concurrencyCache := schedulerTestConcurrencyCache{
 		acquireResults: map[int64]bool{
 			21001: false, // sticky 账号已满
-			21002: true,  // 若回退负载均衡会命中该账号（本测试要求不能切换）
+			21002: true,
 		},
 		waitCounts: map[int64]int{
 			21001: 999,
@@ -751,12 +751,68 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyKeepsS
 	require.NoError(t, err)
 	require.NotNil(t, selection)
 	require.NotNil(t, selection.Account)
-	require.Equal(t, int64(21001), selection.Account.ID, "busy sticky account should remain selected")
-	require.False(t, selection.Acquired)
-	require.NotNil(t, selection.WaitPlan)
-	require.Equal(t, int64(21001), selection.WaitPlan.AccountID)
-	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
-	require.True(t, decision.StickySessionHit)
+	require.Equal(t, int64(21002), selection.Account.ID, "busy sticky account should escape to a healthy load-balance candidate")
+	require.True(t, selection.Acquired)
+	require.Nil(t, selection.WaitPlan)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.False(t, decision.StickySessionHit)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_ProbesOverflowWhenHybridTopKBusy(t *testing.T) {
+	ctx := context.Background()
+	accounts := make([]Account, 0, 40)
+	acquireResults := make(map[int64]bool, 16)
+	for i := int64(1); i <= 40; i++ {
+		priority := 99
+		if i <= 16 {
+			priority = 0
+			acquireResults[30000+i] = false
+		}
+		accounts = append(accounts, Account{
+			ID:          30000 + i,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    priority,
+		})
+	}
+
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: acquireResults}),
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx,
+		nil,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.True(t, selection.Acquired)
+	require.Greater(t, selection.Account.ID, int64(30016), "all primary hybrid top-k accounts are busy, so scheduler should probe overflow candidates before waiting")
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky_ForceHTTP(t *testing.T) {
@@ -1128,6 +1184,68 @@ func TestSelectTopKOpenAICandidates(t *testing.T) {
 	require.Equal(t, int64(11), topAll[1].account.ID)
 	require.Equal(t, int64(12), topAll[2].account.ID)
 	require.Equal(t, int64(14), topAll[3].account.ID)
+}
+
+func TestSelectHybridTopKOpenAICandidates_IncludesFairLRUCandidates(t *testing.T) {
+	now := time.Now()
+	recent := now.Add(-1 * time.Minute)
+	old := now.Add(-1 * time.Hour)
+	candidates := make([]openAIAccountCandidateScore, 0, 10)
+	for id := int64(1); id <= 10; id++ {
+		lastUsed := recent
+		score := 10.0
+		if id >= 9 {
+			lastUsed = old
+			score = 9
+		}
+		candidates = append(candidates, openAIAccountCandidateScore{
+			account:  &Account{ID: id, Priority: 0, LastUsedAt: &lastUsed},
+			loadInfo: &AccountLoadInfo{LoadRate: 10, WaitingCount: 0},
+			score:    score,
+		})
+	}
+
+	legacyTop := selectTopKOpenAICandidates(candidates, 7)
+	legacyIDs := make(map[int64]struct{}, len(legacyTop))
+	for _, candidate := range legacyTop {
+		legacyIDs[candidate.account.ID] = struct{}{}
+	}
+	require.NotContains(t, legacyIDs, int64(9))
+	require.NotContains(t, legacyIDs, int64(10))
+
+	hybridTop := selectHybridTopKOpenAICandidates(candidates, 7, OpenAIAccountScheduleRequest{
+		SessionHash:    "fair-session",
+		RequestedModel: "gpt-5.1",
+	})
+	hybridIDs := make(map[int64]struct{}, len(hybridTop))
+	for _, candidate := range hybridTop {
+		hybridIDs[candidate.account.ID] = struct{}{}
+	}
+	require.Len(t, hybridTop, 7)
+	require.Contains(t, hybridIDs, int64(9))
+	require.Contains(t, hybridIDs, int64(10))
+}
+
+func TestEffectiveOpenAIHybridTopK_ExpandsLargePools(t *testing.T) {
+	require.Equal(t, 7, effectiveOpenAIHybridTopK(7, 10))
+	require.Equal(t, 16, effectiveOpenAIHybridTopK(7, 50))
+	require.Equal(t, 24, effectiveOpenAIHybridTopK(7, 300))
+	require.Equal(t, 32, effectiveOpenAIHybridTopK(7, 1000))
+	require.Equal(t, 40, effectiveOpenAIHybridTopK(40, 1000))
+}
+
+func TestOpenAIHybridFairCandidateCount_ConservativeShare(t *testing.T) {
+	require.Equal(t, 2, openAIHybridFairCandidateCount(7, 1000))
+	require.Equal(t, 4, openAIHybridFairCandidateCount(16, 1000))
+	require.Equal(t, 7, openAIHybridFairCandidateCount(24, 1000))
+	require.Equal(t, 9, openAIHybridFairCandidateCount(32, 1000))
+}
+
+func TestOpenAIHybridOverflowProbeCount_Bounded(t *testing.T) {
+	require.Equal(t, 0, openAIHybridOverflowProbeCount(7, 7))
+	require.Equal(t, 7, openAIHybridOverflowProbeCount(7, 1000))
+	require.Equal(t, 32, openAIHybridOverflowProbeCount(32, 1000))
+	require.Equal(t, 32, openAIHybridOverflowProbeCount(100, 1000))
 }
 
 func TestBuildOpenAIWeightedSelectionOrder_DeterministicBySessionSeed(t *testing.T) {
