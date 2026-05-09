@@ -92,9 +92,14 @@
               {{ t('admin.accounts.bulkActions.clear') }}
             </button>
           </div>
-          <button type="button" class="btn btn-primary btn-sm" @click="openBulkEditModal">
-            {{ t('admin.accounts.bulkActions.edit') }}
-          </button>
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" class="btn btn-secondary btn-sm" @click="openBulkEditModal">
+              {{ t('admin.accounts.bulkActions.edit') }}
+            </button>
+            <button type="button" class="btn btn-danger btn-sm" @click="openBulkDeleteDialog">
+              {{ t('admin.accounts.bulkActions.delete') }}
+            </button>
+          </div>
         </div>
         <DataTable
           :columns="columns"
@@ -358,6 +363,17 @@
       @cancel="closeDeleteDialog"
     />
 
+    <ConfirmDialog
+      :show="showBulkDeleteDialog"
+      :title="t('admin.accounts.bulkDeleteTitle')"
+      :message="bulkDeleteConfirmMessage"
+      :confirm-text="t('common.delete')"
+      :cancel-text="t('common.cancel')"
+      danger
+      @confirm="bulkDeleteAccounts"
+      @cancel="closeBulkDeleteDialog"
+    />
+
     <ImportAccountsModal
       :show="showImportModal"
       @close="showImportModal = false"
@@ -409,6 +425,7 @@ const showEditModal = ref(false)
 const showImportModal = ref(false)
 const showBulkEditModal = ref(false)
 const showDeleteDialog = ref(false)
+const showBulkDeleteDialog = ref(false)
 const editingAccount = ref<Account | null>(null)
 const accountToDelete = ref<Account | null>(null)
 const togglingStatusId = ref<number | null>(null)
@@ -523,6 +540,10 @@ const groupFilterOptions = computed(() => [
 
 const deleteConfirmMessage = computed(() =>
   t('userAccounts.deleteConfirmMessage', { name: accountToDelete.value?.name ?? '' })
+)
+
+const bulkDeleteConfirmMessage = computed(() =>
+  t('admin.accounts.bulkDeleteConfirm', { count: selectedCount.value })
 )
 
 function isAccountActive(account: Account): boolean {
@@ -822,6 +843,18 @@ function openBulkEditModal(): void {
   showBulkEditModal.value = true
 }
 
+function openBulkDeleteDialog(): void {
+  if (selectedCount.value === 0) {
+    appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
+    return
+  }
+  showBulkDeleteDialog.value = true
+}
+
+function closeBulkDeleteDialog(): void {
+  showBulkDeleteDialog.value = false
+}
+
 async function handleAccountCreated(): Promise<void> {
   showCreateModal.value = false
   clearSelection()
@@ -914,6 +947,33 @@ async function deleteAccount(): Promise<void> {
   } catch (error: any) {
     console.error('Failed to delete user account:', error)
     appStore.showError(error?.response?.data?.message || t('userAccounts.failedToDelete'))
+  }
+}
+
+async function bulkDeleteAccounts(): Promise<void> {
+  const accountIds = [...selectedIds.value]
+  if (accountIds.length === 0) {
+    closeBulkDeleteDialog()
+    return
+  }
+  try {
+    const result = await accountsAPI.bulkDelete(accountIds)
+    if (result.success > 0 && result.failed === 0) {
+      appStore.showSuccess(t('admin.accounts.bulkDeleteSuccess', { count: result.success }))
+    } else if (result.success > 0) {
+      appStore.showError(
+        t('admin.accounts.bulkDeletePartial', { success: result.success, failed: result.failed })
+      )
+    } else {
+      appStore.showError(t('admin.accounts.bulkDeleteFailed'))
+    }
+    closeBulkDeleteDialog()
+    clearSelection()
+    usageManualRefreshToken.value += 1
+    await Promise.all([loadGroups(), loadAccounts()])
+  } catch (error: any) {
+    console.error('Failed to bulk delete user accounts:', error)
+    appStore.showError(error?.response?.data?.message || t('admin.accounts.bulkDeleteFailed'))
   }
 }
 

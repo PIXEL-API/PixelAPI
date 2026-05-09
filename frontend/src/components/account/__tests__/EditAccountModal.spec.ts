@@ -188,6 +188,7 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
       'gpt-5.2': 'gpt-5.2'
     })
+    expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('account_level')
   })
 
   it('submits OpenAI compact mode and compact-only model mapping', async () => {

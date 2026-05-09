@@ -32,10 +32,22 @@ func TestNormalizeOpenAIAccountLevel_FromPlanType(t *testing.T) {
 		map[string]any{"plan_type": "plus"},
 		nil,
 	))
-	require.Equal(t, AccountLevelPro, NormalizeOpenAIAccountLevel(
+	require.Equal(t, AccountLevelPlus, NormalizeOpenAIAccountLevel(
 		PlatformOpenAI,
 		AccountLevelPro,
 		map[string]any{"plan_type": "plus"},
+		nil,
+	))
+	require.Equal(t, AccountLevelPro, NormalizeOpenAIAccountLevel(
+		PlatformOpenAI,
+		AccountLevelPro,
+		nil,
+		nil,
+	))
+	require.Equal(t, AccountLevelUnknown, NormalizeOpenAIAccountLevel(
+		PlatformOpenAI,
+		AccountLevelUnknown,
+		map[string]any{"account_level": "pro"},
 		nil,
 	))
 	require.Equal(t, AccountLevelUnknown, NormalizeOpenAIAccountLevel(

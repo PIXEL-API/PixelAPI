@@ -16,6 +16,7 @@ type accountRepoStubForBulkUpdate struct {
 	accountRepoStub
 	bulkUpdateErr    error
 	bulkUpdateIDs    []int64
+	bulkUpdateUpdate AccountBulkUpdate
 	updatedAccount   *Account
 	bindGroupErrByID map[int64]error
 	bindGroupsCalls  []int64
@@ -43,8 +44,9 @@ type accountRepoStubForBulkUpdate struct {
 	}
 }
 
-func (s *accountRepoStubForBulkUpdate) BulkUpdate(_ context.Context, ids []int64, _ AccountBulkUpdate) (int64, error) {
+func (s *accountRepoStubForBulkUpdate) BulkUpdate(_ context.Context, ids []int64, update AccountBulkUpdate) (int64, error) {
 	s.bulkUpdateIDs = append([]int64{}, ids...)
+	s.bulkUpdateUpdate = update
 	if s.bulkUpdateErr != nil {
 		return 0, s.bulkUpdateErr
 	}
@@ -186,6 +188,7 @@ func TestAdminService_UpdateAccountLevel_ValidatesExistingGroups(t *testing.T) {
 				Name:         "plus-account",
 				Platform:     PlatformOpenAI,
 				AccountLevel: AccountLevelPlus,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
 				GroupIDs:     []int64{10},
 			},
 		},
@@ -207,10 +210,9 @@ func TestAdminService_UpdateAccountLevel_ValidatesExistingGroups(t *testing.T) {
 		AccountLevel: &level,
 	})
 
-	require.Nil(t, result)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "account_level mismatch")
-	require.Nil(t, repo.updatedAccount)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, AccountLevelPlus, repo.updatedAccount.AccountLevel)
 }
 
 func TestAdminService_BulkUpdateAccountLevel_ValidatesExistingGroups(t *testing.T) {
@@ -221,6 +223,7 @@ func TestAdminService_BulkUpdateAccountLevel_ValidatesExistingGroups(t *testing.
 				Name:         "plus-account",
 				Platform:     PlatformOpenAI,
 				AccountLevel: AccountLevelPlus,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
 				GroupIDs:     []int64{10},
 			},
 		},
@@ -246,10 +249,47 @@ func TestAdminService_BulkUpdateAccountLevel_ValidatesExistingGroups(t *testing.
 		Extra:        nil,
 	})
 
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
+	require.Nil(t, repo.bulkUpdateUpdate.AccountLevel)
+}
+
+func TestAdminService_UpdateAccount_UsesInferredOpenAILevelForGroupBinding(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDAccounts: map[int64]*Account{
+			1: {
+				ID:           1,
+				Name:         "plus-account",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPro,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
+				Credentials:  map[string]any{"plan_type": "plus"},
+			},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{
+				ID:                   20,
+				Name:                 "PRO共享池",
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPro,
+			},
+		},
+	}
+
+	groupIDs := []int64{20}
+	result, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{
+		GroupIDs:              &groupIDs,
+		SkipMixedChannelCheck: true,
+	})
+
 	require.Nil(t, result)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "account_level mismatch")
-	require.Empty(t, repo.bulkUpdateIDs)
+	require.Nil(t, repo.updatedAccount)
 }
 
 func TestAdminService_UpdateOwnedPrivateAccountRejectsPublicGroupBinding(t *testing.T) {

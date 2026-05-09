@@ -107,9 +107,14 @@ type bulkUpdateUserAccountsRequest struct {
 	Status         string         `json:"status" binding:"omitempty,oneof=active disabled inactive"`
 	Schedulable    *bool          `json:"schedulable"`
 	AccountLevel   *string        `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
+	ShareMode      *string        `json:"share_mode" binding:"omitempty,oneof=private public"`
 	GroupIDs       *[]int64       `json:"group_ids"`
 	Credentials    map[string]any `json:"credentials"`
 	Extra          map[string]any `json:"extra"`
+}
+
+type bulkDeleteUserAccountsRequest struct {
+	AccountIDs []int64 `json:"account_ids"`
 }
 
 type userOAuthProxyRequest struct {
@@ -226,6 +231,19 @@ func normalizeUserAccountIDList(ids []int64) []int64 {
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func removeInt64(values []int64, target int64) []int64 {
+	if len(values) == 0 {
+		return values
+	}
+	out := values[:0]
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
 	return out
 }
 
@@ -806,6 +824,7 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		status != "" ||
 		req.Schedulable != nil ||
 		req.AccountLevel != nil ||
+		req.ShareMode != nil ||
 		req.GroupIDs != nil ||
 		len(req.Credentials) > 0 ||
 		len(req.Extra) > 0
@@ -822,6 +841,7 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		Status:       status,
 		Schedulable:  req.Schedulable,
 		AccountLevel: req.AccountLevel,
+		ShareMode:    req.ShareMode,
 		GroupIDs:     req.GroupIDs,
 		Credentials:  req.Credentials,
 		Extra:        req.Extra,
@@ -829,6 +849,26 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic {
+		for i := range result.Results {
+			entry := &result.Results[i]
+			if !entry.Success {
+				continue
+			}
+			account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, entry.AccountID)
+			if err == nil {
+				_, err = h.activateOwnedPublicShareIfRequested(c.Request.Context(), subject.UserID, account)
+			}
+			if err != nil {
+				entry.Success = false
+				entry.Error = err.Error()
+				result.Success--
+				result.Failed++
+				result.SuccessIDs = removeInt64(result.SuccessIDs, entry.AccountID)
+				result.FailedIDs = append(result.FailedIDs, entry.AccountID)
+			}
+		}
 	}
 	response.Success(c, result)
 }
@@ -849,6 +889,30 @@ func (h *UserAccountHandler) Delete(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"message": "Account deleted successfully"})
+}
+
+func (h *UserAccountHandler) BulkDelete(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req bulkDeleteUserAccountsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeUserAccountIDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	result, err := h.accountService.BulkDeleteOwned(c.Request.Context(), subject.UserID, accountIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *UserAccountHandler) GenerateAnthropicOAuthURL(c *gin.Context) {

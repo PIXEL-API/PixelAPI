@@ -669,6 +669,7 @@ export default {
     concurrency: '并发',
     priority: '优先级',
     shareMode: '共享模式',
+    shareModeHint: '切换为公共模式后，系统会进行公共共享校验，未通过时可能会进入待审核状态。',
     privateMode: '私有',
     publicMode: '公共',
     pendingReview: '待校验',
@@ -2920,6 +2921,8 @@ export default {
       accountLevel: {
         label: '账号等级',
         hint: '仅 OpenAI 账号使用。设置后，账号只能绑定并调度到相同等级的共享号池。',
+        autoDetected: '自动识别',
+        autoDetectedHint: 'OpenAI 账号等级由系统根据账号凭证自动识别，不支持手动修改。',
         unknown: '未知',
         free: 'Free',
         plus: 'Plus',

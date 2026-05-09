@@ -369,10 +369,9 @@ describe('BulkEditAccountModal', () => {
       }
     })
 
-    expect(wrapper.text()).toContain('private-u9-openai')
-    expect(wrapper.text()).not.toContain('private-u9-anthropic')
-    expect(wrapper.text()).not.toContain('private-u9-gemini')
-    expect(wrapper.text()).not.toContain('Codex OAuth Only')
+    expect(wrapper.find('#bulk-edit-share-mode-enabled').exists()).toBe(true)
+    expect(wrapper.find('#bulk-edit-groups-enabled').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('private-u9-openai')
   })
 
   it('用户作用域提交分组更新时调用用户接口', async () => {
@@ -404,13 +403,13 @@ describe('BulkEditAccountModal', () => {
       }
     })
 
-    await wrapper.get('#bulk-edit-groups-enabled').setValue(true)
-    await wrapper.get('button.group-option').trigger('click')
+    await wrapper.get('#bulk-edit-share-mode-enabled').setValue(true)
+    await wrapper.get('select[aria-labelledby="bulk-edit-share-mode-label"]').setValue('public')
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
     expect(accountsAPI.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      group_ids: [1]
+      share_mode: 'public'
     })
     expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
   })

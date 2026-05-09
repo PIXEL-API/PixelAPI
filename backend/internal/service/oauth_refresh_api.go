@@ -220,5 +220,14 @@ func BuildClaudeAccountCredentials(tokenInfo *TokenInfo) map[string]any {
 	if tokenInfo.Scope != "" {
 		creds["scope"] = tokenInfo.Scope
 	}
+	if tokenInfo.OrgUUID != "" {
+		creds["org_uuid"] = tokenInfo.OrgUUID
+	}
+	if tokenInfo.AccountUUID != "" {
+		creds["account_uuid"] = tokenInfo.AccountUUID
+	}
+	if tokenInfo.EmailAddress != "" {
+		creds["email_address"] = tokenInfo.EmailAddress
+	}
 	return creds
 }

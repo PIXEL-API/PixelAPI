@@ -634,6 +634,34 @@
         </div>
       </div>
 
+      <!-- Share mode (user accounts only) -->
+      <div v-if="isUserScope" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <label
+            id="bulk-edit-share-mode-label"
+            class="input-label mb-0"
+            for="bulk-edit-share-mode-enabled"
+          >
+            {{ t('userAccounts.shareMode') }}
+          </label>
+          <input
+            v-model="enableShareMode"
+            id="bulk-edit-share-mode-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-share-mode"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div id="bulk-edit-share-mode" :class="!enableShareMode && 'pointer-events-none opacity-50'">
+          <Select
+            v-model="shareMode"
+            :options="shareModeOptions"
+            aria-labelledby="bulk-edit-share-mode-label"
+          />
+          <p class="input-hint">{{ t('userAccounts.shareModeHint') }}</p>
+        </div>
+      </div>
+
       <!-- Status -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1157,6 +1185,7 @@ const enableConcurrency = ref(false)
 const enableLoadFactor = ref(false)
 const enablePriority = ref(false)
 const enableRateMultiplier = ref(false)
+const enableShareMode = ref(false)
 const enableStatus = ref(false)
 const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
@@ -1182,6 +1211,7 @@ const concurrency = ref(1)
 const loadFactor = ref<number | null>(null)
 const priority = ref(1)
 const rateMultiplier = ref(1)
+const shareMode = ref<'private' | 'public'>('private')
 const status = ref<'active' | 'inactive' | 'disabled'>('active')
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
@@ -1213,6 +1243,10 @@ const commonErrorCodes = [
 const statusOptions = computed(() => [
   { value: 'active', label: t('common.active') },
   { value: isUserScope.value ? 'disabled' : 'inactive', label: t('common.inactive') }
+])
+const shareModeOptions = computed(() => [
+  { value: 'private', label: t('userAccounts.privateMode') },
+  { value: 'public', label: t('userAccounts.publicMode') }
 ])
 const isOpenAIModelRestrictionDisabled = computed(
   () =>
@@ -1342,6 +1376,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (canManageBillingRate.value && enableRateMultiplier.value) {
     updates.rate_multiplier = rateMultiplier.value
+  }
+
+  if (isUserScope.value && enableShareMode.value) {
+    updates.share_mode = shareMode.value
   }
 
   if (enableStatus.value) {
@@ -1546,6 +1584,7 @@ const handleSubmit = async () => {
     enableLoadFactor.value ||
     enablePriority.value ||
     (canManageBillingRate.value && enableRateMultiplier.value) ||
+    (isUserScope.value && enableShareMode.value) ||
     enableStatus.value ||
     (canManageGroups.value && enableGroups.value) ||
     enableOpenAIWSMode.value ||
@@ -1648,6 +1687,7 @@ watch(
       enableLoadFactor.value = false
       enablePriority.value = false
       enableRateMultiplier.value = false
+      enableShareMode.value = false
       enableStatus.value = false
       enableGroups.value = false
       enableOpenAIPassthrough.value = false
@@ -1670,6 +1710,7 @@ watch(
       loadFactor.value = null
       priority.value = 1
       rateMultiplier.value = 1
+      shareMode.value = 'private'
       status.value = 'active'
       groupIds.value = []
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF

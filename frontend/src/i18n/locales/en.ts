@@ -670,6 +670,7 @@ export default {
     concurrency: 'Concurrency',
     priority: 'Priority',
     shareMode: 'Share Mode',
+    shareModeHint: 'When switching to public mode, the system will run public-share validation and may leave the account pending review if it does not pass.',
     privateMode: 'Private',
     publicMode: 'Public',
     pendingReview: 'Validation Pending',
@@ -2844,6 +2845,8 @@ export default {
       accountLevel: {
         label: 'Account Level',
         hint: 'Only OpenAI accounts use this field. Matching shared pools will only accept and schedule accounts at the same level.',
+        autoDetected: 'Auto detected',
+        autoDetectedHint: 'OpenAI account level is detected by the system from account credentials and cannot be edited manually.',
         unknown: 'Unknown',
         free: 'Free',
         plus: 'Plus',

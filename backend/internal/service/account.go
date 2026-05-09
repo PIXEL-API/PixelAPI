@@ -117,11 +117,18 @@ func IsOpenAIPlusAccount(platform, accountLevel string) bool {
 
 func NormalizeOpenAIAccountLevel(platform, accountLevel string, credentials, extra map[string]any) string {
 	level := NormalizeAccountLevel(accountLevel)
-	if platform != PlatformOpenAI || IsConcreteAccountLevel(level) {
+	if platform != PlatformOpenAI {
 		return level
 	}
+	if inferred := InferOpenAIAccountLevel(credentials, extra); IsConcreteAccountLevel(inferred) {
+		return inferred
+	}
+	return level
+}
+
+func InferOpenAIAccountLevel(credentials, extra map[string]any) string {
 	for _, values := range []map[string]any{credentials, extra} {
-		for _, key := range []string{"account_level", "plan_type", "chatgpt_plan_type", "subscription_plan"} {
+		for _, key := range []string{"plan_type", "chatgpt_plan_type", "subscription_plan"} {
 			raw, ok := values[key].(string)
 			if !ok {
 				continue
@@ -131,7 +138,7 @@ func NormalizeOpenAIAccountLevel(platform, accountLevel string, credentials, ext
 			}
 		}
 	}
-	return level
+	return AccountLevelUnknown
 }
 
 func NormalizeOpenAIPlanAccountLevel(planType string) string {
@@ -943,6 +950,20 @@ func (a *Account) GetClaudeUserID() string {
 		return v
 	}
 	return ""
+}
+
+func (a *Account) GetClaudeOrgUUID() string {
+	if v := strings.TrimSpace(a.GetExtraString("org_uuid")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(a.GetCredential("org_uuid"))
+}
+
+func (a *Account) GetClaudeAccountUUID() string {
+	if v := strings.TrimSpace(a.GetExtraString("account_uuid")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(a.GetCredential("account_uuid"))
 }
 
 // matchAntigravityWildcard 通配符匹配（仅支持末尾 *）

@@ -75,6 +75,7 @@ func RegisterUserRoutes(
 			accounts.POST("/import", h.UserAccount.Import)
 			accounts.POST("/import-credentials", h.UserAccount.ImportCredentials)
 			accounts.POST("/bulk-update", h.UserAccount.BulkUpdate)
+			accounts.POST("/bulk-delete", h.UserAccount.BulkDelete)
 			accounts.PUT("/:id", h.UserAccount.Update)
 			accounts.DELETE("/:id", h.UserAccount.Delete)
 		}

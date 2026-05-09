@@ -25,6 +25,7 @@ import (
 	dbgroup "github.com/Wei-Shaw/sub2api/ent/group"
 	dbpredicate "github.com/Wei-Shaw/sub2api/ent/predicate"
 	dbproxy "github.com/Wei-Shaw/sub2api/ent/proxy"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -74,6 +75,16 @@ func NewAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache se
 // 这种设计便于单元测试时注入 mock 对象。
 func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedulerCache service.SchedulerCache) *accountRepository {
 	return &accountRepository{client: client, sql: sqlq, schedulerCache: schedulerCache}
+}
+
+func translateAccountPersistenceError(err error, notFound *infraerrors.ApplicationError) error {
+	if err == nil {
+		return nil
+	}
+	if isUniqueViolationOnIndex(err, ownedAccountIdentityUniqueIndexSet) {
+		return service.ErrOwnedAccountAlreadyExists.WithCause(err)
+	}
+	return translatePersistenceError(err, notFound, nil)
 }
 
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
@@ -141,7 +152,7 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 
 	created, err := builder.Save(ctx)
 	if err != nil {
-		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+		return translateAccountPersistenceError(err, service.ErrAccountNotFound)
 	}
 
 	account.ID = created.ID
@@ -414,7 +425,7 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 
 	updated, err := builder.Save(ctx)
 	if err != nil {
-		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+		return translateAccountPersistenceError(err, service.ErrAccountNotFound)
 	}
 	account.UpdatedAt = updated.UpdatedAt
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
@@ -1493,7 +1504,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, err
+		return 0, translateAccountPersistenceError(err, nil)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {

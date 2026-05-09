@@ -78,6 +78,22 @@ func TestMigration119DefersPaymentIndexRolloutToOnlineFollowup(t *testing.T) {
 	require.Contains(t, alignmentSQL, "RENAME TO paymentorder_out_trade_no")
 }
 
+func TestMigration140CreatesOwnedAccountIdentityIndexesOnline(t *testing.T) {
+	content, err := FS.ReadFile("140_owned_account_identity_unique_notx.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_owned_openai_chatgpt_account_id_uniq")
+	require.Contains(t, sql, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_owned_openai_chatgpt_user_id_uniq")
+	require.Contains(t, sql, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_owned_anthropic_org_account_uniq")
+	require.Contains(t, sql, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_owned_gemini_project_uniq")
+	require.Contains(t, sql, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_owned_antigravity_project_uniq")
+	require.Contains(t, sql, "owner_user_id IS NOT NULL")
+	require.Contains(t, sql, "deleted_at IS NULL")
+	require.NotContains(t, strings.ToUpper(sql), "BEGIN")
+	require.NotContains(t, strings.ToUpper(sql), "COMMIT")
+}
+
 func TestMigration110SeedsAuthSourceSignupGrantsDisabledByDefault(t *testing.T) {
 	content, err := FS.ReadFile("110_pending_auth_and_provider_default_grants.sql")
 	require.NoError(t, err)

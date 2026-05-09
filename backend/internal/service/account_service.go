@@ -15,6 +15,7 @@ import (
 var (
 	ErrAccountNotFound                        = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	ErrAccountNilInput                        = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrOwnedAccountAlreadyExists              = infraerrors.Conflict("OWNED_ACCOUNT_ALREADY_EXISTS", "account already exists")
 	ErrOwnedAccountTypeNotAllowed             = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
 	ErrOwnedAccountCredentialsInvalid         = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
 	ErrOwnedAccountCredentialsNotAllowed      = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
@@ -180,6 +181,11 @@ type ownedAccountFilterRepository interface {
 	ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
 }
 
+type ownedAccountDuplicateKey struct {
+	Name  string
+	Value string
+}
+
 type AccountListFilters struct {
 	Platform    string
 	AccountType string
@@ -197,6 +203,7 @@ type BulkUpdateOwnedAccountsInput struct {
 	Status       string
 	Schedulable  *bool
 	AccountLevel *string
+	ShareMode    *string
 	GroupIDs     *[]int64
 	Credentials  map[string]any
 	Extra        map[string]any
@@ -241,11 +248,15 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 	}
 
 	// 创建账号
+	accountLevelInput := req.AccountLevel
+	if req.Platform == PlatformOpenAI {
+		accountLevelInput = AccountLevelUnknown
+	}
 	account := &Account{
 		Name:         req.Name,
 		Notes:        normalizeAccountNotes(req.Notes),
 		Platform:     req.Platform,
-		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
+		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, accountLevelInput, req.Credentials, req.Extra),
 		Type:         req.Type,
 		Credentials:  req.Credentials,
 		Extra:        req.Extra,
@@ -375,7 +386,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		Name:               req.Name,
 		Notes:              normalizeAccountNotes(req.Notes),
 		Platform:           req.Platform,
-		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
+		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, AccountLevelUnknown, req.Credentials, req.Extra),
 		Type:               req.Type,
 		Credentials:        req.Credentials,
 		Extra:              req.Extra,
@@ -400,6 +411,9 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	}
 	account.Concurrency = concurrency
 	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+		return nil, err
+	}
+	if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, account, 0); err != nil {
 		return nil, err
 	}
 
@@ -506,7 +520,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if req.Extra != nil {
 		account.Extra = *req.Extra
 	}
-	if req.AccountLevel != nil {
+	if req.AccountLevel != nil && account.Platform != PlatformOpenAI {
 		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
 	}
 
@@ -604,7 +618,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if req.Extra != nil {
 		account.Extra = *req.Extra
 	}
-	if req.AccountLevel != nil {
+	if req.AccountLevel != nil && account.Platform != PlatformOpenAI {
 		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
 	}
 	if req.ProxyID != nil {
@@ -669,6 +683,11 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
+	if req.Credentials != nil || req.Extra != nil {
+		if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, account, account.ID); err != nil {
+			return nil, err
+		}
+	}
 
 	if !shouldBindGroups && req.GroupIDs != nil {
 		return nil, ErrGroupNotAllowed
@@ -709,6 +728,32 @@ func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID
 // Delete 删除账号
 // 优化：使用 ExistsByID 替代 GetByID 进行存在性检查，
 // 避免加载完整账号对象及其关联数据，提升删除操作的性能
+func (s *AccountService) BulkDeleteOwned(ctx context.Context, ownerUserID int64, accountIDs []int64) (*BulkUpdateAccountsResult, error) {
+	if ownerUserID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	ids := normalizeOwnedBulkAccountIDs(accountIDs)
+	result := &BulkUpdateAccountsResult{
+		SuccessIDs: make([]int64, 0, len(ids)),
+		FailedIDs:  make([]int64, 0, len(ids)),
+		Results:    make([]BulkUpdateAccountResult, 0, len(ids)),
+	}
+	for _, accountID := range ids {
+		entry := BulkUpdateAccountResult{AccountID: accountID}
+		if err := s.DeleteOwned(ctx, ownerUserID, accountID); err != nil {
+			entry.Error = err.Error()
+			result.Failed++
+			result.FailedIDs = append(result.FailedIDs, accountID)
+		} else {
+			entry.Success = true
+			result.Success++
+			result.SuccessIDs = append(result.SuccessIDs, accountID)
+		}
+		result.Results = append(result.Results, entry)
+	}
+	return result, nil
+}
+
 func normalizeOwnedBulkAccountIDs(ids []int64) []int64 {
 	if len(ids) == 0 {
 		return nil
@@ -758,6 +803,150 @@ func mergeAccountMap(current map[string]any, updates map[string]any) map[string]
 	return next
 }
 
+func accountDuplicateIdentityKeys(account *Account) []ownedAccountDuplicateKey {
+	if account == nil {
+		return nil
+	}
+	keys := make([]ownedAccountDuplicateKey, 0, 3)
+	add := func(name, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		keys = append(keys, ownedAccountDuplicateKey{Name: name, Value: value})
+	}
+	addFolded := func(name, value string) {
+		add(name, strings.ToLower(strings.TrimSpace(value)))
+	}
+	switch account.Platform {
+	case PlatformOpenAI:
+		if account.Type != AccountTypeOAuth {
+			return nil
+		}
+		add("openai.chatgpt_account_id", account.GetChatGPTAccountID())
+		add("openai.chatgpt_user_id", account.GetChatGPTUserID())
+		if len(keys) == 0 {
+			addFolded("openai.email", account.GetCredential("email"))
+		}
+	case PlatformAnthropic:
+		if account.Type != AccountTypeOAuth {
+			return nil
+		}
+		orgUUID := strings.ToLower(strings.TrimSpace(account.GetClaudeOrgUUID()))
+		accountUUID := strings.ToLower(strings.TrimSpace(account.GetClaudeAccountUUID()))
+		if orgUUID != "" && accountUUID != "" {
+			add("anthropic.org_account", orgUUID+"|"+accountUUID)
+		} else if accountUUID != "" {
+			add("anthropic.account_uuid", accountUUID)
+		} else {
+			add("anthropic.org_uuid", orgUUID)
+		}
+		if len(keys) == 0 {
+			addFolded("anthropic.email_address", account.GetCredential("email_address"))
+		}
+	case PlatformGemini:
+		if account.Type != AccountTypeOAuth {
+			return nil
+		}
+		projectID := strings.ToLower(strings.TrimSpace(account.GetCredential("project_id")))
+		oauthType := strings.TrimSpace(account.GeminiOAuthType())
+		if projectID != "" {
+			if oauthType == "" {
+				oauthType = "code_assist"
+			}
+			add("gemini.project", strings.ToLower(oauthType)+"|"+projectID)
+		}
+	case PlatformAntigravity:
+		if account.Type != AccountTypeOAuth {
+			return nil
+		}
+		addFolded("antigravity.project_id", account.GetCredential("project_id"))
+		if len(keys) == 0 {
+			addFolded("antigravity.email", account.GetCredential("email"))
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return keys
+}
+
+func duplicateOwnedAccountError(platform string, key ownedAccountDuplicateKey, existingAccountID int64) error {
+	return ErrOwnedAccountAlreadyExists.WithMetadata(map[string]string{
+		"platform":            platform,
+		"identity":            key.Name,
+		"existing_account_id": fmt.Sprintf("%d", existingAccountID),
+	})
+}
+
+func (s *AccountService) ensureOwnedAccountNotDuplicate(ctx context.Context, ownerUserID int64, candidate *Account, skipAccountIDs ...int64) error {
+	candidateKeys := accountDuplicateIdentityKeys(candidate)
+	if len(candidateKeys) == 0 {
+		return nil
+	}
+	skipIDs := make(map[int64]struct{}, len(skipAccountIDs))
+	for _, id := range skipAccountIDs {
+		if id > 0 {
+			skipIDs[id] = struct{}{}
+		}
+	}
+	repo, ok := s.accountRepo.(ownedAccountFilterRepository)
+	if !ok {
+		return ErrOwnedAccountGroupValidationUnavailable
+	}
+	page := 1
+	for {
+		accounts, result, err := repo.ListOwnedWithFilters(
+			ctx,
+			ownerUserID,
+			pagination.PaginationParams{Page: page, PageSize: 1000, SortBy: "id", SortOrder: pagination.SortOrderAsc},
+			candidate.Platform,
+			candidate.Type,
+			"",
+			"",
+			0,
+			"",
+		)
+		if err != nil {
+			return fmt.Errorf("check owned account duplicate: %w", err)
+		}
+		for i := range accounts {
+			existing := &accounts[i]
+			if _, ok := skipIDs[existing.ID]; ok {
+				continue
+			}
+			existingKeys := accountDuplicateIdentityKeys(existing)
+			for _, candidateKey := range candidateKeys {
+				for _, existingKey := range existingKeys {
+					if existingKey.Name == candidateKey.Name && existingKey.Value == candidateKey.Value {
+						return duplicateOwnedAccountError(candidate.Platform, candidateKey, existing.ID)
+					}
+				}
+			}
+		}
+		if result == nil || int64(page*1000) >= result.Total || len(accounts) == 0 {
+			return nil
+		}
+		page++
+	}
+}
+
+func ensureOwnedAccountBatchNotDuplicate(accounts []*Account) error {
+	seen := make(map[ownedAccountDuplicateKey]int64)
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		for _, key := range accountDuplicateIdentityKeys(account) {
+			if existingID, ok := seen[key]; ok && existingID != account.ID {
+				return duplicateOwnedAccountError(account.Platform, key, existingID)
+			}
+			seen[key] = account.ID
+		}
+	}
+	return nil
+}
+
 func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64, input *BulkUpdateOwnedAccountsInput) (*BulkUpdateAccountsResult, error) {
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
@@ -792,6 +981,10 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	if err != nil {
 		return nil, err
 	}
+	shareMode := ""
+	if input.ShareMode != nil {
+		shareMode = NormalizeAccountShareMode(*input.ShareMode)
+	}
 
 	accounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
 	if err != nil {
@@ -804,6 +997,7 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		}
 	}
 
+	updatedIdentityAccounts := make([]*Account, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
 		account := accountsByID[accountID]
 		if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
@@ -812,6 +1006,9 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 
 		nextCredentials := mergeAccountMap(account.Credentials, input.Credentials)
 		nextExtra := mergeAccountMap(account.Extra, input.Extra)
+		nextAccount := *account
+		nextAccount.Credentials = nextCredentials
+		nextAccount.Extra = nextExtra
 		if err := validateOwnedAccountSource(account.Type, nextCredentials, nextExtra); err != nil {
 			return nil, err
 		}
@@ -824,7 +1021,7 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			nextLoadFactor = normalizeLoadFactor(input.LoadFactor)
 		}
 		nextAccountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, nextCredentials, nextExtra)
-		if input.AccountLevel != nil {
+		if input.AccountLevel != nil && account.Platform != PlatformOpenAI {
 			nextAccountLevel = NormalizeAccountLevel(*input.AccountLevel)
 		}
 		if err := ValidateOpenAIPlusConcurrency(account.Platform, nextAccountLevel, nextConcurrency); err != nil {
@@ -833,7 +1030,53 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		if err := ValidateOpenAIPlusLoadFactor(account.Platform, nextAccountLevel, nextLoadFactor); err != nil {
 			return nil, err
 		}
+		if len(input.Credentials) > 0 || len(input.Extra) > 0 {
+			if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, &nextAccount, accountIDs...); err != nil {
+				return nil, err
+			}
+			updatedIdentityAccounts = append(updatedIdentityAccounts, &nextAccount)
+		}
+	}
+	if err := ensureOwnedAccountBatchNotDuplicate(updatedIdentityAccounts); err != nil {
+		return nil, err
+	}
 
+	if shareMode != "" {
+		for _, accountID := range accountIDs {
+			account := accountsByID[accountID]
+			entry := BulkUpdateAccountResult{AccountID: accountID}
+			updateReq := UpdateAccountRequest{
+				Concurrency:  input.Concurrency,
+				LoadFactor:   input.LoadFactor,
+				Priority:     input.Priority,
+				Schedulable:  input.Schedulable,
+				AccountLevel: input.AccountLevel,
+				ShareMode:    &shareMode,
+			}
+			if status != "" {
+				updateReq.Status = &status
+			}
+			if len(input.Credentials) > 0 {
+				credentials := mergeAccountMap(account.Credentials, input.Credentials)
+				updateReq.Credentials = &credentials
+			}
+			if len(input.Extra) > 0 {
+				extra := mergeAccountMap(account.Extra, input.Extra)
+				updateReq.Extra = &extra
+			}
+			if _, err := s.UpdateOwned(ctx, ownerUserID, accountID, updateReq); err != nil {
+				entry.Error = err.Error()
+				result.Failed++
+				result.FailedIDs = append(result.FailedIDs, accountID)
+				result.Results = append(result.Results, entry)
+				continue
+			}
+			entry.Success = true
+			result.Success++
+			result.SuccessIDs = append(result.SuccessIDs, accountID)
+			result.Results = append(result.Results, entry)
+		}
+		return result, nil
 	}
 
 	repoUpdates := AccountBulkUpdate{
@@ -845,8 +1088,17 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		Extra:       input.Extra,
 	}
 	if input.AccountLevel != nil {
-		level := NormalizeAccountLevel(*input.AccountLevel)
-		repoUpdates.AccountLevel = &level
+		canPersistBulkAccountLevel := true
+		for _, account := range accounts {
+			if account != nil && account.Platform == PlatformOpenAI {
+				canPersistBulkAccountLevel = false
+				break
+			}
+		}
+		if canPersistBulkAccountLevel {
+			level := NormalizeAccountLevel(*input.AccountLevel)
+			repoUpdates.AccountLevel = &level
+		}
 	}
 	if status != "" {
 		repoUpdates.Status = &status

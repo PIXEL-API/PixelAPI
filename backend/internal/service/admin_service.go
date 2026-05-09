@@ -2162,7 +2162,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 	}
-	accountLevel := NormalizeOpenAIAccountLevel(input.Platform, input.AccountLevel, input.Credentials, input.Extra)
+	accountLevelInput := input.AccountLevel
+	if input.Platform == PlatformOpenAI {
+		accountLevelInput = AccountLevelUnknown
+	}
+	accountLevel := NormalizeOpenAIAccountLevel(input.Platform, accountLevelInput, input.Credentials, input.Extra)
 	if err := s.validateAccountLevelGroupBinding(ctx, input.Platform, accountLevel, groupIDs); err != nil {
 		return nil, err
 	}
@@ -2280,7 +2284,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Type != "" {
 		account.Type = input.Type
 	}
-	if input.AccountLevel != nil {
+	if input.AccountLevel != nil && account.Platform != PlatformOpenAI {
 		account.AccountLevel = NormalizeAccountLevel(*input.AccountLevel)
 	}
 	if input.Notes != nil {
@@ -2489,7 +2493,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			credentials := mergeAccountMap(account.Credentials, input.Credentials)
 			extra := mergeAccountMap(account.Extra, input.Extra)
 			level := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, credentials, extra)
-			if input.AccountLevel != nil {
+			if input.AccountLevel != nil && account.Platform != PlatformOpenAI {
 				level = NormalizeAccountLevel(*input.AccountLevel)
 			}
 			groupIDs := account.GroupIDs
@@ -2553,7 +2557,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			credentials := mergeAccountMap(account.Credentials, input.Credentials)
 			extra := mergeAccountMap(account.Extra, input.Extra)
 			level := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, credentials, extra)
-			if input.AccountLevel != nil {
+			if input.AccountLevel != nil && account.Platform != PlatformOpenAI {
 				level = NormalizeAccountLevel(*input.AccountLevel)
 			}
 			concurrency := account.Concurrency
@@ -2613,8 +2617,21 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		repoUpdates.Schedulable = input.Schedulable
 	}
 	if input.AccountLevel != nil {
-		level := NormalizeAccountLevel(*input.AccountLevel)
-		repoUpdates.AccountLevel = &level
+		accounts, err := loadPreflightAccounts()
+		if err != nil {
+			return nil, err
+		}
+		canPersistBulkAccountLevel := true
+		for _, account := range accounts {
+			if account != nil && account.Platform == PlatformOpenAI {
+				canPersistBulkAccountLevel = false
+				break
+			}
+		}
+		if canPersistBulkAccountLevel {
+			level := NormalizeAccountLevel(*input.AccountLevel)
+			repoUpdates.AccountLevel = &level
+		}
 	}
 
 	// Run bulk update for column/jsonb fields first.

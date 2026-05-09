@@ -104,6 +104,20 @@ export async function deleteAccount(id: number): Promise<{ message: string }> {
   return data
 }
 
+export interface UserBulkAccountResult {
+  account_id: number
+  success: boolean
+  error?: string
+}
+
+export interface UserBulkAccountOperationResponse {
+  success: number
+  failed: number
+  success_ids?: number[]
+  failed_ids?: number[]
+  results: UserBulkAccountResult[]
+}
+
 export async function toggleStatus(id: number, status: 'active' | 'disabled'): Promise<Account> {
   return update(id, { status })
 }
@@ -111,22 +125,17 @@ export async function toggleStatus(id: number, status: 'active' | 'disabled'): P
 export async function bulkUpdate(
   accountIds: number[],
   updates: Partial<UpdateAccountRequest>
-): Promise<{
-  success: number
-  failed: number
-  success_ids?: number[]
-  failed_ids?: number[]
-  results: Array<{ account_id: number; success: boolean; error?: string }>
-}> {
-  const { data } = await apiClient.post<{
-    success: number
-    failed: number
-    success_ids?: number[]
-    failed_ids?: number[]
-    results: Array<{ account_id: number; success: boolean; error?: string }>
-  }>('/accounts/bulk-update', {
+): Promise<UserBulkAccountOperationResponse> {
+  const { data } = await apiClient.post<UserBulkAccountOperationResponse>('/accounts/bulk-update', {
     account_ids: accountIds,
     ...updates
+  })
+  return data
+}
+
+export async function bulkDelete(accountIds: number[]): Promise<UserBulkAccountOperationResponse> {
+  const { data } = await apiClient.post<UserBulkAccountOperationResponse>('/accounts/bulk-delete', {
+    account_ids: accountIds
   })
   return data
 }
@@ -360,6 +369,7 @@ export const accountsAPI = {
   delete: deleteAccount,
   toggleStatus,
   bulkUpdate,
+  bulkDelete,
   getUsage,
   getTodayStats,
   getBatchTodayStats,

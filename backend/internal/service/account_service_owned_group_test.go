@@ -126,6 +126,236 @@ func (s *ownedPrivateGroupProvisionerStub) GetActiveUserPrivateGroup(context.Con
 	return &cp, nil
 }
 
+type ownedAccountDuplicateRepoStub struct {
+	createdAccounts     []*Account
+	updatedAccounts     []*Account
+	bulkUpdateCalls     int
+	boundAccountIDs     []int64
+	getByIDAccounts     map[int64]*Account
+	getByIDsAccounts    map[int64]*Account
+	listOwnedByPlatform map[string][]Account
+}
+
+func (s *ownedAccountDuplicateRepoStub) Create(_ context.Context, account *Account) error {
+	cp := *account
+	s.createdAccounts = append(s.createdAccounts, &cp)
+	return nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) Update(_ context.Context, account *Account) error {
+	cp := *account
+	s.updatedAccounts = append(s.updatedAccounts, &cp)
+	if s.getByIDAccounts != nil {
+		stored := cp
+		s.getByIDAccounts[account.ID] = &stored
+	}
+	if s.getByIDsAccounts != nil {
+		stored := cp
+		s.getByIDsAccounts[account.ID] = &stored
+	}
+	return nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) BulkUpdate(_ context.Context, ids []int64, updates AccountBulkUpdate) (int64, error) {
+	s.bulkUpdateCalls++
+	return int64(len(ids)), nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) BindGroups(_ context.Context, accountID int64, _ []int64) error {
+	s.boundAccountIDs = append(s.boundAccountIDs, accountID)
+	return nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) GetByID(_ context.Context, id int64) (*Account, error) {
+	account := s.getByIDAccounts[id]
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	cp := *account
+	return &cp, nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
+	out := make([]*Account, 0, len(ids))
+	for _, id := range ids {
+		account := s.getByIDsAccounts[id]
+		if account == nil {
+			continue
+		}
+		cp := *account
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListOwnedWithFilters(_ context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+	rows := s.listOwnedByPlatform[platform]
+	filtered := make([]Account, 0, len(rows))
+	for _, row := range rows {
+		if row.OwnerUserID == nil || *row.OwnerUserID != ownerUserID {
+			continue
+		}
+		if accountType != "" && row.Type != accountType {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	offset := params.Offset()
+	limit := params.Limit()
+	if offset >= len(filtered) {
+		return nil, &pagination.PaginationResult{Total: int64(len(filtered))}, nil
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[offset:end], &pagination.PaginationResult{Total: int64(len(filtered))}, nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) ExistsByID(context.Context, int64) (bool, error) {
+	panic("unexpected ExistsByID call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) GetByCRSAccountID(context.Context, string) (*Account, error) {
+	panic("unexpected GetByCRSAccountID call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) FindByExtraField(context.Context, string, any) ([]Account, error) {
+	panic("unexpected FindByExtraField call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListCRSAccountIDs(context.Context) (map[string]int64, error) {
+	panic("unexpected ListCRSAccountIDs call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) Delete(context.Context, int64) error {
+	panic("unexpected Delete call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) List(context.Context, pagination.PaginationParams) ([]Account, *pagination.PaginationResult, error) {
+	panic("unexpected List call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, string) ([]Account, *pagination.PaginationResult, error) {
+	panic("unexpected ListWithFilters call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListByGroup(context.Context, int64) ([]Account, error) {
+	panic("unexpected ListByGroup call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListActive(context.Context) ([]Account, error) {
+	panic("unexpected ListActive call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListByPlatform(context.Context, string) ([]Account, error) {
+	panic("unexpected ListByPlatform call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) UpdateLastUsed(context.Context, int64) error {
+	panic("unexpected UpdateLastUsed call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) BatchUpdateLastUsed(context.Context, map[int64]time.Time) error {
+	panic("unexpected BatchUpdateLastUsed call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) SetError(context.Context, int64, string) error {
+	panic("unexpected SetError call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ClearError(context.Context, int64) error {
+	panic("unexpected ClearError call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) SetSchedulable(context.Context, int64, bool) error {
+	panic("unexpected SetSchedulable call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) AutoPauseExpiredAccounts(context.Context, time.Time) (int64, error) {
+	panic("unexpected AutoPauseExpiredAccounts call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulable(context.Context) ([]Account, error) {
+	panic("unexpected ListSchedulable call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulableByGroupID(context.Context, int64) ([]Account, error) {
+	panic("unexpected ListSchedulableByGroupID call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulableByPlatform(context.Context, string) ([]Account, error) {
+	panic("unexpected ListSchedulableByPlatform call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulableByGroupIDAndPlatform(context.Context, int64, string) ([]Account, error) {
+	panic("unexpected ListSchedulableByGroupIDAndPlatform call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulableByPlatforms(context.Context, []string) ([]Account, error) {
+	panic("unexpected ListSchedulableByPlatforms call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulableByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	panic("unexpected ListSchedulableByGroupIDAndPlatforms call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulableUngroupedByPlatform(context.Context, string) ([]Account, error) {
+	panic("unexpected ListSchedulableUngroupedByPlatform call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ListSchedulableUngroupedByPlatforms(context.Context, []string) ([]Account, error) {
+	panic("unexpected ListSchedulableUngroupedByPlatforms call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) SetRateLimited(context.Context, int64, time.Time) error {
+	panic("unexpected SetRateLimited call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) SetModelRateLimit(context.Context, int64, string, time.Time) error {
+	panic("unexpected SetModelRateLimit call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) SetOverloaded(context.Context, int64, time.Time) error {
+	panic("unexpected SetOverloaded call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
+	panic("unexpected SetTempUnschedulable call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ClearTempUnschedulable(context.Context, int64) error {
+	panic("unexpected ClearTempUnschedulable call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ClearRateLimit(context.Context, int64) error {
+	panic("unexpected ClearRateLimit call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ClearAntigravityQuotaScopes(context.Context, int64) error {
+	panic("unexpected ClearAntigravityQuotaScopes call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ClearModelRateLimits(context.Context, int64) error {
+	panic("unexpected ClearModelRateLimits call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) UpdateSessionWindow(context.Context, int64, *time.Time, *time.Time, string) error {
+	panic("unexpected UpdateSessionWindow call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) UpdateExtra(context.Context, int64, map[string]any) error {
+	panic("unexpected UpdateExtra call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) IncrementQuotaUsed(context.Context, int64, float64) error {
+	panic("unexpected IncrementQuotaUsed call")
+}
+
+func (s *ownedAccountDuplicateRepoStub) ResetQuotaUsed(context.Context, int64) error {
+	panic("unexpected ResetQuotaUsed call")
+}
+
 func TestAccountServiceValidateOwnedAccountGroupBinding(t *testing.T) {
 	t.Run("allows active standard group and deduplicates ids", func(t *testing.T) {
 		svc := newOwnedAccountGroupValidationService(
@@ -338,6 +568,237 @@ func TestAccountServiceGetPrivateGroupForOwnedAccountProvisionsMissingPrivateGro
 	require.Equal(t, 1, provisioner.provisionCalls)
 }
 
+func TestAccountServiceCreateOwnedRejectsDuplicateOpenAIIdentity(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{
+		listOwnedByPlatform: map[string][]Account{
+			PlatformOpenAI: {
+				{
+					ID:          1,
+					Platform:    PlatformOpenAI,
+					Type:        AccountTypeOAuth,
+					OwnerUserID: &ownerID,
+					Credentials: map[string]any{"chatgpt_account_id": "acct-1"},
+				},
+			},
+		},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:        "duplicate",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1"},
+		Concurrency: 1,
+		Priority:    1,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
+	require.Empty(t, repo.createdAccounts)
+}
+
+func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			2: {
+				ID:          2,
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token"},
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    1,
+			},
+		},
+		listOwnedByPlatform: map[string][]Account{
+			PlatformAnthropic: {
+				{
+					ID:          1,
+					Platform:    PlatformAnthropic,
+					Type:        AccountTypeOAuth,
+					OwnerUserID: &ownerID,
+					Credentials: map[string]any{"access_token": "token", "org_uuid": "org-a", "account_uuid": "acc-a"},
+				},
+				{
+					ID:          2,
+					Platform:    PlatformAnthropic,
+					Type:        AccountTypeOAuth,
+					OwnerUserID: &ownerID,
+				},
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+	credentials := map[string]any{"access_token": "token", "org_uuid": "org-a", "account_uuid": "acc-a"}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{Credentials: &credentials})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceBulkUpdateOwnedRejectsBatchDuplicateIdentityBeforeWrite(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDsAccounts: map[int64]*Account{
+			1: {
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token-1"},
+				Concurrency: 1,
+				Priority:    1,
+			},
+			2: {
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token-2"},
+				Concurrency: 1,
+				Priority:    1,
+			},
+		},
+		listOwnedByPlatform: map[string][]Account{
+			PlatformOpenAI: {
+				{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, OwnerUserID: &ownerID},
+				{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, OwnerUserID: &ownerID},
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs:  []int64{1, 2},
+		Credentials: map[string]any{"chatgpt_user_id": "user-same"},
+	})
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
+	require.Equal(t, 0, repo.bulkUpdateCalls)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceBulkUpdateOwnedRejectsDuplicateExistingOutsideBatch(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDsAccounts: map[int64]*Account{
+			2: {
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token"},
+				Concurrency: 1,
+				Priority:    1,
+			},
+		},
+		listOwnedByPlatform: map[string][]Account{
+			PlatformOpenAI: {
+				{
+					ID:          1,
+					Platform:    PlatformOpenAI,
+					Type:        AccountTypeOAuth,
+					OwnerUserID: &ownerID,
+					Credentials: map[string]any{"access_token": "token", "email": "same@example.com"},
+				},
+				{
+					ID:          2,
+					Platform:    PlatformOpenAI,
+					Type:        AccountTypeOAuth,
+					OwnerUserID: &ownerID,
+				},
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs:  []int64{2},
+		Credentials: map[string]any{"email": "SAME@example.com"},
+	})
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
+	require.Equal(t, 0, repo.bulkUpdateCalls)
+}
+
+func TestAccountServiceBulkUpdateOwnedShareModeUsesPerAccountUpdateOnly(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			1: {
+				ID:           1,
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPlus,
+				Type:         AccountTypeOAuth,
+				OwnerUserID:  &ownerID,
+				Credentials:  map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1"},
+				ShareMode:    AccountShareModePrivate,
+				ShareStatus:  AccountShareStatusApproved,
+				Status:       StatusActive,
+				Schedulable:  true,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
+				Priority:     1,
+			},
+		},
+		getByIDsAccounts: map[int64]*Account{
+			1: {
+				ID:           1,
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPlus,
+				Type:         AccountTypeOAuth,
+				OwnerUserID:  &ownerID,
+				Credentials:  map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1"},
+				ShareMode:    AccountShareModePrivate,
+				ShareStatus:  AccountShareStatusApproved,
+				Status:       StatusActive,
+				Schedulable:  true,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
+				Priority:     1,
+			},
+		},
+		listOwnedByPlatform: map[string][]Account{
+			PlatformOpenAI: {
+				{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, OwnerUserID: &ownerID, Credentials: map[string]any{"chatgpt_account_id": "acct-1"}},
+			},
+		},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+	shareMode := AccountShareModePrivate
+	status := StatusDisabled
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs: []int64{1},
+		Status:     status,
+		ShareMode:  &shareMode,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 0, repo.bulkUpdateCalls)
+	require.Len(t, repo.updatedAccounts, 1)
+	require.Equal(t, StatusDisabled, repo.updatedAccounts[0].Status)
+	require.Equal(t, AccountShareModePrivate, repo.updatedAccounts[0].ShareMode)
+}
+
 func TestAccountServiceManagedGroupIDsKeepsApprovedPublicAccountInPublicPool(t *testing.T) {
 	ownerID := int64(101)
 	svc := &AccountService{
@@ -364,6 +825,40 @@ func TestAccountServiceManagedGroupIDsKeepsApprovedPublicAccountInPublicPool(t *
 
 	require.NoError(t, err)
 	require.Equal(t, []int64{99, 18}, groupIDs)
+}
+
+func TestAccountServiceDuplicateIdentityKeys(t *testing.T) {
+	t.Run("openai uses stable account and user identity", func(t *testing.T) {
+		keys := accountDuplicateIdentityKeys(&Account{
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"chatgpt_account_id": "acct", "chatgpt_user_id": "user", "organization_id": "org"},
+		})
+
+		require.Contains(t, keys, ownedAccountDuplicateKey{Name: "openai.chatgpt_account_id", Value: "acct"})
+		require.Contains(t, keys, ownedAccountDuplicateKey{Name: "openai.chatgpt_user_id", Value: "user"})
+		require.NotContains(t, keys, ownedAccountDuplicateKey{Name: "openai.organization_id", Value: "org"})
+	})
+
+	t.Run("anthropic combines org and account uuid", func(t *testing.T) {
+		keys := accountDuplicateIdentityKeys(&Account{
+			Platform:    PlatformAnthropic,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"org_uuid": "ORG", "account_uuid": "ACC"},
+		})
+
+		require.Contains(t, keys, ownedAccountDuplicateKey{Name: "anthropic.org_account", Value: "org|acc"})
+	})
+
+	t.Run("antigravity email is case insensitive", func(t *testing.T) {
+		keys := accountDuplicateIdentityKeys(&Account{
+			Platform:    PlatformAntigravity,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"email": "USER@Example.COM"},
+		})
+
+		require.Contains(t, keys, ownedAccountDuplicateKey{Name: "antigravity.email", Value: "user@example.com"})
+	})
 }
 
 func TestIsOwnedAccountPublicShareApprovableAllowsRateLimitedAccountWithOption(t *testing.T) {
