@@ -93,6 +93,7 @@ func RegisterAdminRoutes(
 
 		// 渠道监控
 		registerChannelMonitorRoutes(admin, h)
+		registerSubsiteRoutes(admin, h)
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
@@ -103,6 +104,23 @@ func registerAdminAPIKeyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	apiKeys := admin.Group("/api-keys")
 	{
 		apiKeys.PUT("/:id", h.Admin.APIKey.UpdateGroup)
+	}
+}
+
+func registerSubsiteRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	subsites := admin.Group("/subsites")
+	{
+		subsites.GET("", h.Admin.Subsite.List)
+		subsites.POST("", h.Admin.Subsite.Create)
+		subsites.PATCH("/:id", h.Admin.Subsite.Update)
+		subsites.POST("/:id/activate", h.Admin.Subsite.Activate)
+		subsites.POST("/:id/pause", h.Admin.Subsite.Pause)
+		subsites.POST("/:id/resume", h.Admin.Subsite.Resume)
+		subsites.GET("/:id/leases", h.Admin.Subsite.ListLeases)
+		subsites.POST("/:id/leases", h.Admin.Subsite.CreateLease)
+		subsites.POST("/:id/leases/:lease_id/drain", h.Admin.Subsite.DrainLease)
+		subsites.POST("/:id/leases/:lease_id/release", h.Admin.Subsite.ReleaseLease)
+		subsites.POST("/:id/leases/:lease_id/renew", h.Admin.Subsite.RenewLease)
 	}
 }
 
