@@ -162,6 +162,7 @@ func RegisterUserRoutes(
 		monitors := authenticated.Group("/channel-monitors")
 		{
 			monitors.GET("", h.ChannelMonitor.List)
+			monitors.GET("/capacity-summary", h.ChannelMonitor.CapacitySummary)
 			monitors.GET("/:id/status", h.ChannelMonitor.GetStatus)
 		}
 	}

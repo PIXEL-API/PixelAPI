@@ -1059,6 +1059,13 @@ export default {
       platformEmpty: 'No public platform capacity data is available yet.',
       loadFailed: 'Failed to load capacity pool'
     },
+    capacity: {
+      title: 'Group Capacity',
+      subtitle: 'Current concurrency, session and RPM capacity by group.',
+      total: 'Total Capacity',
+      empty: 'No group capacity data is available yet.',
+      loadFailed: 'Failed to load group capacity'
+    },
     windowTab: {
       '7d': '7 days',
       '15d': '15 days',

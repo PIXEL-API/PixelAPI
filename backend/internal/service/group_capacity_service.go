@@ -7,13 +7,15 @@ import (
 
 // GroupCapacitySummary holds aggregated capacity for a single group.
 type GroupCapacitySummary struct {
-	GroupID         int64 `json:"group_id"`
-	ConcurrencyUsed int   `json:"concurrency_used"`
-	ConcurrencyMax  int   `json:"concurrency_max"`
-	SessionsUsed    int   `json:"sessions_used"`
-	SessionsMax     int   `json:"sessions_max"`
-	RPMUsed         int   `json:"rpm_used"`
-	RPMMax          int   `json:"rpm_max"`
+	GroupID         int64  `json:"group_id"`
+	GroupName       string `json:"group_name"`
+	GroupPlatform   string `json:"group_platform"`
+	ConcurrencyUsed int    `json:"concurrency_used"`
+	ConcurrencyMax  int    `json:"concurrency_max"`
+	SessionsUsed    int    `json:"sessions_used"`
+	SessionsMax     int    `json:"sessions_max"`
+	RPMUsed         int    `json:"rpm_used"`
+	RPMMax          int    `json:"rpm_max"`
 }
 
 // GroupCapacityService aggregates per-group capacity from runtime data.
@@ -57,6 +59,8 @@ func (s *GroupCapacityService) GetAllGroupCapacity(ctx context.Context) ([]Group
 			continue
 		}
 		cap.GroupID = groups[i].ID
+		cap.GroupName = groups[i].Name
+		cap.GroupPlatform = groups[i].Platform
 		results = append(results, cap)
 	}
 	return results, nil

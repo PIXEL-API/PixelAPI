@@ -1063,6 +1063,13 @@ export default {
       platformEmpty: '平台当前还没有可公开展示的容量池数据。',
       loadFailed: '容量池加载失败'
     },
+    capacity: {
+      title: '分组容量',
+      subtitle: '按分组展示当前并发、会话和 RPM 容量。',
+      total: '总容量',
+      empty: '当前还没有可展示的分组容量数据。',
+      loadFailed: '分组容量加载失败'
+    },
     windowTab: {
       '7d': '7 天',
       '15d': '15 天',
