@@ -481,18 +481,19 @@ type UsageCleanupFilters struct {
 }
 
 type UsageCleanupTask struct {
-	ID           int64               `json:"id"`
-	Status       string              `json:"status"`
-	Filters      UsageCleanupFilters `json:"filters"`
-	CreatedBy    int64               `json:"created_by"`
-	DeletedRows  int64               `json:"deleted_rows"`
-	ErrorMessage *string             `json:"error_message,omitempty"`
-	CanceledBy   *int64              `json:"canceled_by,omitempty"`
-	CanceledAt   *time.Time          `json:"canceled_at,omitempty"`
-	StartedAt    *time.Time          `json:"started_at,omitempty"`
-	FinishedAt   *time.Time          `json:"finished_at,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	UpdatedAt    time.Time           `json:"updated_at"`
+	ID            int64               `json:"id"`
+	Status        string              `json:"status"`
+	Filters       UsageCleanupFilters `json:"filters"`
+	CreatedBy     int64               `json:"created_by"`
+	CreatedSource string              `json:"created_source"`
+	DeletedRows   int64               `json:"deleted_rows"`
+	ErrorMessage  *string             `json:"error_message,omitempty"`
+	CanceledBy    *int64              `json:"canceled_by,omitempty"`
+	CanceledAt    *time.Time          `json:"canceled_at,omitempty"`
+	StartedAt     *time.Time          `json:"started_at,omitempty"`
+	FinishedAt    *time.Time          `json:"finished_at,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
 }
 
 // AccountSummary is a minimal account info for usage log display.

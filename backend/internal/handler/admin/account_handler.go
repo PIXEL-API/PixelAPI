@@ -25,6 +25,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -59,6 +60,7 @@ type AccountHandler struct {
 	sessionLimitCache         service.SessionLimitCache
 	rpmCache                  service.RPMCache
 	tokenCacheInvalidator     service.TokenCacheInvalidator
+	accountBatchTaskService   *service.AccountBatchTaskService
 	publicShareValidation     chan ownedPublicShareValidationJob
 	publicShareValidationOnce sync.Once
 }
@@ -79,8 +81,13 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	accountBatchTaskServices ...*service.AccountBatchTaskService,
 ) *AccountHandler {
-	return &AccountHandler{
+	var accountBatchTaskService *service.AccountBatchTaskService
+	if len(accountBatchTaskServices) > 0 {
+		accountBatchTaskService = accountBatchTaskServices[0]
+	}
+	h := &AccountHandler{
 		adminService:            adminService,
 		accountService:          accountService,
 		oauthService:            oauthService,
@@ -95,8 +102,35 @@ func NewAccountHandler(
 		sessionLimitCache:       sessionLimitCache,
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
+		accountBatchTaskService: accountBatchTaskService,
 		publicShareValidation:   make(chan ownedPublicShareValidationJob, adminOwnedPublicShareValidationQueueSize),
 	}
+	h.registerAccountBatchExecutors()
+	return h
+}
+
+func (h *AccountHandler) registerAccountBatchExecutors() {
+	if h == nil || h.accountBatchTaskService == nil {
+		return
+	}
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationAdminRefreshCredentials, h.executeAdminRefreshCredentialsTaskItem)
+}
+
+func (h *AccountHandler) executeAdminRefreshCredentialsTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	account, err := h.adminService.GetAccount(ctx, item.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	updated, warning, err := h.refreshSingleAccount(ctx, account)
+	if err != nil {
+		h.persistManualRefreshFailureState(ctx, account, err)
+		return nil, err
+	}
+	result := map[string]any{"account_id": updated.ID}
+	if strings.TrimSpace(warning) != "" {
+		result["warning"] = warning
+	}
+	return result, nil
 }
 
 // CreateAccountRequest represents create account request
@@ -1381,6 +1415,91 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 		"errors":   errors,
 		"warnings": warnings,
 	})
+}
+
+// CreateBatchRefreshTask creates an async account credential refresh task.
+// POST /api/v1/admin/accounts/batch-refresh/async
+func (h *AccountHandler) CreateBatchRefreshTask(c *gin.Context) {
+	if h.accountBatchTaskService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account batch task service is unavailable")
+		return
+	}
+	var req struct {
+		AccountIDs []int64 `json:"account_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeInt64IDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	accounts, err := h.adminService.GetAccountsByIDs(c.Request.Context(), accountIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	found := make(map[int64]struct{}, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			found[account.ID] = struct{}{}
+		}
+	}
+	for _, accountID := range accountIDs {
+		if _, ok := found[accountID]; !ok {
+			response.BadRequest(c, fmt.Sprintf("account not found: %d", accountID))
+			return
+		}
+	}
+	createdBy, ok := currentAdminUserID(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "Invalid admin identity")
+		return
+	}
+	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
+		Scope:      service.AccountBatchTaskScopeAdmin,
+		Operation:  service.AccountBatchTaskOperationAdminRefreshCredentials,
+		AccountIDs: accountIDs,
+		CreatedBy:  createdBy,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Accepted(c, task)
+}
+
+// GetBatchTask returns an admin account batch task with item results.
+// GET /api/v1/admin/accounts/batch-tasks/:task_id
+func (h *AccountHandler) GetBatchTask(c *gin.Context) {
+	if h.accountBatchTaskService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account batch task service is unavailable")
+		return
+	}
+	taskID, err := strconv.ParseInt(c.Param("task_id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid task ID")
+		return
+	}
+	task, err := h.accountBatchTaskService.GetTask(c.Request.Context(), taskID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if task.Scope != service.AccountBatchTaskScopeAdmin {
+		response.NotFound(c, "Account batch task not found")
+		return
+	}
+	response.Success(c, task)
+}
+
+func currentAdminUserID(c *gin.Context) (int64, bool) {
+	if subject, ok := middleware2.GetAuthSubjectFromContext(c); ok && subject.UserID > 0 {
+		return subject.UserID, true
+	}
+	return 0, false
 }
 
 // BatchCreate handles batch creating accounts

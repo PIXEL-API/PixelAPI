@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,6 +88,8 @@ var usageLogInsertArgTypes = [...]string{
 }
 
 const rawUsageLogModelColumn = "model"
+
+var placeholderPattern = regexp.MustCompile(`\$\d+`)
 
 // rawUsageLogModelColumn preserves the exact stored usage_logs.model semantics for direct filters.
 // Historical rows may contain upstream/billing model values, while newer rows store requested_model.
@@ -1440,7 +1443,7 @@ func (r *usageLogRepository) GetDashboardStatsWithRange(ctx context.Context, sta
 	if err := r.fillDashboardEntityStats(ctx, stats, todayStart, now); err != nil {
 		return nil, err
 	}
-	if err := r.fillDashboardUsageStatsFromUsageLogs(ctx, stats, startUTC, endUTC, todayStart, now); err != nil {
+	if err := r.fillDashboardUsageStatsWithSnapshots(ctx, stats, startUTC, endUTC, todayStart, now); err != nil {
 		return nil, err
 	}
 
@@ -1697,6 +1700,141 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 	return nil
 }
 
+func (r *usageLogRepository) fillDashboardUsageStatsWithSnapshots(ctx context.Context, stats *DashboardStats, startUTC, endUTC, todayUTC, now time.Time) error {
+	if isUsageSnapshotBusinessFullDayRange(startUTC, endUTC) {
+		if err := r.fillDashboardRangeStatsWithSnapshots(ctx, stats, startUTC, endUTC); err != nil {
+			return err
+		}
+		if err := r.fillDashboardTodayAndActiveStatsFromUsageLogs(ctx, stats, todayUTC, now); err != nil {
+			return err
+		}
+		return nil
+	}
+	return r.fillDashboardUsageStatsFromUsageLogs(ctx, stats, startUTC, endUTC, todayUTC, now)
+}
+
+func (r *usageLogRepository) fillDashboardRangeStatsWithSnapshots(ctx context.Context, stats *DashboardStats, startUTC, endUTC time.Time) error {
+	startDate, endDate := usageSnapshotBusinessDateRange(startUTC, endUTC)
+	rawConditions, rawArgs := buildRawUsageStatsSnapshotConditions(UsageLogFilters{StartTime: &startUTC, EndTime: &endUTC})
+	rawWhere := buildWhere(rawConditions)
+	rawQuery := shiftPostgresPlaceholders(fmt.Sprintf(`
+		SELECT
+			COUNT(*) AS total_requests,
+			COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+			COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) AS total_cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) AS total_cache_read_tokens,
+			COALESCE(SUM(total_cost), 0) AS total_cost,
+			COALESCE(SUM(actual_cost), 0) AS total_actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS total_account_cost,
+			COALESCE(SUM(COALESCE(duration_ms, 0)), 0) AS total_duration_ms
+		FROM usage_logs ul
+		%s
+	`, rawWhere), 2)
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(SUM(total_requests), 0) AS total_requests,
+			COALESCE(SUM(total_input_tokens), 0) AS total_input_tokens,
+			COALESCE(SUM(total_output_tokens), 0) AS total_output_tokens,
+			COALESCE(SUM(total_cache_creation_tokens), 0) AS total_cache_creation_tokens,
+			COALESCE(SUM(total_cache_read_tokens), 0) AS total_cache_read_tokens,
+			COALESCE(SUM(total_cost), 0) AS total_cost,
+			COALESCE(SUM(total_actual_cost), 0) AS total_actual_cost,
+			COALESCE(SUM(total_account_cost), 0) AS total_account_cost,
+			COALESCE(SUM(total_duration_ms), 0) AS total_duration_ms
+		FROM (
+			SELECT
+				total_requests,
+				input_tokens AS total_input_tokens,
+				output_tokens AS total_output_tokens,
+				cache_creation_tokens AS total_cache_creation_tokens,
+				cache_read_tokens AS total_cache_read_tokens,
+				total_cost,
+				actual_cost AS total_actual_cost,
+				account_cost AS total_account_cost,
+				total_duration_ms
+			FROM usage_daily_dimension_snapshots s
+			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+			UNION ALL
+			%s
+		) usage_totals
+	`, rawQuery)
+	args := append([]any{startDate, endDate}, rawArgs...)
+	var totalDurationMs int64
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		query,
+		args,
+		&stats.TotalRequests,
+		&stats.TotalInputTokens,
+		&stats.TotalOutputTokens,
+		&stats.TotalCacheCreationTokens,
+		&stats.TotalCacheReadTokens,
+		&stats.TotalCost,
+		&stats.TotalActualCost,
+		&stats.TotalAccountCost,
+		&totalDurationMs,
+	); err != nil {
+		return err
+	}
+	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
+	if stats.TotalRequests > 0 {
+		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
+	}
+	return nil
+}
+
+func (r *usageLogRepository) fillDashboardTodayAndActiveStatsFromUsageLogs(ctx context.Context, stats *DashboardStats, todayUTC, now time.Time) error {
+	todayEnd := todayUTC.Add(24 * time.Hour)
+	todayStatsQuery := `
+		SELECT
+			COUNT(*) AS today_requests,
+			COALESCE(SUM(input_tokens), 0) AS today_input_tokens,
+			COALESCE(SUM(output_tokens), 0) AS today_output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) AS today_cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) AS today_cache_read_tokens,
+			COALESCE(SUM(total_cost), 0) AS today_cost,
+			COALESCE(SUM(actual_cost), 0) AS today_actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS today_account_cost
+		FROM usage_logs
+		WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
+	`
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		todayStatsQuery,
+		[]any{todayUTC, todayEnd},
+		&stats.TodayRequests,
+		&stats.TodayInputTokens,
+		&stats.TodayOutputTokens,
+		&stats.TodayCacheCreationTokens,
+		&stats.TodayCacheReadTokens,
+		&stats.TodayCost,
+		&stats.TodayActualCost,
+		&stats.TodayAccountCost,
+	); err != nil {
+		return err
+	}
+	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
+
+	hourStart := now.UTC().Truncate(time.Hour)
+	hourEnd := hourStart.Add(time.Hour)
+	activeUsersQuery := `
+		WITH scoped AS (
+			SELECT user_id, created_at
+			FROM usage_logs
+			WHERE created_at >= LEAST($1::timestamptz, $3::timestamptz)
+				AND created_at < GREATEST($2::timestamptz, $4::timestamptz)
+		)
+		SELECT
+			COUNT(DISTINCT CASE WHEN created_at >= $1::timestamptz AND created_at < $2::timestamptz THEN user_id END) AS active_users,
+			COUNT(DISTINCT CASE WHEN created_at >= $3::timestamptz AND created_at < $4::timestamptz THEN user_id END) AS hourly_active_users
+		FROM scoped
+	`
+	return scanSingleRow(ctx, r.sql, activeUsersQuery, []any{todayUTC, todayEnd, hourStart, hourEnd}, &stats.ActiveUsers, &stats.HourlyActiveUsers)
+}
+
 func (r *usageLogRepository) ListByAccount(ctx context.Context, accountID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	return r.listUsageLogsWithPagination(ctx, "WHERE account_id = $1", []any{accountID}, params)
 }
@@ -1709,72 +1847,12 @@ func (r *usageLogRepository) ListByUserAndTimeRange(ctx context.Context, userID 
 
 // GetUserStatsAggregated returns aggregated usage statistics for a user using database-level aggregation
 func (r *usageLogRepository) GetUserStatsAggregated(ctx context.Context, userID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
-	query := `
-		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(COALESCE(duration_ms, 0)), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
-	`
-
-	var stats usagestats.UsageStats
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		[]any{userID, startTime, endTime},
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.AverageDurationMs,
-	); err != nil {
-		return nil, err
-	}
-	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
-	return &stats, nil
+	return r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{UserID: userID, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
 }
 
 // GetAPIKeyStatsAggregated returns aggregated usage statistics for an API key using database-level aggregation
 func (r *usageLogRepository) GetAPIKeyStatsAggregated(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
-	query := `
-		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(COALESCE(duration_ms, 0)), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE api_key_id = $1 AND created_at >= $2 AND created_at < $3
-	`
-
-	var stats usagestats.UsageStats
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		[]any{apiKeyID, startTime, endTime},
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.AverageDurationMs,
-	); err != nil {
-		return nil, err
-	}
-	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
-	return &stats, nil
+	return r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{APIKeyID: apiKeyID, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
 }
 
 // GetAccountStatsAggregated 使用 SQL 聚合统计账号使用数据
@@ -1789,73 +1867,13 @@ func (r *usageLogRepository) GetAPIKeyStatsAggregated(ctx context.Context, apiKe
 // 2. 只返回单行聚合结果，大幅减少数据传输量
 // 3. 利用数据库索引优化聚合查询性能
 func (r *usageLogRepository) GetAccountStatsAggregated(ctx context.Context, accountID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
-	query := `
-		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(COALESCE(duration_ms, 0)), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
-	`
-
-	var stats usagestats.UsageStats
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		[]any{accountID, startTime, endTime},
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.AverageDurationMs,
-	); err != nil {
-		return nil, err
-	}
-	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
-	return &stats, nil
+	return r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{AccountID: accountID, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
 }
 
 // GetModelStatsAggregated 使用 SQL 聚合统计模型使用数据
 // 性能优化：数据库层聚合计算，避免应用层循环统计
 func (r *usageLogRepository) GetModelStatsAggregated(ctx context.Context, modelName string, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
-	query := fmt.Sprintf(`
-		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(COALESCE(duration_ms, 0)), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE %s = $1 AND created_at >= $2 AND created_at < $3
-	`, rawUsageLogModelColumn)
-
-	var stats usagestats.UsageStats
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		[]any{modelName, startTime, endTime},
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.AverageDurationMs,
-	); err != nil {
-		return nil, err
-	}
-	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
-	return &stats, nil
+	return r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{Model: modelName, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
 }
 
 // GetDailyStatsAggregated 使用 SQL 聚合统计用户的每日使用数据
@@ -1864,19 +1882,53 @@ func (r *usageLogRepository) GetDailyStatsAggregated(ctx context.Context, userID
 	tzName := resolveUsageStatsTimezone()
 	query := `
 		SELECT
-			-- 使用应用时区分组，避免数据库会话时区导致日边界偏移。
-			TO_CHAR(created_at AT TIME ZONE $4, 'YYYY-MM-DD') as date,
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
+			date,
+			COALESCE(SUM(total_requests), 0) as total_requests,
+			COALESCE(SUM(total_input_tokens), 0) as total_input_tokens,
+			COALESCE(SUM(total_output_tokens), 0) as total_output_tokens,
+			COALESCE(SUM(total_cache_tokens), 0) as total_cache_tokens,
 			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(COALESCE(duration_ms, 0)), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
-		GROUP BY 1
-		ORDER BY 1
+			COALESCE(SUM(total_actual_cost), 0) as total_actual_cost,
+			CASE
+				WHEN COALESCE(SUM(total_requests), 0) = 0 THEN 0
+				ELSE COALESCE(SUM(total_duration_ms), 0)::float / SUM(total_requests)
+			END as avg_duration_ms
+		FROM (
+			SELECT
+				TO_CHAR(bucket_date::timestamp, 'YYYY-MM-DD') as date,
+				total_requests,
+				input_tokens as total_input_tokens,
+				output_tokens as total_output_tokens,
+				(cache_creation_tokens + cache_read_tokens) as total_cache_tokens,
+				total_cost,
+				actual_cost as total_actual_cost,
+				total_duration_ms
+			FROM usage_daily_dimension_snapshots
+			WHERE user_id = $1 AND bucket_date >= $2::date AND bucket_date < $3::date
+			UNION ALL
+			SELECT
+				TO_CHAR(created_at AT TIME ZONE $4, 'YYYY-MM-DD') as date,
+				COUNT(*) as total_requests,
+				COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+				COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+				COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
+				COALESCE(SUM(total_cost), 0) as total_cost,
+				COALESCE(SUM(actual_cost), 0) as total_actual_cost,
+				COALESCE(SUM(COALESCE(duration_ms, 0)), 0) as total_duration_ms
+			FROM usage_logs
+			WHERE user_id = $1
+				AND created_at >= $2
+				AND created_at < $3
+				AND NOT EXISTS (
+					SELECT 1
+					FROM usage_daily_dimension_snapshots s
+					WHERE s.bucket_date = (usage_logs.created_at AT TIME ZONE 'Asia/Shanghai')::date
+						AND s.user_id = usage_logs.user_id
+				)
+			GROUP BY 1
+		) daily
+		GROUP BY date
+		ORDER BY date
 	`
 
 	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime, tzName)
@@ -3089,6 +3141,12 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 
 // GetUsageTrendWithFilters returns usage trend data with optional filters
 func (r *usageLogRepository) GetUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []TrendDataPoint, err error) {
+	if granularity == "day" && isUsageSnapshotBusinessFullDayRange(startTime, endTime) {
+		snapshotResults, snapshotErr := r.getDailyUsageTrendWithSnapshots(ctx, startTime, endTime, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+		if snapshotErr == nil && len(snapshotResults) > 0 {
+			return snapshotResults, nil
+		}
+	}
 	if shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType) {
 		aggregated, aggregatedErr := r.getUsageTrendFromAggregates(ctx, startTime, endTime, granularity)
 		if aggregatedErr == nil && len(aggregated) > 0 {
@@ -3244,6 +3302,13 @@ func (r *usageLogRepository) GetModelStatsWithFiltersBySource(ctx context.Contex
 }
 
 func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8, source string) (results []ModelStat, err error) {
+	if isUsageSnapshotBusinessFullDayRange(startTime, endTime) {
+		snapshotResults, snapshotErr := r.getModelStatsWithSnapshots(ctx, startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, billingType, source)
+		if snapshotErr == nil && len(snapshotResults) > 0 {
+			return snapshotResults, nil
+		}
+	}
+
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	// 当仅按 account_id 聚合时，实际费用使用账号倍率（total_cost * account_rate_multiplier）。
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
@@ -3540,41 +3605,16 @@ func resolveEndpointColumn(endpointType string) string {
 
 // GetGlobalStats gets usage statistics for all users within a time range
 func (r *usageLogRepository) GetGlobalStats(ctx context.Context, startTime, endTime time.Time) (*UsageStats, error) {
-	query := `
-		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(duration_ms), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE created_at >= $1 AND created_at < $2
-	`
-
-	stats := &UsageStats{}
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		[]any{startTime, endTime},
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.AverageDurationMs,
-	); err != nil {
-		return nil, err
-	}
-	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
-	return stats, nil
+	return r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{StartTime: &startTime, EndTime: &endTime}, "actual_cost")
 }
 
 // GetStatsWithFilters gets usage statistics with optional filters
 func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters UsageLogFilters) (*UsageStats, error) {
+	stats, snapshotErr := r.queryUsageStatsWithSnapshots(ctx, filters, r.actualCostSnapshotMetric(filters.UserID, filters.APIKeyID, filters.AccountID))
+	if snapshotErr == nil && stats.TotalRequests > 0 {
+		return r.attachEndpointStats(ctx, stats, filters)
+	}
+
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
@@ -3627,7 +3667,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		%s
 	`, buildWhere(conditions))
 
-	stats := &UsageStats{}
+	stats = &UsageStats{}
 	var totalAccountCost float64
 	if err := scanSingleRow(
 		ctx,
@@ -3647,6 +3687,14 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 	}
 	stats.TotalAccountCost = &totalAccountCost
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
+
+	return r.attachEndpointStats(ctx, stats, filters)
+}
+
+func (r *usageLogRepository) attachEndpointStats(ctx context.Context, stats *UsageStats, filters UsageLogFilters) (*UsageStats, error) {
+	if stats == nil {
+		return nil, fmt.Errorf("usage stats is nil")
+	}
 
 	start := time.Unix(0, 0).UTC()
 	if filters.StartTime != nil {
@@ -3837,6 +3885,290 @@ func (r *usageLogRepository) GetEndpointStatsWithFilters(ctx context.Context, st
 // GetUpstreamEndpointStatsWithFilters returns upstream endpoint statistics with optional filters.
 func (r *usageLogRepository) GetUpstreamEndpointStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) ([]EndpointStat, error) {
 	return r.getEndpointStatsByColumnWithFilters(ctx, "upstream_endpoint", startTime, endTime, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+}
+
+func (r *usageLogRepository) actualCostSnapshotMetric(userID, apiKeyID, accountID int64) string {
+	if accountID > 0 && userID == 0 && apiKeyID == 0 {
+		return "account_cost"
+	}
+	return "actual_cost"
+}
+
+func (r *usageLogRepository) queryUsageStatsWithSnapshots(ctx context.Context, filters UsageLogFilters, actualCostMetric string) (*UsageStats, error) {
+	if actualCostMetric != "account_cost" {
+		actualCostMetric = "actual_cost"
+	}
+	if filters.StartTime == nil || filters.EndTime == nil || !isUsageSnapshotBusinessFullDayRange(*filters.StartTime, *filters.EndTime) {
+		return r.queryUsageStatsLiveOnly(ctx, filters, actualCostMetric)
+	}
+	rawConditions, rawArgs := buildRawUsageStatsSnapshotConditions(filters)
+	snapshotConditions, snapshotArgs := buildSnapshotUsageStatsConditions(filters)
+	rawWhere := buildWhere(rawConditions)
+	snapshotWhere := buildWhere(snapshotConditions)
+
+	args := make([]any, 0, len(snapshotArgs)+len(rawArgs))
+	args = append(args, snapshotArgs...)
+	rawQuery := shiftPostgresPlaceholders(fmt.Sprintf(`
+		SELECT
+			COUNT(*) as total_requests,
+			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
+			COALESCE(SUM(total_cost), 0) as total_cost,
+			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as total_account_cost,
+			COALESCE(SUM(COALESCE(duration_ms, 0)), 0) as total_duration_ms
+		FROM usage_logs ul
+		%s
+	`, rawWhere), len(args))
+	args = append(args, rawArgs...)
+
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(SUM(total_requests), 0) as total_requests,
+			COALESCE(SUM(total_input_tokens), 0) as total_input_tokens,
+			COALESCE(SUM(total_output_tokens), 0) as total_output_tokens,
+			COALESCE(SUM(total_cache_tokens), 0) as total_cache_tokens,
+			COALESCE(SUM(total_cost), 0) as total_cost,
+			COALESCE(SUM(total_actual_cost), 0) as total_actual_cost,
+			COALESCE(SUM(total_account_cost), 0) as total_account_cost,
+			CASE
+				WHEN COALESCE(SUM(total_requests), 0) = 0 THEN 0
+				ELSE COALESCE(SUM(total_duration_ms), 0)::float / SUM(total_requests)
+			END as avg_duration_ms
+		FROM (
+			SELECT
+				total_requests,
+				input_tokens as total_input_tokens,
+				output_tokens as total_output_tokens,
+				(cache_creation_tokens + cache_read_tokens) as total_cache_tokens,
+				total_cost,
+				%s as total_actual_cost,
+				account_cost as total_account_cost,
+				total_duration_ms
+			FROM usage_daily_dimension_snapshots s
+			%s
+			UNION ALL
+			%s
+		) usage_totals
+	`, actualCostMetric, snapshotWhere, rawQuery)
+
+	stats := &UsageStats{}
+	var totalAccountCost float64
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		query,
+		args,
+		&stats.TotalRequests,
+		&stats.TotalInputTokens,
+		&stats.TotalOutputTokens,
+		&stats.TotalCacheTokens,
+		&stats.TotalCost,
+		&stats.TotalActualCost,
+		&totalAccountCost,
+		&stats.AverageDurationMs,
+	); err != nil {
+		return nil, err
+	}
+	stats.TotalAccountCost = &totalAccountCost
+	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
+	return stats, nil
+}
+
+func (r *usageLogRepository) queryUsageStatsLiveOnly(ctx context.Context, filters UsageLogFilters, actualCostMetric string) (*UsageStats, error) {
+	if actualCostMetric != "account_cost" {
+		actualCostMetric = "actual_cost"
+	}
+	conditions, args := buildLiveUsageStatsConditions(filters)
+	actualCostExpr := "COALESCE(SUM(actual_cost), 0)"
+	if actualCostMetric == "account_cost" {
+		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0)"
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(*) as total_requests,
+			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
+			COALESCE(SUM(total_cost), 0) as total_cost,
+			%s as total_actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as total_account_cost,
+			COALESCE(AVG(duration_ms), 0) as avg_duration_ms
+		FROM usage_logs
+		%s
+	`, actualCostExpr, buildWhere(conditions))
+	stats := &UsageStats{}
+	var totalAccountCost float64
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		query,
+		args,
+		&stats.TotalRequests,
+		&stats.TotalInputTokens,
+		&stats.TotalOutputTokens,
+		&stats.TotalCacheTokens,
+		&stats.TotalCost,
+		&stats.TotalActualCost,
+		&totalAccountCost,
+		&stats.AverageDurationMs,
+	); err != nil {
+		return nil, err
+	}
+	stats.TotalAccountCost = &totalAccountCost
+	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
+	return stats, nil
+}
+
+func (r *usageLogRepository) getDailyUsageTrendWithSnapshots(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []TrendDataPoint, err error) {
+	filters := UsageLogFilters{UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID, Model: model, RequestType: requestType, Stream: stream, BillingType: billingType, StartTime: &startTime, EndTime: &endTime}
+	rawConditions, rawArgs := buildRawUsageStatsSnapshotConditions(filters)
+	snapshotConditions, snapshotArgs := buildSnapshotUsageStatsConditions(filters)
+	rawWhere := buildWhere(rawConditions)
+	snapshotWhere := buildWhere(snapshotConditions)
+
+	args := make([]any, 0, len(snapshotArgs)+len(rawArgs))
+	args = append(args, snapshotArgs...)
+	rawQuery := shiftPostgresPlaceholders(fmt.Sprintf(`
+		SELECT
+			TO_CHAR(created_at, 'YYYY-MM-DD') as date,
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
+			COALESCE(SUM(total_cost), 0) as cost,
+			COALESCE(SUM(actual_cost), 0) as actual_cost
+		FROM usage_logs ul
+		%s
+		GROUP BY date
+	`, rawWhere), len(args))
+	args = append(args, rawArgs...)
+
+	query := fmt.Sprintf(`
+		SELECT
+			date,
+			COALESCE(SUM(requests), 0) as requests,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cost), 0) as cost,
+			COALESCE(SUM(actual_cost), 0) as actual_cost
+		FROM (
+			SELECT
+				TO_CHAR(bucket_date::timestamp, 'YYYY-MM-DD') as date,
+				total_requests as requests,
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) as total_tokens,
+				total_cost as cost,
+				actual_cost
+			FROM usage_daily_dimension_snapshots s
+			%s
+			UNION ALL
+			%s
+		) trend
+		GROUP BY date
+		ORDER BY date ASC
+	`, snapshotWhere, rawQuery)
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+	return scanTrendRows(rows)
+}
+
+func (r *usageLogRepository) getModelStatsWithSnapshots(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8, source string) (results []ModelStat, err error) {
+	filters := UsageLogFilters{UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID, RequestType: requestType, Stream: stream, BillingType: billingType, StartTime: &startTime, EndTime: &endTime}
+	rawConditions, rawArgs := buildRawUsageStatsSnapshotConditions(filters)
+	snapshotConditions, snapshotArgs := buildSnapshotUsageStatsConditions(filters)
+	modelExpr := resolveModelDimensionExpression(source)
+	snapshotModelExpr := resolveSnapshotModelDimensionExpression(source)
+	rawWhere := buildWhere(rawConditions)
+	snapshotWhere := buildWhere(snapshotConditions)
+
+	args := make([]any, 0, len(snapshotArgs)+len(rawArgs))
+	args = append(args, snapshotArgs...)
+	actualCostMetric := r.actualCostSnapshotMetric(userID, apiKeyID, accountID)
+	rawActualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
+	if actualCostMetric == "account_cost" {
+		rawActualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
+	}
+	rawQuery := shiftPostgresPlaceholders(fmt.Sprintf(`
+		SELECT
+			%s as model,
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
+			COALESCE(SUM(total_cost), 0) as cost,
+			%s,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost
+		FROM usage_logs ul
+		%s
+		GROUP BY %s
+	`, modelExpr, rawActualCostExpr, rawWhere, modelExpr), len(args))
+	args = append(args, rawArgs...)
+
+	query := fmt.Sprintf(`
+		SELECT
+			model,
+			COALESCE(SUM(requests), 0) as requests,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cost), 0) as cost,
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			COALESCE(SUM(account_cost), 0) as account_cost
+		FROM (
+			SELECT
+				%s as model,
+				total_requests as requests,
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) as total_tokens,
+				total_cost as cost,
+				%s as actual_cost,
+				account_cost
+			FROM usage_daily_dimension_snapshots s
+			%s
+			UNION ALL
+			%s
+		) model_stats
+		GROUP BY model
+		ORDER BY total_tokens DESC
+	`, snapshotModelExpr, actualCostMetric, snapshotWhere, rawQuery)
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+	return scanModelStatsRows(rows)
 }
 
 // GetAccountUsageStats returns comprehensive usage statistics for an account over a time range
@@ -4568,6 +4900,242 @@ func appendRequestTypeOrStreamQueryFilter(query string, args []any, requestType 
 		args = append(args, *stream)
 	}
 	return query, args
+}
+
+func buildLiveUsageStatsConditions(filters UsageLogFilters) ([]string, []any) {
+	conditions := make([]string, 0, 10)
+	args := make([]any, 0, 10)
+	if filters.UserID > 0 {
+		conditions = append(conditions, fmt.Sprintf("user_id = $%d", len(args)+1))
+		args = append(args, filters.UserID)
+	}
+	if filters.APIKeyID > 0 {
+		conditions = append(conditions, fmt.Sprintf("api_key_id = $%d", len(args)+1))
+		args = append(args, filters.APIKeyID)
+	}
+	if filters.AccountID > 0 {
+		conditions = append(conditions, fmt.Sprintf("account_id = $%d", len(args)+1))
+		args = append(args, filters.AccountID)
+	}
+	if filters.GroupID > 0 {
+		conditions = append(conditions, fmt.Sprintf("group_id = $%d", len(args)+1))
+		args = append(args, filters.GroupID)
+	}
+	conditions, args = appendRawUsageLogModelWhereCondition(conditions, args, filters.Model)
+	conditions, args = appendRequestTypeOrStreamWhereCondition(conditions, args, filters.RequestType, filters.Stream)
+	if filters.BillingType != nil {
+		conditions = append(conditions, fmt.Sprintf("billing_type = $%d", len(args)+1))
+		args = append(args, int16(*filters.BillingType))
+	}
+	if filters.BillingMode != "" {
+		conditions = append(conditions, fmt.Sprintf("billing_mode = $%d", len(args)+1))
+		args = append(args, filters.BillingMode)
+	}
+	if filters.StartTime != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", len(args)+1))
+		args = append(args, *filters.StartTime)
+	}
+	if filters.EndTime != nil {
+		conditions = append(conditions, fmt.Sprintf("created_at < $%d", len(args)+1))
+		args = append(args, *filters.EndTime)
+	}
+	return conditions, args
+}
+
+func buildRawUsageStatsSnapshotConditions(filters UsageLogFilters) ([]string, []any) {
+	conditions := make([]string, 0, 11)
+	args := make([]any, 0, 11)
+	if filters.UserID > 0 {
+		conditions = append(conditions, fmt.Sprintf("ul.user_id = $%d", len(args)+1))
+		args = append(args, filters.UserID)
+	}
+	if filters.APIKeyID > 0 {
+		conditions = append(conditions, fmt.Sprintf("ul.api_key_id = $%d", len(args)+1))
+		args = append(args, filters.APIKeyID)
+	}
+	if filters.AccountID > 0 {
+		conditions = append(conditions, fmt.Sprintf("ul.account_id = $%d", len(args)+1))
+		args = append(args, filters.AccountID)
+	}
+	if filters.GroupID > 0 {
+		conditions = append(conditions, fmt.Sprintf("ul.group_id = $%d", len(args)+1))
+		args = append(args, filters.GroupID)
+	}
+	if strings.TrimSpace(filters.Model) != "" {
+		conditions = append(conditions, fmt.Sprintf("ul.%s = $%d", rawUsageLogModelColumn, len(args)+1))
+		args = append(args, filters.Model)
+	}
+	conditions, args = appendAliasedRequestTypeOrStreamWhereCondition(conditions, args, "ul", filters.RequestType, filters.Stream)
+	if filters.BillingType != nil {
+		conditions = append(conditions, fmt.Sprintf("ul.billing_type = $%d", len(args)+1))
+		args = append(args, int16(*filters.BillingType))
+	}
+	if filters.BillingMode != "" {
+		conditions = append(conditions, fmt.Sprintf("ul.billing_mode = $%d", len(args)+1))
+		args = append(args, filters.BillingMode)
+	}
+	if filters.StartTime != nil {
+		conditions = append(conditions, fmt.Sprintf("ul.created_at >= $%d", len(args)+1))
+		args = append(args, *filters.StartTime)
+	}
+	if filters.EndTime != nil {
+		conditions = append(conditions, fmt.Sprintf("ul.created_at < $%d", len(args)+1))
+		args = append(args, *filters.EndTime)
+	}
+	conditions = append(conditions, `NOT EXISTS (
+		SELECT 1
+		FROM usage_daily_dimension_snapshots s
+		WHERE s.bucket_date = (ul.created_at AT TIME ZONE 'Asia/Shanghai')::date
+	)`)
+	return conditions, args
+}
+
+func buildSnapshotUsageStatsConditions(filters UsageLogFilters) ([]string, []any) {
+	conditions := make([]string, 0, 11)
+	args := make([]any, 0, 11)
+	if filters.UserID > 0 {
+		conditions = append(conditions, fmt.Sprintf("s.user_id = $%d", len(args)+1))
+		args = append(args, filters.UserID)
+	}
+	if filters.APIKeyID > 0 {
+		conditions = append(conditions, fmt.Sprintf("s.api_key_id = $%d", len(args)+1))
+		args = append(args, filters.APIKeyID)
+	}
+	if filters.AccountID > 0 {
+		conditions = append(conditions, fmt.Sprintf("s.account_id = $%d", len(args)+1))
+		args = append(args, filters.AccountID)
+	}
+	if filters.GroupID > 0 {
+		conditions = append(conditions, fmt.Sprintf("s.group_id = $%d", len(args)+1))
+		args = append(args, filters.GroupID)
+	}
+	if strings.TrimSpace(filters.Model) != "" {
+		conditions = append(conditions, fmt.Sprintf("s.model = $%d", len(args)+1))
+		args = append(args, filters.Model)
+	}
+	if filters.RequestType != nil {
+		condition, conditionArgs := buildSnapshotRequestTypeCondition(len(args)+1, *filters.RequestType)
+		conditions = append(conditions, condition)
+		args = append(args, conditionArgs...)
+	} else if filters.Stream != nil {
+		streamState := int16(0)
+		if *filters.Stream {
+			streamState = 1
+		}
+		conditions = append(conditions, fmt.Sprintf("s.stream_state = $%d", len(args)+1))
+		args = append(args, streamState)
+	}
+	if filters.BillingType != nil {
+		conditions = append(conditions, fmt.Sprintf("s.billing_type = $%d", len(args)+1))
+		args = append(args, int16(*filters.BillingType))
+	}
+	if filters.BillingMode != "" {
+		conditions = append(conditions, fmt.Sprintf("s.billing_mode = $%d", len(args)+1))
+		args = append(args, filters.BillingMode)
+	}
+	if filters.StartTime != nil {
+		conditions = append(conditions, fmt.Sprintf("s.bucket_date >= $%d::date", len(args)+1))
+		args = append(args, usageSnapshotBusinessDate(*filters.StartTime))
+	}
+	if filters.EndTime != nil {
+		conditions = append(conditions, fmt.Sprintf("s.bucket_date < $%d::date", len(args)+1))
+		args = append(args, usageSnapshotBusinessDate(*filters.EndTime))
+	}
+	return conditions, args
+}
+
+func usageSnapshotBusinessLocation() *time.Location {
+	loc, err := time.LoadLocation(usageSnapshotBusinessTimezone)
+	if err != nil {
+		return time.FixedZone(usageSnapshotBusinessTimezone, 8*60*60)
+	}
+	return loc
+}
+
+func usageSnapshotBusinessDate(t time.Time) string {
+	return t.In(usageSnapshotBusinessLocation()).Format("2006-01-02")
+}
+
+func usageSnapshotBusinessDateRange(start, end time.Time) (string, string) {
+	return usageSnapshotBusinessDate(start), usageSnapshotBusinessDate(end)
+}
+
+func isUsageSnapshotBusinessFullDayRange(start, end time.Time) bool {
+	if !end.After(start) {
+		return false
+	}
+	loc := usageSnapshotBusinessLocation()
+	startLocal := start.In(loc)
+	endLocal := end.In(loc)
+	return startLocal.Hour() == 0 &&
+		startLocal.Minute() == 0 &&
+		startLocal.Second() == 0 &&
+		startLocal.Nanosecond() == 0 &&
+		endLocal.Hour() == 0 &&
+		endLocal.Minute() == 0 &&
+		endLocal.Second() == 0 &&
+		endLocal.Nanosecond() == 0
+}
+
+func appendAliasedRequestTypeOrStreamWhereCondition(conditions []string, args []any, alias string, requestType *int16, stream *bool) ([]string, []any) {
+	if requestType != nil {
+		condition, conditionArgs := buildRequestTypeFilterCondition(len(args)+1, *requestType)
+		conditions = append(conditions, qualifyUsageLogCondition(condition, alias))
+		args = append(args, conditionArgs...)
+		return conditions, args
+	}
+	if stream != nil {
+		conditions = append(conditions, fmt.Sprintf("%s.stream = $%d", alias, len(args)+1))
+		args = append(args, *stream)
+	}
+	return conditions, args
+}
+
+func qualifyUsageLogCondition(condition string, alias string) string {
+	replacer := strings.NewReplacer(
+		"request_type", alias+".request_type",
+		"stream", alias+".stream",
+		"openai_ws_mode", alias+".openai_ws_mode",
+	)
+	return replacer.Replace(condition)
+}
+
+func buildSnapshotRequestTypeCondition(startArgIndex int, requestType int16) (string, []any) {
+	normalized := service.RequestTypeFromInt16(requestType)
+	requestTypeArg := int16(normalized)
+	switch normalized {
+	case service.RequestTypeSync:
+		return fmt.Sprintf("(s.request_type = $%d OR (s.request_type = %d AND s.stream_state = 0))", startArgIndex, int16(service.RequestTypeUnknown)), []any{requestTypeArg}
+	case service.RequestTypeStream:
+		return fmt.Sprintf("(s.request_type = $%d OR (s.request_type = %d AND s.stream_state = 1))", startArgIndex, int16(service.RequestTypeUnknown)), []any{requestTypeArg}
+	default:
+		return fmt.Sprintf("s.request_type = $%d", startArgIndex), []any{requestTypeArg}
+	}
+}
+
+func resolveSnapshotModelDimensionExpression(modelType string) string {
+	requestedExpr := "COALESCE(NULLIF(TRIM(requested_model), ''), model)"
+	switch usagestats.NormalizeModelSource(modelType) {
+	case usagestats.ModelSourceUpstream:
+		return fmt.Sprintf("COALESCE(NULLIF(TRIM(upstream_model), ''), %s)", requestedExpr)
+	case usagestats.ModelSourceMapping:
+		return fmt.Sprintf("(%s || ' -> ' || COALESCE(NULLIF(TRIM(upstream_model), ''), %s))", requestedExpr, requestedExpr)
+	default:
+		return requestedExpr
+	}
+}
+
+func shiftPostgresPlaceholders(query string, offset int) string {
+	if offset <= 0 {
+		return query
+	}
+	return placeholderPattern.ReplaceAllStringFunc(query, func(match string) string {
+		n, err := strconv.Atoi(strings.TrimPrefix(match, "$"))
+		if err != nil {
+			return match
+		}
+		return fmt.Sprintf("$%d", n+offset)
+	})
 }
 
 // buildRequestTypeFilterCondition 在 request_type 过滤时兼容 legacy 字段，避免历史数据漏查。

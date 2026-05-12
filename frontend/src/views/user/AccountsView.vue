@@ -99,6 +99,9 @@
             <button type="button" class="btn btn-secondary btn-sm" @click="bulkRefreshTokens">
               {{ t('admin.accounts.bulkActions.refreshToken') }}
             </button>
+            <button type="button" class="btn btn-secondary btn-sm" @click="bulkRevalidatePublicShare">
+              {{ t('userAccounts.bulkRevalidateShare') }}
+            </button>
             <button type="button" class="btn btn-success btn-sm" @click="bulkToggleSchedulable(true)">
               {{ t('admin.accounts.bulkActions.enableScheduling') }}
             </button>
@@ -477,6 +480,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { accountsAPI, userGroupsAPI } from '@/api'
+import type { AccountBatchTask } from '@/api/accounts'
 import { useAppStore } from '@/stores/app'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -565,6 +569,9 @@ const filterPlatform = ref('')
 const filterType = ref('')
 const filterStatus = ref('')
 const filterGroupId = ref<string | number>('')
+const activeBatchTaskPolls = new Set<number>()
+let isUnmounted = false
+const ACCOUNT_BATCH_TASK_POLL_TIMEOUT_MS = 30 * 60 * 1000
 
 const modalGroups = computed(() => groups.value as unknown as AdminGroup[])
 
@@ -1213,28 +1220,77 @@ async function bulkRefreshTokens(): Promise<void> {
     appStore.showError(t('admin.accounts.bulkActions.noRefreshableAccounts'))
     return
   }
-
-  let success = 0
-  let failed = 0
-  for (const account of selected) {
-    try {
-      const result = await accountsAPI.refreshCredentials(account.id)
-      patchAccountInList(result.account)
-      success++
-    } catch (error) {
-      failed++
-      console.error('Failed to bulk refresh user account token:', error)
-    }
-  }
-
-  if (failed > 0) {
-    appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success, failed }))
-  } else {
-    appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: success }))
+  try {
+    const task = await accountsAPI.createBatchRefreshTask(selected.map(account => account.id))
+    appStore.showSuccess(t('admin.accounts.bulkActions.asyncSubmitted', { count: task.total }))
     clearSelection()
+    void pollUserAccountBatchTask(task.id, (completed) => {
+      if (completed.failed > 0) {
+        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: completed.success, failed: completed.failed }))
+      } else {
+        appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: completed.success }))
+      }
+    })
+  } catch (error: any) {
+    console.error('Failed to create user account refresh task:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || t('common.error'))
   }
-  usageManualRefreshToken.value += 1
-  await refreshTodayStatsBatch()
+}
+
+async function waitForUserAccountBatchTask(taskId: number): Promise<AccountBatchTask> {
+  const deadline = Date.now() + ACCOUNT_BATCH_TASK_POLL_TIMEOUT_MS
+  while (!isUnmounted && Date.now() < deadline) {
+    const task = await accountsAPI.getBatchTask(taskId)
+    if (task.status === 'succeeded' || task.status === 'failed' || task.status === 'canceled') {
+      return task
+    }
+    await new Promise(resolve => setTimeout(resolve, 1500))
+  }
+  throw new Error(t('admin.accounts.bulkActions.asyncTimeout'))
+}
+
+async function pollUserAccountBatchTask(
+  taskId: number,
+  onCompleted: (task: AccountBatchTask) => void
+): Promise<void> {
+  if (activeBatchTaskPolls.has(taskId)) return
+  activeBatchTaskPolls.add(taskId)
+  try {
+    const completed = await waitForUserAccountBatchTask(taskId)
+    if (isUnmounted) return
+    onCompleted(completed)
+    usageManualRefreshToken.value += 1
+    await Promise.all([loadAccounts(), refreshTodayStatsBatch()])
+  } catch (error: any) {
+    if (isUnmounted) return
+    console.error('Failed to poll user account batch task:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || t('common.error'))
+  } finally {
+    activeBatchTaskPolls.delete(taskId)
+  }
+}
+
+async function bulkRevalidatePublicShare(): Promise<void> {
+  const selected = selectedAccounts.value.filter(canRevalidatePublicShare)
+  if (selected.length === 0) {
+    appStore.showError(t('userAccounts.noRevalidatableShareAccounts'))
+    return
+  }
+  try {
+    const task = await accountsAPI.createBatchRevalidatePublicShareTask(selected.map(account => account.id))
+    appStore.showSuccess(t('userAccounts.bulkRevalidateSubmitted', { count: task.total }))
+    clearSelection()
+    void pollUserAccountBatchTask(task.id, (completed) => {
+      if (completed.failed > 0) {
+        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: completed.success, failed: completed.failed }))
+      } else {
+        appStore.showSuccess(t('userAccounts.bulkRevalidateCompleted', { count: completed.success }))
+      }
+    })
+  } catch (error: any) {
+    console.error('Failed to create public share revalidation task:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.shareValidationFailedToRun'))
+  }
 }
 
 async function revalidatePublicShare(account: Account): Promise<void> {
@@ -1327,6 +1383,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  isUnmounted = true
   abortController?.abort()
 })
 </script>

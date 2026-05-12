@@ -9,14 +9,24 @@
           {{ t('admin.revenue.shareSettlements.description') }}
         </p>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="flex flex-wrap items-end gap-2">
+        <div class="grid grid-cols-2 gap-2 sm:w-[300px]">
+          <div>
+            <label class="input-label">{{ t('dates.startDate') }}</label>
+            <input v-model="startDate" type="date" class="input h-10" @change="applyCustomDateRange" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('dates.endDate') }}</label>
+            <input v-model="endDate" type="date" class="input h-10" @change="applyCustomDateRange" />
+          </div>
+        </div>
         <div class="inline-flex rounded-lg border border-gray-200 bg-white p-1 dark:border-dark-600 dark:bg-dark-800">
           <button
             v-for="option in rangeOptions"
             :key="option"
             type="button"
             class="min-w-[64px] rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
-            :class="rangeDays === option
+            :class="selectedRangeDays === option
               ? 'bg-emerald-600 text-white shadow-sm'
               : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
             @click="setRange(option)"
@@ -181,15 +191,20 @@ import type { RevenueShareSettlementItem, RevenueShareSettlementParams } from '@
 import { useAppStore } from '@/stores/app'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 
-type RangeDays = 7 | 30 | 90
+type RangeDays = 1 | 2 | 3
 type SettlementStatus = NonNullable<RevenueShareSettlementParams['status']>
 
-const rangeOptions: RangeDays[] = [7, 30, 90]
+const rangeOptions: RangeDays[] = [1, 2, 3]
+const MAX_SETTLEMENT_RANGE_DAYS = 3
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
 
-const rangeDays = ref<RangeDays>(30)
+const rangeDays = ref<RangeDays>(1)
+const initialRange = getDateRange(rangeDays.value)
+const startDate = ref(initialRange.start)
+const endDate = ref(initialRange.end)
+const selectedRangeDays = ref<RangeDays | null>(rangeDays.value)
 const status = ref<SettlementStatus>('all')
 const search = ref('')
 const loading = ref(false)
@@ -213,14 +228,15 @@ const percentFormatter = computed(() => new Intl.NumberFormat(locale.value, {
 }))
 
 async function loadSettlements() {
+  if (!validateDateRange()) return
+
   loading.value = true
   try {
-    const range = getDateRange(rangeDays.value)
     const result = await revenueAPI.listShareSettlements({
       page: pagination.page,
       page_size: pagination.page_size,
-      start_date: range.start,
-      end_date: range.end,
+      start_date: startDate.value,
+      end_date: endDate.value,
       status: status.value,
       search: search.value.trim() || undefined
     })
@@ -242,9 +258,30 @@ function resetAndLoad() {
 }
 
 function setRange(days: RangeDays) {
-  if (rangeDays.value === days) return
+  if (rangeDays.value === days && selectedRangeDays.value === days) return
   rangeDays.value = days
+  selectedRangeDays.value = days
+  const range = getDateRange(days)
+  startDate.value = range.start
+  endDate.value = range.end
   resetAndLoad()
+}
+
+function applyCustomDateRange() {
+  selectedRangeDays.value = null
+  resetAndLoad()
+}
+
+function validateDateRange(): boolean {
+  if (!startDate.value || !endDate.value || startDate.value > endDate.value) {
+    appStore.showError(t('admin.revenue.shareSettlements.errors.REVENUE_TIME_RANGE_INVALID'))
+    return false
+  }
+  if (getInclusiveDateSpanDays(startDate.value, endDate.value) > MAX_SETTLEMENT_RANGE_DAYS) {
+    appStore.showError(t('admin.revenue.shareSettlements.errors.REVENUE_TIME_RANGE_TOO_LARGE'))
+    return false
+  }
+  return true
 }
 
 function handlePageChange(page: number) {
@@ -273,6 +310,17 @@ function formatDateParam(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function getInclusiveDateSpanDays(start: string, end: string): number {
+  const startTime = parseDateParam(start).getTime()
+  const endTime = parseDateParam(end).getTime()
+  return Math.floor((endTime - startTime) / 86_400_000) + 1
+}
+
+function parseDateParam(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
 }
 
 function formatAmount(value: number): string {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -525,7 +526,17 @@ type UpdateSettingsRequest struct {
 // PUT /api/v1/admin/settings
 func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	var req UpdateSettingsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := json.Unmarshal(rawBody, &req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	providedFields, err := decodeProvidedJSONFields(rawBody)
+	if err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -535,6 +546,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	preserveOmittedUpdateSettingsFields(&req, previousSettings, providedFields)
 	previousAuthSourceDefaults, err := h.settingService.GetAuthSourceDefaultSettings(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -1690,6 +1702,294 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentHelpText != nil || req.PaymentCancelRateLimitEnabled != nil ||
 		req.PaymentCancelRateLimitMax != nil || req.PaymentCancelRateLimitWindow != nil ||
 		req.PaymentCancelRateLimitUnit != nil || req.PaymentCancelRateLimitMode != nil
+}
+
+func decodeProvidedJSONFields(rawBody []byte) (map[string]struct{}, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rawBody, &fields); err != nil {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(fields))
+	for key := range fields {
+		out[key] = struct{}{}
+	}
+	return out, nil
+}
+
+func fieldProvided(fields map[string]struct{}, key string) bool {
+	_, ok := fields[key]
+	return ok
+}
+
+func dtoDefaultSubscriptionsFromService(input []service.DefaultSubscriptionSetting) []dto.DefaultSubscriptionSetting {
+	if input == nil {
+		return nil
+	}
+	out := make([]dto.DefaultSubscriptionSetting, 0, len(input))
+	for _, item := range input {
+		out = append(out, dto.DefaultSubscriptionSetting{
+			GroupID:      item.GroupID,
+			ValidityDays: item.ValidityDays,
+		})
+	}
+	return out
+}
+
+func optionalFloat64Value(input *float64) float64 {
+	if input == nil {
+		return 0
+	}
+	return *input
+}
+
+func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *service.SystemSettings, fields map[string]struct{}) {
+	if req == nil || previous == nil {
+		return
+	}
+
+	if !fieldProvided(fields, "registration_enabled") {
+		req.RegistrationEnabled = previous.RegistrationEnabled
+	}
+	if !fieldProvided(fields, "email_verify_enabled") {
+		req.EmailVerifyEnabled = previous.EmailVerifyEnabled
+	}
+	if !fieldProvided(fields, "registration_email_suffix_whitelist") {
+		req.RegistrationEmailSuffixWhitelist = previous.RegistrationEmailSuffixWhitelist
+	}
+	if !fieldProvided(fields, "promo_code_enabled") {
+		req.PromoCodeEnabled = previous.PromoCodeEnabled
+	}
+	if !fieldProvided(fields, "password_reset_enabled") {
+		req.PasswordResetEnabled = previous.PasswordResetEnabled
+	}
+	if !fieldProvided(fields, "frontend_url") {
+		req.FrontendURL = previous.FrontendURL
+	}
+	if !fieldProvided(fields, "invitation_code_enabled") {
+		req.InvitationCodeEnabled = previous.InvitationCodeEnabled
+	}
+	if !fieldProvided(fields, "totp_enabled") {
+		req.TotpEnabled = previous.TotpEnabled
+	}
+	if !fieldProvided(fields, "smtp_host") {
+		req.SMTPHost = previous.SMTPHost
+	}
+	if !fieldProvided(fields, "smtp_port") {
+		req.SMTPPort = previous.SMTPPort
+	}
+	if !fieldProvided(fields, "smtp_username") {
+		req.SMTPUsername = previous.SMTPUsername
+	}
+	if !fieldProvided(fields, "smtp_from_email") {
+		req.SMTPFrom = previous.SMTPFrom
+	}
+	if !fieldProvided(fields, "smtp_from_name") {
+		req.SMTPFromName = previous.SMTPFromName
+	}
+	if !fieldProvided(fields, "smtp_use_tls") {
+		req.SMTPUseTLS = previous.SMTPUseTLS
+	}
+	if !fieldProvided(fields, "turnstile_enabled") {
+		req.TurnstileEnabled = previous.TurnstileEnabled
+	}
+	if !fieldProvided(fields, "turnstile_site_key") {
+		req.TurnstileSiteKey = previous.TurnstileSiteKey
+	}
+	if !fieldProvided(fields, "linuxdo_connect_enabled") {
+		req.LinuxDoConnectEnabled = previous.LinuxDoConnectEnabled
+	}
+	if !fieldProvided(fields, "linuxdo_connect_client_id") {
+		req.LinuxDoConnectClientID = previous.LinuxDoConnectClientID
+	}
+	if !fieldProvided(fields, "linuxdo_connect_redirect_url") {
+		req.LinuxDoConnectRedirectURL = previous.LinuxDoConnectRedirectURL
+	}
+	if !fieldProvided(fields, "wechat_connect_enabled") {
+		req.WeChatConnectEnabled = previous.WeChatConnectEnabled
+	}
+	if !fieldProvided(fields, "wechat_connect_app_id") {
+		req.WeChatConnectAppID = previous.WeChatConnectAppID
+	}
+	if !fieldProvided(fields, "wechat_connect_open_app_id") {
+		req.WeChatConnectOpenAppID = previous.WeChatConnectOpenAppID
+	}
+	if !fieldProvided(fields, "wechat_connect_mp_app_id") {
+		req.WeChatConnectMPAppID = previous.WeChatConnectMPAppID
+	}
+	if !fieldProvided(fields, "wechat_connect_mobile_app_id") {
+		req.WeChatConnectMobileAppID = previous.WeChatConnectMobileAppID
+	}
+	if !fieldProvided(fields, "wechat_connect_open_enabled") {
+		req.WeChatConnectOpenEnabled = previous.WeChatConnectOpenEnabled
+	}
+	if !fieldProvided(fields, "wechat_connect_mp_enabled") {
+		req.WeChatConnectMPEnabled = previous.WeChatConnectMPEnabled
+	}
+	if !fieldProvided(fields, "wechat_connect_mobile_enabled") {
+		req.WeChatConnectMobileEnabled = previous.WeChatConnectMobileEnabled
+	}
+	if !fieldProvided(fields, "wechat_connect_mode") {
+		req.WeChatConnectMode = previous.WeChatConnectMode
+	}
+	if !fieldProvided(fields, "wechat_connect_scopes") {
+		req.WeChatConnectScopes = previous.WeChatConnectScopes
+	}
+	if !fieldProvided(fields, "wechat_connect_redirect_url") {
+		req.WeChatConnectRedirectURL = previous.WeChatConnectRedirectURL
+	}
+	if !fieldProvided(fields, "wechat_connect_frontend_redirect_url") {
+		req.WeChatConnectFrontendRedirectURL = previous.WeChatConnectFrontendRedirectURL
+	}
+	if !fieldProvided(fields, "oidc_connect_enabled") {
+		req.OIDCConnectEnabled = previous.OIDCConnectEnabled
+	}
+	if !fieldProvided(fields, "oidc_connect_provider_name") {
+		req.OIDCConnectProviderName = previous.OIDCConnectProviderName
+	}
+	if !fieldProvided(fields, "oidc_connect_client_id") {
+		req.OIDCConnectClientID = previous.OIDCConnectClientID
+	}
+	if !fieldProvided(fields, "oidc_connect_issuer_url") {
+		req.OIDCConnectIssuerURL = previous.OIDCConnectIssuerURL
+	}
+	if !fieldProvided(fields, "oidc_connect_discovery_url") {
+		req.OIDCConnectDiscoveryURL = previous.OIDCConnectDiscoveryURL
+	}
+	if !fieldProvided(fields, "oidc_connect_authorize_url") {
+		req.OIDCConnectAuthorizeURL = previous.OIDCConnectAuthorizeURL
+	}
+	if !fieldProvided(fields, "oidc_connect_token_url") {
+		req.OIDCConnectTokenURL = previous.OIDCConnectTokenURL
+	}
+	if !fieldProvided(fields, "oidc_connect_userinfo_url") {
+		req.OIDCConnectUserInfoURL = previous.OIDCConnectUserInfoURL
+	}
+	if !fieldProvided(fields, "oidc_connect_jwks_url") {
+		req.OIDCConnectJWKSURL = previous.OIDCConnectJWKSURL
+	}
+	if !fieldProvided(fields, "oidc_connect_scopes") {
+		req.OIDCConnectScopes = previous.OIDCConnectScopes
+	}
+	if !fieldProvided(fields, "oidc_connect_redirect_url") {
+		req.OIDCConnectRedirectURL = previous.OIDCConnectRedirectURL
+	}
+	if !fieldProvided(fields, "oidc_connect_frontend_redirect_url") {
+		req.OIDCConnectFrontendRedirectURL = previous.OIDCConnectFrontendRedirectURL
+	}
+	if !fieldProvided(fields, "oidc_connect_token_auth_method") {
+		req.OIDCConnectTokenAuthMethod = previous.OIDCConnectTokenAuthMethod
+	}
+	if !fieldProvided(fields, "oidc_connect_allowed_signing_algs") {
+		req.OIDCConnectAllowedSigningAlgs = previous.OIDCConnectAllowedSigningAlgs
+	}
+	if !fieldProvided(fields, "oidc_connect_clock_skew_seconds") {
+		req.OIDCConnectClockSkewSeconds = previous.OIDCConnectClockSkewSeconds
+	}
+	if !fieldProvided(fields, "oidc_connect_require_email_verified") {
+		req.OIDCConnectRequireEmailVerified = previous.OIDCConnectRequireEmailVerified
+	}
+	if !fieldProvided(fields, "oidc_connect_userinfo_email_path") {
+		req.OIDCConnectUserInfoEmailPath = previous.OIDCConnectUserInfoEmailPath
+	}
+	if !fieldProvided(fields, "oidc_connect_userinfo_id_path") {
+		req.OIDCConnectUserInfoIDPath = previous.OIDCConnectUserInfoIDPath
+	}
+	if !fieldProvided(fields, "oidc_connect_userinfo_username_path") {
+		req.OIDCConnectUserInfoUsernamePath = previous.OIDCConnectUserInfoUsernamePath
+	}
+	if !fieldProvided(fields, "site_name") {
+		req.SiteName = previous.SiteName
+	}
+	if !fieldProvided(fields, "site_logo") {
+		req.SiteLogo = previous.SiteLogo
+	}
+	if !fieldProvided(fields, "site_subtitle") {
+		req.SiteSubtitle = previous.SiteSubtitle
+	}
+	if !fieldProvided(fields, "api_base_url") {
+		req.APIBaseURL = previous.APIBaseURL
+	}
+	if !fieldProvided(fields, "contact_info") {
+		req.ContactInfo = previous.ContactInfo
+	}
+	if !fieldProvided(fields, "doc_url") {
+		req.DocURL = previous.DocURL
+	}
+	if !fieldProvided(fields, "home_content") {
+		req.HomeContent = previous.HomeContent
+	}
+	if !fieldProvided(fields, "hide_ccs_import_button") {
+		req.HideCcsImportButton = previous.HideCcsImportButton
+	}
+	if !fieldProvided(fields, "table_default_page_size") {
+		req.TableDefaultPageSize = previous.TableDefaultPageSize
+	}
+	if !fieldProvided(fields, "table_page_size_options") {
+		req.TablePageSizeOptions = previous.TablePageSizeOptions
+	}
+	if !fieldProvided(fields, "default_concurrency") {
+		req.DefaultConcurrency = previous.DefaultConcurrency
+	}
+	if !fieldProvided(fields, "default_balance") {
+		req.DefaultBalance = previous.DefaultBalance
+	}
+	if !fieldProvided(fields, "default_user_rpm_limit") {
+		req.DefaultUserRPMLimit = previous.DefaultUserRPMLimit
+	}
+	if !fieldProvided(fields, "user_private_group_daily_limit_usd") {
+		req.UserPrivateGroupDailyLimitUSD = optionalFloat64Value(previous.UserPrivateGroupDailyLimitUSD)
+	}
+	if !fieldProvided(fields, "user_private_group_weekly_limit_usd") {
+		req.UserPrivateGroupWeeklyLimitUSD = optionalFloat64Value(previous.UserPrivateGroupWeeklyLimitUSD)
+	}
+	if !fieldProvided(fields, "user_private_group_monthly_limit_usd") {
+		req.UserPrivateGroupMonthlyLimitUSD = optionalFloat64Value(previous.UserPrivateGroupMonthlyLimitUSD)
+	}
+	if !fieldProvided(fields, "user_private_group_rate_multiplier") {
+		req.UserPrivateGroupRateMultiplier = previous.UserPrivateGroupRateMultiplier
+	}
+	if !fieldProvided(fields, "user_private_group_rpm_limit") {
+		req.UserPrivateGroupRPMLimit = previous.UserPrivateGroupRPMLimit
+	}
+	if !fieldProvided(fields, "user_private_group_commission_rate") {
+		req.UserPrivateGroupCommissionRate = previous.UserPrivateGroupCommissionRate
+	}
+	if !fieldProvided(fields, "default_subscriptions") {
+		req.DefaultSubscriptions = dtoDefaultSubscriptionsFromService(previous.DefaultSubscriptions)
+	}
+	if !fieldProvided(fields, "enable_model_fallback") {
+		req.EnableModelFallback = previous.EnableModelFallback
+	}
+	if !fieldProvided(fields, "fallback_model_anthropic") {
+		req.FallbackModelAnthropic = previous.FallbackModelAnthropic
+	}
+	if !fieldProvided(fields, "fallback_model_openai") {
+		req.FallbackModelOpenAI = previous.FallbackModelOpenAI
+	}
+	if !fieldProvided(fields, "fallback_model_gemini") {
+		req.FallbackModelGemini = previous.FallbackModelGemini
+	}
+	if !fieldProvided(fields, "fallback_model_antigravity") {
+		req.FallbackModelAntigravity = previous.FallbackModelAntigravity
+	}
+	if !fieldProvided(fields, "enable_identity_patch") {
+		req.EnableIdentityPatch = previous.EnableIdentityPatch
+	}
+	if !fieldProvided(fields, "identity_patch_prompt") {
+		req.IdentityPatchPrompt = previous.IdentityPatchPrompt
+	}
+	if !fieldProvided(fields, "min_claude_code_version") {
+		req.MinClaudeCodeVersion = previous.MinClaudeCodeVersion
+	}
+	if !fieldProvided(fields, "max_claude_code_version") {
+		req.MaxClaudeCodeVersion = previous.MaxClaudeCodeVersion
+	}
+	if !fieldProvided(fields, "allow_ungrouped_key_scheduling") {
+		req.AllowUngroupedKeyScheduling = previous.AllowUngroupedKeyScheduling
+	}
+	if !fieldProvided(fields, "backend_mode_enabled") {
+		req.BackendModeEnabled = previous.BackendModeEnabled
+	}
 }
 
 func (h *SettingHandler) auditSettingsUpdate(c *gin.Context, before *service.SystemSettings, after *service.SystemSettings, beforeAuthSourceDefaults *service.AuthSourceDefaultSettings, afterAuthSourceDefaults *service.AuthSourceDefaultSettings, req UpdateSettingsRequest) {

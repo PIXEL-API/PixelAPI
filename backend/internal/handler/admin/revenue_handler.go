@@ -23,7 +23,7 @@ func NewRevenueHandler(revenueService *service.RevenueService) *RevenueHandler {
 // GetSummary returns the read-only revenue management dashboard data.
 // GET /api/v1/admin/revenue/summary
 func (h *RevenueHandler) GetSummary(c *gin.Context) {
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime := parseRevenueTimeRange(c)
 	granularity := strings.ToLower(strings.TrimSpace(c.DefaultQuery("granularity", service.RevenueGranularityDay)))
 	if granularity != service.RevenueGranularityDay && granularity != service.RevenueGranularityHour {
 		response.BadRequest(c, "granularity must be day or hour")
@@ -72,7 +72,7 @@ func (h *RevenueHandler) GetSummary(c *gin.Context) {
 // ListShareSettlements returns auditable account-share settlement entries.
 // GET /api/v1/admin/revenue/share-settlements
 func (h *RevenueHandler) ListShareSettlements(c *gin.Context) {
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime := parseRevenueTimeRange(c)
 	if !endTime.After(startTime) {
 		response.BadRequest(c, "end_date must be after start_date")
 		return
@@ -94,6 +94,26 @@ func (h *RevenueHandler) ListShareSettlements(c *gin.Context) {
 		return
 	}
 	response.Paginated(c, items, total, page, pageSize)
+}
+
+func parseRevenueTimeRange(c *gin.Context) (time.Time, time.Time) {
+	userTZ := c.Query("timezone")
+	now := tzpkg.NowInUserLocation(userTZ)
+	startTime := tzpkg.StartOfDayInUserLocation(now, userTZ)
+	endTime := tzpkg.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+
+	if startDate := strings.TrimSpace(c.Query("start_date")); startDate != "" {
+		if parsed, err := tzpkg.ParseInUserLocation("2006-01-02", startDate, userTZ); err == nil {
+			startTime = parsed
+		}
+	}
+	if endDate := strings.TrimSpace(c.Query("end_date")); endDate != "" {
+		if parsed, err := tzpkg.ParseInUserLocation("2006-01-02", endDate, userTZ); err == nil {
+			endTime = parsed.Add(24 * time.Hour)
+		}
+	}
+
+	return startTime, endTime
 }
 
 func normalizeRevenueTimezone(raw string) string {

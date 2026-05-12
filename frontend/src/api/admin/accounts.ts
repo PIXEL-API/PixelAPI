@@ -624,6 +624,32 @@ export interface BatchOperationResult {
   warnings?: Array<{ account_id: number; warning: string }>
 }
 
+export type AccountBatchTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
+
+export interface AccountBatchTaskItem {
+  id: number
+  task_id: number
+  account_id: number
+  status: AccountBatchTaskStatus
+  error_message?: string
+  result?: Record<string, unknown>
+}
+
+export interface AccountBatchTask {
+  id: number
+  scope: 'admin' | 'user'
+  operation: string
+  status: AccountBatchTaskStatus
+  total: number
+  processed: number
+  success: number
+  failed: number
+  created_by: number
+  owner_user_id?: number
+  error_message?: string
+  items?: AccountBatchTaskItem[]
+}
+
 /**
  * Batch clear account errors
  * @param accountIds - Array of account IDs
@@ -647,6 +673,18 @@ export async function batchRefresh(accountIds: number[]): Promise<BatchOperation
   }, {
     timeout: 120000  // 120s timeout for large batch refreshes
   })
+  return data
+}
+
+export async function createBatchRefreshTask(accountIds: number[]): Promise<AccountBatchTask> {
+  const { data } = await apiClient.post<AccountBatchTask>('/admin/accounts/batch-refresh/async', {
+    account_ids: accountIds
+  })
+  return data
+}
+
+export async function getBatchTask(taskId: number): Promise<AccountBatchTask> {
+  const { data } = await apiClient.get<AccountBatchTask>(`/admin/accounts/batch-tasks/${taskId}`)
   return data
 }
 
@@ -698,6 +736,8 @@ export const accountsAPI = {
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,
+  createBatchRefreshTask,
+  getBatchTask,
   setPrivacy
 }
 

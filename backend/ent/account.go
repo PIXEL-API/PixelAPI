@@ -28,7 +28,7 @@ type Account struct {
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// Name holds the value of the "name" field.
 	Name string `json:"name,omitempty"`
-	// Account capability level: unknown/free/plus/pro.
+	// Account capability level: unknown/free/plus/pro/team.
 	AccountLevel string `json:"account_level,omitempty"`
 	// Notes holds the value of the "notes" field.
 	Notes *string `json:"notes,omitempty"`

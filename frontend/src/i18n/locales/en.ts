@@ -681,6 +681,10 @@ export default {
     shareValidationFailed: 'Last validation failed: {reason}',
     shareValidationSuspended: 'Public sharing is suspended: {reason}',
     revalidateShare: 'Revalidate public sharing',
+    bulkRevalidateShare: 'Revalidate sharing',
+    noRevalidatableShareAccounts: 'No selected public sharing accounts can be revalidated',
+    bulkRevalidateSubmitted: 'Public sharing revalidation task submitted for {count} account(s)',
+    bulkRevalidateCompleted: 'Public sharing revalidation completed for {count} account(s)',
     shareValidationApproved: 'Public sharing validation passed',
     shareValidationStillPending: 'Revalidation finished, but the account is still pending. Check the validation hint for the reason.',
     shareValidationFailedToRun: 'Failed to revalidate public sharing',
@@ -1111,6 +1115,10 @@ export default {
     public: 'Public',
     exclusiveTooltip: 'Exclusive groups granted to you by an admin',
     publicTooltip: 'Groups open to all users',
+    groupRates: {
+      title: 'Group multiplier and effective price',
+      intervalMultiplierHint: 'Tiered price applies first, then this group multiplier'
+    },
     columns: {
       name: 'Channel',
       description: 'Description',
@@ -1630,7 +1638,8 @@ export default {
         REVENUE_TIME_RANGE_REQUIRED: 'Date range is required',
         REVENUE_TIME_RANGE_INVALID: 'End date must be after start date',
         REVENUE_GRANULARITY_INVALID: 'Granularity must be day or hour',
-        REVENUE_TIME_RANGE_TOO_LARGE: 'Selected date range is too large'
+        REVENUE_TIME_RANGE_TOO_LARGE: 'You can query at most 366 days of data',
+        REVENUE_HOUR_RANGE_TOO_LARGE: 'Hourly granularity supports at most 3 days'
       },
       sharePolicy: {
         title: 'Unified Share Policy',
@@ -1703,7 +1712,8 @@ export default {
         errors: {
           REVENUE_TIME_RANGE_REQUIRED: 'Date range is required',
           REVENUE_TIME_RANGE_INVALID: 'End date must be after start date',
-          REVENUE_SHARE_STATUS_INVALID: 'Invalid share settlement status'
+          REVENUE_SHARE_STATUS_INVALID: 'Invalid share settlement status',
+          REVENUE_TIME_RANGE_TOO_LARGE: 'You can query at most 3 days of share settlements'
         }
       }
     },
@@ -3203,7 +3213,9 @@ export default {
         resetStatusSuccess: 'Successfully reset {count} account(s) status',
         refreshTokenSuccess: 'Successfully refreshed {count} account(s) token',
         noRefreshableAccounts: 'No OAuth/Setup Token account selected for token refresh',
-        partialSuccess: 'Partially completed: {success} succeeded, {failed} failed'
+        partialSuccess: 'Partially completed: {success} succeeded, {failed} failed',
+        asyncSubmitted: 'Background batch task submitted for {count} account(s)',
+        asyncTimeout: 'Background batch task is still running. Refresh later to check the result.'
       },
       bulkEdit: {
         title: 'Bulk Edit Accounts',

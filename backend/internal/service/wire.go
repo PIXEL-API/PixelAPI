@@ -136,10 +136,16 @@ func ProvideDashboardAggregationService(repo DashboardAggregationRepository, tim
 }
 
 // ProvideUsageCleanupService 创建并启动使用记录清理任务服务
-func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboardAgg *DashboardAggregationService, cfg *config.Config) *UsageCleanupService {
-	svc := NewUsageCleanupService(repo, timingWheel, dashboardAgg, cfg)
+func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboardAgg *DashboardAggregationService, backup *BackupService, cfg *config.Config) *UsageCleanupService {
+	svc := NewUsageCleanupServiceWithBackup(repo, timingWheel, dashboardAgg, backup, cfg)
 	svc.Start()
 	return svc
+}
+
+// ProvideAccountBatchTaskService creates account batch task service.
+// The worker is started after handlers register all operation executors.
+func ProvideAccountBatchTaskService(repo AccountBatchTaskRepository, timingWheel *TimingWheelService) *AccountBatchTaskService {
+	return NewAccountBatchTaskService(repo, timingWheel)
 }
 
 // ProvideAccountExpiryService creates and starts AccountExpiryService.
@@ -595,6 +601,7 @@ var ProviderSet = wire.NewSet(
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
+	ProvideAccountBatchTaskService,
 	ProvideDeferredService,
 	NewAntigravityQuotaFetcher,
 	NewUserAttributeService,

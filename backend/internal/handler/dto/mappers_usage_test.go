@@ -55,8 +55,9 @@ func TestUsageCleanupTaskFromService_RequestTypeMapping(t *testing.T) {
 
 	requestType := int16(service.RequestTypeStream)
 	task := &service.UsageCleanupTask{
-		ID:     1,
-		Status: service.UsageCleanupStatusPending,
+		ID:            1,
+		Status:        service.UsageCleanupStatusPending,
+		CreatedSource: "system_auto_retention",
 		Filters: service.UsageCleanupFilters{
 			RequestType: &requestType,
 		},
@@ -66,6 +67,7 @@ func TestUsageCleanupTaskFromService_RequestTypeMapping(t *testing.T) {
 	require.NotNil(t, dtoTask)
 	require.NotNil(t, dtoTask.Filters.RequestType)
 	require.Equal(t, "stream", *dtoTask.Filters.RequestType)
+	require.Equal(t, "system_auto_retention", dtoTask.CreatedSource)
 }
 
 func TestRequestTypeStringPtrNil(t *testing.T) {

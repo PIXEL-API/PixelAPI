@@ -127,6 +127,32 @@ export interface UserBulkAccountOperationResponse {
   results: UserBulkAccountResult[]
 }
 
+export type AccountBatchTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
+
+export interface AccountBatchTaskItem {
+  id: number
+  task_id: number
+  account_id: number
+  status: AccountBatchTaskStatus
+  error_message?: string
+  result?: Record<string, unknown>
+}
+
+export interface AccountBatchTask {
+  id: number
+  scope: 'admin' | 'user'
+  operation: string
+  status: AccountBatchTaskStatus
+  total: number
+  processed: number
+  success: number
+  failed: number
+  created_by: number
+  owner_user_id?: number
+  error_message?: string
+  items?: AccountBatchTaskItem[]
+}
+
 export async function toggleStatus(id: number, status: 'active' | 'disabled'): Promise<Account> {
   return update(id, { status })
 }
@@ -146,6 +172,25 @@ export async function bulkDelete(accountIds: number[]): Promise<UserBulkAccountO
   const { data } = await apiClient.post<UserBulkAccountOperationResponse>('/accounts/bulk-delete', {
     account_ids: accountIds
   })
+  return data
+}
+
+export async function createBatchRefreshTask(accountIds: number[]): Promise<AccountBatchTask> {
+  const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-refresh/async', {
+    account_ids: accountIds
+  })
+  return data
+}
+
+export async function createBatchRevalidatePublicShareTask(accountIds: number[]): Promise<AccountBatchTask> {
+  const { data } = await apiClient.post<AccountBatchTask>('/accounts/batch-revalidate-public-share/async', {
+    account_ids: accountIds
+  })
+  return data
+}
+
+export async function getBatchTask(taskId: number): Promise<AccountBatchTask> {
+  const { data } = await apiClient.get<AccountBatchTask>(`/accounts/batch-tasks/${taskId}`)
   return data
 }
 
@@ -439,6 +484,9 @@ export const accountsAPI = {
   toggleStatus,
   bulkUpdate,
   bulkDelete,
+  createBatchRefreshTask,
+  createBatchRevalidatePublicShareTask,
+  getBatchTask,
   getUsage,
   getStats,
   getTodayStats,

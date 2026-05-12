@@ -647,8 +647,10 @@ dashboard_aggregation:
   # Retention windows (days)
   # 保留窗口（天）
   retention:
-    # Raw usage_logs retention
-    # 原始 usage_logs 保留天数
+    # Initial aggregation lookback when no watermark exists.
+    # 无聚合水位时的初始聚合回看天数。
+    # Raw usage_logs cleanup is controlled by usage_cleanup.auto_retention.
+    # 原始 usage_logs 清理由 usage_cleanup.auto_retention 控制。
     usage_logs_days: 90
     # Hourly aggregation retention
     # 小时聚合保留天数
@@ -677,6 +679,27 @@ usage_cleanup:
   # Task execution timeout (seconds)
   # 单次任务最大执行时长（秒）
   task_timeout_seconds: 1800
+  # Automatic raw usage log retention. Disabled by default for data safety.
+  # 原始用量记录自动保留策略。为保证数据安全默认关闭。
+  auto_retention:
+    # Enable automatic cleanup. When enabled, the service backfills aggregation,
+    # archives only the usage_logs rows in the deletion window as gzip-compressed NDJSON,
+    # and only deletes usage_logs after the archive succeeds.
+    # 启用自动清理。启用后会先补齐聚合快照，只将待删窗口内的 usage_logs 归档为 gzip 压缩 NDJSON，
+    # 归档成功后才删除 usage_logs。
+    enabled: false
+    # Keep recent N days of raw usage_logs.
+    # 原始 usage_logs 保留最近 N 天。
+    retain_days: 3
+    # Check interval (hours).
+    # 自动任务检查间隔（小时）。
+    run_interval_hours: 24
+    # Max historical days to clean in one automatic task.
+    # 单次自动清理最多覆盖的历史天数。
+    window_days: 1
+    # Expiration days for usage_logs archives created by auto cleanup. 0 means never expire.
+    # 自动清理前创建的 usage_logs 归档过期天数，0 表示不过期。
+    backup_expire_days: 14
 
 # =============================================================================
 # HTTP 写接口幂等配置

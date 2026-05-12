@@ -41,7 +41,7 @@ type Group struct {
 	Scope string `json:"scope,omitempty"`
 	// Platform holds the value of the "platform" field.
 	Platform string `json:"platform,omitempty"`
-	// Required account capability level for this group: empty/free/plus/pro.
+	// Required account capability level for this group: empty/free/plus/pro/team.
 	RequiredAccountLevel string `json:"required_account_level,omitempty"`
 	// SubscriptionType holds the value of the "subscription_type" field.
 	SubscriptionType string `json:"subscription_type,omitempty"`

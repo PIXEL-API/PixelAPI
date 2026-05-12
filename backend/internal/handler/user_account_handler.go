@@ -29,6 +29,7 @@ type UserAccountHandler struct {
 	openaiOAuthService      *service.OpenAIOAuthService
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
+	accountBatchTaskService *service.AccountBatchTaskService
 }
 
 func NewUserAccountHandler(
@@ -39,8 +40,13 @@ func NewUserAccountHandler(
 	openaiOAuthService *service.OpenAIOAuthService,
 	geminiOAuthService *service.GeminiOAuthService,
 	antigravityOAuthService *service.AntigravityOAuthService,
+	accountBatchTaskServices ...*service.AccountBatchTaskService,
 ) *UserAccountHandler {
-	return &UserAccountHandler{
+	var accountBatchTaskService *service.AccountBatchTaskService
+	if len(accountBatchTaskServices) > 0 {
+		accountBatchTaskService = accountBatchTaskServices[0]
+	}
+	h := &UserAccountHandler{
 		accountService:          accountService,
 		accountUsageService:     accountUsageService,
 		accountTestService:      accountTestService,
@@ -48,7 +54,10 @@ func NewUserAccountHandler(
 		openaiOAuthService:      openaiOAuthService,
 		geminiOAuthService:      geminiOAuthService,
 		antigravityOAuthService: antigravityOAuthService,
+		accountBatchTaskService: accountBatchTaskService,
 	}
+	h.registerAccountBatchExecutors()
+	return h
 }
 
 type createUserAccountRequest struct {
@@ -115,6 +124,10 @@ type bulkUpdateUserAccountsRequest struct {
 }
 
 type bulkDeleteUserAccountsRequest struct {
+	AccountIDs []int64 `json:"account_ids"`
+}
+
+type userAccountBatchTaskRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
 
@@ -330,6 +343,54 @@ func (h *UserAccountHandler) activateOwnedPublicShareIfRequested(ctx context.Con
 		return h.accountService.MarkOwnedPublicSharePending(ctx, ownerUserID, account.ID, publicShareValidationErrorMessage(err))
 	}
 	return approved, nil
+}
+
+func (h *UserAccountHandler) registerAccountBatchExecutors() {
+	if h == nil || h.accountBatchTaskService == nil {
+		return
+	}
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRefreshCredentials, h.executeUserRefreshCredentialsTaskItem)
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRevalidateShare, h.executeUserRevalidateShareTaskItem)
+}
+
+func (h *UserAccountHandler) executeUserRefreshCredentialsTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	if task == nil || task.OwnerUserID == nil {
+		return nil, service.ErrAccountNotFound
+	}
+	account, err := h.accountService.GetOwnedByID(ctx, *task.OwnerUserID, item.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	updated, warning, err := h.refreshOwnedAccount(ctx, *task.OwnerUserID, account)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"account_id": updated.ID}
+	if strings.TrimSpace(warning) != "" {
+		result["warning"] = warning
+	}
+	return result, nil
+}
+
+func (h *UserAccountHandler) executeUserRevalidateShareTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	if task == nil || task.OwnerUserID == nil {
+		return nil, service.ErrAccountNotFound
+	}
+	account, err := h.accountService.GetOwnedByID(ctx, *task.OwnerUserID, item.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if service.NormalizeAccountShareMode(account.ShareMode) != service.AccountShareModePublic {
+		return nil, fmt.Errorf("only public shared accounts can be revalidated")
+	}
+	updated, err := h.activateOwnedPublicShareIfRequested(ctx, *task.OwnerUserID, account)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"account_id":   updated.ID,
+		"share_status": updated.ShareStatus,
+	}, nil
 }
 
 func (h *UserAccountHandler) List(c *gin.Context) {
@@ -850,6 +911,120 @@ func (h *UserAccountHandler) RevalidatePublicShare(c *gin.Context) {
 		return
 	}
 	response.Success(c, dto.AccountFromService(account))
+}
+
+func (h *UserAccountHandler) CreateBatchRefreshTask(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.accountBatchTaskService == nil {
+		response.Error(c, 503, "Account batch task service is unavailable")
+		return
+	}
+	var req userAccountBatchTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeUserAccountIDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	for _, accountID := range accountIDs {
+		if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	ownerUserID := subject.UserID
+	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
+		Scope:       service.AccountBatchTaskScopeUser,
+		Operation:   service.AccountBatchTaskOperationUserRefreshCredentials,
+		AccountIDs:  accountIDs,
+		CreatedBy:   subject.UserID,
+		OwnerUserID: &ownerUserID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, task)
+}
+
+func (h *UserAccountHandler) CreateBatchRevalidatePublicShareTask(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.accountBatchTaskService == nil {
+		response.Error(c, 503, "Account batch task service is unavailable")
+		return
+	}
+	var req userAccountBatchTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	accountIDs := normalizeUserAccountIDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	for _, accountID := range accountIDs {
+		account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if service.NormalizeAccountShareMode(account.ShareMode) != service.AccountShareModePublic {
+			response.BadRequest(c, "Only public shared accounts can be revalidated")
+			return
+		}
+	}
+	ownerUserID := subject.UserID
+	task, err := h.accountBatchTaskService.CreateTask(c.Request.Context(), service.CreateAccountBatchTaskInput{
+		Scope:       service.AccountBatchTaskScopeUser,
+		Operation:   service.AccountBatchTaskOperationUserRevalidateShare,
+		AccountIDs:  accountIDs,
+		CreatedBy:   subject.UserID,
+		OwnerUserID: &ownerUserID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, task)
+}
+
+func (h *UserAccountHandler) GetBatchTask(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.accountBatchTaskService == nil {
+		response.Error(c, 503, "Account batch task service is unavailable")
+		return
+	}
+	taskID, err := strconv.ParseInt(c.Param("task_id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid task ID")
+		return
+	}
+	task, err := h.accountBatchTaskService.GetTask(c.Request.Context(), taskID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if task.Scope != service.AccountBatchTaskScopeUser || task.OwnerUserID == nil || *task.OwnerUserID != subject.UserID {
+		response.NotFound(c, "Account batch task not found")
+		return
+	}
+	response.Success(c, task)
 }
 
 func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {

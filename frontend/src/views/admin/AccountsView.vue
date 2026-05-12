@@ -378,6 +378,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
+import type { AccountBatchTask } from '@/api/admin/accounts'
 import { useTableLoader } from '@/composables/useTableLoader'
 import { useSwipeSelect, type SwipeSelectVirtualContext } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -548,6 +549,9 @@ const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
 const pendingTodayStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
+const activeBatchTaskPolls = new Set<number>()
+let isUnmounted = false
+const ACCOUNT_BATCH_TASK_POLL_TIMEOUT_MS = 30 * 60 * 1000
 
 const buildDefaultTodayStats = (): WindowStats => ({
   requests: 0,
@@ -1249,17 +1253,51 @@ const handleBulkResetStatus = async () => {
 const handleBulkRefreshToken = async () => {
   if (!confirm(t('common.confirm'))) return
   try {
-    const result = await adminAPI.accounts.batchRefresh(selIds.value)
-    if (result.failed > 0) {
-      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
-    } else {
-      appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: result.success }))
-      clearSelection()
-    }
-    reload()
+    const task = await adminAPI.accounts.createBatchRefreshTask(selIds.value)
+    appStore.showSuccess(t('admin.accounts.bulkActions.asyncSubmitted', { count: task.total }))
+    clearSelection()
+    void pollAdminAccountBatchTask(task.id, (result) => {
+      if (result.failed > 0) {
+        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+      } else {
+        appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: result.success }))
+      }
+    })
   } catch (error) {
     console.error('Failed to bulk refresh token:', error)
     appStore.showError(String(error))
+  }
+}
+
+const waitForAdminAccountBatchTask = async (taskId: number): Promise<AccountBatchTask> => {
+  const deadline = Date.now() + ACCOUNT_BATCH_TASK_POLL_TIMEOUT_MS
+  while (!isUnmounted && Date.now() < deadline) {
+    const task = await adminAPI.accounts.getBatchTask(taskId)
+    if (task.status === 'succeeded' || task.status === 'failed' || task.status === 'canceled') {
+      return task
+    }
+    await new Promise(resolve => setTimeout(resolve, 1500))
+  }
+  throw new Error(t('admin.accounts.bulkActions.asyncTimeout'))
+}
+
+const pollAdminAccountBatchTask = async (
+  taskId: number,
+  onCompleted: (task: AccountBatchTask) => void
+) => {
+  if (activeBatchTaskPolls.has(taskId)) return
+  activeBatchTaskPolls.add(taskId)
+  try {
+    const completed = await waitForAdminAccountBatchTask(taskId)
+    if (isUnmounted) return
+    onCompleted(completed)
+    reload()
+  } catch (error: any) {
+    if (isUnmounted) return
+    console.error('Failed to poll admin account batch task:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || String(error))
+  } finally {
+    activeBatchTaskPolls.delete(taskId)
   }
 }
 const updateSchedulableInList = (accountIds: number[], schedulable: boolean) => {
@@ -1710,6 +1748,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  isUnmounted = true
   window.removeEventListener('scroll', handleScroll, true)
   document.removeEventListener('click', handleClickOutside)
 })

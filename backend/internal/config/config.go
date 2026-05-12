@@ -1188,6 +1188,22 @@ type UsageCleanupConfig struct {
 	WorkerIntervalSeconds int `mapstructure:"worker_interval_seconds"`
 	// TaskTimeoutSeconds: 单次任务最大执行时长（秒）
 	TaskTimeoutSeconds int `mapstructure:"task_timeout_seconds"`
+	// AutoRetention: 自动保留策略配置。默认关闭，开启后会先归档再清理过期 usage_logs。
+	AutoRetention UsageCleanupAutoRetentionConfig `mapstructure:"auto_retention"`
+}
+
+// UsageCleanupAutoRetentionConfig 使用记录自动保留策略配置
+type UsageCleanupAutoRetentionConfig struct {
+	// Enabled: 是否启用自动保留清理
+	Enabled bool `mapstructure:"enabled"`
+	// RetainDays: 原始 usage_logs 保留天数
+	RetainDays int `mapstructure:"retain_days"`
+	// RunIntervalHours: 自动任务检查间隔（小时）
+	RunIntervalHours int `mapstructure:"run_interval_hours"`
+	// WindowDays: 每次最多清理多少天历史数据，避免单次范围过大
+	WindowDays int `mapstructure:"window_days"`
+	// BackupExpireDays: 自动清理前创建的 usage_logs 归档过期天数，0 表示不过期
+	BackupExpireDays int `mapstructure:"backup_expire_days"`
 }
 
 func NormalizeRunMode(value string) string {
@@ -1623,6 +1639,11 @@ func setDefaults() {
 	viper.SetDefault("usage_cleanup.batch_size", 5000)
 	viper.SetDefault("usage_cleanup.worker_interval_seconds", 10)
 	viper.SetDefault("usage_cleanup.task_timeout_seconds", 1800)
+	viper.SetDefault("usage_cleanup.auto_retention.enabled", false)
+	viper.SetDefault("usage_cleanup.auto_retention.retain_days", 3)
+	viper.SetDefault("usage_cleanup.auto_retention.run_interval_hours", 24)
+	viper.SetDefault("usage_cleanup.auto_retention.window_days", 1)
+	viper.SetDefault("usage_cleanup.auto_retention.backup_expire_days", 14)
 
 	// Idempotency
 	viper.SetDefault("idempotency.observe_only", true)
@@ -2253,6 +2274,36 @@ func (c *Config) Validate() error {
 		if c.UsageCleanup.TaskTimeoutSeconds <= 0 {
 			return fmt.Errorf("usage_cleanup.task_timeout_seconds must be positive")
 		}
+		if c.UsageCleanup.AutoRetention.Enabled {
+			if c.UsageCleanup.AutoRetention.RetainDays <= 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.retain_days must be positive")
+			}
+			if c.UsageCleanup.AutoRetention.RunIntervalHours <= 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.run_interval_hours must be positive")
+			}
+			if c.UsageCleanup.AutoRetention.WindowDays <= 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.window_days must be positive")
+			}
+			if c.UsageCleanup.MaxRangeDays > 0 && c.UsageCleanup.AutoRetention.WindowDays > c.UsageCleanup.MaxRangeDays {
+				return fmt.Errorf("usage_cleanup.auto_retention.window_days must be less than or equal to usage_cleanup.max_range_days")
+			}
+			if c.UsageCleanup.AutoRetention.BackupExpireDays < 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.backup_expire_days must be non-negative")
+			}
+		} else {
+			if c.UsageCleanup.AutoRetention.RetainDays < 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.retain_days must be non-negative")
+			}
+			if c.UsageCleanup.AutoRetention.RunIntervalHours < 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.run_interval_hours must be non-negative")
+			}
+			if c.UsageCleanup.AutoRetention.WindowDays < 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.window_days must be non-negative")
+			}
+			if c.UsageCleanup.AutoRetention.BackupExpireDays < 0 {
+				return fmt.Errorf("usage_cleanup.auto_retention.backup_expire_days must be non-negative")
+			}
+		}
 	} else {
 		if c.UsageCleanup.MaxRangeDays < 0 {
 			return fmt.Errorf("usage_cleanup.max_range_days must be non-negative")
@@ -2265,6 +2316,21 @@ func (c *Config) Validate() error {
 		}
 		if c.UsageCleanup.TaskTimeoutSeconds < 0 {
 			return fmt.Errorf("usage_cleanup.task_timeout_seconds must be non-negative")
+		}
+		if c.UsageCleanup.AutoRetention.Enabled {
+			return fmt.Errorf("usage_cleanup.enabled must be true when usage_cleanup.auto_retention.enabled=true")
+		}
+		if c.UsageCleanup.AutoRetention.RetainDays < 0 {
+			return fmt.Errorf("usage_cleanup.auto_retention.retain_days must be non-negative")
+		}
+		if c.UsageCleanup.AutoRetention.RunIntervalHours < 0 {
+			return fmt.Errorf("usage_cleanup.auto_retention.run_interval_hours must be non-negative")
+		}
+		if c.UsageCleanup.AutoRetention.WindowDays < 0 {
+			return fmt.Errorf("usage_cleanup.auto_retention.window_days must be non-negative")
+		}
+		if c.UsageCleanup.AutoRetention.BackupExpireDays < 0 {
+			return fmt.Errorf("usage_cleanup.auto_retention.backup_expire_days must be non-negative")
 		}
 	}
 	if c.Idempotency.DefaultTTLSeconds <= 0 {

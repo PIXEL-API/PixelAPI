@@ -166,6 +166,8 @@ func NormalizeOpenAIPlanAccountLevel(planType string) string {
 
 func NormalizeOpenAISharedPoolAccountLevel(level string) string {
 	switch NormalizeAccountLevel(level) {
+	case AccountLevelUnknown:
+		return AccountLevelFree
 	case AccountLevelTeam:
 		return AccountLevelPlus
 	default:
@@ -215,7 +217,10 @@ func OpenAISharedPoolAllowedAccountLevels(requiredLevel string) []string {
 	if requiredRank == 0 {
 		return nil
 	}
-	levels := make([]string, 0, 4)
+	levels := make([]string, 0, 5)
+	if required == AccountLevelFree {
+		levels = append(levels, AccountLevelUnknown)
+	}
 	for _, level := range []string{AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam} {
 		if CanOpenAIAccountJoinSharedPool(level, required) {
 			levels = append(levels, level)

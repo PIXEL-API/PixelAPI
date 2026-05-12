@@ -680,6 +680,10 @@ export default {
     shareValidationFailed: '上次校验未通过：{reason}',
     shareValidationSuspended: '公共共享已暂停：{reason}',
     revalidateShare: '重新校验公共共享',
+    bulkRevalidateShare: '批量校验共享',
+    noRevalidatableShareAccounts: '没有可重新校验的公共共享账号',
+    bulkRevalidateSubmitted: '已提交公共共享批量校验任务，共 {count} 个账号',
+    bulkRevalidateCompleted: '公共共享批量校验已完成，共 {count} 个账号',
     shareValidationApproved: '公共共享校验已通过',
     shareValidationStillPending: '重新校验完成，账号仍处于待校验状态，请查看提示原因。',
     shareValidationFailedToRun: '重新校验失败',
@@ -1115,6 +1119,10 @@ export default {
     public: '公开',
     exclusiveTooltip: '管理员授权给你的专属分组',
     publicTooltip: '对所有用户公开的分组',
+    groupRates: {
+      title: '分组倍率与折算价格',
+      intervalMultiplierHint: '先按阶梯价格计算，再应用该分组倍率'
+    },
     columns: {
       name: '渠道名',
       description: '描述',
@@ -1651,7 +1659,8 @@ export default {
         REVENUE_TIME_RANGE_REQUIRED: '请选择日期范围',
         REVENUE_TIME_RANGE_INVALID: '结束日期必须晚于开始日期',
         REVENUE_GRANULARITY_INVALID: '粒度必须是按天或按小时',
-        REVENUE_TIME_RANGE_TOO_LARGE: '选择的日期范围过大'
+        REVENUE_TIME_RANGE_TOO_LARGE: '最多只能查询 366 天内的数据',
+        REVENUE_HOUR_RANGE_TOO_LARGE: '按小时最多只能查询 3 天内的数据'
       },
       sharePolicy: {
         title: '统一分成策略',
@@ -1724,7 +1733,8 @@ export default {
         errors: {
           REVENUE_TIME_RANGE_REQUIRED: '请选择日期范围',
           REVENUE_TIME_RANGE_INVALID: '结束日期必须晚于开始日期',
-          REVENUE_SHARE_STATUS_INVALID: '分成流水状态无效'
+          REVENUE_SHARE_STATUS_INVALID: '分成流水状态无效',
+          REVENUE_TIME_RANGE_TOO_LARGE: '最多只能查询 3 天内的分成流水'
         }
       }
     },
@@ -3350,7 +3360,9 @@ export default {
         resetStatusSuccess: '已成功重置 {count} 个账号状态',
         refreshTokenSuccess: '已成功刷新 {count} 个账号令牌',
         noRefreshableAccounts: '所选账号中没有可刷新令牌的 OAuth/Setup Token 账号',
-        partialSuccess: '操作部分完成：{success} 成功，{failed} 失败'
+        partialSuccess: '操作部分完成：{success} 成功，{failed} 失败',
+        asyncSubmitted: '已提交后台批量任务，共 {count} 个账号',
+        asyncTimeout: '后台批量任务仍在处理中，请稍后刷新查看结果'
       },
       bulkEdit: {
         title: '批量编辑账号',

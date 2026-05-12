@@ -34630,6 +34630,7 @@ type UsageCleanupTaskMutation struct {
 	appendfilters   json.RawMessage
 	created_by      *int64
 	addcreated_by   *int64
+	created_source  *string
 	deleted_rows    *int64
 	adddeleted_rows *int64
 	error_message   *string
@@ -34919,7 +34920,7 @@ func (m *UsageCleanupTaskMutation) CreatedBy() (r int64, exists bool) {
 // OldCreatedBy returns the old "created_by" field's value of the UsageCleanupTask entity.
 // If the UsageCleanupTask object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *UsageCleanupTaskMutation) OldCreatedBy(ctx context.Context) (v int64, err error) {
+func (m *UsageCleanupTaskMutation) OldCreatedBy(ctx context.Context) (v *int64, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
 	}
@@ -34951,10 +34952,60 @@ func (m *UsageCleanupTaskMutation) AddedCreatedBy() (r int64, exists bool) {
 	return *v, true
 }
 
+// ClearCreatedBy clears the value of the "created_by" field.
+func (m *UsageCleanupTaskMutation) ClearCreatedBy() {
+	m.created_by = nil
+	m.addcreated_by = nil
+	m.clearedFields[usagecleanuptask.FieldCreatedBy] = struct{}{}
+}
+
+// CreatedByCleared returns if the "created_by" field was cleared in this mutation.
+func (m *UsageCleanupTaskMutation) CreatedByCleared() bool {
+	_, ok := m.clearedFields[usagecleanuptask.FieldCreatedBy]
+	return ok
+}
+
 // ResetCreatedBy resets all changes to the "created_by" field.
 func (m *UsageCleanupTaskMutation) ResetCreatedBy() {
 	m.created_by = nil
 	m.addcreated_by = nil
+	delete(m.clearedFields, usagecleanuptask.FieldCreatedBy)
+}
+
+// SetCreatedSource sets the "created_source" field.
+func (m *UsageCleanupTaskMutation) SetCreatedSource(s string) {
+	m.created_source = &s
+}
+
+// CreatedSource returns the value of the "created_source" field in the mutation.
+func (m *UsageCleanupTaskMutation) CreatedSource() (r string, exists bool) {
+	v := m.created_source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedSource returns the old "created_source" field's value of the UsageCleanupTask entity.
+// If the UsageCleanupTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageCleanupTaskMutation) OldCreatedSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedSource: %w", err)
+	}
+	return oldValue.CreatedSource, nil
+}
+
+// ResetCreatedSource resets all changes to the "created_source" field.
+func (m *UsageCleanupTaskMutation) ResetCreatedSource() {
+	m.created_source = nil
 }
 
 // SetDeletedRows sets the "deleted_rows" field.
@@ -35313,7 +35364,7 @@ func (m *UsageCleanupTaskMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageCleanupTaskMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 12)
 	if m.created_at != nil {
 		fields = append(fields, usagecleanuptask.FieldCreatedAt)
 	}
@@ -35328,6 +35379,9 @@ func (m *UsageCleanupTaskMutation) Fields() []string {
 	}
 	if m.created_by != nil {
 		fields = append(fields, usagecleanuptask.FieldCreatedBy)
+	}
+	if m.created_source != nil {
+		fields = append(fields, usagecleanuptask.FieldCreatedSource)
 	}
 	if m.deleted_rows != nil {
 		fields = append(fields, usagecleanuptask.FieldDeletedRows)
@@ -35365,6 +35419,8 @@ func (m *UsageCleanupTaskMutation) Field(name string) (ent.Value, bool) {
 		return m.Filters()
 	case usagecleanuptask.FieldCreatedBy:
 		return m.CreatedBy()
+	case usagecleanuptask.FieldCreatedSource:
+		return m.CreatedSource()
 	case usagecleanuptask.FieldDeletedRows:
 		return m.DeletedRows()
 	case usagecleanuptask.FieldErrorMessage:
@@ -35396,6 +35452,8 @@ func (m *UsageCleanupTaskMutation) OldField(ctx context.Context, name string) (e
 		return m.OldFilters(ctx)
 	case usagecleanuptask.FieldCreatedBy:
 		return m.OldCreatedBy(ctx)
+	case usagecleanuptask.FieldCreatedSource:
+		return m.OldCreatedSource(ctx)
 	case usagecleanuptask.FieldDeletedRows:
 		return m.OldDeletedRows(ctx)
 	case usagecleanuptask.FieldErrorMessage:
@@ -35451,6 +35509,13 @@ func (m *UsageCleanupTaskMutation) SetField(name string, value ent.Value) error 
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetCreatedBy(v)
+		return nil
+	case usagecleanuptask.FieldCreatedSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedSource(v)
 		return nil
 	case usagecleanuptask.FieldDeletedRows:
 		v, ok := value.(int64)
@@ -35563,6 +35628,9 @@ func (m *UsageCleanupTaskMutation) AddField(name string, value ent.Value) error 
 // mutation.
 func (m *UsageCleanupTaskMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(usagecleanuptask.FieldCreatedBy) {
+		fields = append(fields, usagecleanuptask.FieldCreatedBy)
+	}
 	if m.FieldCleared(usagecleanuptask.FieldErrorMessage) {
 		fields = append(fields, usagecleanuptask.FieldErrorMessage)
 	}
@@ -35592,6 +35660,9 @@ func (m *UsageCleanupTaskMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *UsageCleanupTaskMutation) ClearField(name string) error {
 	switch name {
+	case usagecleanuptask.FieldCreatedBy:
+		m.ClearCreatedBy()
+		return nil
 	case usagecleanuptask.FieldErrorMessage:
 		m.ClearErrorMessage()
 		return nil
@@ -35629,6 +35700,9 @@ func (m *UsageCleanupTaskMutation) ResetField(name string) error {
 		return nil
 	case usagecleanuptask.FieldCreatedBy:
 		m.ResetCreatedBy()
+		return nil
+	case usagecleanuptask.FieldCreatedSource:
+		m.ResetCreatedSource()
 		return nil
 	case usagecleanuptask.FieldDeletedRows:
 		m.ResetDeletedRows()

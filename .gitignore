@@ -54,6 +54,7 @@ pnpm-debug.log*
 *.env
 !.env.example
 docker-compose.override.yml
+main_data.md
 
 # ===================
 # IDE / 编辑器
@@ -140,3 +141,4 @@ frontend/coverage/
 aicodex
 output/
 test/images/
+.gitignore

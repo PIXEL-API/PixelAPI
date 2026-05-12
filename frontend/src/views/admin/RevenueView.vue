@@ -77,7 +77,7 @@
               v-for="option in DAYS_OPTIONS"
               :key="option"
               type="button"
-              class="min-w-[64px] rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              class="min-w-[64px] rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
               :class="selectedRangeDays === option
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
@@ -292,7 +292,7 @@ import { extractI18nErrorMessage } from '@/utils/apiError'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler)
 
-type RangeDays = 7 | 30 | 90
+type RangeDays = 1 | 3 | 7 | 30 | 90
 type BreakdownKey = 'consumers' | 'shareOwners' | 'groups' | 'accounts' | 'models'
 type RevenueTab = 'overview' | 'sharePolicy' | 'shareSettlements'
 type BreakdownValueType = 'amount' | 'percent'
@@ -312,12 +312,14 @@ interface RevenueBreakdownDisplayItem {
   quinary_type: BreakdownValueType
 }
 
-const DAYS_OPTIONS: RangeDays[] = [7, 30, 90]
+const DAYS_OPTIONS: RangeDays[] = [1, 3, 7, 30, 90]
+const MAX_REVENUE_RANGE_DAYS = 366
+const MAX_HOURLY_REVENUE_RANGE_DAYS = 3
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
 
-const rangeDays = ref<RangeDays>(30)
+const rangeDays = ref<RangeDays>(1)
 const initialRange = getDateRange(rangeDays.value)
 const startDate = ref(initialRange.start)
 const endDate = ref(initialRange.end)
@@ -644,11 +646,11 @@ function mapShareOwnerBreakdownItem(item: RevenueShareOwnerBreakdownItem): Reven
 }
 
 function isRangeDisabled(days: RangeDays): boolean {
-  return granularity.value === 'hour' && days > 30
+  return granularity.value === 'hour' && days > MAX_HOURLY_REVENUE_RANGE_DAYS
 }
 
 function setRangeDays(days: RangeDays) {
-  if (isRangeDisabled(days) || rangeDays.value === days) return
+  if (isRangeDisabled(days) || (rangeDays.value === days && selectedRangeDays.value === days)) return
   rangeDays.value = days
   selectedRangeDays.value = days
   const range = getDateRange(days)
@@ -660,10 +662,10 @@ function setRangeDays(days: RangeDays) {
 function setGranularity(value: RevenueGranularity) {
   if (granularity.value === value) return
   granularity.value = value
-  if (value === 'hour' && rangeDays.value > 30) {
-    rangeDays.value = 30
-    selectedRangeDays.value = 30
-    const range = getDateRange(30)
+  if (value === 'hour' && getInclusiveDateSpanDays(startDate.value, endDate.value) > MAX_HOURLY_REVENUE_RANGE_DAYS) {
+    rangeDays.value = 1
+    selectedRangeDays.value = 1
+    const range = getDateRange(1)
     startDate.value = range.start
     endDate.value = range.end
   }
@@ -709,6 +711,14 @@ function validateDateRange(): boolean {
   }
   if (startDate.value > endDate.value) {
     appStore.showError(t('common.unknownError'))
+    return false
+  }
+  if (getInclusiveDateSpanDays(startDate.value, endDate.value) > MAX_REVENUE_RANGE_DAYS) {
+    appStore.showError(t('admin.revenue.errors.REVENUE_TIME_RANGE_TOO_LARGE'))
+    return false
+  }
+  if (granularity.value === 'hour' && getInclusiveDateSpanDays(startDate.value, endDate.value) > MAX_HOURLY_REVENUE_RANGE_DAYS) {
+    appStore.showError(t('admin.revenue.errors.REVENUE_HOUR_RANGE_TOO_LARGE'))
     return false
   }
   return true
@@ -776,6 +786,17 @@ function formatDateParam(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function getInclusiveDateSpanDays(start: string, end: string): number {
+  const startTime = parseDateParam(start).getTime()
+  const endTime = parseDateParam(end).getTime()
+  return Math.floor((endTime - startTime) / 86_400_000) + 1
+}
+
+function parseDateParam(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
 }
 
 function formatAmount(value: number): string {

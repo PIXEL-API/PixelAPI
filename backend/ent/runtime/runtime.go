@@ -1634,8 +1634,14 @@ func init() {
 			return nil
 		}
 	}()
+	// usagecleanuptaskDescCreatedSource is the schema descriptor for created_source field.
+	usagecleanuptaskDescCreatedSource := usagecleanuptaskFields[3].Descriptor()
+	// usagecleanuptask.DefaultCreatedSource holds the default value on creation for the created_source field.
+	usagecleanuptask.DefaultCreatedSource = usagecleanuptaskDescCreatedSource.Default.(string)
+	// usagecleanuptask.CreatedSourceValidator is a validator for the "created_source" field. It is called by the builders before save.
+	usagecleanuptask.CreatedSourceValidator = usagecleanuptaskDescCreatedSource.Validators[0].(func(string) error)
 	// usagecleanuptaskDescDeletedRows is the schema descriptor for deleted_rows field.
-	usagecleanuptaskDescDeletedRows := usagecleanuptaskFields[3].Descriptor()
+	usagecleanuptaskDescDeletedRows := usagecleanuptaskFields[4].Descriptor()
 	// usagecleanuptask.DefaultDeletedRows holds the default value on creation for the deleted_rows field.
 	usagecleanuptask.DefaultDeletedRows = usagecleanuptaskDescDeletedRows.Default.(int64)
 	usagelogFields := schema.UsageLog{}.Fields()

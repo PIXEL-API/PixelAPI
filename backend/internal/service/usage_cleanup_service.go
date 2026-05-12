@@ -19,30 +19,43 @@ import (
 )
 
 const (
-	usageCleanupWorkerName = "usage_cleanup_worker"
+	usageCleanupWorkerName        = "usage_cleanup_worker"
+	usageCleanupAutoRetentionName = "usage_cleanup_auto_retention"
 )
+
+type usageCleanupBackupCreator interface {
+	CreateUsageLogsArchive(ctx context.Context, input UsageLogsArchiveInput) (*BackupRecord, error)
+}
 
 // UsageCleanupService 负责创建与执行使用记录清理任务
 type UsageCleanupService struct {
 	repo        UsageCleanupRepository
 	timingWheel *TimingWheelService
 	dashboard   *DashboardAggregationService
+	backup      usageCleanupBackupCreator
 	cfg         *config.Config
 
-	running   int32
-	startOnce sync.Once
-	stopOnce  sync.Once
+	running     int32
+	autoRunning int32
+	startOnce   sync.Once
+	stopOnce    sync.Once
+	lastAutoRun atomic.Value // time.Time
 
 	workerCtx    context.Context
 	workerCancel context.CancelFunc
 }
 
 func NewUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboard *DashboardAggregationService, cfg *config.Config) *UsageCleanupService {
+	return NewUsageCleanupServiceWithBackup(repo, timingWheel, dashboard, nil, cfg)
+}
+
+func NewUsageCleanupServiceWithBackup(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboard *DashboardAggregationService, backup usageCleanupBackupCreator, cfg *config.Config) *UsageCleanupService {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	return &UsageCleanupService{
 		repo:         repo,
 		timingWheel:  timingWheel,
 		dashboard:    dashboard,
+		backup:       backup,
 		cfg:          cfg,
 		workerCtx:    workerCtx,
 		workerCancel: workerCancel,
@@ -97,6 +110,12 @@ func (s *UsageCleanupService) Start() {
 	s.startOnce.Do(func() {
 		s.timingWheel.ScheduleRecurring(usageCleanupWorkerName, interval, s.runOnce)
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] started (interval=%s max_range_days=%d batch_size=%d task_timeout=%s)", interval, s.maxRangeDays(), s.batchSize(), s.taskTimeout())
+		if s.autoRetentionEnabled() {
+			autoInterval := s.autoRetentionCheckInterval()
+			s.timingWheel.ScheduleRecurring(usageCleanupAutoRetentionName, autoInterval, s.runAutoRetentionIfDue)
+			s.timingWheel.Schedule(usageCleanupAutoRetentionName+":startup", time.Minute, s.runAutoRetentionOnce)
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention started (check_interval=%s run_interval=%s retain_days=%d window_days=%d backup_expire_days=%d)", autoInterval, s.autoRetentionInterval(), s.autoRetentionDays(), s.autoRetentionWindowDays(), s.autoRetentionBackupExpireDays())
+		}
 	})
 }
 
@@ -110,6 +129,8 @@ func (s *UsageCleanupService) Stop() {
 		}
 		if s.timingWheel != nil {
 			s.timingWheel.Cancel(usageCleanupWorkerName)
+			s.timingWheel.Cancel(usageCleanupAutoRetentionName)
+			s.timingWheel.Cancel(usageCleanupAutoRetentionName + ":startup")
 		}
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] stopped")
 	})
@@ -132,7 +153,14 @@ func (s *UsageCleanupService) CreateTask(ctx context.Context, filters UsageClean
 	if createdBy <= 0 {
 		return nil, infraerrors.BadRequest("USAGE_CLEANUP_INVALID_CREATOR", "invalid creator")
 	}
+	return s.createTask(ctx, filters, createdBy, true)
+}
 
+func (s *UsageCleanupService) createSystemTask(ctx context.Context, filters UsageCleanupFilters) (*UsageCleanupTask, error) {
+	return s.createTask(ctx, filters, UsageCleanupSystemActor, false)
+}
+
+func (s *UsageCleanupService) createTask(ctx context.Context, filters UsageCleanupFilters, createdBy int64, runImmediately bool) (*UsageCleanupTask, error) {
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task requested: operator=%d %s", createdBy, describeUsageCleanupFilters(filters))
 	sanitizeUsageCleanupFilters(&filters)
 	if err := s.validateFilters(filters); err != nil {
@@ -141,17 +169,114 @@ func (s *UsageCleanupService) CreateTask(ctx context.Context, filters UsageClean
 	}
 
 	task := &UsageCleanupTask{
-		Status:    UsageCleanupStatusPending,
-		Filters:   filters,
-		CreatedBy: createdBy,
+		Status:        UsageCleanupStatusPending,
+		Filters:       filters,
+		CreatedBy:     createdBy,
+		CreatedSource: usageCleanupCreatedSource(createdBy),
 	}
 	if err := s.repo.CreateTask(ctx, task); err != nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task persist failed: operator=%d err=%v %s", createdBy, err, describeUsageCleanupFilters(filters))
 		return nil, fmt.Errorf("create cleanup task: %w", err)
 	}
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task persisted: task=%d operator=%d status=%s deleted_rows=%d %s", task.ID, createdBy, task.Status, task.DeletedRows, describeUsageCleanupFilters(filters))
-	go s.runOnce()
+	if runImmediately {
+		go s.runOnce()
+	}
 	return task, nil
+}
+
+func (s *UsageCleanupService) runAutoRetentionOnce() {
+	if s == nil || !s.autoRetentionEnabled() {
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&s.autoRunning, 0, 1) {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention skipped: already_running=true")
+		return
+	}
+	defer atomic.StoreInt32(&s.autoRunning, 0)
+
+	if s.repo == nil || s.dashboard == nil || s.backup == nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention skipped: missing dependency repo=%t dashboard=%t backup=%t", s.repo != nil, s.dashboard != nil, s.backup != nil)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.autoRetentionTimeout())
+	defer cancel()
+
+	now := time.Now().UTC()
+	cutoff := truncateToDayUTC(now.AddDate(0, 0, -s.autoRetentionDays()))
+	oldest, err := s.repo.FindOldestUsageLogBefore(ctx, cutoff)
+	if err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention oldest usage lookup failed: err=%v", err)
+		return
+	}
+	if oldest == nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention skipped: no usage_logs before cutoff=%s", cutoff.Format(time.RFC3339))
+		return
+	}
+	start := truncateToDayUTC(oldest.UTC())
+	end := start.AddDate(0, 0, s.autoRetentionWindowDays())
+	if end.After(cutoff) {
+		end = cutoff
+	}
+	if !end.After(start) {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention skipped: invalid window start=%s end=%s", start.Format(time.RFC3339), end.Format(time.RFC3339))
+		return
+	}
+
+	filters := UsageCleanupFilters{StartTime: start, EndTime: usageCleanupInclusiveEnd(end)}
+
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention preparing: retain_days=%d start=%s end=%s", s.autoRetentionDays(), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	if err := s.dashboard.RecomputeRangeSync(ctx, start, end); err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention aggregation failed: err=%v", err)
+		return
+	}
+	if err := s.repo.SnapshotUsageLogs(ctx, filters); err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention daily snapshot failed: err=%v", err)
+		return
+	}
+
+	archiveStream, err := s.repo.ExportUsageLogs(ctx, filters)
+	if err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention usage_logs archive export failed: err=%v", err)
+		return
+	}
+	record, err := s.backup.CreateUsageLogsArchive(ctx, UsageLogsArchiveInput{
+		Stream:     archiveStream,
+		StartTime:  start,
+		EndTime:    end,
+		ExpireDays: s.autoRetentionBackupExpireDays(),
+	})
+	if err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention usage_logs archive failed: err=%v", err)
+		return
+	}
+	if record == nil || record.Status != "completed" {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention usage_logs archive incomplete: record=%v", record)
+		return
+	}
+
+	task, err := s.createSystemTask(ctx, filters)
+	if err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention create cleanup task failed: err=%v", err)
+		return
+	}
+	s.lastAutoRun.Store(time.Now().UTC())
+	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] auto retention cleanup task created: task=%d backup=%s start=%s end=%s", task.ID, record.ID, start.Format(time.RFC3339), end.Format(time.RFC3339))
+	s.runOnce()
+}
+
+func (s *UsageCleanupService) runAutoRetentionIfDue() {
+	if s == nil || !s.autoRetentionEnabled() {
+		return
+	}
+	lastAny := s.lastAutoRun.Load()
+	if lastAny != nil {
+		if last, ok := lastAny.(time.Time); ok && time.Since(last) < s.autoRetentionInterval() {
+			return
+		}
+	}
+	s.runAutoRetentionOnce()
 }
 
 func (s *UsageCleanupService) runOnce() {
@@ -247,7 +372,7 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task succeeded: task=%d deleted_rows=%d duration=%s", task.ID, deletedTotal, time.Since(start))
 	}
 
-	if s.dashboard != nil {
+	if s.dashboard != nil && task.CreatedSource != UsageCleanupCreatedSourceAutoRetention {
 		if err := s.dashboard.TriggerRecomputeRange(task.Filters.StartTime, task.Filters.EndTime); err != nil {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute failed: task=%d err=%v", task.ID, err)
 		} else {
@@ -386,6 +511,17 @@ func sanitizeUsageCleanupFilters(filters *UsageCleanupFilters) {
 	}
 }
 
+func usageCleanupCreatedSource(createdBy int64) string {
+	if createdBy == UsageCleanupSystemActor {
+		return UsageCleanupCreatedSourceAutoRetention
+	}
+	return UsageCleanupCreatedSourceAdmin
+}
+
+func usageCleanupInclusiveEnd(exclusiveEnd time.Time) time.Time {
+	return exclusiveEnd.Add(-time.Microsecond)
+}
+
 func (s *UsageCleanupService) maxRangeDays() int {
 	if s == nil || s.cfg == nil {
 		return 31
@@ -424,4 +560,52 @@ func (s *UsageCleanupService) taskTimeout() time.Duration {
 		return time.Duration(s.cfg.UsageCleanup.TaskTimeoutSeconds) * time.Second
 	}
 	return 30 * time.Minute
+}
+
+func (s *UsageCleanupService) autoRetentionEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.UsageCleanup.Enabled && s.cfg.UsageCleanup.AutoRetention.Enabled
+}
+
+func (s *UsageCleanupService) autoRetentionDays() int {
+	if s == nil || s.cfg == nil || s.cfg.UsageCleanup.AutoRetention.RetainDays <= 0 {
+		return 3
+	}
+	return s.cfg.UsageCleanup.AutoRetention.RetainDays
+}
+
+func (s *UsageCleanupService) autoRetentionWindowDays() int {
+	if s == nil || s.cfg == nil || s.cfg.UsageCleanup.AutoRetention.WindowDays <= 0 {
+		return 1
+	}
+	return s.cfg.UsageCleanup.AutoRetention.WindowDays
+}
+
+func (s *UsageCleanupService) autoRetentionInterval() time.Duration {
+	if s == nil || s.cfg == nil || s.cfg.UsageCleanup.AutoRetention.RunIntervalHours <= 0 {
+		return 24 * time.Hour
+	}
+	return time.Duration(s.cfg.UsageCleanup.AutoRetention.RunIntervalHours) * time.Hour
+}
+
+func (s *UsageCleanupService) autoRetentionCheckInterval() time.Duration {
+	interval := s.autoRetentionInterval()
+	if interval <= time.Hour {
+		return interval
+	}
+	return time.Hour
+}
+
+func (s *UsageCleanupService) autoRetentionBackupExpireDays() int {
+	if s == nil || s.cfg == nil {
+		return 14
+	}
+	return s.cfg.UsageCleanup.AutoRetention.BackupExpireDays
+}
+
+func (s *UsageCleanupService) autoRetentionTimeout() time.Duration {
+	timeout := 30*time.Minute + s.taskTimeout()
+	if timeout < time.Hour {
+		return time.Hour
+	}
+	return timeout
 }

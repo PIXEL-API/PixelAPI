@@ -103,6 +103,13 @@ type BackupRecord struct {
 	RestoredAt    string `json:"restored_at,omitempty"`
 }
 
+type UsageLogsArchiveInput struct {
+	Stream     io.ReadCloser
+	StartTime  time.Time
+	EndTime    time.Time
+	ExpireDays int
+}
+
 // BackupService 数据库备份恢复服务
 type BackupService struct {
 	settingRepo  SettingRepository
@@ -539,6 +546,111 @@ func (s *BackupService) CreateBackup(ctx context.Context, triggeredBy string, ex
 	return record, nil
 }
 
+func (s *BackupService) CreateUsageLogsArchive(ctx context.Context, input UsageLogsArchiveInput) (*BackupRecord, error) {
+	if input.Stream == nil {
+		return nil, infraerrors.BadRequest("USAGE_LOG_ARCHIVE_EMPTY_STREAM", "usage log archive stream is required")
+	}
+	defer func() { _ = input.Stream.Close() }()
+	if !input.EndTime.After(input.StartTime) {
+		return nil, infraerrors.BadRequest("USAGE_LOG_ARCHIVE_INVALID_RANGE", "usage log archive range is invalid")
+	}
+	if s.shuttingDown.Load() {
+		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")
+	}
+
+	s.opMu.Lock()
+	if s.backingUp {
+		s.opMu.Unlock()
+		return nil, ErrBackupInProgress
+	}
+	s.backingUp = true
+	s.opMu.Unlock()
+	defer func() {
+		s.opMu.Lock()
+		s.backingUp = false
+		s.opMu.Unlock()
+	}()
+
+	s3Cfg, err := s.loadS3Config(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s3Cfg == nil || !s3Cfg.IsConfigured() {
+		return nil, ErrBackupS3NotConfigured
+	}
+	objectStore, err := s.getOrCreateStore(ctx, s3Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init object store: %w", err)
+	}
+
+	now := time.Now()
+	fileName := fmt.Sprintf("usage_logs_%s_%s.ndjson.gz", input.StartTime.UTC().Format("20060102_150405"), input.EndTime.UTC().Format("20060102_150405"))
+	record := &BackupRecord{
+		ID:          uuid.New().String()[:8],
+		Status:      "running",
+		BackupType:  "usage_logs_archive",
+		FileName:    fileName,
+		S3Key:       s.buildS3Key(s3Cfg, fileName),
+		TriggeredBy: "usage_cleanup_auto",
+		StartedAt:   now.Format(time.RFC3339),
+	}
+	if input.ExpireDays > 0 {
+		record.ExpiresAt = now.AddDate(0, 0, input.ExpireDays).Format(time.RFC3339)
+	}
+
+	pr, pw := io.Pipe()
+	gzipDone := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err := fmt.Errorf("usage logs archive gzip panic: %v", r)
+				_ = pw.CloseWithError(err)
+				gzipDone <- err
+			}
+		}()
+		gzWriter := gzip.NewWriter(pw)
+		var gzErr error
+		_, gzErr = io.Copy(gzWriter, input.Stream)
+		if closeErr := gzWriter.Close(); closeErr != nil && gzErr == nil {
+			gzErr = closeErr
+		}
+		if gzErr != nil {
+			_ = pw.CloseWithError(gzErr)
+		} else {
+			_ = pw.Close()
+		}
+		gzipDone <- gzErr
+	}()
+
+	sizeBytes, err := objectStore.Upload(ctx, record.S3Key, pr, "application/gzip")
+	if err != nil {
+		_ = pr.CloseWithError(err)
+		gzErr := <-gzipDone
+		record.Status = "failed"
+		record.ErrorMsg = fmt.Sprintf("S3 upload failed: %v", err)
+		if gzErr != nil {
+			record.ErrorMsg = fmt.Sprintf("gzip/archive failed: %v", gzErr)
+		}
+		record.FinishedAt = time.Now().Format(time.RFC3339)
+		_ = s.saveRecord(ctx, record)
+		return record, fmt.Errorf("usage logs archive upload: %w", err)
+	}
+	if gzErr := <-gzipDone; gzErr != nil {
+		record.Status = "failed"
+		record.ErrorMsg = fmt.Sprintf("gzip/archive failed: %v", gzErr)
+		record.FinishedAt = time.Now().Format(time.RFC3339)
+		_ = s.saveRecord(ctx, record)
+		return record, gzErr
+	}
+	record.SizeBytes = sizeBytes
+	record.Status = "completed"
+	record.FinishedAt = time.Now().Format(time.RFC3339)
+	if err := s.saveRecord(ctx, record); err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] 保存 usage_logs 归档记录失败: %v", err)
+	}
+	return record, nil
+}
+
 // StartBackup 异步创建备份，立即返回 running 状态的记录
 func (s *BackupService) StartBackup(ctx context.Context, triggeredBy string, expireDays int) (*BackupRecord, error) {
 	if s.shuttingDown.Load() {
@@ -729,6 +841,9 @@ func (s *BackupService) RestoreBackup(ctx context.Context, backupID string) erro
 	if record.Status != "completed" {
 		return infraerrors.BadRequest("BACKUP_NOT_COMPLETED", "can only restore from a completed backup")
 	}
+	if record.BackupType != "" && record.BackupType != "postgres" {
+		return infraerrors.BadRequest("BACKUP_TYPE_NOT_RESTORABLE", "only full postgres backups can be restored automatically")
+	}
 
 	s3Cfg, err := s.loadS3Config(ctx)
 	if err != nil {
@@ -791,6 +906,9 @@ func (s *BackupService) StartRestore(ctx context.Context, backupID string) (*Bac
 	}
 	if record.Status != "completed" {
 		return nil, infraerrors.BadRequest("BACKUP_NOT_COMPLETED", "can only restore from a completed backup")
+	}
+	if record.BackupType != "" && record.BackupType != "postgres" {
+		return nil, infraerrors.BadRequest("BACKUP_TYPE_NOT_RESTORABLE", "only full postgres backups can be restored automatically")
 	}
 
 	s3Cfg, err := s.loadS3Config(ctx)

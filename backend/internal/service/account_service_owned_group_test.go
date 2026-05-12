@@ -512,7 +512,7 @@ func TestAccountServiceResolveOwnedPublicShareGroupRejectsHigherPoolForLowerLeve
 	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
 }
 
-func TestAccountServiceResolveOwnedPublicShareGroupRejectsUnknownOpenAILevel(t *testing.T) {
+func TestAccountServiceResolveOwnedPublicShareGroupTreatsUnknownOpenAILevelAsFree(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
@@ -521,9 +521,10 @@ func TestAccountServiceResolveOwnedPublicShareGroupRejectsUnknownOpenAILevel(t *
 		},
 	}
 
-	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelUnknown})
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelUnknown})
 
-	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
+	require.NoError(t, err)
+	require.Equal(t, int64(10), group.ID)
 }
 
 func TestShouldRepairSuspectedOpenAIFreeAccount(t *testing.T) {

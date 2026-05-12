@@ -1339,7 +1339,8 @@ var (
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "status", Type: field.TypeString, Size: 20},
 		{Name: "filters", Type: field.TypeJSON},
-		{Name: "created_by", Type: field.TypeInt64},
+		{Name: "created_by", Type: field.TypeInt64, Nullable: true},
+		{Name: "created_source", Type: field.TypeString, Size: 50, Default: "admin"},
 		{Name: "deleted_rows", Type: field.TypeInt64, Default: 0},
 		{Name: "error_message", Type: field.TypeString, Nullable: true},
 		{Name: "canceled_by", Type: field.TypeInt64, Nullable: true},
@@ -1366,7 +1367,7 @@ var (
 			{
 				Name:    "usagecleanuptask_canceled_at",
 				Unique:  false,
-				Columns: []*schema.Column{UsageCleanupTasksColumns[9]},
+				Columns: []*schema.Column{UsageCleanupTasksColumns[10]},
 			},
 		},
 	}

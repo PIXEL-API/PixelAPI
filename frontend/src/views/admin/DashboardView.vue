@@ -586,7 +586,7 @@ const onDateRangeChange = (range: {
     granularity.value = 'day'
   }
 
-  loadChartData()
+  loadDashboardStats()
 }
 
 // Load data

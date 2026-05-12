@@ -13,12 +13,16 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+const revenueSnapshotBusinessTimezone = "Asia/Shanghai"
+
 const (
 	RevenueGranularityDay  = "day"
 	RevenueGranularityHour = "hour"
 
 	defaultRevenueTopLimit = 10
 	maxRevenueTopLimit     = 50
+	maxRevenueLiveRange    = 3 * 24 * time.Hour
+	maxRevenueSummaryRange = 366 * 24 * time.Hour
 
 	revenueAffiliateActionAccrue   = "accrue"
 	revenueAffiliateActionTransfer = "transfer"
@@ -258,6 +262,9 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 	if !params.EndTime.After(params.StartTime) {
 		return nil, 0, infraerrors.BadRequest("REVENUE_TIME_RANGE_INVALID", "end_time must be after start_time")
 	}
+	if params.EndTime.Sub(params.StartTime) > maxRevenueLiveRange {
+		return nil, 0, infraerrors.BadRequest("REVENUE_TIME_RANGE_TOO_LARGE", "date range exceeds 3 days")
+	}
 	params.Page, params.PageSize = normalizeRevenueSettlementPagination(params.Page, params.PageSize)
 	status, err := normalizeRevenueSettlementStatus(params.Status)
 	if err != nil {
@@ -443,11 +450,11 @@ func validateRevenueQueryParams(params RevenueQueryParams) error {
 		return infraerrors.BadRequest("REVENUE_GRANULARITY_INVALID", "granularity must be day or hour")
 	}
 	window := params.EndTime.Sub(params.StartTime)
-	if window > 366*24*time.Hour {
+	if window > maxRevenueSummaryRange {
 		return infraerrors.BadRequest("REVENUE_TIME_RANGE_TOO_LARGE", "date range exceeds 366 days")
 	}
-	if params.Granularity == RevenueGranularityHour && window > 31*24*time.Hour {
-		return infraerrors.BadRequest("REVENUE_TIME_RANGE_TOO_LARGE", "hour granularity supports at most 31 days")
+	if params.Granularity == RevenueGranularityHour && window > maxRevenueLiveRange {
+		return infraerrors.BadRequest("REVENUE_TIME_RANGE_TOO_LARGE", "hour granularity supports at most 3 days")
 	}
 	if params.UserID != nil && *params.UserID <= 0 {
 		return infraerrors.BadRequest("REVENUE_USER_ID_INVALID", "user_id must be a positive integer")
@@ -576,6 +583,52 @@ func revenueBucketExpression(column, granularity string) string {
 	return fmt.Sprintf("TO_CHAR(%s AT TIME ZONE $3, 'YYYY-MM-DD')", column)
 }
 
+func revenueSnapshotDateRange(params RevenueQueryParams) (string, string) {
+	return revenueSnapshotBusinessDate(params.StartTime), revenueSnapshotBusinessDate(params.EndTime)
+}
+
+func shouldUseRevenueDailySnapshots(params RevenueQueryParams) bool {
+	return params.Granularity == RevenueGranularityDay &&
+		strings.TrimSpace(params.Timezone) == revenueSnapshotBusinessTimezone &&
+		isRevenueSnapshotBusinessFullDayRange(params.StartTime, params.EndTime)
+}
+
+func revenueSnapshotBusinessLocation() *time.Location {
+	loc, err := time.LoadLocation(revenueSnapshotBusinessTimezone)
+	if err != nil {
+		return time.FixedZone(revenueSnapshotBusinessTimezone, 8*60*60)
+	}
+	return loc
+}
+
+func revenueSnapshotBusinessDate(t time.Time) string {
+	return t.In(revenueSnapshotBusinessLocation()).Format("2006-01-02")
+}
+
+func isRevenueSnapshotBusinessFullDayRange(start, end time.Time) bool {
+	if !end.After(start) {
+		return false
+	}
+	loc := revenueSnapshotBusinessLocation()
+	startLocal := start.In(loc)
+	endLocal := end.In(loc)
+	return startLocal.Hour() == 0 &&
+		startLocal.Minute() == 0 &&
+		startLocal.Second() == 0 &&
+		startLocal.Nanosecond() == 0 &&
+		endLocal.Hour() == 0 &&
+		endLocal.Minute() == 0 &&
+		endLocal.Second() == 0 &&
+		endLocal.Nanosecond() == 0
+}
+
+func revenueSnapshotUserFilter(column string, userID *int64, placeholder int) string {
+	if userID == nil {
+		return ""
+	}
+	return fmt.Sprintf(" AND %s = $%d", column, placeholder)
+}
+
 func (s *RevenueService) fillRevenueCashStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
 	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 6)
 	query := `
@@ -659,6 +712,10 @@ func (s *RevenueService) fillRevenueCashStats(ctx context.Context, params Revenu
 }
 
 func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	if shouldUseRevenueDailySnapshots(params) {
+		return s.fillRevenueUsageStatsFromSnapshots(ctx, params, out, pointIndex)
+	}
+
 	accountCostExpr := "COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)"
 	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 3)
 	query := fmt.Sprintf(`
@@ -724,6 +781,141 @@ func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params Reven
 	return nil
 }
 
+func (s *RevenueService) fillRevenueUsageStatsFromSnapshots(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	startDate, endDate := revenueSnapshotDateRange(params)
+	statsSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 5)
+	statsLiveUserFilter := revenueSnapshotUserFilter("ul.user_id", params.UserID, 5)
+	query := fmt.Sprintf(`
+		WITH snapshot_days AS (
+			SELECT DISTINCT bucket_date
+			FROM revenue_daily_dimension_snapshots
+			WHERE bucket_date >= $1::date AND bucket_date < $2::date
+				%s
+		),
+		combined AS (
+			SELECT
+				s.bucket_date,
+				SUM(s.total_requests)::bigint AS requests,
+				SUM(s.total_tokens)::bigint AS total_tokens,
+				SUM(s.standard_cost)::double precision AS standard_cost,
+				SUM(s.consumed_revenue)::double precision AS consumed_revenue,
+				SUM(s.account_cost)::double precision AS account_cost
+			FROM revenue_daily_dimension_snapshots s
+			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+				%s
+			GROUP BY s.bucket_date
+			UNION ALL
+			SELECT
+				(ul.created_at AT TIME ZONE 'Asia/Shanghai')::date AS bucket_date,
+				COUNT(*)::bigint AS requests,
+				COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0)::bigint AS total_tokens,
+				COALESCE(SUM(ul.total_cost), 0)::double precision AS standard_cost,
+				COALESCE(SUM(ul.actual_cost), 0)::double precision AS consumed_revenue,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0)::double precision AS account_cost
+			FROM usage_logs ul
+			WHERE ul.created_at >= $3 AND ul.created_at < $4
+				AND NOT EXISTS (
+					SELECT 1
+					FROM snapshot_days sd
+					WHERE sd.bucket_date = (ul.created_at AT TIME ZONE 'Asia/Shanghai')::date
+				)
+				%s
+			GROUP BY 1
+		)
+		SELECT
+			COALESCE(SUM(requests), 0)::bigint,
+			COALESCE(SUM(total_tokens), 0)::bigint,
+			COALESCE(SUM(standard_cost), 0)::double precision,
+			COALESCE(SUM(consumed_revenue), 0)::double precision,
+			COALESCE(SUM(account_cost), 0)::double precision
+		FROM combined
+	`, statsSnapshotUserFilter, statsSnapshotUserFilter, statsLiveUserFilter)
+	args := []any{startDate, endDate, params.StartTime, params.EndTime}
+	if params.UserID != nil {
+		args = append(args, *params.UserID)
+	}
+	if err := s.querySingle(ctx, query, args,
+		&out.Usage.Requests,
+		&out.Usage.TotalTokens,
+		&out.Usage.StandardCost,
+		&out.Usage.ConsumedRevenue,
+		&out.Usage.AccountCost,
+	); err != nil {
+		return fmt.Errorf("query revenue usage snapshot stats: %w", err)
+	}
+
+	trendSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 6)
+	trendLiveUserFilter := revenueSnapshotUserFilter("ul.user_id", params.UserID, 6)
+	trendQuery := fmt.Sprintf(`
+		WITH snapshot_days AS (
+			SELECT DISTINCT bucket_date
+			FROM revenue_daily_dimension_snapshots
+			WHERE bucket_date >= $1::date AND bucket_date < $2::date
+				%s
+		),
+		combined AS (
+			SELECT
+				TO_CHAR(s.bucket_date::timestamp, 'YYYY-MM-DD') AS bucket,
+				SUM(s.total_requests)::bigint AS requests,
+				SUM(s.consumed_revenue)::double precision AS consumed_revenue,
+				SUM(s.account_cost)::double precision AS account_cost
+			FROM revenue_daily_dimension_snapshots s
+			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+				%s
+			GROUP BY 1
+			UNION ALL
+			SELECT
+				TO_CHAR(ul.created_at AT TIME ZONE $5, 'YYYY-MM-DD') AS bucket,
+				COUNT(*)::bigint AS requests,
+				COALESCE(SUM(ul.actual_cost), 0)::double precision AS consumed_revenue,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0)::double precision AS account_cost
+			FROM usage_logs ul
+			WHERE ul.created_at >= $3 AND ul.created_at < $4
+				AND NOT EXISTS (
+					SELECT 1
+					FROM snapshot_days sd
+					WHERE sd.bucket_date = (ul.created_at AT TIME ZONE 'Asia/Shanghai')::date
+				)
+				%s
+			GROUP BY 1
+		)
+		SELECT
+			bucket,
+			COALESCE(SUM(requests), 0)::bigint,
+			COALESCE(SUM(consumed_revenue), 0)::double precision,
+			COALESCE(SUM(account_cost), 0)::double precision
+		FROM combined
+		GROUP BY bucket
+		ORDER BY bucket
+	`, trendSnapshotUserFilter, trendSnapshotUserFilter, trendLiveUserFilter)
+	trendArgs := []any{startDate, endDate, params.StartTime, params.EndTime, params.Timezone}
+	if params.UserID != nil {
+		trendArgs = append(trendArgs, *params.UserID)
+	}
+	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
+	if err != nil {
+		return fmt.Errorf("query revenue usage snapshot trend: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var bucket string
+		var requests int64
+		var consumedRevenue, accountCost float64
+		if err := rows.Scan(&bucket, &requests, &consumedRevenue, &accountCost); err != nil {
+			return fmt.Errorf("scan revenue usage snapshot trend: %w", err)
+		}
+		if idx, ok := pointIndex[bucket]; ok {
+			out.Trend[idx].Requests = requests
+			out.Trend[idx].ConsumedRevenue = consumedRevenue
+			out.Trend[idx].AccountCost = accountCost
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate revenue usage snapshot trend: %w", err)
+	}
+	return nil
+}
+
 func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
 	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 5)
 	query := `
@@ -779,6 +971,10 @@ func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params R
 }
 
 func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	if shouldUseRevenueDailySnapshots(params) {
+		return s.fillRevenueShareStatsFromSnapshots(ctx, params, out, pointIndex)
+	}
+
 	userFilter, userArgs := revenueUserFilter("consumer_user_id", params.UserID, 4)
 	query := `
 		SELECT
@@ -838,6 +1034,142 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate revenue share trend: %w", err)
+	}
+	return nil
+}
+
+func (s *RevenueService) fillRevenueShareStatsFromSnapshots(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	startDate, endDate := revenueSnapshotDateRange(params)
+	statsSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 5)
+	statsLiveUserFilter := revenueSnapshotUserFilter("ase.consumer_user_id", params.UserID, 5)
+	statsStatusPlaceholder := nextRevenuePlaceholder(params.UserID, 5)
+	query := fmt.Sprintf(`
+		WITH snapshot_days AS (
+			SELECT DISTINCT bucket_date
+			FROM revenue_daily_dimension_snapshots
+			WHERE bucket_date >= $1::date AND bucket_date < $2::date
+				%s
+		),
+		combined AS (
+			SELECT
+				s.bucket_date,
+				SUM(s.share_consumer_charge)::double precision AS consumer_charge,
+				SUM(s.share_account_cost)::double precision AS account_cost,
+				SUM(s.share_owner_credit)::double precision AS owner_credit,
+				SUM(s.share_platform_fee)::double precision AS platform_fee,
+				SUM(CASE WHEN s.share_owner_credit > 0 OR s.share_platform_fee > 0 THEN s.total_requests ELSE 0 END)::bigint AS settlement_count
+			FROM revenue_daily_dimension_snapshots s
+			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+				%s
+			GROUP BY s.bucket_date
+			UNION ALL
+			SELECT
+				(ase.created_at AT TIME ZONE 'Asia/Shanghai')::date AS bucket_date,
+				COALESCE(SUM(ase.consumer_charge), 0)::double precision AS consumer_charge,
+				COALESCE(SUM(ase.account_cost), 0)::double precision AS account_cost,
+				COALESCE(SUM(ase.owner_credit), 0)::double precision AS owner_credit,
+				COALESCE(SUM(ase.platform_fee), 0)::double precision AS platform_fee,
+				COUNT(*)::bigint AS settlement_count
+			FROM account_share_settlement_entries ase
+			WHERE ase.created_at >= $3 AND ase.created_at < $4 AND ase.status = $%d
+				AND ase.consumer_user_id <> ase.owner_user_id
+				AND NOT EXISTS (
+					SELECT 1
+					FROM snapshot_days sd
+					WHERE sd.bucket_date = (ase.created_at AT TIME ZONE 'Asia/Shanghai')::date
+				)
+				%s
+			GROUP BY 1
+		)
+		SELECT
+			COALESCE(SUM(consumer_charge), 0)::double precision,
+			COALESCE(SUM(account_cost), 0)::double precision,
+			COALESCE(SUM(owner_credit), 0)::double precision,
+			COALESCE(SUM(platform_fee), 0)::double precision,
+			COALESCE(SUM(settlement_count), 0)::bigint
+		FROM combined
+	`, statsSnapshotUserFilter, statsSnapshotUserFilter, statsStatusPlaceholder, statsLiveUserFilter)
+	args := []any{startDate, endDate, params.StartTime, params.EndTime}
+	if params.UserID != nil {
+		args = append(args, *params.UserID)
+	}
+	args = append(args, revenueShareStatusApplied)
+	if err := s.querySingle(ctx, query, args,
+		&out.Adjustments.ShareConsumerCharge,
+		&out.Adjustments.ShareAccountCost,
+		&out.Adjustments.ShareOwnerCredit,
+		&out.Adjustments.SharePlatformFee,
+		&out.Adjustments.ShareSettlementCount,
+	); err != nil {
+		return fmt.Errorf("query revenue share snapshot stats: %w", err)
+	}
+
+	trendSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 6)
+	trendLiveUserFilter := revenueSnapshotUserFilter("ase.consumer_user_id", params.UserID, 6)
+	trendStatusPlaceholder := nextRevenuePlaceholder(params.UserID, 6)
+	trendQuery := fmt.Sprintf(`
+		WITH snapshot_days AS (
+			SELECT DISTINCT bucket_date
+			FROM revenue_daily_dimension_snapshots
+			WHERE bucket_date >= $1::date AND bucket_date < $2::date
+				%s
+		),
+		combined AS (
+			SELECT
+				TO_CHAR(s.bucket_date::timestamp, 'YYYY-MM-DD') AS bucket,
+				SUM(s.share_owner_credit)::double precision AS owner_credit,
+				SUM(s.share_platform_fee)::double precision AS platform_fee
+			FROM revenue_daily_dimension_snapshots s
+			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+				%s
+			GROUP BY 1
+			UNION ALL
+			SELECT
+				TO_CHAR(ase.created_at AT TIME ZONE $5, 'YYYY-MM-DD') AS bucket,
+				COALESCE(SUM(ase.owner_credit), 0)::double precision AS owner_credit,
+				COALESCE(SUM(ase.platform_fee), 0)::double precision AS platform_fee
+			FROM account_share_settlement_entries ase
+			WHERE ase.created_at >= $3 AND ase.created_at < $4 AND ase.status = $%d
+				AND ase.consumer_user_id <> ase.owner_user_id
+				AND NOT EXISTS (
+					SELECT 1
+					FROM snapshot_days sd
+					WHERE sd.bucket_date = (ase.created_at AT TIME ZONE 'Asia/Shanghai')::date
+				)
+				%s
+			GROUP BY 1
+		)
+		SELECT
+			bucket,
+			COALESCE(SUM(owner_credit), 0)::double precision,
+			COALESCE(SUM(platform_fee), 0)::double precision
+		FROM combined
+		GROUP BY bucket
+		ORDER BY bucket
+	`, trendSnapshotUserFilter, trendSnapshotUserFilter, trendStatusPlaceholder, trendLiveUserFilter)
+	trendArgs := []any{startDate, endDate, params.StartTime, params.EndTime, params.Timezone}
+	if params.UserID != nil {
+		trendArgs = append(trendArgs, *params.UserID)
+	}
+	trendArgs = append(trendArgs, revenueShareStatusApplied)
+	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
+	if err != nil {
+		return fmt.Errorf("query revenue share snapshot trend: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var bucket string
+		var ownerCredit, platformFee float64
+		if err := rows.Scan(&bucket, &ownerCredit, &platformFee); err != nil {
+			return fmt.Errorf("scan revenue share snapshot trend: %w", err)
+		}
+		if idx, ok := pointIndex[bucket]; ok {
+			out.Trend[idx].ShareOwnerCredit = ownerCredit
+			out.Trend[idx].SharePlatformFee = platformFee
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate revenue share snapshot trend: %w", err)
 	}
 	return nil
 }
@@ -975,6 +1307,10 @@ const (
 )
 
 func (s *RevenueService) queryRevenueBreakdown(ctx context.Context, params RevenueQueryParams, kind revenueBreakdownKind) ([]RevenueBreakdownItem, error) {
+	if shouldUseRevenueDailySnapshots(params) {
+		return s.queryRevenueBreakdownFromSnapshots(ctx, params, kind)
+	}
+
 	const accountCostExpr = "COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)"
 	var selectExpr string
 	var joinExpr string
@@ -1060,7 +1396,238 @@ func (s *RevenueService) queryRevenueBreakdown(ctx context.Context, params Reven
 	return items, nil
 }
 
+func (s *RevenueService) queryRevenueBreakdownFromSnapshots(ctx context.Context, params RevenueQueryParams, kind revenueBreakdownKind) ([]RevenueBreakdownItem, error) {
+	startDate, endDate := revenueSnapshotDateRange(params)
+	var snapshotSelectExpr string
+	var snapshotGroupExpr string
+	var liveSelectExpr string
+	var liveGroupExpr string
+	var joinExpr string
+
+	switch kind {
+	case revenueBreakdownUsers:
+		snapshotSelectExpr = "s.user_id AS id"
+		snapshotGroupExpr = "s.user_id"
+		liveSelectExpr = "ul.user_id AS id"
+		liveGroupExpr = "ul.user_id"
+		joinExpr = "LEFT JOIN users u ON u.id = rolled.id"
+	case revenueBreakdownGroups:
+		snapshotSelectExpr = "COALESCE(s.group_id, 0) AS id"
+		snapshotGroupExpr = "COALESCE(s.group_id, 0)"
+		liveSelectExpr = "COALESCE(ul.group_id, 0) AS id"
+		liveGroupExpr = "COALESCE(ul.group_id, 0)"
+		joinExpr = "LEFT JOIN groups g ON g.id = rolled.id"
+	case revenueBreakdownAccounts:
+		snapshotSelectExpr = "s.account_id AS id"
+		snapshotGroupExpr = "s.account_id"
+		liveSelectExpr = "ul.account_id AS id"
+		liveGroupExpr = "ul.account_id"
+		joinExpr = "LEFT JOIN accounts a ON a.id = rolled.id"
+	case revenueBreakdownModels:
+		snapshotSelectExpr = "0 AS id, COALESCE(NULLIF(TRIM(s.requested_model), ''), NULLIF(TRIM(s.model), ''), 'unknown') AS model_name"
+		snapshotGroupExpr = "COALESCE(NULLIF(TRIM(s.requested_model), ''), NULLIF(TRIM(s.model), ''), 'unknown')"
+		liveSelectExpr = "0 AS id, COALESCE(NULLIF(TRIM(ul.requested_model), ''), NULLIF(TRIM(ul.model), ''), 'unknown') AS model_name"
+		liveGroupExpr = "COALESCE(NULLIF(TRIM(ul.requested_model), ''), NULLIF(TRIM(ul.model), ''), 'unknown')"
+	default:
+		return nil, infraerrors.BadRequest("REVENUE_BREAKDOWN_INVALID", "invalid breakdown kind")
+	}
+
+	statsSnapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 6)
+	statsLiveUserFilter := revenueSnapshotUserFilter("ul.user_id", params.UserID, 6)
+	var query string
+	if kind == revenueBreakdownModels {
+		query = fmt.Sprintf(`
+			WITH snapshot_days AS (
+				SELECT DISTINCT bucket_date
+				FROM revenue_daily_dimension_snapshots
+				WHERE bucket_date >= $1::date AND bucket_date < $2::date
+					%s
+			),
+			combined AS (
+				SELECT
+					%s,
+					SUM(s.total_requests)::bigint AS requests,
+					SUM(s.total_tokens)::bigint AS total_tokens,
+					SUM(s.consumed_revenue)::double precision AS consumed_revenue,
+					SUM(s.account_cost)::double precision AS account_cost,
+					SUM(s.share_owner_credit)::double precision AS share_owner_credit
+				FROM revenue_daily_dimension_snapshots s
+				WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+					%s
+				GROUP BY %s
+				UNION ALL
+				SELECT
+					%s,
+					COUNT(*)::bigint AS requests,
+					COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0)::bigint AS total_tokens,
+					COALESCE(SUM(ul.actual_cost), 0)::double precision AS consumed_revenue,
+					COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0)::double precision AS account_cost,
+					COALESCE(SUM(ase.owner_credit), 0)::double precision AS share_owner_credit
+				FROM usage_logs ul
+				LEFT JOIN account_share_settlement_entries ase ON ase.usage_log_id = ul.id
+					AND ase.status = $5
+					AND ase.consumer_user_id <> ase.owner_user_id
+				WHERE ul.created_at >= $3 AND ul.created_at < $4
+					AND NOT EXISTS (
+						SELECT 1
+						FROM snapshot_days sd
+						WHERE sd.bucket_date = (ul.created_at AT TIME ZONE 'Asia/Shanghai')::date
+					)
+					%s
+				GROUP BY %s
+			)
+			SELECT *
+			FROM (
+				SELECT
+					id,
+					model_name AS name,
+					'' AS secondary,
+					COALESCE(SUM(requests), 0)::bigint AS requests,
+					COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+					COALESCE(SUM(consumed_revenue), 0)::double precision AS consumed_revenue,
+					COALESCE(SUM(account_cost), 0)::double precision AS account_cost,
+					COALESCE(SUM(share_owner_credit), 0)::double precision AS share_owner_credit
+				FROM combined
+				GROUP BY id, model_name
+			) rolled_models
+			ORDER BY rolled_models.consumed_revenue DESC, rolled_models.requests DESC
+			LIMIT $%d
+		`, statsSnapshotUserFilter, snapshotSelectExpr, statsSnapshotUserFilter, snapshotGroupExpr, liveSelectExpr, statsLiveUserFilter, liveGroupExpr, nextRevenuePlaceholder(params.UserID, 6))
+	} else {
+		nameExpr, secondaryExpr := revenueBreakdownNameExpressions(kind)
+		query = fmt.Sprintf(`
+			WITH snapshot_days AS (
+				SELECT DISTINCT bucket_date
+				FROM revenue_daily_dimension_snapshots
+				WHERE bucket_date >= $1::date AND bucket_date < $2::date
+					%s
+			),
+			combined AS (
+				SELECT
+					%s,
+					SUM(s.total_requests)::bigint AS requests,
+					SUM(s.total_tokens)::bigint AS total_tokens,
+					SUM(s.consumed_revenue)::double precision AS consumed_revenue,
+					SUM(s.account_cost)::double precision AS account_cost,
+					SUM(s.share_owner_credit)::double precision AS share_owner_credit
+				FROM revenue_daily_dimension_snapshots s
+				WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+					%s
+				GROUP BY %s
+				UNION ALL
+				SELECT
+					%s,
+					COUNT(*)::bigint AS requests,
+					COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0)::bigint AS total_tokens,
+					COALESCE(SUM(ul.actual_cost), 0)::double precision AS consumed_revenue,
+					COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0)::double precision AS account_cost,
+					COALESCE(SUM(ase.owner_credit), 0)::double precision AS share_owner_credit
+				FROM usage_logs ul
+				LEFT JOIN account_share_settlement_entries ase ON ase.usage_log_id = ul.id
+					AND ase.status = $5
+					AND ase.consumer_user_id <> ase.owner_user_id
+				WHERE ul.created_at >= $3 AND ul.created_at < $4
+					AND NOT EXISTS (
+						SELECT 1
+						FROM snapshot_days sd
+						WHERE sd.bucket_date = (ul.created_at AT TIME ZONE 'Asia/Shanghai')::date
+					)
+					%s
+				GROUP BY %s
+			),
+			rolled AS (
+				SELECT
+					id,
+					COALESCE(SUM(requests), 0)::bigint AS requests,
+					COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+					COALESCE(SUM(consumed_revenue), 0)::double precision AS consumed_revenue,
+					COALESCE(SUM(account_cost), 0)::double precision AS account_cost,
+					COALESCE(SUM(share_owner_credit), 0)::double precision AS share_owner_credit
+				FROM combined
+				GROUP BY id
+			)
+			SELECT
+				rolled.id,
+				%s AS name,
+				%s AS secondary,
+				rolled.requests,
+				rolled.total_tokens,
+				rolled.consumed_revenue,
+				rolled.account_cost,
+				rolled.share_owner_credit
+			FROM rolled
+			%s
+			ORDER BY rolled.consumed_revenue DESC, rolled.requests DESC
+			LIMIT $%d
+		`, statsSnapshotUserFilter, snapshotSelectExpr, statsSnapshotUserFilter, snapshotGroupExpr, liveSelectExpr, statsLiveUserFilter, liveGroupExpr, nameExpr, secondaryExpr, joinExpr, nextRevenuePlaceholder(params.UserID, 6))
+	}
+
+	args := []any{startDate, endDate, params.StartTime, params.EndTime, revenueShareStatusApplied}
+	if params.UserID != nil {
+		args = append(args, *params.UserID)
+	}
+	args = append(args, params.TopLimit)
+	rows, err := s.entClient.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query revenue snapshot breakdown: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]RevenueBreakdownItem, 0)
+	for rows.Next() {
+		var item RevenueBreakdownItem
+		if err := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.Secondary,
+			&item.Requests,
+			&item.TotalTokens,
+			&item.ConsumedRevenue,
+			&item.AccountCost,
+			&item.ShareOwnerCredit,
+		); err != nil {
+			return nil, fmt.Errorf("scan revenue snapshot breakdown: %w", err)
+		}
+		item.ConsumedRevenue = roundRevenue(item.ConsumedRevenue)
+		item.AccountCost = roundRevenue(item.AccountCost)
+		item.ShareOwnerCredit = roundRevenue(item.ShareOwnerCredit)
+		item.GrossProfit = roundRevenue(item.ConsumedRevenue - item.AccountCost)
+		item.GrossMargin = marginRatio(item.GrossProfit, item.ConsumedRevenue)
+		item.NetProfit = roundRevenue(item.ConsumedRevenue - item.AccountCost - item.ShareOwnerCredit)
+		item.NetMargin = marginRatio(item.NetProfit, item.ConsumedRevenue)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate revenue snapshot breakdown: %w", err)
+	}
+	return items, nil
+}
+
+func revenueBreakdownNameExpressions(kind revenueBreakdownKind) (string, string) {
+	switch kind {
+	case revenueBreakdownUsers:
+		return "COALESCE(NULLIF(u.email, ''), 'unknown')", "COALESCE(NULLIF(u.username, ''), '')"
+	case revenueBreakdownGroups:
+		return "COALESCE(NULLIF(g.name, ''), 'No Group')", "COALESCE(NULLIF(g.platform, ''), '')"
+	case revenueBreakdownAccounts:
+		return "COALESCE(NULLIF(a.name, ''), CONCAT('Account #', rolled.id::text))", "COALESCE(NULLIF(a.platform, ''), '')"
+	default:
+		return "''", "''"
+	}
+}
+
+func nextRevenuePlaceholder(userID *int64, base int) int {
+	if userID != nil {
+		return base + 1
+	}
+	return base
+}
+
 func (s *RevenueService) queryRevenueShareOwnerBreakdown(ctx context.Context, params RevenueQueryParams) ([]RevenueShareOwnerBreakdownItem, error) {
+	if shouldUseRevenueDailySnapshots(params) {
+		return s.queryRevenueShareOwnerBreakdownFromSnapshots(ctx, params)
+	}
+
 	userFilter, userArgs := revenueUserFilter("ase.consumer_user_id", params.UserID, 5)
 	query := `
 		SELECT
@@ -1124,6 +1691,125 @@ func (s *RevenueService) queryRevenueShareOwnerBreakdown(ctx context.Context, pa
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate revenue share owner breakdown: %w", err)
+	}
+	return items, nil
+}
+
+func (s *RevenueService) queryRevenueShareOwnerBreakdownFromSnapshots(ctx context.Context, params RevenueQueryParams) ([]RevenueShareOwnerBreakdownItem, error) {
+	startDate, endDate := revenueSnapshotDateRange(params)
+	snapshotUserFilter := revenueSnapshotUserFilter("s.user_id", params.UserID, 6)
+	liveUserFilter := revenueSnapshotUserFilter("ase.consumer_user_id", params.UserID, 6)
+	query := fmt.Sprintf(`
+		WITH snapshot_days AS (
+			SELECT DISTINCT bucket_date
+			FROM revenue_daily_dimension_snapshots
+			WHERE bucket_date >= $1::date AND bucket_date < $2::date
+				%s
+		),
+		combined AS (
+			SELECT
+				s.owner_user_id AS id,
+				SUM(CASE WHEN s.share_owner_credit > 0 OR s.share_platform_fee > 0 THEN s.total_requests ELSE 0 END)::bigint AS requests,
+				SUM(CASE WHEN s.share_owner_credit > 0 OR s.share_platform_fee > 0 THEN s.total_tokens ELSE 0 END)::bigint AS total_tokens,
+				SUM(s.share_consumer_charge)::double precision AS consumer_charge,
+				SUM(s.share_account_cost)::double precision AS account_cost,
+				SUM(s.share_owner_credit)::double precision AS owner_credit,
+				SUM(s.share_platform_fee)::double precision AS platform_fee
+			FROM revenue_daily_dimension_snapshots s
+			WHERE s.bucket_date >= $1::date AND s.bucket_date < $2::date
+				AND s.owner_user_id > 0
+				%s
+			GROUP BY s.owner_user_id
+			UNION ALL
+			SELECT
+				ase.owner_user_id AS id,
+				COUNT(*)::bigint AS requests,
+				COALESCE(SUM(COALESCE(ul.input_tokens, 0) + COALESCE(ul.output_tokens, 0) + COALESCE(ul.cache_creation_tokens, 0) + COALESCE(ul.cache_read_tokens, 0)), 0)::bigint AS total_tokens,
+				COALESCE(SUM(ase.consumer_charge), 0)::double precision AS consumer_charge,
+				COALESCE(SUM(ase.account_cost), 0)::double precision AS account_cost,
+				COALESCE(SUM(ase.owner_credit), 0)::double precision AS owner_credit,
+				COALESCE(SUM(ase.platform_fee), 0)::double precision AS platform_fee
+			FROM account_share_settlement_entries ase
+			LEFT JOIN usage_logs ul ON ul.id = ase.usage_log_id
+			WHERE ase.created_at >= $3 AND ase.created_at < $4
+				AND ase.status = $5
+				AND ase.consumer_user_id <> ase.owner_user_id
+				AND NOT EXISTS (
+					SELECT 1
+					FROM snapshot_days sd
+					WHERE sd.bucket_date = (ase.created_at AT TIME ZONE 'Asia/Shanghai')::date
+				)
+				%s
+			GROUP BY ase.owner_user_id
+		),
+		rolled AS (
+			SELECT
+				id,
+				COALESCE(SUM(requests), 0)::bigint AS requests,
+				COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+				COALESCE(SUM(consumer_charge), 0)::double precision AS consumer_charge,
+				COALESCE(SUM(account_cost), 0)::double precision AS account_cost,
+				COALESCE(SUM(owner_credit), 0)::double precision AS owner_credit,
+				COALESCE(SUM(platform_fee), 0)::double precision AS platform_fee
+			FROM combined
+			GROUP BY id
+		)
+		SELECT
+			rolled.id,
+			COALESCE(NULLIF(u.email, ''), 'unknown') AS name,
+			COALESCE(NULLIF(u.username, ''), '') AS secondary,
+			rolled.requests,
+			rolled.total_tokens,
+			rolled.consumer_charge,
+			rolled.account_cost,
+			rolled.owner_credit,
+			rolled.platform_fee,
+			CASE
+				WHEN rolled.consumer_charge > 0 THEN (rolled.owner_credit / rolled.consumer_charge)::double precision
+				ELSE 0::double precision
+			END AS owner_share_ratio
+		FROM rolled
+		LEFT JOIN users u ON u.id = rolled.id
+		ORDER BY rolled.owner_credit DESC, rolled.requests DESC
+		LIMIT $%d
+	`, snapshotUserFilter, snapshotUserFilter, liveUserFilter, nextRevenuePlaceholder(params.UserID, 6))
+	args := []any{startDate, endDate, params.StartTime, params.EndTime, revenueShareStatusApplied}
+	if params.UserID != nil {
+		args = append(args, *params.UserID)
+	}
+	args = append(args, params.TopLimit)
+	rows, err := s.entClient.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query revenue share owner snapshot breakdown: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]RevenueShareOwnerBreakdownItem, 0)
+	for rows.Next() {
+		var item RevenueShareOwnerBreakdownItem
+		if err := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.Secondary,
+			&item.Requests,
+			&item.TotalTokens,
+			&item.ConsumerCharge,
+			&item.AccountCost,
+			&item.OwnerCredit,
+			&item.PlatformFee,
+			&item.OwnerShareRatio,
+		); err != nil {
+			return nil, fmt.Errorf("scan revenue share owner snapshot breakdown: %w", err)
+		}
+		item.ConsumerCharge = roundRevenue(item.ConsumerCharge)
+		item.AccountCost = roundRevenue(item.AccountCost)
+		item.OwnerCredit = roundRevenue(item.OwnerCredit)
+		item.PlatformFee = roundRevenue(item.PlatformFee)
+		item.OwnerShareRatio = marginRatio(item.OwnerCredit, item.ConsumerCharge)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate revenue share owner snapshot breakdown: %w", err)
 	}
 	return items, nil
 }

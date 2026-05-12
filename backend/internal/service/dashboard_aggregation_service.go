@@ -153,6 +153,25 @@ func (s *DashboardAggregationService) TriggerRecomputeRange(start, end time.Time
 	return nil
 }
 
+// RecomputeRangeSync synchronously rebuilds aggregate snapshots for a range.
+// It is used by destructive cleanup flows so raw records are not deleted before
+// their daily/hourly summaries are materialized.
+func (s *DashboardAggregationService) RecomputeRangeSync(ctx context.Context, start, end time.Time) error {
+	if s == nil || s.repo == nil {
+		return errors.New("聚合服务未初始化")
+	}
+	if !s.cfg.Enabled {
+		return errors.New("聚合服务已禁用")
+	}
+	if !end.After(start) {
+		return errors.New("重新计算时间范围无效")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.recomputeRange(ctx, start, end)
+}
+
 func (s *DashboardAggregationService) recomputeRecentDays() {
 	days := s.cfg.RecomputeDays
 	if days <= 0 {
@@ -296,22 +315,17 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 
 	hourlyCutoff := now.AddDate(0, 0, -s.cfg.Retention.HourlyDays)
 	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
-	usageCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageLogsDays)
 	dedupCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageBillingDedupDays)
 
 	aggErr := s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
 	if aggErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合保留清理失败: %v", aggErr)
 	}
-	usageErr := s.repo.CleanupUsageLogs(ctx, usageCutoff)
-	if usageErr != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_logs 保留清理失败: %v", usageErr)
-	}
 	dedupErr := s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
 	if dedupErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_billing_dedup 保留清理失败: %v", dedupErr)
 	}
-	if aggErr == nil && usageErr == nil && dedupErr == nil {
+	if aggErr == nil && dedupErr == nil {
 		s.lastRetentionCleanup.Store(now)
 	}
 }

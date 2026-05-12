@@ -83,6 +83,26 @@ func (_u *UsageCleanupTaskUpdate) AddCreatedBy(v int64) *UsageCleanupTaskUpdate 
 	return _u
 }
 
+// ClearCreatedBy clears the value of the "created_by" field.
+func (_u *UsageCleanupTaskUpdate) ClearCreatedBy() *UsageCleanupTaskUpdate {
+	_u.mutation.ClearCreatedBy()
+	return _u
+}
+
+// SetCreatedSource sets the "created_source" field.
+func (_u *UsageCleanupTaskUpdate) SetCreatedSource(v string) *UsageCleanupTaskUpdate {
+	_u.mutation.SetCreatedSource(v)
+	return _u
+}
+
+// SetNillableCreatedSource sets the "created_source" field if the given value is not nil.
+func (_u *UsageCleanupTaskUpdate) SetNillableCreatedSource(v *string) *UsageCleanupTaskUpdate {
+	if v != nil {
+		_u.SetCreatedSource(*v)
+	}
+	return _u
+}
+
 // SetDeletedRows sets the "deleted_rows" field.
 func (_u *UsageCleanupTaskUpdate) SetDeletedRows(v int64) *UsageCleanupTaskUpdate {
 	_u.mutation.ResetDeletedRows()
@@ -259,6 +279,11 @@ func (_u *UsageCleanupTaskUpdate) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UsageCleanupTask.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.CreatedSource(); ok {
+		if err := usagecleanuptask.CreatedSourceValidator(v); err != nil {
+			return &ValidationError{Name: "created_source", err: fmt.Errorf(`ent: validator failed for field "UsageCleanupTask.created_source": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -293,6 +318,12 @@ func (_u *UsageCleanupTaskUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if value, ok := _u.mutation.AddedCreatedBy(); ok {
 		_spec.AddField(usagecleanuptask.FieldCreatedBy, field.TypeInt64, value)
+	}
+	if _u.mutation.CreatedByCleared() {
+		_spec.ClearField(usagecleanuptask.FieldCreatedBy, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.CreatedSource(); ok {
+		_spec.SetField(usagecleanuptask.FieldCreatedSource, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.DeletedRows(); ok {
 		_spec.SetField(usagecleanuptask.FieldDeletedRows, field.TypeInt64, value)
@@ -403,6 +434,26 @@ func (_u *UsageCleanupTaskUpdateOne) SetNillableCreatedBy(v *int64) *UsageCleanu
 // AddCreatedBy adds value to the "created_by" field.
 func (_u *UsageCleanupTaskUpdateOne) AddCreatedBy(v int64) *UsageCleanupTaskUpdateOne {
 	_u.mutation.AddCreatedBy(v)
+	return _u
+}
+
+// ClearCreatedBy clears the value of the "created_by" field.
+func (_u *UsageCleanupTaskUpdateOne) ClearCreatedBy() *UsageCleanupTaskUpdateOne {
+	_u.mutation.ClearCreatedBy()
+	return _u
+}
+
+// SetCreatedSource sets the "created_source" field.
+func (_u *UsageCleanupTaskUpdateOne) SetCreatedSource(v string) *UsageCleanupTaskUpdateOne {
+	_u.mutation.SetCreatedSource(v)
+	return _u
+}
+
+// SetNillableCreatedSource sets the "created_source" field if the given value is not nil.
+func (_u *UsageCleanupTaskUpdateOne) SetNillableCreatedSource(v *string) *UsageCleanupTaskUpdateOne {
+	if v != nil {
+		_u.SetCreatedSource(*v)
+	}
 	return _u
 }
 
@@ -595,6 +646,11 @@ func (_u *UsageCleanupTaskUpdateOne) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UsageCleanupTask.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.CreatedSource(); ok {
+		if err := usagecleanuptask.CreatedSourceValidator(v); err != nil {
+			return &ValidationError{Name: "created_source", err: fmt.Errorf(`ent: validator failed for field "UsageCleanupTask.created_source": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -646,6 +702,12 @@ func (_u *UsageCleanupTaskUpdateOne) sqlSave(ctx context.Context) (_node *UsageC
 	}
 	if value, ok := _u.mutation.AddedCreatedBy(); ok {
 		_spec.AddField(usagecleanuptask.FieldCreatedBy, field.TypeInt64, value)
+	}
+	if _u.mutation.CreatedByCleared() {
+		_spec.ClearField(usagecleanuptask.FieldCreatedBy, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.CreatedSource(); ok {
+		_spec.SetField(usagecleanuptask.FieldCreatedSource, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.DeletedRows(); ok {
 		_spec.SetField(usagecleanuptask.FieldDeletedRows, field.TypeInt64, value)
