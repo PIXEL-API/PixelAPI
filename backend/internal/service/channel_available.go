@@ -46,15 +46,23 @@ type AvailableChannel struct {
 // 前置条件：s.groupRepo 必须非 nil（由 wire DI 保证）。直接 nil-deref 用于 fail-fast，
 // 避免静默掩盖注入缺失。
 func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel, error) {
+	groups, err := s.groupRepo.ListActive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list active groups: %w", err)
+	}
+	return s.listAvailableWithGroups(ctx, groups)
+}
+
+func (s *ChannelService) ListAvailableForGroups(ctx context.Context, groups []Group) ([]AvailableChannel, error) {
+	return s.listAvailableWithGroups(ctx, groups)
+}
+
+func (s *ChannelService) listAvailableWithGroups(ctx context.Context, groups []Group) ([]AvailableChannel, error) {
 	channels, err := s.repo.ListAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list channels: %w", err)
 	}
 
-	groups, err := s.groupRepo.ListActive(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list active groups: %w", err)
-	}
 	groupByID := make(map[int64]AvailableGroupRef, len(groups))
 	for i := range groups {
 		g := groups[i]

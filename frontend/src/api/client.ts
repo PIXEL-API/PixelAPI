@@ -76,7 +76,7 @@ apiClient.interceptors.request.use(
 
     return config
   },
-  (error) => {
+  (error: AxiosError) => {
     return Promise.reject(error)
   }
 )

@@ -87,9 +87,13 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 		SetPlatform(g.Platform).
 		SetRequiredAccountLevel(service.NormalizeRequiredAccountLevel(g.RequiredAccountLevel)).
 		SetStatus(g.Status).
+		SetScope(service.NormalizeGroupScope(g.Scope)).
 		SetSubscriptionType(g.SubscriptionType).
 		SetRateMultiplier(g.RateMultiplier).
 		SetIsExclusive(g.IsExclusive)
+	if g.OwnerUserID != nil {
+		create.SetOwnerUserID(*g.OwnerUserID)
+	}
 	if g.Description != "" {
 		create.SetDescription(g.Description)
 	}

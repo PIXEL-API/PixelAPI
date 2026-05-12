@@ -86,6 +86,10 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 	return PrivacyModeTrainingOff
 }
 
+func DisableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL string) string {
+	return disableOpenAITraining(ctx, clientFactory, accessToken, proxyURL)
+}
+
 // ChatGPTAccountInfo 从 chatgpt.com/backend-api/accounts/check 获取的账号信息
 type ChatGPTAccountInfo struct {
 	PlanType              string

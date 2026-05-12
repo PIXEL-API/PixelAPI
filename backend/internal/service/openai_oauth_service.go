@@ -35,6 +35,13 @@ func (s *OpenAIOAuthService) SetPrivacyClientFactory(factory PrivacyClientFactor
 	s.privacyClientFactory = factory
 }
 
+func (s *OpenAIOAuthService) PrivacyClientFactory() PrivacyClientFactory {
+	if s == nil {
+		return nil
+	}
+	return s.privacyClientFactory
+}
+
 // OpenAIAuthURLResult contains the authorization URL and session info
 type OpenAIAuthURLResult struct {
 	AuthURL   string `json:"auth_url"`

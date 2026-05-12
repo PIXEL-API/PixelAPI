@@ -1554,7 +1554,11 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		}
 		requiredLevel := service.NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
 		if group.Platform == service.PlatformOpenAI && requiredLevel != "" {
-			preds = append(preds, dbaccount.PlatformEQ(service.PlatformOpenAI), dbaccount.AccountLevelEQ(requiredLevel))
+			allowedLevels := service.OpenAISharedPoolAllowedAccountLevels(requiredLevel)
+			if len(allowedLevels) == 0 {
+				return []service.Account{}, nil
+			}
+			preds = append(preds, dbaccount.PlatformEQ(service.PlatformOpenAI), dbaccount.AccountLevelIn(allowedLevels...))
 		}
 	}
 	if opts.status != "" {

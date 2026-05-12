@@ -257,6 +257,8 @@ interface PreviewImage {
 const props = defineProps<{
   show: boolean
   account: Account | null
+  accountScope?: 'admin' | 'user'
+  testEndpointBase?: string
 }>()
 
 const emit = defineEmits<{
@@ -290,6 +292,8 @@ const supportsOpenAIImageTest = computed(() => {
 })
 
 const supportsImageTest = computed(() => supportsGeminiImageTest.value || supportsOpenAIImageTest.value)
+const isUserScope = computed(() => props.accountScope === 'user')
+const testEndpointBase = computed(() => props.testEndpointBase ?? '/api/v1/admin/accounts')
 
 const sortTestModels = (models: ClaudeModel[]) => {
   const priorityMap = new Map(prioritizedGeminiModels.map((id, index) => [id, index]))
@@ -328,7 +332,9 @@ const loadAvailableModels = async () => {
   loadingModels.value = true
   selectedModelId.value = '' // Reset selection before loading
   try {
-    const models = await adminAPI.accounts.getAvailableModels(props.account.id)
+    const models = isUserScope.value
+      ? getUserDefaultTestModels(props.account)
+      : await adminAPI.accounts.getAvailableModels(props.account.id)
     availableModels.value = props.account.platform === 'gemini' || props.account.platform === 'antigravity'
       ? sortTestModels(models)
       : models
@@ -349,6 +355,19 @@ const loadAvailableModels = async () => {
     selectedModelId.value = ''
   } finally {
     loadingModels.value = false
+  }
+}
+
+const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
+  switch (account.platform) {
+    case 'openai':
+      return [{ id: 'gpt-4o-mini', type: 'model', display_name: 'gpt-4o-mini', created_at: '' }]
+    case 'gemini':
+      return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
+    case 'antigravity':
+      return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]
+    default:
+      return [{ id: 'claude-sonnet-4-5-20250929', type: 'model', display_name: 'Claude Sonnet 4.5', created_at: '' }]
   }
 }
 
@@ -400,7 +419,7 @@ const startTest = async () => {
 
   try {
     // Create EventSource for SSE
-    const url = `/api/v1/admin/accounts/${props.account.id}/test`
+    const url = `${testEndpointBase.value}/${props.account.id}/test`
 
     // Use fetch with streaming for SSE since EventSource doesn't support POST
     const response = await fetch(url, {

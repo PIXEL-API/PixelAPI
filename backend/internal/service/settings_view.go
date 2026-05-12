@@ -17,6 +17,7 @@ type UserPrivateGroupTemplate struct {
 	MonthlyLimitUSD *float64
 	RateMultiplier  float64
 	RPMLimit        int
+	CommissionRate  float64
 }
 
 type SystemSettings struct {
@@ -125,6 +126,7 @@ type SystemSettings struct {
 	UserPrivateGroupMonthlyLimitUSD *float64
 	UserPrivateGroupRateMultiplier  float64
 	UserPrivateGroupRPMLimit        int
+	UserPrivateGroupCommissionRate  float64
 	DefaultSubscriptions            []DefaultSubscriptionSetting
 
 	// Model fallback configuration
@@ -161,6 +163,12 @@ type SystemSettings struct {
 	// Backend 模式：禁用用户注册和自助服务，仅管理员可登录
 	BackendModeEnabled bool
 
+	// Master data plane mode: direct model gateway requests on the master are allowed.
+	MasterDataPlaneEnabled bool
+
+	// Deprecated: use MasterDataPlaneEnabled.
+	SubsiteOnlyGatewayEnabled bool
+
 	// Gateway forwarding behavior
 	EnableFingerprintUnification       bool // 是否统一 OAuth 账号的指纹头（默认 true）
 	EnableMetadataPassthrough          bool // 是否透传客户端原始 metadata（默认 false）
@@ -178,6 +186,10 @@ type SystemSettings struct {
 
 	// OpenAI account scheduling
 	OpenAIAdvancedSchedulerEnabled bool
+
+	// OpenAI account repair
+	OpenAIFreeAccountRepairEnabled            bool
+	OpenAIFreeAccountRepairWeeklyThresholdUSD float64
 
 	// Balance low notification
 	BalanceLowNotifyEnabled     bool

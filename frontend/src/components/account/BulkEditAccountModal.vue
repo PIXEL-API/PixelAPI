@@ -33,7 +33,7 @@
 
       <!-- OpenAI passthrough -->
       <div
-        v-if="allOpenAIPassthroughCapable"
+        v-if="!isUserScope && allOpenAIPassthroughCapable"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="mb-3 flex items-center justify-between">
@@ -528,6 +528,7 @@
               v-model="enableConcurrency"
               id="bulk-edit-concurrency-enabled"
               type="checkbox"
+              :disabled="isUserScope"
               aria-controls="bulk-edit-concurrency"
               class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
             />
@@ -537,9 +538,9 @@
             id="bulk-edit-concurrency"
             type="number"
             min="1"
-            :disabled="!enableConcurrency"
+            :disabled="isUserScope || !enableConcurrency"
             class="input"
-            :class="!enableConcurrency && 'cursor-not-allowed opacity-50'"
+            :class="(isUserScope || !enableConcurrency) && 'cursor-not-allowed opacity-50'"
             aria-labelledby="bulk-edit-concurrency-label"
             @input="concurrency = Math.max(1, concurrency || 1)"
           />
@@ -557,6 +558,7 @@
               v-model="enableLoadFactor"
               id="bulk-edit-load-factor-enabled"
               type="checkbox"
+              :disabled="isUserScope"
               aria-controls="bulk-edit-load-factor"
               class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
             />
@@ -566,9 +568,9 @@
             id="bulk-edit-load-factor"
             type="number"
             min="1"
-            :disabled="!enableLoadFactor"
+            :disabled="isUserScope || !enableLoadFactor"
             class="input"
-            :class="!enableLoadFactor && 'cursor-not-allowed opacity-50'"
+            :class="(isUserScope || !enableLoadFactor) && 'cursor-not-allowed opacity-50'"
             aria-labelledby="bulk-edit-load-factor-label"
             @input="loadFactor = (loadFactor &amp;&amp; loadFactor >= 1) ? loadFactor : null"
           />
@@ -663,7 +665,7 @@
       </div>
 
       <!-- Status -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="!isUserScope" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-status-label"
@@ -690,7 +692,7 @@
       </div>
 
       <!-- OpenAI OAuth WS mode -->
-      <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="!isUserScope && allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-openai-ws-mode-label"
@@ -727,7 +729,7 @@
       </div>
 
       <!-- OpenAI OAuth Codex CLI only -->
-      <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="!isUserScope && allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-openai-codex-cli-only-label"
@@ -771,7 +773,7 @@
       </div>
 
       <!-- OpenAI API Key WS mode -->
-      <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="!isUserScope && allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-openai-apikey-ws-mode-label"
@@ -808,7 +810,7 @@
       </div>
 
       <!-- RPM Limit (仅全部为 Anthropic OAuth/SetupToken 时显示) -->
-      <div v-if="allAnthropicOAuthOrSetupToken" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="!isUserScope && allAnthropicOAuthOrSetupToken" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
             id="bulk-edit-rpm-limit-label"
@@ -1027,6 +1029,10 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import Icon from '@/components/icons/Icon.vue'
+import {
+  PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
+  PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+} from '@/components/account/personalAccountTemplate'
 import {
   buildModelMappingObject as buildModelMappingPayload,
   getPresetMappingsByPlatform
@@ -1374,6 +1380,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     updates.priority = priority.value
   }
 
+  if (isUserScope.value) {
+    delete updates.concurrency
+    delete updates.load_factor
+  }
+
   if (canManageBillingRate.value && enableRateMultiplier.value) {
     updates.rate_multiplier = rateMultiplier.value
   }
@@ -1524,12 +1535,25 @@ const sanitizeBulkUpdatePayload = (payload: Record<string, unknown>) => {
   if (!canManageGroups.value) {
     delete next.group_ids
   }
+  if (isUserScope.value) {
+    delete next.status
+    delete next.concurrency
+    delete next.load_factor
+    if ('priority' in next) {
+      next.priority = typeof next.priority === 'number' && Number(next.priority) > 0
+        ? next.priority
+        : PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+    }
+  }
   if (next.credentials && typeof next.credentials === 'object') {
     const credentials = { ...(next.credentials as Record<string, unknown>) }
     if (!canManageBaseUrl.value) {
       delete credentials.base_url
     }
     if (!canManageModelRestriction.value) {
+      delete credentials.model_mapping
+    }
+    if (isUserScope.value) {
       delete credentials.model_mapping
     }
     if (!canManageCustomErrorCodes.value) {
@@ -1706,9 +1730,9 @@ watch(
       customErrorCodeInput.value = null
       interceptWarmupRequests.value = false
       proxyId.value = null
-      concurrency.value = 1
+      concurrency.value = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : 1
       loadFactor.value = null
-      priority.value = 1
+      priority.value = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
       rateMultiplier.value = 1
       shareMode.value = 'private'
       status.value = 'active'

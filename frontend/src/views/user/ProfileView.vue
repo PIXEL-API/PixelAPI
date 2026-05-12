@@ -14,6 +14,8 @@
         :wechat-mp-enabled="wechatOAuthMPEnabled"
       />
 
+      <ProfileReceiptCodeCard />
+
       <div
         v-if="contactInfo"
         class="card border-primary-200 bg-primary-50 p-6 dark:bg-primary-900/20"
@@ -55,6 +57,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import ProfileBalanceNotifyCard from '@/components/user/profile/ProfileBalanceNotifyCard.vue'
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
 import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'
+import ProfileReceiptCodeCard from '@/components/user/profile/ProfileReceiptCodeCard.vue'
 import ProfileTotpCard from '@/components/user/profile/ProfileTotpCard.vue'
 import { isWeChatWebOAuthEnabled } from '@/api/auth'
 import { useAppStore } from '@/stores/app'

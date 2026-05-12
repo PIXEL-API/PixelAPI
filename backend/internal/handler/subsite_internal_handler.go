@@ -49,6 +49,9 @@ func (h *SubsiteInternalHandler) Heartbeat(c *gin.Context) {
 	}
 	if strings.TrimSpace(input.SubsiteID) == "" {
 		input.SubsiteID = subsiteID
+	} else if strings.TrimSpace(input.SubsiteID) != subsiteID {
+		response.ErrorFrom(c, service.ErrSubsiteAuthInvalid)
+		return
 	}
 	input.RemoteIP = c.ClientIP()
 	result, err := h.subsiteService.RecordHeartbeat(c.Request.Context(), input)
@@ -89,6 +92,9 @@ func (h *SubsiteInternalHandler) Authorize(c *gin.Context) {
 	}
 	if strings.TrimSpace(input.SubsiteID) == "" {
 		input.SubsiteID = subsiteID
+	} else if strings.TrimSpace(input.SubsiteID) != subsiteID {
+		response.ErrorFrom(c, service.ErrSubsiteAuthInvalid)
+		return
 	}
 	result, err := h.authorizeService.Authorize(c.Request.Context(), input)
 	if response.ErrorFrom(c, err) {
@@ -109,6 +115,9 @@ func (h *SubsiteInternalHandler) UsageBatch(c *gin.Context) {
 	}
 	if strings.TrimSpace(input.SubsiteID) == "" {
 		input.SubsiteID = subsiteID
+	} else if strings.TrimSpace(input.SubsiteID) != subsiteID {
+		response.ErrorFrom(c, service.ErrSubsiteAuthInvalid)
+		return
 	}
 	result, err := h.usageService.Ingest(c.Request.Context(), input)
 	if response.ErrorFrom(c, err) {
@@ -118,29 +127,35 @@ func (h *SubsiteInternalHandler) UsageBatch(c *gin.Context) {
 }
 
 func (h *SubsiteInternalHandler) CancelRequest(c *gin.Context) {
-	_, ok := h.verify(c)
+	subsiteID, ok := h.verify(c)
 	if !ok {
 		return
 	}
 	var input struct {
+		SubsiteID string `json:"subsite_id"`
 		RequestID string `json:"request_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	if response.ErrorFrom(c, h.authorizeService.Cancel(c.Request.Context(), input.RequestID)) {
+	if strings.TrimSpace(input.SubsiteID) != "" && strings.TrimSpace(input.SubsiteID) != subsiteID {
+		response.ErrorFrom(c, service.ErrSubsiteAuthInvalid)
+		return
+	}
+	if response.ErrorFrom(c, h.authorizeService.CancelForSubsite(c.Request.Context(), subsiteID, input.RequestID)) {
 		return
 	}
 	response.Success(c, gin.H{"status": service.QuotaReservationStatusCanceled})
 }
 
 func (h *SubsiteInternalHandler) RenewLease(c *gin.Context) {
-	_, ok := h.verify(c)
+	subsiteID, ok := h.verify(c)
 	if !ok {
 		return
 	}
 	var input struct {
+		SubsiteID  string     `json:"subsite_id"`
 		LeaseID    string     `json:"lease_id" binding:"required"`
 		ExpiresAt  *time.Time `json:"expires_at"`
 		TTLSeconds int        `json:"ttl_seconds"`
@@ -158,7 +173,12 @@ func (h *SubsiteInternalHandler) RenewLease(c *gin.Context) {
 		response.BadRequest(c, "expires_at or ttl_seconds is required")
 		return
 	}
+	if strings.TrimSpace(input.SubsiteID) != "" && strings.TrimSpace(input.SubsiteID) != subsiteID {
+		response.ErrorFrom(c, service.ErrSubsiteAuthInvalid)
+		return
+	}
 	lease, err := h.leaseService.Renew(c.Request.Context(), service.RenewAccountLeaseInput{
+		SubsiteID: subsiteID,
 		LeaseID:   input.LeaseID,
 		ExpiresAt: expiresAt,
 	})
@@ -169,18 +189,23 @@ func (h *SubsiteInternalHandler) RenewLease(c *gin.Context) {
 }
 
 func (h *SubsiteInternalHandler) ReleaseLease(c *gin.Context) {
-	_, ok := h.verify(c)
+	subsiteID, ok := h.verify(c)
 	if !ok {
 		return
 	}
 	var input struct {
-		LeaseID string `json:"lease_id" binding:"required"`
+		SubsiteID string `json:"subsite_id"`
+		LeaseID   string `json:"lease_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	lease, err := h.leaseService.Release(c.Request.Context(), input.LeaseID)
+	if strings.TrimSpace(input.SubsiteID) != "" && strings.TrimSpace(input.SubsiteID) != subsiteID {
+		response.ErrorFrom(c, service.ErrSubsiteAuthInvalid)
+		return
+	}
+	lease, err := h.leaseService.ReleaseForSubsite(c.Request.Context(), subsiteID, input.LeaseID)
 	if response.ErrorFrom(c, err) {
 		return
 	}

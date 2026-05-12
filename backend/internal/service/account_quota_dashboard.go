@@ -12,9 +12,10 @@ import (
 const accountQuotaDashboardPageSize = 1000
 
 type AccountQuotaDashboard struct {
-	GeneratedAt time.Time             `json:"generated_at"`
-	Summaries   []AccountQuotaSummary `json:"summaries"`
-	Totals      AccountQuotaSummary   `json:"totals"`
+	GeneratedAt    time.Time                  `json:"generated_at"`
+	Summaries      []AccountQuotaSummary      `json:"summaries"`
+	Totals         AccountQuotaSummary        `json:"totals"`
+	GroupSummaries []AccountQuotaGroupSummary `json:"group_summaries,omitempty"`
 }
 
 type UserAccountQuotaPoolDashboard struct {
@@ -26,6 +27,22 @@ type UserAccountQuotaPoolDashboard struct {
 type AccountQuotaSummary struct {
 	Platform                string                       `json:"platform"`
 	Type                    string                       `json:"type"`
+	AccountCount            int                          `json:"account_count"`
+	ActiveAccountCount      int                          `json:"active_account_count"`
+	SchedulableAccountCount int                          `json:"schedulable_account_count"`
+	QuotaAccountCount       int                          `json:"quota_account_count"`
+	UnlimitedAccountCount   int                          `json:"unlimited_account_count"`
+	Total                   AccountQuotaDimensionSummary `json:"total"`
+	Daily                   AccountQuotaDimensionSummary `json:"daily"`
+	Weekly                  AccountQuotaDimensionSummary `json:"weekly"`
+	UsageWindows            []AccountUsageWindowSummary  `json:"usage_windows,omitempty"`
+}
+
+type AccountQuotaGroupSummary struct {
+	GroupID                 *int64                       `json:"group_id"`
+	GroupName               string                       `json:"group_name"`
+	GroupStatus             string                       `json:"group_status"`
+	Platform                string                       `json:"platform"`
 	AccountCount            int                          `json:"account_count"`
 	ActiveAccountCount      int                          `json:"active_account_count"`
 	SchedulableAccountCount int                          `json:"schedulable_account_count"`
@@ -72,6 +89,18 @@ type accountQuotaDashboardBuilder struct {
 	total        *accountQuotaSummaryAccumulator
 }
 
+type accountQuotaGroupDashboardBuilder struct {
+	generatedAt  time.Time
+	accumulators map[string]*accountQuotaGroupSummaryAccumulator
+}
+
+type accountQuotaGroupSummaryAccumulator struct {
+	groupID     *int64
+	groupName   string
+	groupStatus string
+	core        accountQuotaSummaryAccumulator
+}
+
 func (s *adminServiceImpl) GetAccountQuotaDashboard(ctx context.Context) (*AccountQuotaDashboard, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, fmt.Errorf("account repository is unavailable")
@@ -100,23 +129,35 @@ func (s *AccountService) GetQuotaPoolDashboard(ctx context.Context, ownerUserID 
 
 	generatedAt := time.Now().UTC()
 	mine := newAccountQuotaDashboardBuilder(generatedAt)
+	mineGroups := newAccountQuotaGroupDashboardBuilder(generatedAt)
 	platform := newAccountQuotaDashboardBuilder(generatedAt)
+	platformGroups := newAccountQuotaGroupDashboardBuilder(generatedAt)
 
 	if err := visitAccountQuotaDashboardAccounts(ctx, s.accountRepo, func(account Account) {
 		if account.OwnerUserID != nil && *account.OwnerUserID == ownerUserID {
 			mine.addAccount(account)
+			mineGroups.addAccountWithGroupFilter(account, func(group *Group) bool {
+				return isOwnUserPrivateQuotaGroup(group, ownerUserID)
+			})
 		}
 		if isPlatformQuotaPoolAccount(account) {
 			platform.addAccount(account)
+			platformGroups.addAccountWithGroupFilter(account, isPlatformSharedQuotaGroup)
 		}
 	}); err != nil {
 		return nil, err
 	}
 
+	mineDashboard := mine.finalize()
+	mineDashboard.GroupSummaries = mineGroups.finalize()
+
+	platformDashboard := platform.finalize()
+	platformDashboard.GroupSummaries = platformGroups.finalize()
+
 	return &UserAccountQuotaPoolDashboard{
 		GeneratedAt: generatedAt,
-		Mine:        mine.finalize(),
-		Platform:    platform.finalize(),
+		Mine:        mineDashboard,
+		Platform:    platformDashboard,
 	}, nil
 }
 
@@ -217,6 +258,171 @@ func (b *accountQuotaDashboardBuilder) finalize() AccountQuotaDashboard {
 	}
 }
 
+func newAccountQuotaGroupDashboardBuilder(generatedAt time.Time) *accountQuotaGroupDashboardBuilder {
+	return &accountQuotaGroupDashboardBuilder{
+		generatedAt:  generatedAt,
+		accumulators: make(map[string]*accountQuotaGroupSummaryAccumulator),
+	}
+}
+
+func (b *accountQuotaGroupDashboardBuilder) addAccount(account Account) {
+	b.addAccountWithGroupFilter(account, nil)
+}
+
+func (b *accountQuotaGroupDashboardBuilder) addAccountWithGroupFilter(account Account, allowGroup func(*Group) bool) {
+	if b == nil {
+		return
+	}
+	if len(account.Groups) == 0 {
+		b.addAccountToGroup(account, nil, "", StatusActive, account.Platform, "", false, false)
+		return
+	}
+	for _, group := range account.Groups {
+		if group == nil || group.ID <= 0 {
+			continue
+		}
+		if allowGroup != nil && !allowGroup(group) {
+			continue
+		}
+		platform := group.Platform
+		if platform == "" {
+			platform = account.Platform
+		}
+		b.addAccountToGroup(
+			account,
+			&group.ID,
+			group.Name,
+			group.Status,
+			platform,
+			group.RequiredAccountLevel,
+			group.RequireOAuthOnly,
+			group.RequirePrivacySet,
+		)
+	}
+}
+
+func isOwnUserPrivateQuotaGroup(group *Group, ownerUserID int64) bool {
+	if group == nil || ownerUserID <= 0 || !group.IsUserPrivateScope() || group.OwnerUserID == nil {
+		return false
+	}
+	return *group.OwnerUserID == ownerUserID
+}
+
+func isPlatformSharedQuotaGroup(group *Group) bool {
+	if group == nil {
+		return false
+	}
+	return group.OwnerUserID == nil && NormalizeGroupScope(group.Scope) == GroupScopePublic
+}
+
+func (b *accountQuotaGroupDashboardBuilder) addAccountToGroup(account Account, groupID *int64, groupName, groupStatus, platform, requiredAccountLevel string, requireOAuthOnly, requirePrivacySet bool) {
+	key := accountQuotaGroupKey(groupID, platform)
+	acc, ok := b.accumulators[key]
+	if !ok {
+		acc = newAccountQuotaGroupSummaryAccumulator(groupID, groupName, groupStatus, platform)
+		b.accumulators[key] = acc
+	}
+	acc.addAccount(account, b.generatedAt, accountSchedulableInQuotaGroup(account, groupStatus, platform, requiredAccountLevel, requireOAuthOnly, requirePrivacySet))
+}
+
+func newAccountQuotaGroupSummaryAccumulator(groupID *int64, groupName, groupStatus, platform string) *accountQuotaGroupSummaryAccumulator {
+	var idCopy *int64
+	if groupID != nil {
+		id := *groupID
+		idCopy = &id
+	}
+	return &accountQuotaGroupSummaryAccumulator{
+		groupID:     idCopy,
+		groupName:   groupName,
+		groupStatus: groupStatus,
+		core: accountQuotaSummaryAccumulator{
+			summary: AccountQuotaSummary{
+				Platform: platform,
+				Type:     "all",
+			},
+			windowAggs: make(map[string]*accountUsageWindowAccumulator),
+		},
+	}
+}
+
+func (a *accountQuotaGroupSummaryAccumulator) addAccount(account Account, now time.Time, schedulable bool) {
+	if a == nil {
+		return
+	}
+	a.core.addAccountWithSchedulability(account, now, schedulable)
+}
+
+func (a *accountQuotaGroupSummaryAccumulator) finalize() AccountQuotaGroupSummary {
+	if a == nil {
+		return AccountQuotaGroupSummary{}
+	}
+	summary := a.core.finalize()
+	return AccountQuotaGroupSummary{
+		GroupID:                 cloneInt64Ptr(a.groupID),
+		GroupName:               a.groupName,
+		GroupStatus:             a.groupStatus,
+		Platform:                summary.Platform,
+		AccountCount:            summary.AccountCount,
+		ActiveAccountCount:      summary.ActiveAccountCount,
+		SchedulableAccountCount: summary.SchedulableAccountCount,
+		QuotaAccountCount:       summary.QuotaAccountCount,
+		UnlimitedAccountCount:   summary.UnlimitedAccountCount,
+		Total:                   summary.Total,
+		Daily:                   summary.Daily,
+		Weekly:                  summary.Weekly,
+		UsageWindows:            summary.UsageWindows,
+	}
+}
+
+func (b *accountQuotaGroupDashboardBuilder) finalize() []AccountQuotaGroupSummary {
+	if b == nil || len(b.accumulators) == 0 {
+		return nil
+	}
+
+	out := make([]AccountQuotaGroupSummary, 0, len(b.accumulators))
+	for _, acc := range b.accumulators {
+		out = append(out, acc.finalize())
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Platform != out[j].Platform {
+			return out[i].Platform < out[j].Platform
+		}
+		if out[i].GroupID == nil && out[j].GroupID != nil {
+			return false
+		}
+		if out[i].GroupID != nil && out[j].GroupID == nil {
+			return true
+		}
+		if out[i].GroupName != out[j].GroupName {
+			return out[i].GroupName < out[j].GroupName
+		}
+		return int64PtrValue(out[i].GroupID) < int64PtrValue(out[j].GroupID)
+	})
+	return out
+}
+
+func accountQuotaGroupKey(groupID *int64, platform string) string {
+	if groupID == nil {
+		return "ungrouped\x00" + platform
+	}
+	return fmt.Sprintf("%d", *groupID)
+}
+
+func cloneInt64Ptr(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	out := *value
+	return &out
+}
+
+func int64PtrValue(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
 func isPlatformQuotaPoolAccount(account Account) bool {
 	if account.OwnerUserID == nil {
 		return true
@@ -225,11 +431,15 @@ func isPlatformQuotaPoolAccount(account Account) bool {
 }
 
 func (a *accountQuotaSummaryAccumulator) addAccount(account Account, now time.Time) {
+	a.addAccountWithSchedulability(account, now, account.IsSchedulable())
+}
+
+func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Account, now time.Time, schedulable bool) {
 	a.summary.AccountCount++
 	if account.Status == StatusActive {
 		a.summary.ActiveAccountCount++
 	}
-	if account.IsSchedulable() {
+	if schedulable {
 		a.summary.SchedulableAccountCount++
 	}
 
@@ -259,6 +469,31 @@ func (a *accountQuotaSummaryAccumulator) addAccount(account Account, now time.Ti
 		a.addOpenAIUsageWindow(account, "5h", now)
 		a.addOpenAIUsageWindow(account, "7d", now)
 	}
+}
+
+func accountSchedulableInQuotaGroup(account Account, groupStatus, groupPlatform, requiredAccountLevel string, requireOAuthOnly, requirePrivacySet bool) bool {
+	if !account.IsSchedulable() {
+		return false
+	}
+	if groupStatus != "" && groupStatus != StatusActive {
+		return false
+	}
+	if groupPlatform != "" && account.Platform != groupPlatform {
+		return false
+	}
+	if groupPlatform == PlatformOpenAI {
+		required := NormalizeOpenAISharedPoolRequiredLevel(requiredAccountLevel)
+		if required != "" && !CanOpenAIAccountJoinSharedPool(account.AccountLevel, required) {
+			return false
+		}
+	}
+	if requireOAuthOnly && requiresOAuthOnlyGroupCheck(account.Type) {
+		return false
+	}
+	if requirePrivacySet && !account.IsPrivacySet() {
+		return false
+	}
+	return true
 }
 
 func (a *accountQuotaSummaryAccumulator) addOpenAIUsageWindow(account Account, window string, now time.Time) {

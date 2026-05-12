@@ -99,6 +99,21 @@ export interface User {
   updated_at: string
 }
 
+export type ReceiptCodePaymentMethod = 'alipay' | 'wechat'
+
+export interface ReceiptCode {
+  id: number
+  user_id: number
+  payment_method: ReceiptCodePaymentMethod
+  storage_provider: string
+  url?: string | null
+  content_type: string
+  byte_size: number
+  sha256: string
+  created_at: string
+  updated_at: string
+}
+
 export interface AdminUser extends User {
   // 管理员备注（普通用户接口不返回）
   notes: string
@@ -925,10 +940,27 @@ export interface AccountQuotaSummary {
   usage_windows?: AccountUsageWindowSummary[]
 }
 
+export interface AccountQuotaGroupSummary {
+  group_id?: number | null
+  group_name: string
+  group_status: string
+  platform: AccountPlatform | 'all' | string
+  account_count: number
+  active_account_count: number
+  schedulable_account_count: number
+  quota_account_count: number
+  unlimited_account_count: number
+  total: AccountQuotaDimensionSummary
+  daily: AccountQuotaDimensionSummary
+  weekly: AccountQuotaDimensionSummary
+  usage_windows?: AccountUsageWindowSummary[]
+}
+
 export interface AccountQuotaDashboard {
   generated_at: string
   summaries: AccountQuotaSummary[]
   totals: AccountQuotaSummary
+  group_summaries?: AccountQuotaGroupSummary[]
 }
 
 export interface UserAccountQuotaPoolDashboard {

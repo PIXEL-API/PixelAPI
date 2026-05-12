@@ -19,9 +19,11 @@ type UsageBillingCommand struct {
 	APIKeyID           int64
 	RequestFingerprint string
 	RequestPayloadHash string
+	QuotaReservationID string
 
 	UserID              int64
 	AccountID           int64
+	LeaseID             string
 	GroupID             *int64
 	SubscriptionID      *int64
 	AccountType         string
@@ -38,9 +40,13 @@ type UsageBillingCommand struct {
 
 	BalanceCost         float64
 	SubscriptionCost    float64
+	PrivateGroupCommissionCost float64
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
+
+	LeaseUsageRequests int64
+	LeaseUsageTokens   int64
 
 	ShareSnapshotCaptured bool
 	ShareOwnerUserID      *int64
@@ -61,6 +67,14 @@ func (c *UsageBillingCommand) Normalize() {
 		return
 	}
 	c.RequestID = strings.TrimSpace(c.RequestID)
+	c.QuotaReservationID = strings.TrimSpace(c.QuotaReservationID)
+	c.LeaseID = strings.TrimSpace(c.LeaseID)
+	if c.LeaseUsageRequests < 0 {
+		c.LeaseUsageRequests = 0
+	}
+	if c.LeaseUsageTokens < 0 {
+		c.LeaseUsageTokens = 0
+	}
 	if strings.TrimSpace(c.RequestFingerprint) == "" {
 		c.RequestFingerprint = buildUsageBillingFingerprint(c)
 	}
@@ -71,7 +85,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		return ""
 	}
 	raw := fmt.Sprintf(
-		"%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
+		"%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
 		c.UserID,
 		c.AccountID,
 		c.APIKeyID,
@@ -89,6 +103,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		valueOrZero(c.SubscriptionID),
 		c.BalanceCost,
 		c.SubscriptionCost,
+		c.PrivateGroupCommissionCost,
 		c.APIKeyQuotaCost,
 		c.APIKeyRateLimitCost,
 		c.AccountQuotaCost,

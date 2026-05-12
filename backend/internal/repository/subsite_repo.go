@@ -202,6 +202,23 @@ func (r *subsiteRepository) UpdateStatus(ctx context.Context, subsiteID, status 
 	return nil
 }
 
+func (r *subsiteRepository) UpdateSecret(ctx context.Context, subsiteID, secretHash, secretCiphertext string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE subsites
+		SET secret_hash = $1,
+			secret_ciphertext = $2,
+			updated_at = NOW()
+		WHERE subsite_id = $3 AND deleted_at IS NULL
+	`, strings.TrimSpace(secretHash), strings.TrimSpace(secretCiphertext), strings.TrimSpace(subsiteID))
+	if err != nil {
+		return fmt.Errorf("update subsite secret: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return service.ErrSubsiteNotFound
+	}
+	return nil
+}
+
 func (r *subsiteRepository) RecordHeartbeat(ctx context.Context, heartbeat *service.SubsiteHeartbeat) error {
 	if heartbeat == nil {
 		return service.ErrSubsiteInvalidInput
@@ -241,16 +258,18 @@ func (r *subsiteRepository) RecordHeartbeat(ctx context.Context, heartbeat *serv
 	res, err := tx.ExecContext(ctx, `
 		UPDATE subsites
 		SET status = CASE
-				WHEN status = 'disabled' THEN status
-				WHEN $2 IN ('active', 'maintenance', 'unhealthy') THEN $2
+				WHEN status IN ('disabled', 'maintenance', 'pending') THEN status
+				WHEN $2 IN ('active', 'unhealthy') THEN $2
 				ELSE status
 			END,
 			version = COALESCE(NULLIF($3, ''), version),
 			last_heartbeat_at = $4,
 			last_seen_ip = $5,
 			health_score = CASE
+				WHEN status = 'disabled' THEN health_score
+				WHEN status = 'maintenance' THEN 50
+				WHEN status = 'pending' THEN health_score
 				WHEN $2 = 'unhealthy' THEN 0
-				WHEN $2 = 'maintenance' THEN 50
 				ELSE 100
 			END,
 			updated_at = NOW()
@@ -265,6 +284,22 @@ func (r *subsiteRepository) RecordHeartbeat(ctx context.Context, heartbeat *serv
 	return tx.Commit()
 }
 
+func (r *subsiteRepository) MarkHeartbeatTimeouts(ctx context.Context, before time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE subsites
+		SET status = 'unhealthy',
+			health_score = 0,
+			updated_at = NOW()
+		WHERE deleted_at IS NULL
+		  AND status = 'active'
+		  AND COALESCE(last_heartbeat_at, updated_at, created_at) < $1
+	`, before)
+	if err != nil {
+		return 0, fmt.Errorf("mark subsite heartbeat timeouts: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 type accountLeaseRepository struct {
 	db *sql.DB
 }
@@ -276,15 +311,16 @@ func NewAccountLeaseRepository(db *sql.DB) service.AccountLeaseRepository {
 func (r *accountLeaseRepository) Create(ctx context.Context, lease *service.AccountLease) error {
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO account_leases (
-			lease_id, subsite_id, account_id, platform, status, max_concurrency,
+			lease_id, subsite_id, account_id, group_id, platform, status, max_concurrency,
 			max_requests, max_tokens, assigned_at, expires_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, updated_at
 	`,
 		lease.LeaseID,
 		lease.SubsiteID,
 		lease.AccountID,
+		lease.GroupID,
 		lease.Platform,
 		lease.Status,
 		lease.MaxConcurrency,
@@ -304,11 +340,16 @@ func (r *accountLeaseRepository) Create(ctx context.Context, lease *service.Acco
 
 func (r *accountLeaseRepository) GetByLeaseID(ctx context.Context, leaseID string) (*service.AccountLease, error) {
 	lease, err := scanAccountLease(r.db.QueryRowContext(ctx, `
-		SELECT id, lease_id, subsite_id, account_id, platform, status, max_concurrency,
+		SELECT al.id, al.lease_id, al.subsite_id, al.account_id, al.group_id,
+			COALESCE(NULLIF(a.name, ''), '') AS account_name,
+			COALESCE(NULLIF(g.name, ''), '') AS group_name,
+			al.platform, al.status, al.max_concurrency,
 			max_requests, max_tokens, used_requests, used_tokens, assigned_at, expires_at,
 			renewed_at, released_at, created_at, updated_at
-		FROM account_leases
-		WHERE lease_id = $1 AND deleted_at IS NULL
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		LEFT JOIN groups g ON g.id = al.group_id AND g.deleted_at IS NULL
+		WHERE al.lease_id = $1 AND al.deleted_at IS NULL
 	`, strings.TrimSpace(leaseID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrAccountLeaseNotFound
@@ -321,27 +362,131 @@ func (r *accountLeaseRepository) GetByLeaseID(ctx context.Context, leaseID strin
 
 func (r *accountLeaseRepository) ListBySubsite(ctx context.Context, subsiteID string) ([]service.AccountLease, error) {
 	return r.list(ctx, `
-		SELECT id, lease_id, subsite_id, account_id, platform, status, max_concurrency,
-			max_requests, max_tokens, used_requests, used_tokens, assigned_at, expires_at,
-			renewed_at, released_at, created_at, updated_at
-		FROM account_leases
-		WHERE subsite_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at DESC
+		SELECT al.id, al.lease_id, al.subsite_id, al.account_id, al.group_id,
+			COALESCE(NULLIF(a.name, ''), '') AS account_name,
+			COALESCE(NULLIF(g.name, ''), '') AS group_name,
+			al.platform, al.status, al.max_concurrency, al.max_requests, al.max_tokens,
+			al.used_requests, al.used_tokens, al.assigned_at, al.expires_at,
+			al.renewed_at, al.released_at, al.created_at, al.updated_at
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		LEFT JOIN groups g ON g.id = al.group_id AND g.deleted_at IS NULL
+		WHERE al.subsite_id = $1
+		  AND al.deleted_at IS NULL
+		  AND a.status = 'active'
+		ORDER BY al.created_at DESC
 	`, strings.TrimSpace(subsiteID))
+}
+
+func (r *accountLeaseRepository) ListBySubsitePaginated(ctx context.Context, subsiteID string, params pagination.PaginationParams) ([]service.AccountLease, *pagination.PaginationResult, error) {
+	subsiteID = strings.TrimSpace(subsiteID)
+	var total int64
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		WHERE al.subsite_id = $1
+		  AND al.deleted_at IS NULL
+		  AND a.status = 'active'
+	`, subsiteID).Scan(&total); err != nil {
+		return nil, nil, fmt.Errorf("count account leases: %w", err)
+	}
+
+	page := params.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := params.Limit()
+	offset := (page - 1) * pageSize
+	leases, err := r.list(ctx, `
+		SELECT al.id, al.lease_id, al.subsite_id, al.account_id, al.group_id,
+			COALESCE(NULLIF(a.name, ''), '') AS account_name,
+			COALESCE(NULLIF(g.name, ''), '') AS group_name,
+			al.platform, al.status, al.max_concurrency, al.max_requests, al.max_tokens,
+			al.used_requests, al.used_tokens, al.assigned_at, al.expires_at,
+			al.renewed_at, al.released_at, al.created_at, al.updated_at
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		LEFT JOIN groups g ON g.id = al.group_id AND g.deleted_at IS NULL
+		WHERE al.subsite_id = $1
+		  AND al.deleted_at IS NULL
+		  AND a.status = 'active'
+		ORDER BY al.created_at DESC
+		LIMIT $2 OFFSET $3
+	`, subsiteID, pageSize, offset)
+	if err != nil {
+		return nil, nil, err
+	}
+	pages := int((total + int64(pageSize) - 1) / int64(pageSize))
+	if pages < 1 {
+		pages = 1
+	}
+	return leases, &pagination.PaginationResult{Total: total, Page: page, PageSize: pageSize, Pages: pages}, nil
 }
 
 func (r *accountLeaseRepository) ListActiveBySubsite(ctx context.Context, subsiteID string) ([]service.AccountLease, error) {
 	return r.list(ctx, `
-		SELECT id, lease_id, subsite_id, account_id, platform, status, max_concurrency,
-			max_requests, max_tokens, used_requests, used_tokens, assigned_at, expires_at,
-			renewed_at, released_at, created_at, updated_at
-		FROM account_leases
-		WHERE subsite_id = $1
-		  AND deleted_at IS NULL
-		  AND status IN ('active', 'renewing')
-		  AND expires_at > NOW()
-		ORDER BY assigned_at ASC
+		SELECT al.id, al.lease_id, al.subsite_id, al.account_id, al.group_id,
+			COALESCE(NULLIF(a.name, ''), '') AS account_name,
+			COALESCE(NULLIF(g.name, ''), '') AS group_name,
+			al.platform, al.status, al.max_concurrency, al.max_requests, al.max_tokens,
+			al.used_requests, al.used_tokens, al.assigned_at, al.expires_at,
+			al.renewed_at, al.released_at, al.created_at, al.updated_at
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		LEFT JOIN groups g ON g.id = al.group_id AND g.deleted_at IS NULL
+		WHERE al.subsite_id = $1
+		  AND al.deleted_at IS NULL
+		  AND a.status = 'active'
+		  AND a.schedulable = TRUE
+		  AND al.status IN ('active', 'renewing')
+		  AND al.expires_at > NOW()
+		ORDER BY al.assigned_at ASC
 	`, strings.TrimSpace(subsiteID))
+}
+
+func (r *accountLeaseRepository) ListActiveAccountIDsBySubsite(ctx context.Context, subsiteID string) ([]int64, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT al.account_id
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		WHERE al.subsite_id = $1
+		  AND al.deleted_at IS NULL
+		  AND a.status = 'active'
+		  AND al.status IN ('active', 'renewing', 'draining')
+		  AND al.expires_at > NOW()
+	`, strings.TrimSpace(subsiteID))
+	if err != nil {
+		return nil, fmt.Errorf("list active lease account ids: %w", err)
+	}
+	defer rows.Close()
+
+	accountIDs := make([]int64, 0)
+	for rows.Next() {
+		var accountID int64
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, err
+		}
+		accountIDs = append(accountIDs, accountID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return accountIDs, nil
+}
+
+func (r *accountLeaseRepository) UpdateLimitsForSubsite(ctx context.Context, subsiteID, leaseID string, maxConcurrency int, maxRequests int, maxTokens int64) (*service.AccountLease, error) {
+	return r.updateLease(ctx, `
+		UPDATE account_leases
+		SET max_concurrency = $1,
+			max_requests = $2,
+			max_tokens = $3,
+			updated_at = NOW()
+		WHERE lease_id = $4
+		  AND subsite_id = $5
+		  AND deleted_at IS NULL
+		  AND status IN ('active', 'renewing', 'draining')
+	`, maxConcurrency, maxRequests, maxTokens, strings.TrimSpace(leaseID), strings.TrimSpace(subsiteID))
 }
 
 func (r *accountLeaseRepository) Renew(ctx context.Context, leaseID string, expiresAt time.Time) (*service.AccountLease, error) {
@@ -352,6 +497,14 @@ func (r *accountLeaseRepository) Renew(ctx context.Context, leaseID string, expi
 	`, expiresAt, strings.TrimSpace(leaseID))
 }
 
+func (r *accountLeaseRepository) RenewForSubsite(ctx context.Context, subsiteID, leaseID string, expiresAt time.Time) (*service.AccountLease, error) {
+	return r.updateLease(ctx, `
+		UPDATE account_leases
+		SET status = 'renewing', expires_at = $1, renewed_at = NOW(), updated_at = NOW()
+		WHERE lease_id = $2 AND subsite_id = $3 AND deleted_at IS NULL AND status IN ('active', 'renewing')
+	`, expiresAt, strings.TrimSpace(leaseID), strings.TrimSpace(subsiteID))
+}
+
 func (r *accountLeaseRepository) Release(ctx context.Context, leaseID string) (*service.AccountLease, error) {
 	return r.updateLease(ctx, `
 		UPDATE account_leases
@@ -360,12 +513,116 @@ func (r *accountLeaseRepository) Release(ctx context.Context, leaseID string) (*
 	`, strings.TrimSpace(leaseID))
 }
 
+func (r *accountLeaseRepository) ReleaseForSubsite(ctx context.Context, subsiteID, leaseID string) (*service.AccountLease, error) {
+	return r.updateLease(ctx, `
+		UPDATE account_leases
+		SET status = 'released', released_at = NOW(), updated_at = NOW()
+		WHERE lease_id = $1 AND subsite_id = $2 AND deleted_at IS NULL AND status IN ('active', 'renewing', 'draining')
+	`, strings.TrimSpace(leaseID), strings.TrimSpace(subsiteID))
+}
+
 func (r *accountLeaseRepository) Drain(ctx context.Context, leaseID string) (*service.AccountLease, error) {
 	return r.updateLease(ctx, `
 		UPDATE account_leases
 		SET status = 'draining', updated_at = NOW()
 		WHERE lease_id = $1 AND deleted_at IS NULL AND status IN ('active', 'renewing')
 	`, strings.TrimSpace(leaseID))
+}
+
+func (r *accountLeaseRepository) DrainForSubsite(ctx context.Context, subsiteID, leaseID string) (*service.AccountLease, error) {
+	return r.updateLease(ctx, `
+		UPDATE account_leases
+		SET status = 'draining', updated_at = NOW()
+		WHERE lease_id = $1 AND subsite_id = $2 AND deleted_at IS NULL AND status IN ('active', 'renewing')
+	`, strings.TrimSpace(leaseID), strings.TrimSpace(subsiteID))
+}
+
+func (r *accountLeaseRepository) DeleteForSubsite(ctx context.Context, subsiteID, leaseID string) (*service.AccountLease, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, fmt.Errorf("begin delete account lease tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	lease, err := scanAccountLease(tx.QueryRowContext(ctx, `
+		SELECT al.id, al.lease_id, al.subsite_id, al.account_id, al.group_id,
+			COALESCE(NULLIF(a.name, ''), '') AS account_name,
+			COALESCE(NULLIF(g.name, ''), '') AS group_name,
+			al.platform, al.status, al.max_concurrency, al.max_requests, al.max_tokens,
+			al.used_requests, al.used_tokens, al.assigned_at, al.expires_at,
+			al.renewed_at, al.released_at, al.created_at, al.updated_at
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		LEFT JOIN groups g ON g.id = al.group_id AND g.deleted_at IS NULL
+		WHERE al.lease_id = $1
+		  AND al.subsite_id = $2
+		  AND al.deleted_at IS NULL
+		FOR UPDATE
+	`, strings.TrimSpace(leaseID), strings.TrimSpace(subsiteID)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrAccountLeaseNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock account lease for delete: %w", err)
+	}
+
+	var activeReservations int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM quota_reservations
+		WHERE lease_id = $1
+		  AND status = 'reserved'
+		  AND expires_at > NOW()
+	`, lease.LeaseID).Scan(&activeReservations); err != nil {
+		return nil, fmt.Errorf("count active lease reservations: %w", err)
+	}
+	if activeReservations > 0 {
+		return nil, service.ErrAccountLeaseInUse
+	}
+
+	now := time.Now()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE account_leases
+		SET status = 'revoked',
+			released_at = COALESCE(released_at, $3),
+			deleted_at = $3,
+			updated_at = $3
+		WHERE lease_id = $1
+		  AND subsite_id = $2
+		  AND deleted_at IS NULL
+	`, lease.LeaseID, lease.SubsiteID, now)
+	if err != nil {
+		return nil, fmt.Errorf("delete account lease: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return nil, service.ErrAccountLeaseNotFound
+	}
+	lease.Status = service.AccountLeaseStatusRevoked
+	lease.ReleasedAt = &now
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return lease, nil
+}
+
+func (r *accountLeaseRepository) IncrementUsage(ctx context.Context, leaseID string, requests int64, tokens int64) error {
+	if requests < 0 || tokens < 0 {
+		return service.ErrSubsiteInvalidInput
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE account_leases
+		SET used_requests = used_requests + $2,
+			used_tokens = used_tokens + $3,
+			updated_at = NOW()
+		WHERE lease_id = $1 AND deleted_at IS NULL
+	`, strings.TrimSpace(leaseID), requests, tokens)
+	if err != nil {
+		return fmt.Errorf("increment account lease usage: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return service.ErrAccountLeaseNotFound
+	}
+	return nil
 }
 
 func (r *accountLeaseRepository) ExpireStale(ctx context.Context, now time.Time) (int64, error) {
@@ -413,18 +670,29 @@ func (r *accountLeaseRepository) updateLease(ctx context.Context, query string, 
 		return nil, service.ErrAccountLeaseNotFound
 	}
 	var leaseID string
-	switch v := args[len(args)-1].(type) {
+	leaseArgIndex := len(args) - 1
+	if len(args) >= 2 {
+		if _, ok := args[len(args)-2].(string); ok {
+			leaseArgIndex = len(args) - 2
+		}
+	}
+	switch v := args[leaseArgIndex].(type) {
 	case string:
 		leaseID = v
 	default:
 		leaseID = fmt.Sprint(v)
 	}
 	lease, err := scanAccountLease(tx.QueryRowContext(ctx, `
-		SELECT id, lease_id, subsite_id, account_id, platform, status, max_concurrency,
-			max_requests, max_tokens, used_requests, used_tokens, assigned_at, expires_at,
-			renewed_at, released_at, created_at, updated_at
-		FROM account_leases
-		WHERE lease_id = $1 AND deleted_at IS NULL
+		SELECT al.id, al.lease_id, al.subsite_id, al.account_id, al.group_id,
+			COALESCE(NULLIF(a.name, ''), '') AS account_name,
+			COALESCE(NULLIF(g.name, ''), '') AS group_name,
+			al.platform, al.status, al.max_concurrency, al.max_requests, al.max_tokens,
+			al.used_requests, al.used_tokens, al.assigned_at, al.expires_at,
+			al.renewed_at, al.released_at, al.created_at, al.updated_at
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id AND a.deleted_at IS NULL
+		LEFT JOIN groups g ON g.id = al.group_id AND g.deleted_at IS NULL
+		WHERE al.lease_id = $1 AND al.deleted_at IS NULL
 	`, leaseID))
 	if err != nil {
 		return nil, err
@@ -447,11 +715,74 @@ func (r *quotaReservationRepository) Create(ctx context.Context, reservation *se
 	if reservation == nil {
 		return service.ErrSubsiteInvalidInput
 	}
+	if reservation.ReservedRequests <= 0 {
+		reservation.ReservedRequests = 1
+	}
+	if reservation.ActiveRequestUnits <= 0 {
+		reservation.ActiveRequestUnits = 1
+	}
+	if reservation.ReservedTokens < 0 {
+		return service.ErrSubsiteInvalidInput
+	}
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return fmt.Errorf("begin quota reservation tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var maxConcurrency, accountConcurrency, maxRequests int
+	var maxTokens int64
+	var usedRequests, usedTokens int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT al.max_concurrency,
+		       COALESCE(a.concurrency, 0) AS account_concurrency,
+		       al.max_requests,
+		       al.max_tokens,
+		       al.used_requests,
+		       al.used_tokens
+		FROM account_leases al
+		JOIN accounts a ON a.id = al.account_id
+		WHERE lease_id = $1
+		  AND al.subsite_id = $2
+		  AND al.account_id = $3
+		  AND al.group_id = $4
+		  AND al.deleted_at IS NULL
+		  AND al.status IN ('active', 'renewing')
+		  AND al.expires_at > NOW()
+		FOR UPDATE
+	`, reservation.LeaseID, reservation.SubsiteID, reservation.AccountID, reservation.GroupID).Scan(&maxConcurrency, &accountConcurrency, &maxRequests, &maxTokens, &usedRequests, &usedTokens); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return service.ErrAccountLeaseNotFound
+		}
+		return fmt.Errorf("lock account lease for reservation: %w", err)
+	}
+	var reservedRequests, reservedTokens, activeRequestUnits int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(reserved_requests), 0),
+		       COALESCE(SUM(reserved_tokens), 0),
+		       COALESCE(SUM(active_request_units), 0)
+		FROM quota_reservations
+		WHERE lease_id = $1
+		  AND status = 'reserved'
+		  AND expires_at > NOW()
+	`, reservation.LeaseID).Scan(&reservedRequests, &reservedTokens, &activeRequestUnits); err != nil {
+		return fmt.Errorf("sum active lease reservations: %w", err)
+	}
+	effectiveMaxConcurrency := maxConcurrency
+	if effectiveMaxConcurrency == 0 {
+		effectiveMaxConcurrency = accountConcurrency
+		if effectiveMaxConcurrency < 0 {
+			effectiveMaxConcurrency = 0
+		}
+	}
+	if effectiveMaxConcurrency > 0 && activeRequestUnits+reservation.ActiveRequestUnits > int64(effectiveMaxConcurrency) {
+		return service.ErrSubsiteLeaseCapacityExceeded
+	}
+	if maxRequests > 0 && usedRequests+reservedRequests+reservation.ReservedRequests > int64(maxRequests) {
+		return service.ErrSubsiteLeaseCapacityExceeded
+	}
+	if maxTokens > 0 && usedTokens+reservedTokens+reservation.ReservedTokens > maxTokens {
+		return service.ErrSubsiteLeaseCapacityExceeded
+	}
 	if reservation.BillingType == service.BillingTypeBalance {
 		var balance, reserved float64
 		if err := tx.QueryRowContext(ctx, `
@@ -482,10 +813,11 @@ func (r *quotaReservationRepository) Create(ctx context.Context, reservation *se
 		INSERT INTO quota_reservations (
 			reservation_id, request_id, subsite_id, lease_id, account_id,
 			api_key_id, user_id, group_id, subscription_id, platform,
-			requested_model, mapped_model, estimated_cost, billing_type,
-			status, request_fingerprint, expires_at
+			requested_model, mapped_model, estimated_cost, reserved_requests,
+			reserved_tokens, active_request_units, billing_type, status,
+			request_fingerprint, expires_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		RETURNING id, created_at, updated_at
 	`,
 		reservation.ReservationID,
@@ -501,6 +833,9 @@ func (r *quotaReservationRepository) Create(ctx context.Context, reservation *se
 		reservation.RequestedModel,
 		reservation.MappedModel,
 		reservation.EstimatedCost,
+		reservation.ReservedRequests,
+		reservation.ReservedTokens,
+		reservation.ActiveRequestUnits,
 		reservation.BillingType,
 		reservation.Status,
 		reservation.RequestFingerprint,
@@ -547,6 +882,24 @@ func (r *quotaReservationRepository) Cancel(ctx context.Context, requestID strin
 	`, strings.TrimSpace(requestID))
 	if err != nil {
 		return fmt.Errorf("cancel quota reservation: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return service.ErrQuotaReservationNotFound
+	}
+	return nil
+}
+
+func (r *quotaReservationRepository) CancelForSubsite(ctx context.Context, subsiteID, requestID string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE quota_reservations
+		SET status = 'canceled',
+			updated_at = NOW()
+		WHERE request_id = $1
+		  AND subsite_id = $2
+		  AND status = 'reserved'
+	`, strings.TrimSpace(requestID), strings.TrimSpace(subsiteID))
+	if err != nil {
+		return fmt.Errorf("cancel quota reservation for subsite: %w", err)
 	}
 	if affected, _ := res.RowsAffected(); affected == 0 {
 		return service.ErrQuotaReservationNotFound
@@ -648,6 +1001,9 @@ func scanAccountLease(row subsiteRowScanner) (*service.AccountLease, error) {
 		&lease.LeaseID,
 		&lease.SubsiteID,
 		&lease.AccountID,
+		&lease.GroupID,
+		&lease.AccountName,
+		&lease.GroupName,
 		&lease.Platform,
 		&lease.Status,
 		&lease.MaxConcurrency,
@@ -672,9 +1028,9 @@ func quotaReservationSelectSQL() string {
 	return `
 		SELECT id, reservation_id, request_id, subsite_id, lease_id, account_id,
 			api_key_id, user_id, group_id, subscription_id, platform,
-			requested_model, mapped_model, estimated_cost, actual_cost,
-			billing_type, status, request_fingerprint, expires_at, settled_at,
-			created_at, updated_at
+			requested_model, mapped_model, estimated_cost, reserved_requests,
+			reserved_tokens, active_request_units, actual_cost, billing_type, status,
+			request_fingerprint, expires_at, settled_at, created_at, updated_at
 		FROM quota_reservations
 	`
 }
@@ -696,6 +1052,9 @@ func scanQuotaReservation(row subsiteRowScanner) (*service.QuotaReservation, err
 		&reservation.RequestedModel,
 		&reservation.MappedModel,
 		&reservation.EstimatedCost,
+		&reservation.ReservedRequests,
+		&reservation.ReservedTokens,
+		&reservation.ActiveRequestUnits,
 		&reservation.ActualCost,
 		&reservation.BillingType,
 		&reservation.Status,

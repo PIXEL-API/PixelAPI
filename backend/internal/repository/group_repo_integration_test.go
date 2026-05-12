@@ -533,6 +533,36 @@ func (s *GroupRepoSuite) TestListActive() {
 	s.Require().True(found, "active1 group should be in results")
 }
 
+func (s *GroupRepoSuite) TestListActive_DoesNotLoadAccountCounts() {
+	group := &service.Group{
+		Name:             "active-lite",
+		Platform:         service.PlatformAnthropic,
+		RateMultiplier:   1.0,
+		IsExclusive:      false,
+		Status:           service.StatusActive,
+		SubscriptionType: service.SubscriptionTypeStandard,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, group))
+
+	spy := &forbidSQLExecutor{}
+	repo := newGroupRepositoryWithSQL(s.tx.Client(), spy)
+
+	groups, err := repo.ListActive(s.ctx)
+	s.Require().NoError(err)
+	s.Require().False(spy.called, "ListActive should not run direct SQL account-count queries")
+
+	var found bool
+	for _, g := range groups {
+		if g.ID == group.ID {
+			found = true
+			s.Require().Zero(g.AccountCount)
+			s.Require().Zero(g.ActiveAccountCount)
+			break
+		}
+	}
+	s.Require().True(found, "active-lite group should be in results")
+}
+
 func (s *GroupRepoSuite) TestListActiveByPlatform() {
 	s.Require().NoError(s.repo.Create(s.ctx, &service.Group{
 		Name:             "g1",
@@ -572,6 +602,62 @@ func (s *GroupRepoSuite) TestListActiveByPlatform() {
 		}
 	}
 	s.Require().True(found, "g1 group should be in results")
+}
+
+func (s *GroupRepoSuite) TestListActiveVisibleToUser_LimitsCandidateSet() {
+	user := mustCreateUser(s.T(), s.tx.Client(), &service.User{Email: "visible-user@example.com"})
+	otherUser := mustCreateUser(s.T(), s.tx.Client(), &service.User{Email: "other-visible-user@example.com"})
+
+	publicStandard := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name:             "visible-public-standard",
+		Platform:         service.PlatformOpenAI,
+		RateMultiplier:   1,
+		Status:           service.StatusActive,
+		Scope:            service.GroupScopePublic,
+		SubscriptionType: service.SubscriptionTypeStandard,
+		IsExclusive:      true,
+	})
+	publicSubscription := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name:             "visible-public-subscription",
+		Platform:         service.PlatformOpenAI,
+		RateMultiplier:   1,
+		Status:           service.StatusActive,
+		Scope:            service.GroupScopePublic,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+		IsExclusive:      true,
+	})
+	ownPrivate := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name:             "visible-own-private",
+		Platform:         service.PlatformOpenAI,
+		RateMultiplier:   1,
+		Status:           service.StatusActive,
+		Scope:            service.GroupScopeUserPrivate,
+		OwnerUserID:      &user.ID,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+		IsExclusive:      true,
+	})
+	otherPrivate := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name:             "visible-other-private",
+		Platform:         service.PlatformOpenAI,
+		RateMultiplier:   1,
+		Status:           service.StatusActive,
+		Scope:            service.GroupScopeUserPrivate,
+		OwnerUserID:      &otherUser.ID,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+		IsExclusive:      true,
+	})
+
+	groups, err := s.repo.ListActiveVisibleToUser(s.ctx, user.ID, []int64{publicSubscription.ID, ownPrivate.ID, otherPrivate.ID})
+
+	s.Require().NoError(err)
+	ids := make(map[int64]struct{}, len(groups))
+	for _, group := range groups {
+		ids[group.ID] = struct{}{}
+	}
+	s.Require().Contains(ids, publicStandard.ID)
+	s.Require().Contains(ids, publicSubscription.ID)
+	s.Require().Contains(ids, ownPrivate.ID)
+	s.Require().NotContains(ids, otherPrivate.ID)
 }
 
 // --- ExistsByName ---

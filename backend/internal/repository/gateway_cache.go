@@ -51,3 +51,18 @@ func (c *gatewayCache) DeleteSessionAccountID(ctx context.Context, groupID int64
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Del(ctx, key).Err()
 }
+
+func (c *gatewayCache) GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error) {
+	key := buildSessionKey(groupID, sessionHash)
+	return c.rdb.Get(ctx, key).Result()
+}
+
+func (c *gatewayCache) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {
+	key := buildSessionKey(groupID, sessionHash)
+	return c.rdb.Set(ctx, key, value, ttl).Err()
+}
+
+func (c *gatewayCache) DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error {
+	key := buildSessionKey(groupID, sessionHash)
+	return c.rdb.Del(ctx, key).Err()
+}

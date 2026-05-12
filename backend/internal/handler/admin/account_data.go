@@ -379,6 +379,7 @@ func (h *AccountHandler) createAccountFromCredentialImportSource(
 	}
 	h.adminService.ForceAntigravityPrivacy(ctx, account)
 	h.adminService.ForceOpenAIPrivacy(ctx, account)
+	h.enqueueOwnedPublicShareValidation(account)
 	return account, nil
 }
 
@@ -543,6 +544,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
 			privacyAccounts = append(privacyAccounts, created)
 		}
+		h.enqueueOwnedPublicShareValidation(created)
 		result.AccountCreated++
 	}
 

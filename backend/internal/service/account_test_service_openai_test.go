@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -123,6 +124,30 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.Equal(t, 42.0, repo.updatedExtra["codex_5h_used_percent"])
 	require.Equal(t, 88.0, repo.updatedExtra["codex_7d_used_percent"])
 	require.Contains(t, recorder.Body.String(), "test_complete")
+}
+
+func TestCreateOpenAITestPayload_OAuthOmitsMaxOutputTokens(t *testing.T) {
+	payload := createOpenAITestPayload("gpt-5.4", true)
+
+	require.Equal(t, true, payload["stream"])
+	require.Equal(t, false, payload["store"])
+	_, hasMaxOutputTokens := payload["max_output_tokens"]
+	require.False(t, hasMaxOutputTokens)
+
+	_, err := json.Marshal(payload)
+	require.NoError(t, err)
+}
+
+func TestCreateOpenAITestPayload_APIKeyKeepsMaxOutputTokens(t *testing.T) {
+	payload := createOpenAITestPayload("gpt-5.4", false)
+
+	require.Equal(t, openAITestMaxOutputTokens, payload["max_output_tokens"])
+	require.Equal(t, true, payload["stream"])
+	_, hasStore := payload["store"]
+	require.False(t, hasStore)
+
+	_, err := json.Marshal(payload)
+	require.NoError(t, err)
 }
 
 func TestAccountTestService_OpenAIStreamEOFBeforeCompletedFails(t *testing.T) {

@@ -60,6 +60,7 @@ type Handlers struct {
 	PaymentWebhook   *PaymentWebhookHandler
 	AvailableChannel *AvailableChannelHandler
 	SubsiteInternal  *SubsiteInternalHandler
+	ReceiptCode      *ReceiptCodeHandler
 }
 
 // BuildInfo contains build-time information

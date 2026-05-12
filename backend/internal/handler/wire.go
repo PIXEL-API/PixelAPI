@@ -108,6 +108,7 @@ func ProvideHandlers(
 	paymentWebhookHandler *PaymentWebhookHandler,
 	availableChannelHandler *AvailableChannelHandler,
 	subsiteInternalHandler *SubsiteInternalHandler,
+	receiptCodeHandler *ReceiptCodeHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -130,6 +131,7 @@ func ProvideHandlers(
 		PaymentWebhook:   paymentWebhookHandler,
 		AvailableChannel: availableChannelHandler,
 		SubsiteInternal:  subsiteInternalHandler,
+		ReceiptCode:      receiptCodeHandler,
 	}
 }
 
@@ -153,6 +155,7 @@ var ProviderSet = wire.NewSet(
 	NewPaymentWebhookHandler,
 	NewAvailableChannelHandler,
 	NewSubsiteInternalHandler,
+	NewReceiptCodeHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,

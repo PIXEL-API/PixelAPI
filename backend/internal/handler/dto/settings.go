@@ -119,6 +119,7 @@ type SystemSettings struct {
 	UserPrivateGroupMonthlyLimitUSD *float64                     `json:"user_private_group_monthly_limit_usd"`
 	UserPrivateGroupRateMultiplier  float64                      `json:"user_private_group_rate_multiplier"`
 	UserPrivateGroupRPMLimit        int                          `json:"user_private_group_rpm_limit"`
+	UserPrivateGroupCommissionRate  float64                      `json:"user_private_group_commission_rate"`
 	DefaultSubscriptions            []DefaultSubscriptionSetting `json:"default_subscriptions"`
 
 	// Model fallback configuration
@@ -147,6 +148,9 @@ type SystemSettings struct {
 	// Backend Mode
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
+	// Master data plane mode
+	MasterDataPlaneEnabled bool `json:"master_data_plane_enabled"`
+
 	// Gateway forwarding behavior
 	EnableFingerprintUnification       bool `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough          bool `json:"enable_metadata_passthrough"`
@@ -163,7 +167,9 @@ type SystemSettings struct {
 	PaymentVisibleMethodWxpayEnabled  bool   `json:"payment_visible_method_wxpay_enabled"`
 
 	// OpenAI account scheduling
-	OpenAIAdvancedSchedulerEnabled bool `json:"openai_advanced_scheduler_enabled"`
+	OpenAIAdvancedSchedulerEnabled            bool    `json:"openai_advanced_scheduler_enabled"`
+	OpenAIFreeAccountRepairEnabled            bool    `json:"openai_free_account_repair_enabled"`
+	OpenAIFreeAccountRepairWeeklyThresholdUSD float64 `json:"openai_free_account_repair_weekly_threshold_usd"`
 
 	// Payment configuration
 	PaymentEnabled                   bool     `json:"payment_enabled"`

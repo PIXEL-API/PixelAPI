@@ -131,6 +131,7 @@ type ownedAccountDuplicateRepoStub struct {
 	updatedAccounts     []*Account
 	bulkUpdateCalls     int
 	boundAccountIDs     []int64
+	boundGroupIDs       map[int64][]int64
 	getByIDAccounts     map[int64]*Account
 	getByIDsAccounts    map[int64]*Account
 	listOwnedByPlatform map[string][]Account
@@ -161,8 +162,12 @@ func (s *ownedAccountDuplicateRepoStub) BulkUpdate(_ context.Context, ids []int6
 	return int64(len(ids)), nil
 }
 
-func (s *ownedAccountDuplicateRepoStub) BindGroups(_ context.Context, accountID int64, _ []int64) error {
+func (s *ownedAccountDuplicateRepoStub) BindGroups(_ context.Context, accountID int64, groupIDs []int64) error {
 	s.boundAccountIDs = append(s.boundAccountIDs, accountID)
+	if s.boundGroupIDs == nil {
+		s.boundGroupIDs = map[int64][]int64{}
+	}
+	s.boundGroupIDs[accountID] = append([]int64(nil), groupIDs...)
 	return nil
 }
 
@@ -463,11 +468,41 @@ func TestAccountServiceResolveOwnedPublicShareGroup(t *testing.T) {
 	require.Equal(t, int64(11), group.ID)
 }
 
-func TestAccountServiceResolveOwnedPublicShareGroupRequiresMatchingLevelPool(t *testing.T) {
+func TestAccountServiceResolveOwnedPublicShareGroupAllowsHigherLevelFallbackToLowerPool(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
-				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+				{ID: 10, Name: "PLUS共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelPlus},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPro})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(10), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupTreatsTeamPoolAsPlus(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 12, Name: "TEAM共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelTeam},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPlus})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(12), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupRejectsHigherPoolForLowerLevel(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 13, Name: "PRO共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelPro},
 			},
 		},
 	}
@@ -489,6 +524,77 @@ func TestAccountServiceResolveOwnedPublicShareGroupRejectsUnknownOpenAILevel(t *
 	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelUnknown})
 
 	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
+}
+
+func TestShouldRepairSuspectedOpenAIFreeAccount(t *testing.T) {
+	now := time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPlus,
+		Extra: map[string]any{
+			"quota_weekly_limit":    50.0,
+			"codex_7d_used_percent": 100.0,
+			"codex_7d_reset_at":     now.Add(24 * time.Hour).Format(time.RFC3339),
+		},
+	}
+
+	require.True(t, ShouldRepairSuspectedOpenAIFreeAccount(account, 60, now))
+	require.False(t, ShouldRepairSuspectedOpenAIFreeAccount(account, 40, now))
+
+	account.Extra["codex_7d_used_percent"] = 99.9
+	require.False(t, ShouldRepairSuspectedOpenAIFreeAccount(account, 60, now))
+}
+
+func TestAccountServiceAutoRepairSuspectedOpenAIFreeAccountSuspendsPublicShareAndRebindsFreePool(t *testing.T) {
+	ownerID := int64(101)
+	accountID := int64(202)
+	now := time.Now().UTC()
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			accountID: {
+				ID:           accountID,
+				Platform:     PlatformOpenAI,
+				Type:         AccountTypeOAuth,
+				AccountLevel: AccountLevelPlus,
+				OwnerUserID:  &ownerID,
+				ShareMode:    AccountShareModePublic,
+				ShareStatus:  AccountShareStatusApproved,
+				Status:       StatusActive,
+				Schedulable:  true,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
+				GroupIDs:     []int64{99, 11},
+				Extra: map[string]any{
+					"quota_weekly_limit":    50.0,
+					"codex_7d_used_percent": 100.0,
+					"codex_7d_reset_at":     now.Add(24 * time.Hour).Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+				{ID: 11, Name: "PLUS共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelPlus},
+			},
+		},
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	account, repaired, err := svc.AutoRepairSuspectedOpenAIFreeAccount(context.Background(), accountID, 60, "quota proof")
+
+	require.NoError(t, err)
+	require.True(t, repaired)
+	require.Equal(t, AccountLevelFree, account.AccountLevel)
+	require.Equal(t, AccountShareStatusSuspended, account.ShareStatus)
+	require.Equal(t, "quota proof", account.ErrorMessage)
+	require.Equal(t, []int64{99, 10}, repo.boundGroupIDs[accountID])
+	require.Len(t, repo.updatedAccounts, 1)
+	require.Equal(t, AccountLevelFree, repo.updatedAccounts[0].AccountLevel)
 }
 
 func TestAccountServiceValidateOwnedPublicSharePolicyRequiresEnabledPositivePolicy(t *testing.T) {
@@ -602,6 +708,28 @@ func TestAccountServiceCreateOwnedRejectsDuplicateOpenAIIdentity(t *testing.T) {
 	require.Nil(t, account)
 	require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
 	require.Empty(t, repo.createdAccounts)
+}
+
+func TestValidateOwnedAccountSourceAllowsOAuthMetadataURLs(t *testing.T) {
+	err := validateOwnedAccountSource(AccountTypeOAuth, map[string]any{
+		"access_token": "oauth-access-token",
+		"scope":        "openid https://www.googleapis.com/auth/cloud-platform",
+	}, map[string]any{
+		"issuer":     "https://auth.openai.com",
+		"avatar_url": "https://cdn.example.com/avatar.png",
+	})
+
+	require.NoError(t, err)
+}
+
+func TestValidateOwnedAccountSourceRejectsCustomEndpointURL(t *testing.T) {
+	err := validateOwnedAccountSource(AccountTypeOAuth, map[string]any{
+		"access_token": "oauth-access-token",
+	}, map[string]any{
+		"custom_base_url": "https://evil.example.com",
+	})
+
+	require.ErrorIs(t, err, ErrOwnedAccountCredentialsNotAllowed)
 }
 
 func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T) {

@@ -66,4 +66,26 @@ describe('UsageProgressBar', () => {
     expect(wrapper.text()).toContain('2h 30m')
     expect(wrapper.text()).not.toContain('现在')
   })
+
+  it('shows quota details when backend returns zero window stats', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: '5h',
+        utilization: 0,
+        resetsAt: null,
+        color: 'indigo',
+        windowStats: {
+          requests: 0,
+          tokens: 0,
+          cost: 0,
+          standard_cost: 0,
+          user_cost: 0
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('0 req')
+    expect(wrapper.text()).toContain('A $0.00')
+    expect(wrapper.text()).toContain('U $0.00')
+  })
 })

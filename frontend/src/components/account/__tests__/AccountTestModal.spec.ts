@@ -147,4 +147,36 @@ describe('AccountTestModal', () => {
       mode: 'compact'
     })
   })
+
+  it('uses user-scoped endpoint and default models for user accounts', async () => {
+    const wrapper = mount(AccountTestModal, {
+      props: {
+        show: true,
+        account: buildAccount(),
+        accountScope: 'user'
+      },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+          Select: SelectStub,
+          TextArea: TextAreaStub,
+          Icon: true
+        }
+      }
+    })
+
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-4o-mini'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect(getAvailableModelsMock).not.toHaveBeenCalled()
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    const [url, options] = (global.fetch as any).mock.calls[0]
+    expect(url).toBe('/api/v1/accounts/1/test')
+    expect(JSON.parse(options.body)).toMatchObject({
+      model_id: 'gpt-4o-mini',
+      mode: 'default'
+    })
+  })
 })

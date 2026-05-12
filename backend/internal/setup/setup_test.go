@@ -74,7 +74,12 @@ func TestWriteConfigFileKeepsDefaultUserConcurrency(t *testing.T) {
 	t.Setenv("RUN_MODE", "simple")
 	t.Setenv("DATA_DIR", t.TempDir())
 
-	if err := writeConfigFile(&SetupConfig{}); err != nil {
+	cfg := &SetupConfig{
+		Totp: TotpConfig{
+			EncryptionKey: strings.Repeat("a", 64),
+		},
+	}
+	if err := writeConfigFile(cfg); err != nil {
 		t.Fatalf("writeConfigFile() error = %v", err)
 	}
 
@@ -85,5 +90,28 @@ func TestWriteConfigFileKeepsDefaultUserConcurrency(t *testing.T) {
 
 	if !strings.Contains(string(data), "user_concurrency: 5") {
 		t.Fatalf("config missing default user concurrency, got:\n%s", string(data))
+	}
+}
+
+func TestWriteConfigFilePersistsTotpEncryptionKey(t *testing.T) {
+	t.Setenv("DATA_DIR", t.TempDir())
+
+	key := strings.Repeat("b", 64)
+	if err := writeConfigFile(&SetupConfig{
+		Totp: TotpConfig{
+			EncryptionKey: key,
+		},
+	}); err != nil {
+		t.Fatalf("writeConfigFile() error = %v", err)
+	}
+
+	data, err := os.ReadFile(GetConfigFilePath())
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "totp:") || !strings.Contains(content, "encryption_key: "+key) {
+		t.Fatalf("config missing totp encryption key, got:\n%s", content)
 	}
 }

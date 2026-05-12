@@ -522,6 +522,7 @@ const { t } = useI18n()
 const props = defineProps<{
   show: boolean
   account: Account | null
+  statsLoader?: (id: number, days?: number) => Promise<AccountUsageStatsResponse>
 }>()
 
 const emit = defineEmits<{
@@ -695,7 +696,8 @@ const loadStats = async () => {
 
   loading.value = true
   try {
-    stats.value = await adminAPI.accounts.getStats(props.account.id, 30)
+    const loader = props.statsLoader ?? adminAPI.accounts.getStats
+    stats.value = await loader(props.account.id, 30)
   } catch (error) {
     console.error('Failed to load account stats:', error)
     stats.value = null

@@ -8,6 +8,7 @@ export interface RevenueSummaryParams {
   end_date?: string
   granularity?: RevenueGranularity
   top_limit?: number
+  user_id?: number
 }
 
 export interface RevenueShareSettlementParams {
@@ -43,6 +44,7 @@ export interface RevenueAdjustmentStats {
   affiliate_rebate: number
   affiliate_transfer: number
   affiliate_rebate_count: number
+  private_group_commission: number
   share_consumer_charge: number
   share_account_cost: number
   share_owner_credit: number
@@ -68,6 +70,7 @@ export interface RevenueTrendPoint {
   account_cost: number
   usage_gross_profit: number
   affiliate_rebate: number
+  private_group_commission: number
   share_owner_credit: number
   share_platform_fee: number
   estimated_net_profit: number

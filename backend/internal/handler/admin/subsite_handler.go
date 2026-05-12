@@ -86,16 +86,42 @@ func (h *SubsiteHandler) Resume(c *gin.Context) {
 	response.Success(c, gin.H{"status": service.SubsiteStatusActive})
 }
 
-func (h *SubsiteHandler) ListLeases(c *gin.Context) {
-	leases, err := h.leaseService.ListBySubsite(c.Request.Context(), c.Param("id"))
+func (h *SubsiteHandler) ResetSecret(c *gin.Context) {
+	result, err := h.subsiteService.ResetSecret(c.Request.Context(), c.Param("id"))
 	if response.ErrorFrom(c, err) {
 		return
 	}
-	response.Success(c, leases)
+	response.Success(c, result)
+}
+
+func (h *SubsiteHandler) ListLeases(c *gin.Context) {
+	page, pageSize := response.ParsePagination(c)
+	leases, result, err := h.leaseService.ListBySubsitePaginated(c.Request.Context(), c.Param("id"), pagination.PaginationParams{
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.PaginatedWithResult(c, leases, &response.PaginationResult{
+		Total:    result.Total,
+		Page:     result.Page,
+		PageSize: result.PageSize,
+		Pages:    result.Pages,
+	})
+}
+
+func (h *SubsiteHandler) ListLeaseActiveAccountIDs(c *gin.Context) {
+	accountIDs, err := h.leaseService.ListActiveAccountIDsBySubsite(c.Request.Context(), c.Param("id"))
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, gin.H{"account_ids": accountIDs})
 }
 
 func (h *SubsiteHandler) CreateLease(c *gin.Context) {
 	var input struct {
+		GroupID        int64      `json:"group_id" binding:"required"`
 		AccountID      int64      `json:"account_id" binding:"required"`
 		MaxConcurrency int        `json:"max_concurrency"`
 		MaxRequests    int        `json:"max_requests"`
@@ -114,6 +140,7 @@ func (h *SubsiteHandler) CreateLease(c *gin.Context) {
 	}
 	lease, err := h.leaseService.Create(c.Request.Context(), service.CreateAccountLeaseInput{
 		SubsiteID:      c.Param("id"),
+		GroupID:        input.GroupID,
 		AccountID:      input.AccountID,
 		MaxConcurrency: input.MaxConcurrency,
 		MaxRequests:    input.MaxRequests,
@@ -127,7 +154,7 @@ func (h *SubsiteHandler) CreateLease(c *gin.Context) {
 }
 
 func (h *SubsiteHandler) DrainLease(c *gin.Context) {
-	lease, err := h.leaseService.Drain(c.Request.Context(), c.Param("lease_id"))
+	lease, err := h.leaseService.DrainForSubsite(c.Request.Context(), c.Param("id"), c.Param("lease_id"))
 	if response.ErrorFrom(c, err) {
 		return
 	}
@@ -135,7 +162,7 @@ func (h *SubsiteHandler) DrainLease(c *gin.Context) {
 }
 
 func (h *SubsiteHandler) ReleaseLease(c *gin.Context) {
-	lease, err := h.leaseService.Release(c.Request.Context(), c.Param("lease_id"))
+	lease, err := h.leaseService.ReleaseForSubsite(c.Request.Context(), c.Param("id"), c.Param("lease_id"))
 	if response.ErrorFrom(c, err) {
 		return
 	}
@@ -161,9 +188,42 @@ func (h *SubsiteHandler) RenewLease(c *gin.Context) {
 		return
 	}
 	lease, err := h.leaseService.Renew(c.Request.Context(), service.RenewAccountLeaseInput{
+		SubsiteID: c.Param("id"),
 		LeaseID:   c.Param("lease_id"),
 		ExpiresAt: expiresAt,
 	})
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, lease)
+}
+
+func (h *SubsiteHandler) UpdateLease(c *gin.Context) {
+	var input struct {
+		MaxConcurrency int   `json:"max_concurrency"`
+		MaxRequests    int   `json:"max_requests"`
+		MaxTokens      int64 `json:"max_tokens"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	lease, err := h.leaseService.UpdateLimitsForSubsite(
+		c.Request.Context(),
+		c.Param("id"),
+		c.Param("lease_id"),
+		input.MaxConcurrency,
+		input.MaxRequests,
+		input.MaxTokens,
+	)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, lease)
+}
+
+func (h *SubsiteHandler) DeleteLease(c *gin.Context) {
+	lease, err := h.leaseService.DeleteForSubsite(c.Request.Context(), c.Param("id"), c.Param("lease_id"))
 	if response.ErrorFrom(c, err) {
 		return
 	}

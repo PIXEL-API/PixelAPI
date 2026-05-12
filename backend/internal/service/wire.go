@@ -156,6 +156,17 @@ func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository) *S
 	return svc
 }
 
+// ProvideSubsiteMaintenanceService creates and starts SubsiteMaintenanceService.
+func ProvideSubsiteMaintenanceService(
+	subsiteRepo SubsiteRepository,
+	leaseRepo AccountLeaseRepository,
+	reservationRepo QuotaReservationRepository,
+) *SubsiteMaintenanceService {
+	svc := NewSubsiteMaintenanceService(subsiteRepo, leaseRepo, reservationRepo)
+	svc.Start()
+	return svc
+}
+
 // ProvideTimingWheelService creates and starts TimingWheelService
 func ProvideTimingWheelService() (*TimingWheelService, error) {
 	svc, err := NewTimingWheelService()
@@ -580,6 +591,7 @@ var ProviderSet = wire.NewSet(
 	ProvideTokenRefreshService,
 	ProvideAccountExpiryService,
 	ProvideSubscriptionExpiryService,
+	ProvideSubsiteMaintenanceService,
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
@@ -601,6 +613,7 @@ var ProviderSet = wire.NewSet(
 	NewModelPricingResolver,
 	NewAffiliateService,
 	NewRevenueService,
+	NewReceiptCodeService,
 	ProvidePaymentConfigService,
 	NewPaymentService,
 	ProvidePaymentOrderExpiryService,

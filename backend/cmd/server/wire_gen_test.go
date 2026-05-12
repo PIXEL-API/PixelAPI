@@ -41,6 +41,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	)
 	accountExpirySvc := service.NewAccountExpiryService(nil, time.Second)
 	subscriptionExpirySvc := service.NewSubscriptionExpiryService(nil, time.Second)
+	subsiteMaintenanceSvc := service.NewSubsiteMaintenanceService(nil, nil, nil)
 	pricingSvc := service.NewPricingService(cfg, nil)
 	emailQueueSvc := service.NewEmailQueueService(nil, 1)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg)
@@ -61,6 +62,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		tokenRefreshSvc,
 		accountExpirySvc,
 		subscriptionExpirySvc,
+		subsiteMaintenanceSvc,
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
 		pricingSvc,

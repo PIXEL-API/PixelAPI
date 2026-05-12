@@ -80,6 +80,18 @@ const backendModeCacheTTL = 60 * time.Second
 const backendModeErrorTTL = 5 * time.Second
 const backendModeDBTimeout = 5 * time.Second
 
+type cachedMasterDataPlane struct {
+	value     bool
+	expiresAt int64 // unix nano
+}
+
+var masterDataPlaneCache atomic.Value // *cachedMasterDataPlane
+var masterDataPlaneSF singleflight.Group
+
+const masterDataPlaneCacheTTL = 60 * time.Second
+const masterDataPlaneErrorTTL = 5 * time.Second
+const masterDataPlaneDBTimeout = 5 * time.Second
+
 // cachedGatewayForwardingSettings 缓存网关转发行为设置（进程内缓存，60s TTL）
 type cachedGatewayForwardingSettings struct {
 	fingerprintUnification       bool
@@ -445,6 +457,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyWeChatConnectRedirectURL,
 		SettingKeyWeChatConnectFrontendRedirectURL,
 		SettingKeyBackendModeEnabled,
+		SettingKeyMasterDataPlaneEnabled,
+		SettingKeySubsiteOnlyGatewayEnabled,
 		SettingPaymentEnabled,
 		SettingKeyOIDCConnectEnabled,
 		SettingKeyOIDCConnectProviderName,
@@ -1206,6 +1220,13 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		settings.UserPrivateGroupRPMLimit = 0
 	}
 	updates[SettingKeyUserPrivateGroupRPMLimit] = strconv.Itoa(settings.UserPrivateGroupRPMLimit)
+	if settings.UserPrivateGroupCommissionRate < 0 || math.IsNaN(settings.UserPrivateGroupCommissionRate) || math.IsInf(settings.UserPrivateGroupCommissionRate, 0) {
+		settings.UserPrivateGroupCommissionRate = 0
+	}
+	if settings.UserPrivateGroupCommissionRate > 1 {
+		settings.UserPrivateGroupCommissionRate = 1
+	}
+	updates[SettingKeyUserPrivateGroupCommissionRate] = strconv.FormatFloat(settings.UserPrivateGroupCommissionRate, 'f', 8, 64)
 	defaultSubsJSON, err := json.Marshal(settings.DefaultSubscriptions)
 	if err != nil {
 		return nil, fmt.Errorf("marshal default subscriptions: %w", err)
@@ -1253,6 +1274,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// Backend Mode
 	updates[SettingKeyBackendModeEnabled] = strconv.FormatBool(settings.BackendModeEnabled)
 
+	// Master data plane. Keep the legacy inverse key in sync for compatibility.
+	updates[SettingKeyMasterDataPlaneEnabled] = strconv.FormatBool(settings.MasterDataPlaneEnabled)
+	updates[SettingKeySubsiteOnlyGatewayEnabled] = strconv.FormatBool(!settings.MasterDataPlaneEnabled)
+
 	// Gateway forwarding behavior
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
@@ -1263,6 +1288,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingPaymentVisibleMethodAlipayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodAlipayEnabled)
 	updates[SettingPaymentVisibleMethodWxpayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodWxpayEnabled)
 	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
+	updates[SettingKeyOpenAIFreeAccountRepairEnabled] = strconv.FormatBool(settings.OpenAIFreeAccountRepairEnabled)
+	if settings.OpenAIFreeAccountRepairWeeklyThresholdUSD < 0 || math.IsNaN(settings.OpenAIFreeAccountRepairWeeklyThresholdUSD) || math.IsInf(settings.OpenAIFreeAccountRepairWeeklyThresholdUSD, 0) {
+		settings.OpenAIFreeAccountRepairWeeklyThresholdUSD = 0
+	}
+	updates[SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD] = strconv.FormatFloat(settings.OpenAIFreeAccountRepairWeeklyThresholdUSD, 'f', 8, 64)
 
 	// Balance low notification
 	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
@@ -1315,6 +1345,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	backendModeCache.Store(&cachedBackendMode{
 		value:     settings.BackendModeEnabled,
 		expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
+	})
+	masterDataPlaneSF.Forget("master_data_plane")
+	masterDataPlaneCache.Store(&cachedMasterDataPlane{
+		value:     settings.MasterDataPlaneEnabled,
+		expiresAt: time.Now().Add(masterDataPlaneCacheTTL).UnixNano(),
 	})
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
@@ -1427,6 +1462,61 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 		return val
 	}
 	return false
+}
+
+func (s *SettingService) IsMasterDataPlaneEnabled(ctx context.Context) bool {
+	if cached, ok := masterDataPlaneCache.Load().(*cachedMasterDataPlane); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.value
+		}
+	}
+	result, _, _ := masterDataPlaneSF.Do("master_data_plane", func() (any, error) {
+		if cached, ok := masterDataPlaneCache.Load().(*cachedMasterDataPlane); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.value, nil
+			}
+		}
+		if s == nil || s.settingRepo == nil {
+			return true, nil
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), masterDataPlaneDBTimeout)
+		defer cancel()
+		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyMasterDataPlaneEnabled,
+			SettingKeySubsiteOnlyGatewayEnabled,
+		})
+		if err != nil {
+			slog.Warn("failed to get master data plane setting", "error", err)
+			masterDataPlaneCache.Store(&cachedMasterDataPlane{
+				value:     false,
+				expiresAt: time.Now().Add(masterDataPlaneErrorTTL).UnixNano(),
+			})
+			return false, nil
+		}
+		enabled := parseMasterDataPlaneEnabled(values)
+		masterDataPlaneCache.Store(&cachedMasterDataPlane{
+			value:     enabled,
+			expiresAt: time.Now().Add(masterDataPlaneCacheTTL).UnixNano(),
+		})
+		return enabled, nil
+	})
+	if val, ok := result.(bool); ok {
+		return val
+	}
+	return false
+}
+
+func parseMasterDataPlaneEnabled(settings map[string]string) bool {
+	if settings == nil {
+		return true
+	}
+	if raw, ok := settings[SettingKeyMasterDataPlaneEnabled]; ok && strings.TrimSpace(raw) != "" {
+		return strings.EqualFold(strings.TrimSpace(raw), "true")
+	}
+	if raw, ok := settings[SettingKeySubsiteOnlyGatewayEnabled]; ok && strings.TrimSpace(raw) != "" {
+		return !strings.EqualFold(strings.TrimSpace(raw), "true")
+	}
+	return true
 }
 
 type gatewayForwardingSettingsResult struct {
@@ -1703,6 +1793,7 @@ func (s *SettingService) GetUserPrivateGroupTemplate(ctx context.Context) (*User
 		MonthlyLimitUSD: settings.UserPrivateGroupMonthlyLimitUSD,
 		RateMultiplier:  settings.UserPrivateGroupRateMultiplier,
 		RPMLimit:        settings.UserPrivateGroupRPMLimit,
+		CommissionRate:  settings.UserPrivateGroupCommissionRate,
 	}, nil
 }
 
@@ -1713,6 +1804,30 @@ func (s *SettingService) GetDefaultSubscriptions(ctx context.Context) []DefaultS
 		return nil
 	}
 	return parseDefaultSubscriptions(value)
+}
+
+func (s *SettingService) GetOpenAIFreeAccountRepairSettings(ctx context.Context) (enabled bool, weeklyThresholdUSD float64) {
+	if s == nil || s.settingRepo == nil {
+		return false, 0
+	}
+	rawEnabled, err := s.settingRepo.GetValue(ctx, SettingKeyOpenAIFreeAccountRepairEnabled)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(rawEnabled), "true") {
+		return false, 0
+	}
+
+	threshold := 60.0
+	rawThreshold, err := s.settingRepo.GetValue(ctx, SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD)
+	if err == nil && strings.TrimSpace(rawThreshold) != "" {
+		parsed, parseErr := strconv.ParseFloat(strings.TrimSpace(rawThreshold), 64)
+		if parseErr != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return false, 0
+		}
+		threshold = parsed
+	} else if err != nil && !errors.Is(err, ErrSettingNotFound) {
+		return false, 0
+	}
+
+	return true, threshold
 }
 
 func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*AuthSourceDefaultSettings, error) {
@@ -1934,18 +2049,23 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyMaxClaudeCodeVersion: "",
 
 		// 分组隔离（默认不允许未分组 Key 调度）
-		SettingKeyAllowUngroupedKeyScheduling:        "false",
-		SettingKeyEnableAnthropicCacheTTL1hInjection: "false",
-		SettingKeyUserPrivateGroupDailyLimitUSD:      "0",
-		SettingKeyUserPrivateGroupWeeklyLimitUSD:     "0",
-		SettingKeyUserPrivateGroupMonthlyLimitUSD:    "0",
-		SettingKeyUserPrivateGroupRateMultiplier:     "1",
-		SettingKeyUserPrivateGroupRPMLimit:           "0",
-		SettingPaymentVisibleMethodAlipaySource:      "",
-		SettingPaymentVisibleMethodWxpaySource:       "",
-		SettingPaymentVisibleMethodAlipayEnabled:     "false",
-		SettingPaymentVisibleMethodWxpayEnabled:      "false",
-		openAIAdvancedSchedulerSettingKey:            "false",
+		SettingKeyAllowUngroupedKeyScheduling:               "false",
+		SettingKeyEnableAnthropicCacheTTL1hInjection:        "false",
+		SettingKeyUserPrivateGroupDailyLimitUSD:             "0",
+		SettingKeyUserPrivateGroupWeeklyLimitUSD:            "0",
+		SettingKeyUserPrivateGroupMonthlyLimitUSD:           "0",
+		SettingKeyUserPrivateGroupRateMultiplier:            "1",
+		SettingKeyUserPrivateGroupRPMLimit:                  "0",
+		SettingKeyUserPrivateGroupCommissionRate:            "0.005",
+		SettingKeyMasterDataPlaneEnabled:                    "true",
+		SettingKeySubsiteOnlyGatewayEnabled:                 "false",
+		SettingPaymentVisibleMethodAlipaySource:             "",
+		SettingPaymentVisibleMethodWxpaySource:              "",
+		SettingPaymentVisibleMethodAlipayEnabled:            "false",
+		SettingPaymentVisibleMethodWxpayEnabled:             "false",
+		openAIAdvancedSchedulerSettingKey:                   "false",
+		SettingKeyOpenAIFreeAccountRepairEnabled:            "false",
+		SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD: "60",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -1985,6 +2105,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
+		MasterDataPlaneEnabled:           parseMasterDataPlaneEnabled(settings),
+		SubsiteOnlyGatewayEnabled:        !parseMasterDataPlaneEnabled(settings),
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
@@ -2018,6 +2140,14 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	if rpm, err := strconv.Atoi(settings[SettingKeyUserPrivateGroupRPMLimit]); err == nil && rpm >= 0 {
 		result.UserPrivateGroupRPMLimit = rpm
+	}
+	if commissionRate, err := strconv.ParseFloat(settings[SettingKeyUserPrivateGroupCommissionRate], 64); err == nil && commissionRate >= 0 && !math.IsNaN(commissionRate) && !math.IsInf(commissionRate, 0) {
+		if commissionRate > 1 {
+			commissionRate = 1
+		}
+		result.UserPrivateGroupCommissionRate = commissionRate
+	} else {
+		result.UserPrivateGroupCommissionRate = 0.005
 	}
 
 	if balance, err := strconv.ParseFloat(settings[SettingKeyDefaultBalance], 64); err == nil {
@@ -2313,6 +2443,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.PaymentVisibleMethodAlipayEnabled = settings[SettingPaymentVisibleMethodAlipayEnabled] == "true"
 	result.PaymentVisibleMethodWxpayEnabled = settings[SettingPaymentVisibleMethodWxpayEnabled] == "true"
 	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
+	result.OpenAIFreeAccountRepairEnabled = settings[SettingKeyOpenAIFreeAccountRepairEnabled] == "true"
+	if v, err := strconv.ParseFloat(settings[SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD], 64); err == nil && v > 0 {
+		result.OpenAIFreeAccountRepairWeeklyThresholdUSD = v
+	} else {
+		result.OpenAIFreeAccountRepairWeeklyThresholdUSD = 60
+	}
 
 	// Balance low notification
 	result.BalanceLowNotifyEnabled = settings[SettingKeyBalanceLowNotifyEnabled] == "true"

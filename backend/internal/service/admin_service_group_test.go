@@ -255,6 +255,41 @@ func TestAdminService_CreateGroupCopyAccounts_RejectsMismatchedOpenAILevelBefore
 	require.Empty(t, repo.bindAccountsAccountIDs)
 }
 
+func TestAdminService_CreateGroupCopyAccounts_AllowsHigherOpenAILevelIntoLowerPool(t *testing.T) {
+	repo := &groupRepoStubForAdmin{
+		getByIDByID: map[int64]*Group{
+			1: {ID: 1, Name: "Pro Source", Platform: PlatformOpenAI},
+		},
+		accountIDsByGroupIDs: []int64{101},
+	}
+	accountRepo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{
+				ID:           101,
+				Name:         "pro-account",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPro,
+				Type:         AccountTypeOAuth,
+			},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo, accountRepo: accountRepo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                     "Plus Pool",
+		Platform:                 PlatformOpenAI,
+		RateMultiplier:           1,
+		RequiredAccountLevel:     AccountLevelPlus,
+		CopyAccountsFromGroupIDs: []int64{1},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.created)
+	require.Equal(t, AccountLevelPlus, repo.created.RequiredAccountLevel)
+	require.Equal(t, []int64{101}, repo.bindAccountsAccountIDs)
+}
+
 func TestAdminService_UpdateGroupCopyAccounts_RejectsMismatchedOpenAILevelBeforeClearingBindings(t *testing.T) {
 	existing := &Group{
 		ID:                   2,
@@ -292,6 +327,32 @@ func TestAdminService_UpdateGroupCopyAccounts_RejectsMismatchedOpenAILevelBefore
 	require.Nil(t, repo.updated)
 	require.Zero(t, repo.deleteAccountGroupsByGroupID)
 	require.Empty(t, repo.bindAccountsAccountIDs)
+}
+
+func TestAdminService_UpdateGroupCopyAccounts_NormalizesTeamRequiredLevelToPlus(t *testing.T) {
+	existing := &Group{
+		ID:             2,
+		Name:           "Legacy Team Pool",
+		Platform:       PlatformOpenAI,
+		RateMultiplier: 1,
+		Status:         StatusActive,
+	}
+	repo := &groupRepoStubForAdmin{
+		getByIDByID: map[int64]*Group{
+			2: existing,
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	updated, err := svc.UpdateGroup(context.Background(), 2, &UpdateGroupInput{
+		RequiredAccountLevel: ptrString(AccountLevelTeam),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Equal(t, AccountLevelPlus, updated.RequiredAccountLevel)
+	require.NotNil(t, repo.updated)
+	require.Equal(t, AccountLevelPlus, repo.updated.RequiredAccountLevel)
 }
 
 // TestAdminService_UpdateGroup_WithImagePricing 测试更新分组时 ImagePrice 字段正确更新

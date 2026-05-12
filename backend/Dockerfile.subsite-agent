@@ -1,5 +1,11 @@
 FROM golang:1.26-alpine AS builder
 
+ARG GOPROXY=https://goproxy.cn,direct
+ARG GOSUMDB=sum.golang.google.cn
+
+ENV GOPROXY=${GOPROXY}
+ENV GOSUMDB=${GOSUMDB}
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -8,8 +14,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/sub2api-subsite-agent ./cmd/subsit
 
 FROM alpine:3.22
 
-RUN addgroup -S subsite && adduser -S subsite -G subsite
 WORKDIR /app
+RUN addgroup -S subsite && adduser -S subsite -G subsite && \
+    mkdir -p /app/data && \
+    chown -R subsite:subsite /app
 COPY --from=builder /out/sub2api-subsite-agent /usr/local/bin/sub2api-subsite-agent
 USER subsite
 EXPOSE 8080

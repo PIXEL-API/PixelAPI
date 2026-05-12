@@ -31,6 +31,7 @@ type RevenueQueryParams struct {
 	Granularity string
 	Timezone    string
 	TopLimit    int
+	UserID      *int64
 }
 
 type RevenueShareSettlementQueryParams struct {
@@ -80,15 +81,16 @@ type RevenueUsageStats struct {
 }
 
 type RevenueAdjustmentStats struct {
-	AffiliateRebate      float64 `json:"affiliate_rebate"`
-	AffiliateTransfer    float64 `json:"affiliate_transfer"`
-	AffiliateRebateCount int64   `json:"affiliate_rebate_count"`
-	ShareConsumerCharge  float64 `json:"share_consumer_charge"`
-	ShareAccountCost     float64 `json:"share_account_cost"`
-	ShareOwnerCredit     float64 `json:"share_owner_credit"`
-	SharePlatformFee     float64 `json:"share_platform_fee"`
-	ShareNetProfit       float64 `json:"share_net_profit"`
-	ShareSettlementCount int64   `json:"share_settlement_count"`
+	AffiliateRebate        float64 `json:"affiliate_rebate"`
+	AffiliateTransfer      float64 `json:"affiliate_transfer"`
+	AffiliateRebateCount   int64   `json:"affiliate_rebate_count"`
+	PrivateGroupCommission float64 `json:"private_group_commission"`
+	ShareConsumerCharge    float64 `json:"share_consumer_charge"`
+	ShareAccountCost       float64 `json:"share_account_cost"`
+	ShareOwnerCredit       float64 `json:"share_owner_credit"`
+	SharePlatformFee       float64 `json:"share_platform_fee"`
+	ShareNetProfit         float64 `json:"share_net_profit"`
+	ShareSettlementCount   int64   `json:"share_settlement_count"`
 }
 
 type RevenueProfitStats struct {
@@ -99,18 +101,19 @@ type RevenueProfitStats struct {
 }
 
 type RevenueTrendPoint struct {
-	Date               string  `json:"date"`
-	PaidAmount         float64 `json:"paid_amount"`
-	RefundAmount       float64 `json:"refund_amount"`
-	NetPaidAmount      float64 `json:"net_paid_amount"`
-	Requests           int64   `json:"requests"`
-	ConsumedRevenue    float64 `json:"consumed_revenue"`
-	AccountCost        float64 `json:"account_cost"`
-	UsageGrossProfit   float64 `json:"usage_gross_profit"`
-	AffiliateRebate    float64 `json:"affiliate_rebate"`
-	ShareOwnerCredit   float64 `json:"share_owner_credit"`
-	SharePlatformFee   float64 `json:"share_platform_fee"`
-	EstimatedNetProfit float64 `json:"estimated_net_profit"`
+	Date                   string  `json:"date"`
+	PaidAmount             float64 `json:"paid_amount"`
+	RefundAmount           float64 `json:"refund_amount"`
+	NetPaidAmount          float64 `json:"net_paid_amount"`
+	Requests               int64   `json:"requests"`
+	ConsumedRevenue        float64 `json:"consumed_revenue"`
+	AccountCost            float64 `json:"account_cost"`
+	UsageGrossProfit       float64 `json:"usage_gross_profit"`
+	AffiliateRebate        float64 `json:"affiliate_rebate"`
+	PrivateGroupCommission float64 `json:"private_group_commission"`
+	ShareOwnerCredit       float64 `json:"share_owner_credit"`
+	SharePlatformFee       float64 `json:"share_platform_fee"`
+	EstimatedNetProfit     float64 `json:"estimated_net_profit"`
 }
 
 type RevenueBreakdownItem struct {
@@ -214,6 +217,9 @@ func (s *RevenueService) GetSummary(ctx context.Context, params RevenueQueryPara
 		return nil, err
 	}
 	if err := s.fillRevenueAffiliateStats(ctx, params, out, pointIndex); err != nil {
+		return nil, err
+	}
+	if err := s.fillRevenuePrivateGroupCommissionStats(ctx, params, out, pointIndex); err != nil {
 		return nil, err
 	}
 	if err := s.fillRevenueShareStats(ctx, params, out, pointIndex); err != nil {
@@ -443,7 +449,17 @@ func validateRevenueQueryParams(params RevenueQueryParams) error {
 	if params.Granularity == RevenueGranularityHour && window > 31*24*time.Hour {
 		return infraerrors.BadRequest("REVENUE_TIME_RANGE_TOO_LARGE", "hour granularity supports at most 31 days")
 	}
+	if params.UserID != nil && *params.UserID <= 0 {
+		return infraerrors.BadRequest("REVENUE_USER_ID_INVALID", "user_id must be a positive integer")
+	}
 	return nil
+}
+
+func revenueUserFilter(column string, userID *int64, placeholder int) (string, []any) {
+	if userID == nil {
+		return "", nil
+	}
+	return fmt.Sprintf(" AND %s = $%d", column, placeholder), []any{*userID}
 }
 
 func normalizeRevenueTopLimit(limit int) int {
@@ -561,6 +577,7 @@ func revenueBucketExpression(column, granularity string) string {
 }
 
 func (s *RevenueService) fillRevenueCashStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 6)
 	query := `
 		SELECT
 			COALESCE(SUM(pay_amount) FILTER (WHERE paid_at >= $1 AND paid_at < $2), 0)::double precision AS paid_amount,
@@ -572,11 +589,16 @@ func (s *RevenueService) fillRevenueCashStats(ctx context.Context, params Revenu
 			COALESCE(SUM(pay_amount) FILTER (WHERE status = $5 AND created_at >= $1 AND created_at < $2), 0)::double precision AS pending_amount,
 			COUNT(*) FILTER (WHERE status = $5 AND created_at >= $1 AND created_at < $2) AS pending_order_count
 		FROM payment_orders
-		WHERE (paid_at >= $1 AND paid_at < $2)
+		WHERE ((paid_at >= $1 AND paid_at < $2)
 			OR (refund_at >= $1 AND refund_at < $2)
-			OR (status = $5 AND created_at >= $1 AND created_at < $2)
+			OR (status = $5 AND created_at >= $1 AND created_at < $2))
 	`
-	if err := s.querySingle(ctx, query, []any{params.StartTime, params.EndTime, payment.OrderTypeBalance, payment.OrderTypeSubscription, OrderStatusPending},
+	if userFilter != "" {
+		query += userFilter
+	}
+	args := []any{params.StartTime, params.EndTime, payment.OrderTypeBalance, payment.OrderTypeSubscription, OrderStatusPending}
+	args = append(args, userArgs...)
+	if err := s.querySingle(ctx, query, args,
 		&out.Cash.PaidAmount,
 		&out.Cash.BalancePaidAmount,
 		&out.Cash.SubscriptionPaidAmount,
@@ -591,6 +613,7 @@ func (s *RevenueService) fillRevenueCashStats(ctx context.Context, params Revenu
 
 	bucketPaid := revenueBucketExpression("paid_at", params.Granularity)
 	bucketRefund := revenueBucketExpression("refund_at", params.Granularity)
+	trendUserFilter, trendUserArgs := revenueUserFilter("user_id", params.UserID, 4)
 	trendQuery := fmt.Sprintf(`
 		SELECT bucket,
 			COALESCE(SUM(paid_amount), 0)::double precision,
@@ -599,17 +622,21 @@ func (s *RevenueService) fillRevenueCashStats(ctx context.Context, params Revenu
 			SELECT %s AS bucket, COALESCE(SUM(pay_amount), 0) AS paid_amount, 0::numeric AS refund_amount
 			FROM payment_orders
 			WHERE paid_at >= $1 AND paid_at < $2
+				%s
 			GROUP BY 1
 			UNION ALL
 			SELECT %s AS bucket, 0::numeric AS paid_amount, COALESCE(SUM(refund_amount), 0) AS refund_amount
 			FROM payment_orders
 			WHERE refund_at >= $1 AND refund_at < $2 AND refund_amount > 0
+				%s
 			GROUP BY 1
 		) s
 		GROUP BY bucket
 		ORDER BY bucket
-	`, bucketPaid, bucketRefund)
-	rows, err := s.entClient.QueryContext(ctx, trendQuery, params.StartTime, params.EndTime, params.Timezone)
+	`, bucketPaid, trendUserFilter, bucketRefund, trendUserFilter)
+	trendArgs := []any{params.StartTime, params.EndTime, params.Timezone}
+	trendArgs = append(trendArgs, trendUserArgs...)
+	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
 	if err != nil {
 		return fmt.Errorf("query revenue cash trend: %w", err)
 	}
@@ -633,6 +660,7 @@ func (s *RevenueService) fillRevenueCashStats(ctx context.Context, params Revenu
 
 func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
 	accountCostExpr := "COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)"
+	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 3)
 	query := fmt.Sprintf(`
 		SELECT
 			COUNT(*) AS requests,
@@ -642,8 +670,11 @@ func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params Reven
 			COALESCE(SUM(%s), 0)::double precision AS account_cost
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, accountCostExpr)
-	if err := s.querySingle(ctx, query, []any{params.StartTime, params.EndTime},
+			%s
+	`, accountCostExpr, userFilter)
+	args := []any{params.StartTime, params.EndTime}
+	args = append(args, userArgs...)
+	if err := s.querySingle(ctx, query, args,
 		&out.Usage.Requests,
 		&out.Usage.TotalTokens,
 		&out.Usage.StandardCost,
@@ -654,6 +685,7 @@ func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params Reven
 	}
 
 	bucketExpr := revenueBucketExpression("created_at", params.Granularity)
+	trendUserFilter, trendUserArgs := revenueUserFilter("user_id", params.UserID, 4)
 	trendQuery := fmt.Sprintf(`
 		SELECT
 			%s AS bucket,
@@ -662,10 +694,13 @@ func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params Reven
 			COALESCE(SUM(%s), 0)::double precision AS account_cost
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
+			%s
 		GROUP BY 1
 		ORDER BY 1
-	`, bucketExpr, accountCostExpr)
-	rows, err := s.entClient.QueryContext(ctx, trendQuery, params.StartTime, params.EndTime, params.Timezone)
+	`, bucketExpr, accountCostExpr, trendUserFilter)
+	trendArgs := []any{params.StartTime, params.EndTime, params.Timezone}
+	trendArgs = append(trendArgs, trendUserArgs...)
+	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
 	if err != nil {
 		return fmt.Errorf("query revenue usage trend: %w", err)
 	}
@@ -690,6 +725,7 @@ func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params Reven
 }
 
 func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 5)
 	query := `
 		SELECT
 			COALESCE(SUM(amount) FILTER (WHERE action = $3), 0)::double precision AS affiliate_rebate,
@@ -698,7 +734,10 @@ func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params R
 		FROM user_affiliate_ledger
 		WHERE created_at >= $1 AND created_at < $2
 	`
-	if err := s.querySingle(ctx, query, []any{params.StartTime, params.EndTime, revenueAffiliateActionAccrue, revenueAffiliateActionTransfer},
+	query += userFilter
+	args := []any{params.StartTime, params.EndTime, revenueAffiliateActionAccrue, revenueAffiliateActionTransfer}
+	args = append(args, userArgs...)
+	if err := s.querySingle(ctx, query, args,
 		&out.Adjustments.AffiliateRebate,
 		&out.Adjustments.AffiliateTransfer,
 		&out.Adjustments.AffiliateRebateCount,
@@ -707,14 +746,18 @@ func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params R
 	}
 
 	bucketExpr := revenueBucketExpression("created_at", params.Granularity)
+	trendUserFilter, trendUserArgs := revenueUserFilter("user_id", params.UserID, 5)
 	trendQuery := fmt.Sprintf(`
 		SELECT %s AS bucket, COALESCE(SUM(amount), 0)::double precision AS affiliate_rebate
 		FROM user_affiliate_ledger
 		WHERE created_at >= $1 AND created_at < $2 AND action = $4
+			%s
 		GROUP BY 1
 		ORDER BY 1
-	`, bucketExpr)
-	rows, err := s.entClient.QueryContext(ctx, trendQuery, params.StartTime, params.EndTime, params.Timezone, revenueAffiliateActionAccrue)
+	`, bucketExpr, trendUserFilter)
+	trendArgs := []any{params.StartTime, params.EndTime, params.Timezone, revenueAffiliateActionAccrue}
+	trendArgs = append(trendArgs, trendUserArgs...)
+	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
 	if err != nil {
 		return fmt.Errorf("query revenue affiliate trend: %w", err)
 	}
@@ -736,6 +779,7 @@ func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params R
 }
 
 func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	userFilter, userArgs := revenueUserFilter("consumer_user_id", params.UserID, 4)
 	query := `
 		SELECT
 			COALESCE(SUM(consumer_charge), 0)::double precision AS consumer_charge,
@@ -747,7 +791,10 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 		WHERE created_at >= $1 AND created_at < $2 AND status = $3
 			AND consumer_user_id <> owner_user_id
 	`
-	if err := s.querySingle(ctx, query, []any{params.StartTime, params.EndTime, revenueShareStatusApplied},
+	query += userFilter
+	args := []any{params.StartTime, params.EndTime, revenueShareStatusApplied}
+	args = append(args, userArgs...)
+	if err := s.querySingle(ctx, query, args,
 		&out.Adjustments.ShareConsumerCharge,
 		&out.Adjustments.ShareAccountCost,
 		&out.Adjustments.ShareOwnerCredit,
@@ -758,6 +805,7 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 	}
 
 	bucketExpr := revenueBucketExpression("created_at", params.Granularity)
+	trendUserFilter, trendUserArgs := revenueUserFilter("consumer_user_id", params.UserID, 5)
 	trendQuery := fmt.Sprintf(`
 		SELECT
 			%s AS bucket,
@@ -766,10 +814,13 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 		FROM account_share_settlement_entries
 		WHERE created_at >= $1 AND created_at < $2 AND status = $4
 			AND consumer_user_id <> owner_user_id
+			%s
 		GROUP BY 1
 		ORDER BY 1
-	`, bucketExpr)
-	rows, err := s.entClient.QueryContext(ctx, trendQuery, params.StartTime, params.EndTime, params.Timezone, revenueShareStatusApplied)
+	`, bucketExpr, trendUserFilter)
+	trendArgs := []any{params.StartTime, params.EndTime, params.Timezone, revenueShareStatusApplied}
+	trendArgs = append(trendArgs, trendUserArgs...)
+	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
 	if err != nil {
 		return fmt.Errorf("query revenue share trend: %w", err)
 	}
@@ -791,6 +842,55 @@ func (s *RevenueService) fillRevenueShareStats(ctx context.Context, params Reven
 	return nil
 }
 
+func (s *RevenueService) fillRevenuePrivateGroupCommissionStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 4)
+	query := `
+		SELECT COALESCE(SUM(amount), 0)::double precision
+		FROM user_balance_ledger
+		WHERE created_at >= $1 AND created_at < $2 AND reason = $3
+	`
+	query += userFilter
+	args := []any{params.StartTime, params.EndTime, "private_group_commission"}
+	args = append(args, userArgs...)
+	if err := s.querySingle(ctx, query, args,
+		&out.Adjustments.PrivateGroupCommission,
+	); err != nil {
+		return fmt.Errorf("query revenue private group commission stats: %w", err)
+	}
+
+	bucketExpr := revenueBucketExpression("created_at", params.Granularity)
+	trendUserFilter, trendUserArgs := revenueUserFilter("user_id", params.UserID, 5)
+	trendQuery := fmt.Sprintf(`
+		SELECT %s AS bucket, COALESCE(SUM(amount), 0)::double precision AS commission
+		FROM user_balance_ledger
+		WHERE created_at >= $1 AND created_at < $2 AND reason = $4
+			%s
+		GROUP BY 1
+		ORDER BY 1
+	`, bucketExpr, trendUserFilter)
+	trendArgs := []any{params.StartTime, params.EndTime, params.Timezone, "private_group_commission"}
+	trendArgs = append(trendArgs, trendUserArgs...)
+	rows, err := s.entClient.QueryContext(ctx, trendQuery, trendArgs...)
+	if err != nil {
+		return fmt.Errorf("query revenue private group commission trend: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var bucket string
+		var commission float64
+		if err := rows.Scan(&bucket, &commission); err != nil {
+			return fmt.Errorf("scan revenue private group commission trend: %w", err)
+		}
+		if idx, ok := pointIndex[bucket]; ok {
+			out.Trend[idx].PrivateGroupCommission = commission
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate revenue private group commission trend: %w", err)
+	}
+	return nil
+}
+
 func finalizeRevenueSummary(out *RevenueSummary) {
 	out.Cash.PaidAmount = roundRevenue(out.Cash.PaidAmount)
 	out.Cash.BalancePaidAmount = roundRevenue(out.Cash.BalancePaidAmount)
@@ -805,6 +905,7 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 
 	out.Adjustments.AffiliateRebate = roundRevenue(out.Adjustments.AffiliateRebate)
 	out.Adjustments.AffiliateTransfer = roundRevenue(out.Adjustments.AffiliateTransfer)
+	out.Adjustments.PrivateGroupCommission = roundRevenue(out.Adjustments.PrivateGroupCommission)
 	out.Adjustments.ShareConsumerCharge = roundRevenue(out.Adjustments.ShareConsumerCharge)
 	out.Adjustments.ShareAccountCost = roundRevenue(out.Adjustments.ShareAccountCost)
 	out.Adjustments.ShareOwnerCredit = roundRevenue(out.Adjustments.ShareOwnerCredit)
@@ -813,7 +914,7 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 
 	out.Profit.UsageGrossProfit = roundRevenue(out.Usage.ConsumedRevenue - out.Usage.AccountCost)
 	out.Profit.UsageGrossMargin = marginRatio(out.Profit.UsageGrossProfit, out.Usage.ConsumedRevenue)
-	out.Profit.EstimatedNetProfit = roundRevenue(out.Usage.ConsumedRevenue - out.Usage.AccountCost - out.Adjustments.AffiliateRebate - out.Adjustments.ShareOwnerCredit)
+	out.Profit.EstimatedNetProfit = roundRevenue(out.Usage.ConsumedRevenue - out.Usage.AccountCost - out.Adjustments.AffiliateRebate - out.Adjustments.ShareOwnerCredit + out.Adjustments.PrivateGroupCommission)
 	out.Profit.EstimatedNetMargin = marginRatio(out.Profit.EstimatedNetProfit, out.Usage.ConsumedRevenue)
 
 	for i := range out.Trend {
@@ -825,9 +926,10 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 		p.AccountCost = roundRevenue(p.AccountCost)
 		p.UsageGrossProfit = roundRevenue(p.ConsumedRevenue - p.AccountCost)
 		p.AffiliateRebate = roundRevenue(p.AffiliateRebate)
+		p.PrivateGroupCommission = roundRevenue(p.PrivateGroupCommission)
 		p.ShareOwnerCredit = roundRevenue(p.ShareOwnerCredit)
 		p.SharePlatformFee = roundRevenue(p.SharePlatformFee)
-		p.EstimatedNetProfit = roundRevenue(p.ConsumedRevenue - p.AccountCost - p.AffiliateRebate - p.ShareOwnerCredit)
+		p.EstimatedNetProfit = roundRevenue(p.ConsumedRevenue - p.AccountCost - p.AffiliateRebate - p.ShareOwnerCredit + p.PrivateGroupCommission)
 	}
 }
 
@@ -899,6 +1001,7 @@ func (s *RevenueService) queryRevenueBreakdown(ctx context.Context, params Reven
 		return nil, infraerrors.BadRequest("REVENUE_BREAKDOWN_INVALID", "invalid breakdown kind")
 	}
 
+	userFilter, userArgs := revenueUserFilter("ul.user_id", params.UserID, 5)
 	query := fmt.Sprintf(`
 		SELECT
 			%s,
@@ -913,12 +1016,15 @@ func (s *RevenueService) queryRevenueBreakdown(ctx context.Context, params Reven
 			AND ase.status = $4
 			AND ase.consumer_user_id <> ase.owner_user_id
 		WHERE ul.created_at >= $1 AND ul.created_at < $2
+			%s
 		GROUP BY %s
 		ORDER BY %s
 		LIMIT $3
-	`, selectExpr, accountCostExpr, joinExpr, groupExpr, orderExpr)
+	`, selectExpr, accountCostExpr, joinExpr, userFilter, groupExpr, orderExpr)
 
-	rows, err := s.entClient.QueryContext(ctx, query, params.StartTime, params.EndTime, params.TopLimit, revenueShareStatusApplied)
+	args := []any{params.StartTime, params.EndTime, params.TopLimit, revenueShareStatusApplied}
+	args = append(args, userArgs...)
+	rows, err := s.entClient.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query revenue breakdown: %w", err)
 	}
@@ -955,6 +1061,7 @@ func (s *RevenueService) queryRevenueBreakdown(ctx context.Context, params Reven
 }
 
 func (s *RevenueService) queryRevenueShareOwnerBreakdown(ctx context.Context, params RevenueQueryParams) ([]RevenueShareOwnerBreakdownItem, error) {
+	userFilter, userArgs := revenueUserFilter("ase.consumer_user_id", params.UserID, 5)
 	query := `
 		SELECT
 			ase.owner_user_id AS id,
@@ -977,11 +1084,15 @@ func (s *RevenueService) queryRevenueShareOwnerBreakdown(ctx context.Context, pa
 		WHERE ase.created_at >= $1 AND ase.created_at < $2
 			AND ase.status = $3
 			AND ase.consumer_user_id <> ase.owner_user_id
+			%s
 		GROUP BY ase.owner_user_id, u.email, u.username
 		ORDER BY owner_credit DESC, requests DESC
 		LIMIT $4
 	`
-	rows, err := s.entClient.QueryContext(ctx, query, params.StartTime, params.EndTime, revenueShareStatusApplied, params.TopLimit)
+	query = fmt.Sprintf(query, userFilter)
+	args := []any{params.StartTime, params.EndTime, revenueShareStatusApplied, params.TopLimit}
+	args = append(args, userArgs...)
+	rows, err := s.entClient.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query revenue share owner breakdown: %w", err)
 	}

@@ -146,6 +146,32 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 			return err
 		}
 	}
+	if cmd.PrivateGroupCommissionCost > 0 {
+		newBalance, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.PrivateGroupCommissionCost)
+		if err != nil {
+			return err
+		}
+		result.NewBalance = &newBalance
+		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+			UserID:       cmd.UserID,
+			Direction:    "debit",
+			Amount:       decimalFromFloat(cmd.PrivateGroupCommissionCost),
+			Reason:       "private_group_commission",
+			RefType:      "usage_log",
+			RefID:        nullablePositiveInt64(usageLogID),
+			BalanceAfter: decimalFromFloat(newBalance),
+			Metadata: map[string]any{
+				"request_id":      cmd.RequestID,
+				"api_key_id":      cmd.APIKeyID,
+				"account_id":      cmd.AccountID,
+				"group_id":        nullablePositiveInt64Value(cmd.GroupID),
+				"subscription_id": nullablePositiveInt64Value(cmd.SubscriptionID),
+				"base_cost":       cmd.SubscriptionCost,
+			},
+		}); err != nil {
+			return err
+		}
+	}
 
 	if cmd.APIKeyQuotaCost > 0 {
 		exhausted, err := incrementUsageBillingAPIKeyQuota(ctx, tx, cmd.APIKeyID, cmd.APIKeyQuotaCost)
@@ -173,6 +199,69 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		return err
 	}
 
+	if strings.TrimSpace(cmd.LeaseID) != "" && (cmd.LeaseUsageRequests > 0 || cmd.LeaseUsageTokens > 0) {
+		if err := incrementUsageBillingAccountLeaseUsage(ctx, tx, cmd.LeaseID, cmd.LeaseUsageRequests, cmd.LeaseUsageTokens); err != nil {
+			return err
+		}
+	}
+
+	if strings.TrimSpace(cmd.QuotaReservationID) != "" {
+		actualCost := cmd.BalanceCost
+		if cmd.SubscriptionCost > actualCost {
+			actualCost = cmd.SubscriptionCost
+		}
+		if err := settleUsageBillingQuotaReservation(ctx, tx, cmd.QuotaReservationID, actualCost); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func incrementUsageBillingAccountLeaseUsage(ctx context.Context, tx *sql.Tx, leaseID string, requests int64, tokens int64) error {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE account_leases
+		SET used_requests = used_requests + $2,
+			used_tokens = used_tokens + $3,
+			updated_at = NOW()
+		WHERE lease_id = $1
+		  AND deleted_at IS NULL
+		  AND (max_requests <= 0 OR used_requests + $2 <= max_requests)
+		  AND (max_tokens <= 0 OR used_tokens + $3 <= max_tokens)
+	`, strings.TrimSpace(leaseID), requests, tokens)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrSubsiteLeaseCapacityExceeded
+	}
+	return nil
+}
+
+func settleUsageBillingQuotaReservation(ctx context.Context, tx *sql.Tx, reservationID string, actualCost float64) error {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE quota_reservations
+		SET actual_cost = $2,
+			status = 'settled',
+			settled_at = NOW(),
+			updated_at = NOW()
+		WHERE reservation_id = $1
+		  AND status = 'reserved'
+	`, strings.TrimSpace(reservationID), actualCost)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrQuotaReservationNotFound
+	}
 	return nil
 }
 
@@ -914,6 +1003,13 @@ func nullablePositiveInt64(v int64) any {
 		return nil
 	}
 	return v
+}
+
+func nullablePositiveInt64Value(v *int64) any {
+	if v == nil || *v <= 0 {
+		return nil
+	}
+	return *v
 }
 
 func nullablePtrInt64(v *int64) any {

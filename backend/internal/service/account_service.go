@@ -8,7 +8,11 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
 
@@ -28,6 +32,10 @@ var (
 
 const AccountListGroupUngrouped int64 = -1
 const AccountPrivacyModeUnsetFilter = "__unset__"
+const ownedPersonalDefaultConcurrency = 3
+const ownedPersonalDefaultPriority = 1
+const ownedPersonalDefaultOpenAICompactMode = "force_on"
+const ownedPersonalDefaultOpenAIWSMode = OpenAIWSIngressModeOff
 
 const (
 	AccountLevelUnknown = domain.AccountLevelUnknown
@@ -248,15 +256,11 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 	}
 
 	// 创建账号
-	accountLevelInput := req.AccountLevel
-	if req.Platform == PlatformOpenAI {
-		accountLevelInput = AccountLevelUnknown
-	}
 	account := &Account{
 		Name:         req.Name,
 		Notes:        normalizeAccountNotes(req.Notes),
 		Platform:     req.Platform,
-		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, accountLevelInput, req.Credentials, req.Extra),
+		AccountLevel: NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
 		Type:         req.Type,
 		Credentials:  req.Credentials,
 		Extra:        req.Extra,
@@ -368,6 +372,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
+	applyOwnedPersonalAccountTemplateToCreate(&req)
 	if err := validateOwnedAccountSource(req.Type, req.Credentials, req.Extra); err != nil {
 		return nil, err
 	}
@@ -386,7 +391,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		Name:               req.Name,
 		Notes:              normalizeAccountNotes(req.Notes),
 		Platform:           req.Platform,
-		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, AccountLevelUnknown, req.Credentials, req.Extra),
+		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
 		Type:               req.Type,
 		Credentials:        req.Credentials,
 		Extra:              req.Extra,
@@ -469,7 +474,10 @@ func hasNonEmptyStringField(values map[string]any, key string) bool {
 }
 
 func findDisallowedOwnedAccountField(values map[string]any) (string, bool) {
-	return findDisallowedCredentialContent(values, credentialSafetyOptions{AllowOAuthTokenValues: true})
+	return findDisallowedCredentialContent(values, credentialSafetyOptions{
+		AllowOAuthTokenValues:  true,
+		AllowOAuthMetadataURLs: true,
+	})
 }
 
 func normalizeLoadFactor(value *int) *int {
@@ -478,6 +486,109 @@ func normalizeLoadFactor(value *int) *int {
 	}
 	normalized := *value
 	return &normalized
+}
+
+func ownedPersonalDefaultModelMapping(platform string) map[string]any {
+	models := make([]string, 0)
+	switch platform {
+	case PlatformOpenAI:
+		models = append(models, openai.DefaultModelIDs()...)
+		models = append(models, "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-4o-audio-preview", "gpt-4o-realtime-preview", "gpt-image-1.5", "gpt-image-2")
+	case PlatformAnthropic:
+		models = append(models, claude.DefaultModelIDs()...)
+		models = append(models, "claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20241022", "claude-3-7-sonnet-20250219", "claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-opus-4-1-20250805")
+	case PlatformGemini:
+		for _, model := range geminicli.DefaultModels {
+			models = append(models, model.ID)
+		}
+		models = append(models, "gemini-3.1-flash-image")
+	case PlatformAntigravity:
+		for _, model := range antigravity.DefaultModels() {
+			models = append(models, model.ID)
+		}
+	}
+	if len(models) == 0 {
+		return map[string]any{}
+	}
+	mapping := make(map[string]any, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" || strings.Contains(model, "*") {
+			continue
+		}
+		mapping[model] = model
+	}
+	return mapping
+}
+
+func applyOwnedPersonalAccountTemplateToMaps(platform string, credentials, extra map[string]any) (map[string]any, map[string]any) {
+	nextCredentials := make(map[string]any, len(credentials)+1)
+	for key, value := range credentials {
+		nextCredentials[key] = value
+	}
+	nextCredentials["model_mapping"] = ownedPersonalDefaultModelMapping(platform)
+	delete(nextCredentials, "compact_model_mapping")
+
+	nextExtra := make(map[string]any, len(extra)+6)
+	for key, value := range extra {
+		nextExtra[key] = value
+	}
+	if platform == PlatformOpenAI {
+		nextExtra["openai_oauth_responses_websockets_v2_mode"] = ownedPersonalDefaultOpenAIWSMode
+		nextExtra["openai_oauth_responses_websockets_v2_enabled"] = false
+		nextExtra["openai_passthrough"] = false
+		nextExtra["openai_oauth_passthrough"] = false
+		nextExtra["codex_cli_only"] = false
+		nextExtra["openai_compact_mode"] = ownedPersonalDefaultOpenAICompactMode
+		delete(nextExtra, "responses_websockets_v2_enabled")
+		delete(nextExtra, "openai_ws_enabled")
+	}
+	return nextCredentials, nextExtra
+}
+
+func applyOwnedPersonalAccountTemplateToCreate(req *CreateAccountRequest) {
+	if req == nil {
+		return
+	}
+	req.Concurrency = ownedPersonalDefaultConcurrency
+	req.LoadFactor = nil
+	if req.Priority <= 0 {
+		req.Priority = ownedPersonalDefaultPriority
+	}
+	autoPause := true
+	req.AutoPauseOnExpired = &autoPause
+	req.GroupIDs = nil
+	req.ProxyID = nil
+	req.Credentials, req.Extra = applyOwnedPersonalAccountTemplateToMaps(req.Platform, req.Credentials, req.Extra)
+}
+
+func applyOwnedPersonalAccountTemplateToUpdate(account *Account, req *UpdateAccountRequest) {
+	if account == nil || req == nil {
+		return
+	}
+	concurrency := ownedPersonalDefaultConcurrency
+	req.Concurrency = &concurrency
+	req.LoadFactor = nil
+	autoPause := true
+	req.AutoPauseOnExpired = &autoPause
+	req.GroupIDs = nil
+	req.ProxyID = nil
+	priority := ownedPersonalDefaultPriority
+	if req.Priority != nil && *req.Priority > 0 {
+		priority = *req.Priority
+	}
+	req.Priority = &priority
+	credentials := account.Credentials
+	if req.Credentials != nil {
+		credentials = *req.Credentials
+	}
+	extra := account.Extra
+	if req.Extra != nil {
+		extra = *req.Extra
+	}
+	nextCredentials, nextExtra := applyOwnedPersonalAccountTemplateToMaps(account.Platform, credentials, extra)
+	req.Credentials = &nextCredentials
+	req.Extra = &nextExtra
 }
 
 // ListByPlatform 根据平台获取账号列表
@@ -520,7 +631,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if req.Extra != nil {
 		account.Extra = *req.Extra
 	}
-	if req.AccountLevel != nil && account.Platform != PlatformOpenAI {
+	if req.AccountLevel != nil {
 		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
 	}
 
@@ -605,6 +716,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if err != nil {
 		return nil, err
 	}
+	applyOwnedPersonalAccountTemplateToUpdate(account, &req)
 
 	if req.Name != nil {
 		account.Name = *req.Name
@@ -618,7 +730,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if req.Extra != nil {
 		account.Extra = *req.Extra
 	}
-	if req.AccountLevel != nil && account.Platform != PlatformOpenAI {
+	if req.AccountLevel != nil {
 		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
 	}
 	if req.ProxyID != nil {
@@ -997,6 +1109,22 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		}
 	}
 
+	if input.Concurrency != nil {
+		input.Concurrency = nil
+	}
+	if input.LoadFactor != nil {
+		input.LoadFactor = nil
+	}
+	if input.Priority == nil || *input.Priority <= 0 {
+		priority := ownedPersonalDefaultPriority
+		input.Priority = &priority
+	}
+	if input.Credentials == nil {
+		input.Credentials = map[string]any{}
+	}
+	if input.Extra == nil {
+		input.Extra = map[string]any{}
+	}
 	updatedIdentityAccounts := make([]*Account, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
 		account := accountsByID[accountID]
@@ -1006,22 +1134,17 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 
 		nextCredentials := mergeAccountMap(account.Credentials, input.Credentials)
 		nextExtra := mergeAccountMap(account.Extra, input.Extra)
+		nextCredentials, nextExtra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, nextCredentials, nextExtra)
 		nextAccount := *account
 		nextAccount.Credentials = nextCredentials
 		nextAccount.Extra = nextExtra
 		if err := validateOwnedAccountSource(account.Type, nextCredentials, nextExtra); err != nil {
 			return nil, err
 		}
-		nextConcurrency := account.Concurrency
-		if input.Concurrency != nil {
-			nextConcurrency = *input.Concurrency
-		}
-		nextLoadFactor := account.LoadFactor
-		if input.LoadFactor != nil {
-			nextLoadFactor = normalizeLoadFactor(input.LoadFactor)
-		}
+		nextConcurrency := ownedPersonalDefaultConcurrency
+		nextLoadFactor := (*int)(nil)
 		nextAccountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, nextCredentials, nextExtra)
-		if input.AccountLevel != nil && account.Platform != PlatformOpenAI {
+		if input.AccountLevel != nil {
 			nextAccountLevel = NormalizeAccountLevel(*input.AccountLevel)
 		}
 		if err := ValidateOpenAIPlusConcurrency(account.Platform, nextAccountLevel, nextConcurrency); err != nil {
@@ -1046,8 +1169,8 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			account := accountsByID[accountID]
 			entry := BulkUpdateAccountResult{AccountID: accountID}
 			updateReq := UpdateAccountRequest{
-				Concurrency:  input.Concurrency,
-				LoadFactor:   input.LoadFactor,
+				Concurrency:  nil,
+				LoadFactor:   nil,
 				Priority:     input.Priority,
 				Schedulable:  input.Schedulable,
 				AccountLevel: input.AccountLevel,
@@ -1058,10 +1181,12 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			}
 			if len(input.Credentials) > 0 {
 				credentials := mergeAccountMap(account.Credentials, input.Credentials)
+				credentials, _ = applyOwnedPersonalAccountTemplateToMaps(account.Platform, credentials, account.Extra)
 				updateReq.Credentials = &credentials
 			}
 			if len(input.Extra) > 0 {
 				extra := mergeAccountMap(account.Extra, input.Extra)
+				_, extra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, account.Credentials, extra)
 				updateReq.Extra = &extra
 			}
 			if _, err := s.UpdateOwned(ctx, ownerUserID, accountID, updateReq); err != nil {
@@ -1080,36 +1205,45 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	}
 
 	repoUpdates := AccountBulkUpdate{
-		Concurrency: input.Concurrency,
+		Concurrency: nil,
 		Priority:    input.Priority,
-		LoadFactor:  input.LoadFactor,
+		LoadFactor:  nil,
 		Schedulable: input.Schedulable,
-		Credentials: input.Credentials,
-		Extra:       input.Extra,
+		Credentials: map[string]any{},
+		Extra:       map[string]any{},
 	}
 	if input.AccountLevel != nil {
-		canPersistBulkAccountLevel := true
-		for _, account := range accounts {
-			if account != nil && account.Platform == PlatformOpenAI {
-				canPersistBulkAccountLevel = false
-				break
-			}
-		}
-		if canPersistBulkAccountLevel {
-			level := NormalizeAccountLevel(*input.AccountLevel)
-			repoUpdates.AccountLevel = &level
-		}
+		level := NormalizeAccountLevel(*input.AccountLevel)
+		repoUpdates.AccountLevel = &level
 	}
 	if status != "" {
 		repoUpdates.Status = &status
 	}
 
-	if _, err := s.accountRepo.BulkUpdate(ctx, accountIDs, repoUpdates); err != nil {
-		return nil, fmt.Errorf("bulk update accounts: %w", err)
-	}
-
 	for _, accountID := range accountIDs {
+		account := accountsByID[accountID]
 		entry := BulkUpdateAccountResult{AccountID: accountID}
+		updateReq := UpdateAccountRequest{
+			Priority:     input.Priority,
+			Schedulable:  input.Schedulable,
+			AccountLevel: input.AccountLevel,
+			ShareMode:    input.ShareMode,
+		}
+		if len(input.Credentials) > 0 {
+			credentials := mergeAccountMap(account.Credentials, input.Credentials)
+			updateReq.Credentials = &credentials
+		}
+		if len(input.Extra) > 0 {
+			extra := mergeAccountMap(account.Extra, input.Extra)
+			updateReq.Extra = &extra
+		}
+		if _, err := s.UpdateOwned(ctx, ownerUserID, accountID, updateReq); err != nil {
+			entry.Error = err.Error()
+			result.Failed++
+			result.FailedIDs = append(result.FailedIDs, accountID)
+			result.Results = append(result.Results, entry)
+			continue
+		}
 		entry.Success = true
 		result.Success++
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
@@ -1294,6 +1428,100 @@ func (s *AccountService) MarkOwnedPublicSharePending(ctx context.Context, ownerU
 	return account, nil
 }
 
+func (s *AccountService) AutoRepairSuspectedOpenAIFreeAccount(ctx context.Context, accountID int64, maxWeeklyLimitUSD float64, reason string) (*Account, bool, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, false, ErrOwnedAccountGroupValidationUnavailable
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, false, fmt.Errorf("get account: %w", err)
+	}
+	if !ShouldRepairSuspectedOpenAIFreeAccount(account, maxWeeklyLimitUSD, time.Now()) {
+		return account, false, nil
+	}
+
+	account.AccountLevel = AccountLevelFree
+	if account.ShareMode == AccountShareModePublic {
+		account.ShareStatus = AccountShareStatusSuspended
+	}
+	message := strings.TrimSpace(reason)
+	if message == "" {
+		message = "OpenAI Codex weekly quota exhausted under free-account threshold; public sharing suspended pending review"
+	}
+	account.ErrorMessage = message
+
+	groupIDs := account.GroupIDs
+	if account.OwnerUserID != nil {
+		groupIDs, err = s.repairedOpenAIAccountGroupIDs(ctx, account)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return nil, false, fmt.Errorf("update account suspected free repair: %w", err)
+	}
+	if account.OwnerUserID != nil {
+		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+			return nil, false, fmt.Errorf("bind repaired account groups: %w", err)
+		}
+		account.GroupIDs = append([]int64(nil), groupIDs...)
+	}
+	return account, true, nil
+}
+
+func (s *AccountService) repairedOpenAIAccountGroupIDs(ctx context.Context, account *Account) ([]int64, error) {
+	if account == nil || account.OwnerUserID == nil {
+		return nil, ErrAccountNotFound
+	}
+	privateGroup, err := s.getPrivateGroupForOwnedAccount(ctx, *account.OwnerUserID, account.Platform)
+	if err != nil {
+		return nil, err
+	}
+	groupIDs := []int64{privateGroup.ID}
+	if s.groupRepo == nil {
+		return normalizeGroupIDs(groupIDs)
+	}
+	groups, err := s.groupRepo.ListActiveByPlatform(ctx, account.Platform)
+	if err != nil {
+		return nil, fmt.Errorf("list public share groups: %w", err)
+	}
+	for i := range groups {
+		group := groups[i]
+		if !isOwnedPublicSharePoolGroup(&group, account.Platform) {
+			continue
+		}
+		if NormalizeOpenAISharedPoolRequiredLevel(group.RequiredAccountLevel) == AccountLevelFree {
+			groupIDs = append(groupIDs, group.ID)
+			break
+		}
+	}
+	return normalizeGroupIDs(groupIDs)
+}
+
+func ShouldRepairSuspectedOpenAIFreeAccount(account *Account, maxWeeklyLimitUSD float64, now time.Time) bool {
+	if account == nil || maxWeeklyLimitUSD <= 0 {
+		return false
+	}
+	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+		return false
+	}
+	if OpenAISharedPoolLevelRank(account.AccountLevel) <= OpenAISharedPoolLevelRank(AccountLevelFree) {
+		return false
+	}
+	weeklyLimit := account.GetQuotaWeeklyLimit()
+	if weeklyLimit <= 0 || weeklyLimit > maxWeeklyLimitUSD {
+		return false
+	}
+	progress := buildCodexUsageProgressFromExtra(account.Extra, "7d", now)
+	if progress == nil || progress.Utilization < 100 {
+		return false
+	}
+	if progress.ResetsAt != nil && now.After(*progress.ResetsAt) {
+		return false
+	}
+	return true
+}
+
 func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, account *Account) (*Group, error) {
 	if s == nil || s.groupRepo == nil || account == nil {
 		return nil, ErrOwnedAccountGroupValidationUnavailable
@@ -1307,18 +1535,29 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 		return nil, fmt.Errorf("list public share groups: %w", err)
 	}
 	if account.Platform == PlatformOpenAI {
-		accountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
-		if !IsConcreteAccountLevel(accountLevel) {
+		accountLevel := NormalizeOpenAISharedPoolAccountLevel(NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra))
+		if OpenAISharedPoolLevelRank(accountLevel) == 0 {
 			return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
 				"platform":      platform,
 				"account_level": accountLevel,
 			})
 		}
+		var matchedGroup *Group
+		bestRank := 0
 		for i := range groups {
 			group := groups[i]
-			if isOwnedPublicSharePoolGroup(&group, platform) && NormalizeRequiredAccountLevel(group.RequiredAccountLevel) == accountLevel {
-				return &group, nil
+			if !isOwnedPublicSharePoolGroup(&group, platform) || !CanOpenAIAccountJoinSharedPool(accountLevel, group.RequiredAccountLevel) {
+				continue
 			}
+			requiredRank := OpenAISharedPoolLevelRank(group.RequiredAccountLevel)
+			if matchedGroup == nil || requiredRank > bestRank {
+				candidate := group
+				matchedGroup = &candidate
+				bestRank = requiredRank
+			}
+		}
+		if matchedGroup != nil {
+			return matchedGroup, nil
 		}
 		return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
 			"platform":      platform,

@@ -89,6 +89,7 @@ type Config struct {
 	Gemini                  GeminiConfig                  `mapstructure:"gemini"`
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
+	ReceiptCodeStorage      ReceiptCodeStorageConfig      `mapstructure:"receipt_code_storage"`
 }
 
 type LogConfig struct {
@@ -150,6 +151,20 @@ type UpdateConfig struct {
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
 	ProxyURL string `mapstructure:"proxy_url"`
+}
+
+type ReceiptCodeStorageConfig struct {
+	Enabled              bool   `mapstructure:"enabled"`
+	Endpoint             string `mapstructure:"endpoint"`
+	Region               string `mapstructure:"region"`
+	Bucket               string `mapstructure:"bucket"`
+	AccessKeyID          string `mapstructure:"access_key_id"`
+	SecretAccessKey      string `mapstructure:"secret_access_key"`
+	Prefix               string `mapstructure:"prefix"`
+	PublicBaseURL        string `mapstructure:"public_base_url"`
+	ForcePathStyle       bool   `mapstructure:"force_path_style"`
+	MaxSizeBytes         int64  `mapstructure:"max_size_bytes"`
+	PresignExpireSeconds int    `mapstructure:"presign_expire_seconds"`
 }
 
 type IdempotencyConfig struct {
@@ -1308,9 +1323,13 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		cfg.Gateway.UserMessageQueue.Mode = ""
 	}
 
-	// Auto-generate TOTP encryption key if not set (32 bytes = 64 hex chars for AES-256)
+	originalJWTSecret := cfg.JWT.Secret
+
 	cfg.Totp.EncryptionKey = strings.TrimSpace(cfg.Totp.EncryptionKey)
 	if cfg.Totp.EncryptionKey == "" {
+		if !allowMissingJWTSecret || originalJWTSecret != "" {
+			return nil, fmt.Errorf("totp.encryption_key is required; run setup again or set TOTP_ENCRYPTION_KEY to a fixed 64-character hex key")
+		}
 		key, err := generateJWTSecret(32) // Reuse the same random generation function
 		if err != nil {
 			return nil, fmt.Errorf("generate totp encryption key error: %w", err)
@@ -1322,7 +1341,6 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		cfg.Totp.EncryptionKeyConfigured = true
 	}
 
-	originalJWTSecret := cfg.JWT.Secret
 	if allowMissingJWTSecret && originalJWTSecret == "" {
 		// 启动阶段允许先无 JWT 密钥，后续在数据库初始化后补齐。
 		cfg.JWT.Secret = strings.Repeat("0", 32)
@@ -1616,6 +1634,19 @@ func setDefaults() {
 	viper.SetDefault("idempotency.cleanup_interval_seconds", 60)
 	viper.SetDefault("idempotency.cleanup_batch_size", 500)
 
+	// Receipt code storage
+	viper.SetDefault("receipt_code_storage.enabled", false)
+	viper.SetDefault("receipt_code_storage.endpoint", "")
+	viper.SetDefault("receipt_code_storage.region", "oss-cn-hangzhou")
+	viper.SetDefault("receipt_code_storage.bucket", "")
+	viper.SetDefault("receipt_code_storage.access_key_id", "")
+	viper.SetDefault("receipt_code_storage.secret_access_key", "")
+	viper.SetDefault("receipt_code_storage.prefix", "receipt-codes/")
+	viper.SetDefault("receipt_code_storage.public_base_url", "")
+	viper.SetDefault("receipt_code_storage.force_path_style", false)
+	viper.SetDefault("receipt_code_storage.max_size_bytes", int64(1024*1024))
+	viper.SetDefault("receipt_code_storage.presign_expire_seconds", 300)
+
 	// Gateway
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
 	viper.SetDefault("gateway.log_upstream_error_body", true)
@@ -1821,6 +1852,41 @@ func (c *Config) Validate() error {
 	}
 	if c.SubscriptionMaintenance.QueueSize < 0 {
 		return fmt.Errorf("subscription_maintenance.queue_size must be non-negative")
+	}
+
+	if c.ReceiptCodeStorage.Enabled {
+		if strings.TrimSpace(c.ReceiptCodeStorage.Endpoint) == "" {
+			return fmt.Errorf("receipt_code_storage.endpoint is required when receipt_code_storage.enabled=true")
+		}
+		if strings.TrimSpace(c.ReceiptCodeStorage.Bucket) == "" {
+			return fmt.Errorf("receipt_code_storage.bucket is required when receipt_code_storage.enabled=true")
+		}
+		if strings.TrimSpace(c.ReceiptCodeStorage.AccessKeyID) == "" {
+			return fmt.Errorf("receipt_code_storage.access_key_id is required when receipt_code_storage.enabled=true")
+		}
+		if strings.TrimSpace(c.ReceiptCodeStorage.SecretAccessKey) == "" {
+			return fmt.Errorf("receipt_code_storage.secret_access_key is required when receipt_code_storage.enabled=true")
+		}
+		if c.ReceiptCodeStorage.MaxSizeBytes <= 0 {
+			return fmt.Errorf("receipt_code_storage.max_size_bytes must be positive when receipt_code_storage.enabled=true")
+		}
+		if c.ReceiptCodeStorage.MaxSizeBytes > 5*1024*1024 {
+			return fmt.Errorf("receipt_code_storage.max_size_bytes must be <= 5242880")
+		}
+		if c.ReceiptCodeStorage.PresignExpireSeconds <= 0 {
+			return fmt.Errorf("receipt_code_storage.presign_expire_seconds must be positive when receipt_code_storage.enabled=true")
+		}
+		if c.ReceiptCodeStorage.PresignExpireSeconds > 3600 {
+			return fmt.Errorf("receipt_code_storage.presign_expire_seconds must be <= 3600")
+		}
+		if err := ValidateAbsoluteHTTPURL(c.ReceiptCodeStorage.Endpoint); err != nil {
+			return fmt.Errorf("receipt_code_storage.endpoint invalid: %w", err)
+		}
+		if v := strings.TrimSpace(c.ReceiptCodeStorage.PublicBaseURL); v != "" {
+			if err := ValidateAbsoluteHTTPURL(v); err != nil {
+				return fmt.Errorf("receipt_code_storage.public_base_url invalid: %w", err)
+			}
+		}
 	}
 
 	// Gemini OAuth 配置校验：client_id 与 client_secret 必须同时设置或同时留空。

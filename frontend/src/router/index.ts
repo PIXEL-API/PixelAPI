@@ -458,6 +458,16 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/subsites',
+    name: 'AdminSubsites',
+    component: () => import('@/views/admin/SubsitesView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Subsite Management'
+    }
+  },
+  {
     path: '/admin/announcements',
     name: 'AdminAnnouncements',
     component: () => import('@/views/admin/AnnouncementsView.vue'),

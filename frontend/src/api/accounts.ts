@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from './client'
-import type { Account, AccountUsageInfo, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, UserAccountQuotaPoolDashboard, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, AccountUsageStatsResponse, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, UserAccountQuotaPoolDashboard, WindowStats } from '@/types'
 
 export interface UserAccountListFilters {
   platform?: string
@@ -99,6 +99,15 @@ export async function update(id: number, updates: UpdateAccountRequest): Promise
   return data
 }
 
+export async function revalidatePublicShare(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(
+    `/accounts/${id}/revalidate-public-share`,
+    undefined,
+    { timeout: 75000 }
+  )
+  return data
+}
+
 export async function deleteAccount(id: number): Promise<{ message: string }> {
   const { data } = await apiClient.delete<{ message: string }>(`/accounts/${id}`)
   return data
@@ -147,8 +156,67 @@ export async function getUsage(id: number, source?: 'passive' | 'active'): Promi
   return data
 }
 
+export async function getStats(id: number, days: number = 30): Promise<AccountUsageStatsResponse> {
+  const { data } = await apiClient.get<AccountUsageStatsResponse>(`/accounts/${id}/stats`, {
+    params: { days }
+  })
+  return data
+}
+
 export async function getTodayStats(id: number): Promise<WindowStats> {
   const { data } = await apiClient.get<WindowStats>(`/accounts/${id}/today-stats`)
+  return data
+}
+
+export async function testAccount(
+  id: number,
+  modelId?: string,
+  prompt?: string,
+  mode?: string
+): Promise<{
+  status: 'success' | 'error'
+  message: string
+  response?: string
+  latency?: number
+}> {
+  const { data } = await apiClient.post<{
+    status: 'success' | 'error'
+    message: string
+    response?: string
+    latency?: number
+  }>(`/accounts/${id}/test`, {
+    model_id: modelId,
+    prompt,
+    mode
+  })
+  return data
+}
+
+export interface RefreshCredentialsResponse {
+  account: Account
+  warning?: string
+  message?: string
+}
+
+function normalizeRefreshCredentialsResponse(data: Account | RefreshCredentialsResponse): RefreshCredentialsResponse {
+  if (data && typeof data === 'object' && 'account' in data) {
+    return data as RefreshCredentialsResponse
+  }
+  return { account: data as Account }
+}
+
+export async function refreshCredentials(id: number): Promise<RefreshCredentialsResponse> {
+  const { data } = await apiClient.post<Account | RefreshCredentialsResponse>(`/accounts/${id}/refresh`)
+  return normalizeRefreshCredentialsResponse(data)
+}
+
+export async function refreshCredentialsAccount(id: number): Promise<Account> {
+  const data = await refreshCredentials(id)
+  return data.account
+}
+
+export async function setPrivacy(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/accounts/${id}/set-privacy`)
   return data
 }
 
@@ -366,13 +434,18 @@ export const accountsAPI = {
   importAccount,
   importCredentialContents,
   update,
+  revalidatePublicShare,
   delete: deleteAccount,
   toggleStatus,
   bulkUpdate,
   bulkDelete,
   getUsage,
+  getStats,
   getTodayStats,
   getBatchTodayStats,
+  testAccount,
+  refreshCredentials,
+  setPrivacy,
   generateAnthropicOAuthUrl,
   exchangeAnthropicOAuthCode,
   generateAnthropicSetupTokenUrl,

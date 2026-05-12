@@ -245,6 +245,49 @@
         {{ t('admin.revenue.sharePolicy.noPolicy') }}
       </div>
     </section>
+
+    <section class="card p-5">
+      <div class="mb-4">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+          {{ t('admin.revenue.sharePolicy.privateGroupCommissionTitle') }}
+        </h3>
+        <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
+          {{ t('admin.revenue.sharePolicy.privateGroupCommissionDescription') }}
+        </p>
+      </div>
+
+      <form class="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,280px)_1fr] md:items-end" @submit.prevent="saveCommissionSettings">
+        <div>
+          <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+            {{ t('admin.revenue.sharePolicy.privateGroupCommissionRate') }}
+          </label>
+          <div class="relative">
+            <input
+              v-model="commissionForm.ratePercent"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              class="input w-full pr-10"
+              @blur="normalizeCommissionPercent"
+            />
+            <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-gray-400">%</span>
+          </div>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.revenue.sharePolicy.privateGroupCommissionHint') }}
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-2 md:items-start">
+          <div class="text-sm text-gray-600 dark:text-gray-300">
+            {{ t('admin.revenue.sharePolicy.privateGroupCommissionExample', { rate: formatPercentFromNumber(Number(commissionForm.ratePercent) || 0) }) }}
+          </div>
+          <button type="submit" class="btn btn-primary h-10" :disabled="savingCommission">
+            {{ savingCommission ? t('common.saving') : t('admin.revenue.sharePolicy.saveCommission') }}
+          </button>
+        </div>
+      </form>
+    </section>
   </div>
 </template>
 
@@ -255,6 +298,7 @@ import Icon from '@/components/icons/Icon.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import { accountSharePoliciesAPI } from '@/api/admin/accountSharePolicies'
 import type { AccountSharePolicy } from '@/api/admin/accountSharePolicies'
+import { getSettings, updateSettings } from '@/api/admin/settings'
 import { useAppStore } from '@/stores/app'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 
@@ -263,11 +307,15 @@ const appStore = useAppStore()
 
 const loading = ref(false)
 const saving = ref(false)
+const savingCommission = ref(false)
 const policies = ref<AccountSharePolicy[]>([])
 const form = reactive({
   ownerSharePercent: 70 as number | string,
   inviteSharePercent: 0 as number | string,
   enabled: true
+})
+const commissionForm = reactive({
+  ratePercent: 0.5 as number | string
 })
 
 const effectivePolicy = computed(() => {
@@ -294,17 +342,42 @@ const platformSharePercent = computed(() => clampPercent(100 - normalizedOwnerSh
 async function loadPolicies() {
   loading.value = true
   try {
-    const result = await accountSharePoliciesAPI.list(1, 50, {
-      scope_type: 'global',
-      sort_by: 'effective_at',
-      sort_order: 'desc'
-    })
+    const [result, settings] = await Promise.all([
+      accountSharePoliciesAPI.list(1, 50, {
+        scope_type: 'global',
+        sort_by: 'effective_at',
+        sort_order: 'desc'
+      }),
+      getSettings()
+    ])
     policies.value = [...result.items].sort(comparePolicyByEffectiveAtDesc)
+    commissionForm.ratePercent = roundPercent((settings.user_private_group_commission_rate ?? 0) * 100)
     syncFormFromPolicy()
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.sharePolicy.errors', t('admin.revenue.sharePolicy.loadFailed')))
   } finally {
     loading.value = false
+  }
+}
+
+async function saveCommissionSettings() {
+  const rateValue = Number(commissionForm.ratePercent)
+  if (!Number.isFinite(rateValue) || rateValue < 0 || rateValue > 100) {
+    appStore.showError(t('admin.revenue.sharePolicy.invalidRatio'))
+    return
+  }
+
+  savingCommission.value = true
+  try {
+    await updateSettings({
+      user_private_group_commission_rate: clampPercent(rateValue) / 100
+    })
+    commissionForm.ratePercent = roundPercent(clampPercent(rateValue))
+    appStore.showSuccess(t('admin.revenue.sharePolicy.saved'))
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.sharePolicy.errors', t('admin.revenue.sharePolicy.saveFailed')))
+  } finally {
+    savingCommission.value = false
   }
 }
 
@@ -366,6 +439,15 @@ function normalizeFormPercent() {
     form.inviteSharePercent = 0
   } else {
     form.inviteSharePercent = roundPercent(clampPercent(inviteValue))
+  }
+}
+
+function normalizeCommissionPercent() {
+  const value = Number(commissionForm.ratePercent)
+  if (!Number.isFinite(value)) {
+    commissionForm.ratePercent = 0
+  } else {
+    commissionForm.ratePercent = roundPercent(clampPercent(value))
   }
 }
 

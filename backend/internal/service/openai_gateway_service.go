@@ -336,6 +336,7 @@ type OpenAIGatewayService struct {
 	channelService         *ChannelService
 	balanceNotifyService   *BalanceNotifyService
 	settingService         *SettingService
+	accountService         *AccountService
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -376,6 +377,7 @@ func NewOpenAIGatewayService(
 	channelService *ChannelService,
 	balanceNotifyService *BalanceNotifyService,
 	settingService *SettingService,
+	accountService *AccountService,
 ) *OpenAIGatewayService {
 	svc := &OpenAIGatewayService{
 		accountRepo:            accountRepo,
@@ -408,6 +410,7 @@ func NewOpenAIGatewayService(
 		channelService:        channelService,
 		balanceNotifyService:  balanceNotifyService,
 		settingService:        settingService,
+		accountService:        accountService,
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 	}
@@ -5398,16 +5401,23 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	billingErr := func() error {
+		privateGroupCommissionRate := 0.0
+		if isSubscriptionBilling && apiKey.Group != nil && apiKey.Group.IsUserPrivateScope() && s.settingService != nil {
+			if settings, err := s.settingService.GetAllSettings(ctx); err == nil && settings != nil {
+				privateGroupCommissionRate = settings.UserPrivateGroupCommissionRate
+			}
+		}
 		_, err := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
-			Cost:                  cost,
-			User:                  user,
-			APIKey:                apiKey,
-			Account:               account,
-			Subscription:          subscription,
-			RequestPayloadHash:    resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
-			IsSubscriptionBill:    isSubscriptionBilling,
-			AccountRateMultiplier: accountRateMultiplier,
-			APIKeyService:         input.APIKeyService,
+			Cost:                       cost,
+			User:                       user,
+			APIKey:                     apiKey,
+			Account:                    account,
+			Subscription:               subscription,
+			RequestPayloadHash:         resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+			IsSubscriptionBill:         isSubscriptionBilling,
+			PrivateGroupCommissionRate: privateGroupCommissionRate,
+			AccountRateMultiplier:      accountRateMultiplier,
+			APIKeyService:              input.APIKeyService,
 		}, s.billingDeps(), s.usageBillingRepo)
 		return err
 	}()
@@ -5675,8 +5685,31 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 	go func() {
 		updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.accountRepo.UpdateExtra(updateCtx, accountID, updates)
+		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err != nil {
+			slog.Warn("failed to update OpenAI Codex usage snapshot", "account_id", accountID, "error", err)
+			return
+		}
+		s.autoRepairOpenAIFreeAccountFromCodexSnapshot(updateCtx, accountID)
 	}()
+}
+
+func (s *OpenAIGatewayService) autoRepairOpenAIFreeAccountFromCodexSnapshot(ctx context.Context, accountID int64) {
+	if s == nil || s.settingService == nil || s.accountService == nil || accountID <= 0 {
+		return
+	}
+	enabled, threshold := s.settingService.GetOpenAIFreeAccountRepairSettings(ctx)
+	if !enabled || threshold <= 0 {
+		return
+	}
+	reason := fmt.Sprintf("OpenAI Codex 7d quota exhausted with weekly limit <= %.2f USD; account level repaired to free and public sharing suspended", threshold)
+	account, repaired, err := s.accountService.AutoRepairSuspectedOpenAIFreeAccount(ctx, accountID, threshold, reason)
+	if err != nil {
+		slog.Warn("failed to auto repair suspected OpenAI free account", "account_id", accountID, "threshold_usd", threshold, "error", err)
+		return
+	}
+	if repaired && account != nil {
+		slog.Info("auto repaired suspected OpenAI free account", "account_id", accountID, "threshold_usd", threshold, "share_status", account.ShareStatus)
+	}
 }
 
 func (s *OpenAIGatewayService) UpdateCodexUsageSnapshotFromHeaders(ctx context.Context, accountID int64, headers http.Header) {

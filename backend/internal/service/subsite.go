@@ -10,10 +10,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -44,6 +47,15 @@ const (
 	SubsiteAuthHeaderNonce     = "X-Subsite-Nonce"
 	SubsiteAuthHeaderBodySHA   = "X-Subsite-Body-SHA256"
 	SubsiteAuthHeaderSignature = "X-Subsite-Signature"
+
+	DefaultSubsiteHeartbeatTimeout       = 45 * time.Second
+	DefaultSubsiteMaintenanceInterval    = 15 * time.Second
+	DefaultSubsiteMaintenanceRunTimeout  = 10 * time.Second
+	DefaultSubsiteReservationExpiryGrace = 24 * time.Hour
+
+	DefaultSubsiteEstimatedInputTokens           = 4096
+	DefaultSubsiteEstimatedOutputTokens          = 8192
+	DefaultSubsiteEstimatedUnboundedOutputTokens = 128000
 )
 
 var (
@@ -55,16 +67,21 @@ var (
 	ErrSubsiteNonceReplay                 = infraerrors.Unauthorized("SUBSITE_NONCE_REPLAY", "subsite signature nonce has already been used")
 	ErrAccountLeaseNotFound               = infraerrors.NotFound("ACCOUNT_LEASE_NOT_FOUND", "account lease not found")
 	ErrAccountLeaseConflict               = infraerrors.Conflict("ACCOUNT_LEASE_CONFLICT", "account already has an effective lease")
+	ErrAccountLeaseInUse                  = infraerrors.Conflict("ACCOUNT_LEASE_IN_USE", "account lease still has active reservations")
 	ErrAccountLeaseInvalidStatus          = infraerrors.Forbidden("ACCOUNT_LEASE_INVALID_STATUS", "account lease status does not allow this operation")
 	ErrQuotaReservationNotFound           = infraerrors.NotFound("QUOTA_RESERVATION_NOT_FOUND", "quota reservation not found")
 	ErrQuotaReservationConflict           = infraerrors.Conflict("QUOTA_RESERVATION_CONFLICT", "quota reservation conflict")
 	ErrQuotaReservationCostRequired       = infraerrors.BadRequest("QUOTA_RESERVATION_COST_REQUIRED", "estimated cost must be greater than zero")
 	ErrQuotaReservationInsufficientFunds  = infraerrors.Forbidden("QUOTA_RESERVATION_INSUFFICIENT_FUNDS", "insufficient available balance for reservation")
 	ErrSubsiteAuthorizeNoLease            = infraerrors.ServiceUnavailable("SUBSITE_NO_ACCOUNT_LEASE", "no active account lease is available for this subsite")
+	ErrSubsiteAuthorizeGroupRequired      = infraerrors.Forbidden("SUBSITE_GROUP_REQUIRED", "api key must be bound to a group for subsite routing")
 	ErrSubsiteAuthorizeModelMismatch      = infraerrors.BadRequest("SUBSITE_MODEL_MISMATCH", "requested model or platform is not available on the selected lease")
+	ErrSubsiteLeaseCapacityExceeded       = infraerrors.TooManyRequests("SUBSITE_LEASE_CAPACITY_EXCEEDED", "subsite account lease capacity is exhausted")
 	ErrSubsiteUsageBatchEmpty             = infraerrors.BadRequest("SUBSITE_USAGE_BATCH_EMPTY", "usage batch is empty")
 	ErrSubsiteUsageReservationMismatch    = infraerrors.Conflict("SUBSITE_USAGE_RESERVATION_MISMATCH", "usage item does not match its reservation")
 	ErrSubsiteUsagePayloadFingerprintMiss = infraerrors.BadRequest("SUBSITE_USAGE_FINGERPRINT_REQUIRED", "usage request fingerprint is required")
+	ErrSubsiteUsageReservationNotActive   = infraerrors.Conflict("SUBSITE_USAGE_RESERVATION_NOT_ACTIVE", "usage reservation is not active")
+	ErrSubsiteUsageCostExceedsReservation = infraerrors.Conflict("SUBSITE_USAGE_COST_EXCEEDS_RESERVATION", "usage cost exceeds reserved maximum")
 )
 
 type Subsite struct {
@@ -94,6 +111,9 @@ type AccountLease struct {
 	LeaseID        string     `json:"lease_id"`
 	SubsiteID      string     `json:"subsite_id"`
 	AccountID      int64      `json:"account_id"`
+	GroupID        int64      `json:"group_id"`
+	AccountName    string     `json:"account_name,omitempty"`
+	GroupName      string     `json:"group_name,omitempty"`
 	Platform       string     `json:"platform"`
 	Status         string     `json:"status"`
 	MaxConcurrency int        `json:"max_concurrency"`
@@ -124,6 +144,9 @@ type QuotaReservation struct {
 	RequestedModel     string     `json:"requested_model"`
 	MappedModel        string     `json:"mapped_model"`
 	EstimatedCost      float64    `json:"estimated_cost"`
+	ReservedRequests   int64      `json:"reserved_requests"`
+	ReservedTokens     int64      `json:"reserved_tokens"`
+	ActiveRequestUnits int64      `json:"active_request_units"`
 	ActualCost         *float64   `json:"actual_cost,omitempty"`
 	BillingType        int8       `json:"billing_type"`
 	Status             string     `json:"status"`
@@ -167,6 +190,11 @@ type CreateSubsiteResult struct {
 	Secret  string   `json:"secret"`
 }
 
+type ResetSubsiteSecretResult struct {
+	Subsite *Subsite `json:"subsite"`
+	Secret  string   `json:"secret"`
+}
+
 type UpdateSubsiteInput struct {
 	Name           *string         `json:"name"`
 	PublicURL      *string         `json:"public_url"`
@@ -186,6 +214,7 @@ type ListSubsitesFilter struct {
 type CreateAccountLeaseInput struct {
 	SubsiteID      string     `json:"subsite_id"`
 	AccountID      int64      `json:"account_id"`
+	GroupID        int64      `json:"group_id"`
 	MaxConcurrency int        `json:"max_concurrency"`
 	MaxRequests    int        `json:"max_requests"`
 	MaxTokens      int64      `json:"max_tokens"`
@@ -193,6 +222,7 @@ type CreateAccountLeaseInput struct {
 }
 
 type RenewAccountLeaseInput struct {
+	SubsiteID string    `json:"subsite_id,omitempty"`
 	LeaseID   string    `json:"lease_id"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
@@ -212,16 +242,31 @@ type SubsiteHeartbeatInput struct {
 }
 
 type AuthorizeSubsiteRequestInput struct {
-	SubsiteID          string  `json:"subsite_id"`
-	APIKey             string  `json:"api_key"`
-	Platform           string  `json:"platform"`
-	RequestedModel     string  `json:"requested_model"`
-	MappedModel        string  `json:"mapped_model"`
-	EstimatedCost      float64 `json:"estimated_cost"`
-	RequestFingerprint string  `json:"request_fingerprint"`
-	ClientIP           string  `json:"client_ip"`
-	UserAgent          string  `json:"user_agent"`
-	InboundEndpoint    string  `json:"inbound_endpoint"`
+	SubsiteID                      string   `json:"subsite_id"`
+	APIKey                         string   `json:"api_key"`
+	Platform                       string   `json:"platform"`
+	RequestedModel                 string   `json:"requested_model"`
+	MappedModel                    string   `json:"mapped_model"`
+	EstimatedCost                  float64  `json:"estimated_cost"`
+	EstimatedInputTokens           int      `json:"estimated_input_tokens,omitempty"`
+	EstimatedOutputTokens          int      `json:"estimated_output_tokens,omitempty"`
+	EstimatedCacheCreationTokens   int      `json:"estimated_cache_creation_tokens,omitempty"`
+	EstimatedCacheCreation5mTokens int      `json:"estimated_cache_creation_5m_tokens,omitempty"`
+	EstimatedCacheCreation1hTokens int      `json:"estimated_cache_creation_1h_tokens,omitempty"`
+	EstimatedCacheReadTokens       int      `json:"estimated_cache_read_tokens,omitempty"`
+	EstimatedImageOutputTokens     int      `json:"estimated_image_output_tokens,omitempty"`
+	EstimatedImageCount            int      `json:"estimated_image_count,omitempty"`
+	EstimatedImageSize             string   `json:"estimated_image_size,omitempty"`
+	ServiceTier                    string   `json:"service_tier,omitempty"`
+	ReasoningEffort                string   `json:"reasoning_effort,omitempty"`
+	RequestFingerprint             string   `json:"request_fingerprint"`
+	ClientIP                       string   `json:"client_ip"`
+	UserAgent                      string   `json:"user_agent"`
+	InboundEndpoint                string   `json:"inbound_endpoint"`
+	PreferredLeaseID               string   `json:"preferred_lease_id,omitempty"`
+	PreferredAccountID             int64    `json:"preferred_account_id,omitempty"`
+	ExcludedLeaseIDs               []string `json:"excluded_lease_ids,omitempty"`
+	ExcludedAccountIDs             []int64  `json:"excluded_account_ids,omitempty"`
 }
 
 type AuthorizeSubsiteResponse struct {
@@ -257,45 +302,86 @@ type UsageIngestBatch struct {
 }
 
 type UsageIngestItem struct {
-	RequestID           string    `json:"request_id"`
-	ReservationID       string    `json:"reservation_id"`
-	APIKeyID            int64     `json:"api_key_id"`
-	UserID              int64     `json:"user_id"`
-	AccountID           int64     `json:"account_id"`
-	GroupID             *int64    `json:"group_id"`
-	SubscriptionID      *int64    `json:"subscription_id"`
-	AccountType         string    `json:"account_type"`
-	Model               string    `json:"model"`
-	RequestedModel      string    `json:"requested_model"`
-	UpstreamModel       *string   `json:"upstream_model"`
-	ServiceTier         string    `json:"service_tier"`
-	ReasoningEffort     string    `json:"reasoning_effort"`
-	BillingType         int8      `json:"billing_type"`
-	RequestType         int16     `json:"request_type"`
-	InputTokens         int       `json:"input_tokens"`
-	OutputTokens        int       `json:"output_tokens"`
-	CacheCreationTokens int       `json:"cache_creation_tokens"`
-	CacheReadTokens     int       `json:"cache_read_tokens"`
-	ImageCount          int       `json:"image_count"`
-	MediaType           string    `json:"media_type"`
-	BalanceCost         float64   `json:"balance_cost"`
-	SubscriptionCost    float64   `json:"subscription_cost"`
-	APIKeyQuotaCost     float64   `json:"api_key_quota_cost"`
-	APIKeyRateLimitCost float64   `json:"api_key_rate_limit_cost"`
-	AccountQuotaCost    float64   `json:"account_quota_cost"`
-	RequestFingerprint  string    `json:"request_fingerprint"`
-	RequestPayloadHash  string    `json:"request_payload_hash"`
-	InboundEndpoint     string    `json:"inbound_endpoint"`
-	UpstreamEndpoint    string    `json:"upstream_endpoint"`
-	UserAgent           string    `json:"user_agent"`
-	IPAddress           string    `json:"ip_address"`
-	OccurredAt          time.Time `json:"occurred_at"`
+	RequestID                  string    `json:"request_id"`
+	ReservationID              string    `json:"reservation_id"`
+	APIKeyID                   int64     `json:"api_key_id"`
+	UserID                     int64     `json:"user_id"`
+	AccountID                  int64     `json:"account_id"`
+	GroupID                    *int64    `json:"group_id"`
+	SubscriptionID             *int64    `json:"subscription_id"`
+	AccountType                string    `json:"account_type"`
+	Model                      string    `json:"model"`
+	RequestedModel             string    `json:"requested_model"`
+	UpstreamModel              *string   `json:"upstream_model"`
+	ServiceTier                string    `json:"service_tier"`
+	ReasoningEffort            string    `json:"reasoning_effort"`
+	BillingType                int8      `json:"billing_type"`
+	RequestType                int16     `json:"request_type"`
+	InputTokens                int       `json:"input_tokens"`
+	OutputTokens               int       `json:"output_tokens"`
+	CacheCreationTokens        int       `json:"cache_creation_tokens"`
+	CacheCreation5mTokens      int       `json:"cache_creation_5m_tokens"`
+	CacheCreation1hTokens      int       `json:"cache_creation_1h_tokens"`
+	CacheReadTokens            int       `json:"cache_read_tokens"`
+	ImageOutputTokens          int       `json:"image_output_tokens"`
+	ImageCount                 int       `json:"image_count"`
+	ImageSize                  string    `json:"image_size"`
+	MediaType                  string    `json:"media_type"`
+	InputCost                  float64   `json:"input_cost"`
+	OutputCost                 float64   `json:"output_cost"`
+	CacheCreationCost          float64   `json:"cache_creation_cost"`
+	CacheReadCost              float64   `json:"cache_read_cost"`
+	ImageOutputCost            float64   `json:"image_output_cost"`
+	TotalCost                  float64   `json:"total_cost"`
+	BalanceCost                float64   `json:"balance_cost"`
+	SubscriptionCost           float64   `json:"subscription_cost"`
+	PrivateGroupCommissionCost float64   `json:"private_group_commission_cost"`
+	RateMultiplier             float64   `json:"rate_multiplier"`
+	AccountRateMultiplier      float64   `json:"account_rate_multiplier"`
+	APIKeyQuotaCost            float64   `json:"api_key_quota_cost"`
+	APIKeyRateLimitCost        float64   `json:"api_key_rate_limit_cost"`
+	AccountQuotaCost           float64   `json:"account_quota_cost"`
+	RequestFingerprint         string    `json:"request_fingerprint"`
+	RequestPayloadHash         string    `json:"request_payload_hash"`
+	InboundEndpoint            string    `json:"inbound_endpoint"`
+	UpstreamEndpoint           string    `json:"upstream_endpoint"`
+	UserAgent                  string    `json:"user_agent"`
+	IPAddress                  string    `json:"ip_address"`
+	DurationMs                 *int      `json:"duration_ms,omitempty"`
+	FirstTokenMs               *int      `json:"first_token_ms,omitempty"`
+	OccurredAt                 time.Time `json:"occurred_at"`
+
+	costCalculatedByMaster bool
 }
 
 type UsageIngestResult struct {
-	Accepted  int `json:"accepted"`
-	Applied   int `json:"applied"`
-	Duplicate int `json:"duplicate"`
+	Accepted  int                     `json:"accepted"`
+	Applied   int                     `json:"applied"`
+	Duplicate int                     `json:"duplicate"`
+	Failed    int                     `json:"failed"`
+	Items     []UsageIngestItemResult `json:"items,omitempty"`
+}
+
+type UsageIngestItemResult struct {
+	RequestID     string `json:"request_id"`
+	ReservationID string `json:"reservation_id"`
+	Applied       bool   `json:"applied"`
+	Duplicate     bool   `json:"duplicate"`
+	Error         string `json:"error,omitempty"`
+}
+
+type SubsiteMaintenanceInput struct {
+	Now                    time.Time     `json:"now"`
+	HeartbeatTimeout       time.Duration `json:"heartbeat_timeout"`
+	ReservationExpiryGrace time.Duration `json:"reservation_expiry_grace"`
+}
+
+type SubsiteMaintenanceResult struct {
+	ExpiredLeases              int64 `json:"expired_leases"`
+	ExpiredReservations        int64 `json:"expired_reservations"`
+	UnhealthySubsites          int64 `json:"unhealthy_subsites"`
+	HeartbeatTimeoutSecs       int64 `json:"heartbeat_timeout_secs"`
+	ReservationExpiryGraceSecs int64 `json:"reservation_expiry_grace_secs"`
 }
 
 type SubsiteRepository interface {
@@ -304,18 +390,35 @@ type SubsiteRepository interface {
 	List(ctx context.Context, params pagination.PaginationParams, filter ListSubsitesFilter) ([]Subsite, *pagination.PaginationResult, error)
 	Update(ctx context.Context, subsite *Subsite) error
 	UpdateStatus(ctx context.Context, subsiteID, status string) error
+	UpdateSecret(ctx context.Context, subsiteID, secretHash, secretCiphertext string) error
 	RecordHeartbeat(ctx context.Context, heartbeat *SubsiteHeartbeat) error
+	MarkHeartbeatTimeouts(ctx context.Context, before time.Time) (int64, error)
 }
 
 type AccountLeaseRepository interface {
 	Create(ctx context.Context, lease *AccountLease) error
 	GetByLeaseID(ctx context.Context, leaseID string) (*AccountLease, error)
 	ListBySubsite(ctx context.Context, subsiteID string) ([]AccountLease, error)
+	ListBySubsitePaginated(ctx context.Context, subsiteID string, params pagination.PaginationParams) ([]AccountLease, *pagination.PaginationResult, error)
 	ListActiveBySubsite(ctx context.Context, subsiteID string) ([]AccountLease, error)
+	ListActiveAccountIDsBySubsite(ctx context.Context, subsiteID string) ([]int64, error)
+	UpdateLimitsForSubsite(ctx context.Context, subsiteID, leaseID string, maxConcurrency int, maxRequests int, maxTokens int64) (*AccountLease, error)
 	Renew(ctx context.Context, leaseID string, expiresAt time.Time) (*AccountLease, error)
+	RenewForSubsite(ctx context.Context, subsiteID, leaseID string, expiresAt time.Time) (*AccountLease, error)
 	Release(ctx context.Context, leaseID string) (*AccountLease, error)
+	ReleaseForSubsite(ctx context.Context, subsiteID, leaseID string) (*AccountLease, error)
 	Drain(ctx context.Context, leaseID string) (*AccountLease, error)
+	DrainForSubsite(ctx context.Context, subsiteID, leaseID string) (*AccountLease, error)
+	DeleteForSubsite(ctx context.Context, subsiteID, leaseID string) (*AccountLease, error)
+	IncrementUsage(ctx context.Context, leaseID string, requests int64, tokens int64) error
 	ExpireStale(ctx context.Context, now time.Time) (int64, error)
+}
+
+type SubsiteSubscriptionAuthorizer interface {
+	GetActiveSubscription(ctx context.Context, userID, groupID int64) (*UserSubscription, error)
+	CheckUsageLimits(ctx context.Context, sub *UserSubscription, group *Group, additionalCost float64) error
+	ValidateAndCheckLimits(sub *UserSubscription, group *Group) (needsMaintenance bool, err error)
+	DoWindowMaintenance(sub *UserSubscription)
 }
 
 type QuotaReservationRepository interface {
@@ -323,6 +426,7 @@ type QuotaReservationRepository interface {
 	GetByRequestID(ctx context.Context, requestID string) (*QuotaReservation, error)
 	GetByReservationID(ctx context.Context, reservationID string) (*QuotaReservation, error)
 	Cancel(ctx context.Context, requestID string) error
+	CancelForSubsite(ctx context.Context, subsiteID, requestID string) error
 	Settle(ctx context.Context, requestID string, actualCost float64) error
 	ExpireStale(ctx context.Context, now time.Time) (int64, error)
 }
@@ -441,6 +545,35 @@ func (s *SubsiteService) Pause(ctx context.Context, subsiteID string) error {
 
 func (s *SubsiteService) Resume(ctx context.Context, subsiteID string) error {
 	return s.repo.UpdateStatus(ctx, strings.TrimSpace(subsiteID), SubsiteStatusActive)
+}
+
+func (s *SubsiteService) ResetSecret(ctx context.Context, subsiteID string) (*ResetSubsiteSecretResult, error) {
+	if s == nil || s.repo == nil || s.encryptor == nil {
+		return nil, errors.New("subsite service dependencies are nil")
+	}
+	subsiteID = strings.TrimSpace(subsiteID)
+	if subsiteID == "" {
+		return nil, ErrSubsiteInvalidInput
+	}
+	if _, err := s.repo.GetBySubsiteID(ctx, subsiteID); err != nil {
+		return nil, err
+	}
+	secret, err := generateSubsiteSecret()
+	if err != nil {
+		return nil, fmt.Errorf("generate subsite secret: %w", err)
+	}
+	encrypted, err := s.encryptor.Encrypt(secret)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt subsite secret: %w", err)
+	}
+	if err := s.repo.UpdateSecret(ctx, subsiteID, hashSubsiteSecret(secret), encrypted); err != nil {
+		return nil, err
+	}
+	subsite, err := s.repo.GetBySubsiteID(ctx, subsiteID)
+	if err != nil {
+		return nil, err
+	}
+	return &ResetSubsiteSecretResult{Subsite: subsite, Secret: secret}, nil
 }
 
 func (s *SubsiteService) RecordHeartbeat(ctx context.Context, input SubsiteHeartbeatInput) (*Subsite, error) {
@@ -576,14 +709,20 @@ type AccountLeaseService struct {
 	leaseRepo   AccountLeaseRepository
 	subsiteRepo SubsiteRepository
 	accountRepo AccountRepository
+	groupRepo   GroupRepository
 }
 
-func NewAccountLeaseService(leaseRepo AccountLeaseRepository, subsiteRepo SubsiteRepository, accountRepo AccountRepository) *AccountLeaseService {
-	return &AccountLeaseService{leaseRepo: leaseRepo, subsiteRepo: subsiteRepo, accountRepo: accountRepo}
+func NewAccountLeaseService(leaseRepo AccountLeaseRepository, subsiteRepo SubsiteRepository, accountRepo AccountRepository, groupRepo GroupRepository) *AccountLeaseService {
+	return &AccountLeaseService{
+		leaseRepo:   leaseRepo,
+		subsiteRepo: subsiteRepo,
+		accountRepo: accountRepo,
+		groupRepo:   groupRepo,
+	}
 }
 
 func (s *AccountLeaseService) Create(ctx context.Context, input CreateAccountLeaseInput) (*AccountLease, error) {
-	if strings.TrimSpace(input.SubsiteID) == "" || input.AccountID <= 0 {
+	if strings.TrimSpace(input.SubsiteID) == "" || input.AccountID <= 0 || input.GroupID <= 0 {
 		return nil, ErrSubsiteInvalidInput
 	}
 	subsite, err := s.subsiteRepo.GetBySubsiteID(ctx, strings.TrimSpace(input.SubsiteID))
@@ -597,8 +736,18 @@ func (s *AccountLeaseService) Create(ctx context.Context, input CreateAccountLea
 	if err != nil {
 		return nil, err
 	}
-	if !account.IsActive() {
+	group, err := s.groupRepo.GetByID(ctx, input.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	if !group.IsActive() || !account.IsActive() || !account.Schedulable {
 		return nil, ErrAccountLeaseInvalidStatus
+	}
+	if !strings.EqualFold(group.Platform, account.Platform) {
+		return nil, ErrSubsiteInvalidInput
+	}
+	if !containsInt64(account.GroupIDs, group.ID) {
+		return nil, ErrSubsiteInvalidInput
 	}
 	expiresAt := time.Now().Add(30 * time.Minute)
 	if input.ExpiresAt != nil {
@@ -611,9 +760,10 @@ func (s *AccountLeaseService) Create(ctx context.Context, input CreateAccountLea
 		LeaseID:        "lease_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
 		SubsiteID:      subsite.SubsiteID,
 		AccountID:      account.ID,
+		GroupID:        group.ID,
 		Platform:       account.Platform,
 		Status:         AccountLeaseStatusActive,
-		MaxConcurrency: maxInt(1, input.MaxConcurrency),
+		MaxConcurrency: clampNonNegativeInt(input.MaxConcurrency),
 		MaxRequests:    clampNonNegativeInt(input.MaxRequests),
 		MaxTokens:      maxInt64(0, input.MaxTokens),
 		AssignedAt:     time.Now(),
@@ -629,9 +779,29 @@ func (s *AccountLeaseService) ListBySubsite(ctx context.Context, subsiteID strin
 	return s.leaseRepo.ListBySubsite(ctx, strings.TrimSpace(subsiteID))
 }
 
+func (s *AccountLeaseService) ListBySubsitePaginated(ctx context.Context, subsiteID string, params pagination.PaginationParams) ([]AccountLease, *pagination.PaginationResult, error) {
+	return s.leaseRepo.ListBySubsitePaginated(ctx, strings.TrimSpace(subsiteID), params)
+}
+
+func (s *AccountLeaseService) ListActiveAccountIDsBySubsite(ctx context.Context, subsiteID string) ([]int64, error) {
+	return s.leaseRepo.ListActiveAccountIDsBySubsite(ctx, strings.TrimSpace(subsiteID))
+}
+
+func (s *AccountLeaseService) UpdateLimitsForSubsite(ctx context.Context, subsiteID, leaseID string, maxConcurrency int, maxRequests int, maxTokens int64) (*AccountLease, error) {
+	subsiteID = strings.TrimSpace(subsiteID)
+	leaseID = strings.TrimSpace(leaseID)
+	if subsiteID == "" || leaseID == "" || maxConcurrency < 0 || maxRequests < 0 || maxTokens < 0 {
+		return nil, ErrSubsiteInvalidInput
+	}
+	return s.leaseRepo.UpdateLimitsForSubsite(ctx, subsiteID, leaseID, maxConcurrency, maxRequests, maxTokens)
+}
+
 func (s *AccountLeaseService) Renew(ctx context.Context, input RenewAccountLeaseInput) (*AccountLease, error) {
 	if strings.TrimSpace(input.LeaseID) == "" || !input.ExpiresAt.After(time.Now()) {
 		return nil, ErrSubsiteInvalidInput
+	}
+	if subsiteID := strings.TrimSpace(input.SubsiteID); subsiteID != "" {
+		return s.leaseRepo.RenewForSubsite(ctx, subsiteID, strings.TrimSpace(input.LeaseID), input.ExpiresAt)
 	}
 	return s.leaseRepo.Renew(ctx, strings.TrimSpace(input.LeaseID), input.ExpiresAt)
 }
@@ -640,8 +810,29 @@ func (s *AccountLeaseService) Release(ctx context.Context, leaseID string) (*Acc
 	return s.leaseRepo.Release(ctx, strings.TrimSpace(leaseID))
 }
 
+func (s *AccountLeaseService) ReleaseForSubsite(ctx context.Context, subsiteID, leaseID string) (*AccountLease, error) {
+	if strings.TrimSpace(subsiteID) == "" || strings.TrimSpace(leaseID) == "" {
+		return nil, ErrSubsiteInvalidInput
+	}
+	return s.leaseRepo.ReleaseForSubsite(ctx, strings.TrimSpace(subsiteID), strings.TrimSpace(leaseID))
+}
+
 func (s *AccountLeaseService) Drain(ctx context.Context, leaseID string) (*AccountLease, error) {
 	return s.leaseRepo.Drain(ctx, strings.TrimSpace(leaseID))
+}
+
+func (s *AccountLeaseService) DrainForSubsite(ctx context.Context, subsiteID, leaseID string) (*AccountLease, error) {
+	if strings.TrimSpace(subsiteID) == "" || strings.TrimSpace(leaseID) == "" {
+		return nil, ErrSubsiteInvalidInput
+	}
+	return s.leaseRepo.DrainForSubsite(ctx, strings.TrimSpace(subsiteID), strings.TrimSpace(leaseID))
+}
+
+func (s *AccountLeaseService) DeleteForSubsite(ctx context.Context, subsiteID, leaseID string) (*AccountLease, error) {
+	if strings.TrimSpace(subsiteID) == "" || strings.TrimSpace(leaseID) == "" {
+		return nil, ErrSubsiteInvalidInput
+	}
+	return s.leaseRepo.DeleteForSubsite(ctx, strings.TrimSpace(subsiteID), strings.TrimSpace(leaseID))
 }
 
 type RequestAuthorizeService struct {
@@ -649,8 +840,10 @@ type RequestAuthorizeService struct {
 	leaseRepo       AccountLeaseRepository
 	reservationRepo QuotaReservationRepository
 	apiKeyService   *APIKeyService
-	subscriptionSvc *SubscriptionService
+	subscriptionSvc SubsiteSubscriptionAuthorizer
 	accountRepo     AccountRepository
+	billingService  *BillingService
+	resolver        *ModelPricingResolver
 }
 
 func NewRequestAuthorizeService(
@@ -658,8 +851,10 @@ func NewRequestAuthorizeService(
 	leaseRepo AccountLeaseRepository,
 	reservationRepo QuotaReservationRepository,
 	apiKeyService *APIKeyService,
-	subscriptionSvc *SubscriptionService,
+	subscriptionSvc SubsiteSubscriptionAuthorizer,
 	accountRepo AccountRepository,
+	billingService *BillingService,
+	resolver *ModelPricingResolver,
 ) *RequestAuthorizeService {
 	return &RequestAuthorizeService{
 		subsiteRepo:     subsiteRepo,
@@ -668,6 +863,8 @@ func NewRequestAuthorizeService(
 		apiKeyService:   apiKeyService,
 		subscriptionSvc: subscriptionSvc,
 		accountRepo:     accountRepo,
+		billingService:  billingService,
+		resolver:        resolver,
 	}
 }
 
@@ -678,8 +875,13 @@ func (s *RequestAuthorizeService) Authorize(ctx context.Context, input Authorize
 	input.RequestedModel = strings.TrimSpace(input.RequestedModel)
 	input.MappedModel = strings.TrimSpace(input.MappedModel)
 	input.RequestFingerprint = strings.TrimSpace(input.RequestFingerprint)
-	if input.SubsiteID == "" || input.APIKey == "" || input.EstimatedCost <= 0 || input.RequestFingerprint == "" {
-		return nil, ErrQuotaReservationCostRequired
+	input.PreferredLeaseID = strings.TrimSpace(input.PreferredLeaseID)
+	input.EstimatedImageSize = strings.TrimSpace(input.EstimatedImageSize)
+	input.ServiceTier = strings.TrimSpace(input.ServiceTier)
+	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
+	input.InboundEndpoint = strings.TrimSpace(input.InboundEndpoint)
+	if input.SubsiteID == "" || input.APIKey == "" || input.RequestFingerprint == "" {
+		return nil, ErrSubsiteInvalidInput
 	}
 	subsite, err := s.subsiteRepo.GetBySubsiteID(ctx, input.SubsiteID)
 	if err != nil {
@@ -698,9 +900,6 @@ func (s *RequestAuthorizeService) Authorize(ctx context.Context, input Authorize
 	if apiKey.IsExpired() {
 		return nil, ErrAPIKeyExpired
 	}
-	if apiKey.IsQuotaExhausted() || (apiKey.Quota > 0 && apiKey.QuotaUsed+input.EstimatedCost > apiKey.Quota) {
-		return nil, ErrAPIKeyQuotaExhausted
-	}
 	if len(apiKey.IPWhitelist) > 0 || len(apiKey.IPBlacklist) > 0 {
 		allowed, _ := ip.CheckIPRestrictionWithCompiledRules(input.ClientIP, apiKey.CompiledIPWhitelist, apiKey.CompiledIPBlacklist)
 		if !allowed {
@@ -714,6 +913,18 @@ func (s *RequestAuthorizeService) Authorize(ctx context.Context, input Authorize
 		return nil, ErrUserNotActive
 	}
 
+	mappedModel := s.resolveAuthorizeMappedModel(input, nil)
+	estimatedCost, err := s.estimateAuthorizeCost(ctx, input, apiKey, mappedModel)
+	if err != nil {
+		return nil, err
+	}
+	if estimatedCost <= 0 {
+		return nil, ErrQuotaReservationCostRequired
+	}
+	if apiKey.IsQuotaExhausted() || (apiKey.Quota > 0 && apiKey.QuotaUsed+estimatedCost > apiKey.Quota) {
+		return nil, ErrAPIKeyQuotaExhausted
+	}
+
 	var subscription *UserSubscription
 	billingType := BillingTypeBalance
 	if apiKey.Group != nil && apiKey.Group.IsSubscriptionType() && s.subscriptionSvc != nil {
@@ -725,7 +936,7 @@ func (s *RequestAuthorizeService) Authorize(ctx context.Context, input Authorize
 		if err != nil {
 			return nil, err
 		}
-		if err := s.subscriptionSvc.CheckUsageLimits(ctx, subscription, apiKey.Group, input.EstimatedCost); err != nil {
+		if err := s.subscriptionSvc.CheckUsageLimits(ctx, subscription, apiKey.Group, estimatedCost); err != nil {
 			return nil, err
 		}
 		if needsMaintenance {
@@ -733,48 +944,22 @@ func (s *RequestAuthorizeService) Authorize(ctx context.Context, input Authorize
 			s.subscriptionSvc.DoWindowMaintenance(&maintenanceCopy)
 		}
 		billingType = BillingTypeSubscription
-	} else if apiKey.User.Balance < input.EstimatedCost {
+	} else if apiKey.User.Balance < estimatedCost {
 		return nil, ErrQuotaReservationInsufficientFunds
 	}
 
-	lease, account, err := s.selectLease(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	requestID := "subreq_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	reservationID := "qres_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	expiresAt := time.Now().Add(10 * time.Minute)
 	groupID := apiKey.GroupID
 	var subscriptionID *int64
 	if subscription != nil {
 		subscriptionID = &subscription.ID
 	}
-	mappedModel := input.MappedModel
-	if mappedModel == "" {
-		mappedModel = input.RequestedModel
-	}
-	reservation := &QuotaReservation{
-		ReservationID:      reservationID,
-		RequestID:          requestID,
-		SubsiteID:          subsite.SubsiteID,
-		LeaseID:            lease.LeaseID,
-		AccountID:          account.ID,
-		APIKeyID:           apiKey.ID,
-		UserID:             apiKey.User.ID,
-		GroupID:            groupID,
-		SubscriptionID:     subscriptionID,
-		Platform:           account.Platform,
-		RequestedModel:     input.RequestedModel,
-		MappedModel:        mappedModel,
-		EstimatedCost:      input.EstimatedCost,
-		BillingType:        billingType,
-		Status:             QuotaReservationStatusReserved,
-		RequestFingerprint: input.RequestFingerprint,
-		ExpiresAt:          expiresAt,
-	}
-	if err := s.reservationRepo.Create(ctx, reservation); err != nil {
+	lease, account, reservation, err := s.authorizeAgainstLeaseCandidates(ctx, input, apiKey, groupID, subscriptionID, estimatedCost, billingType, expiresAt)
+	if err != nil {
 		return nil, err
 	}
+	requestID := reservation.RequestID
+	reservationID := reservation.ReservationID
 	return &AuthorizeSubsiteResponse{
 		RequestID:      requestID,
 		ReservationID:  reservationID,
@@ -788,7 +973,7 @@ func (s *RequestAuthorizeService) Authorize(ctx context.Context, input Authorize
 		Platform:       account.Platform,
 		RequestedModel: input.RequestedModel,
 		MappedModel:    mappedModel,
-		MaxCost:        input.EstimatedCost,
+		MaxCost:        estimatedCost,
 		ExpiresAt:      expiresAt,
 		BillingType:    billingType,
 		Credential: CredentialSnapshot{
@@ -805,18 +990,214 @@ func (s *RequestAuthorizeService) Cancel(ctx context.Context, requestID string) 
 	return s.reservationRepo.Cancel(ctx, strings.TrimSpace(requestID))
 }
 
-func (s *RequestAuthorizeService) selectLease(ctx context.Context, input AuthorizeSubsiteRequestInput) (*AccountLease, *Account, error) {
+func (s *RequestAuthorizeService) CancelForSubsite(ctx context.Context, subsiteID, requestID string) error {
+	if strings.TrimSpace(subsiteID) == "" || strings.TrimSpace(requestID) == "" {
+		return ErrSubsiteInvalidInput
+	}
+	return s.reservationRepo.CancelForSubsite(ctx, strings.TrimSpace(subsiteID), strings.TrimSpace(requestID))
+}
+
+func (s *RequestAuthorizeService) resolveAuthorizeMappedModel(input AuthorizeSubsiteRequestInput, account *Account) string {
+	mappedModel := strings.TrimSpace(input.MappedModel)
+	if mappedModel == "" {
+		mappedModel = strings.TrimSpace(input.RequestedModel)
+	}
+	if account == nil || strings.TrimSpace(input.RequestedModel) == "" {
+		return mappedModel
+	}
+	if account.Type == AccountTypeAPIKey {
+		if resolved := strings.TrimSpace(account.GetMappedModel(input.RequestedModel)); resolved != "" {
+			return resolved
+		}
+	}
+	if account.Platform == PlatformAnthropic {
+		if normalized := strings.TrimSpace(claude.NormalizeModelID(input.RequestedModel)); normalized != "" {
+			return normalized
+		}
+	}
+	return mappedModel
+}
+
+func (s *RequestAuthorizeService) estimateAuthorizeCost(ctx context.Context, input AuthorizeSubsiteRequestInput, apiKey *APIKey, mappedModel string) (float64, error) {
+	if s == nil || s.billingService == nil || apiKey == nil || apiKey.User == nil {
+		return 0, ErrQuotaReservationCostRequired
+	}
+	model := strings.TrimSpace(mappedModel)
+	if model == "" {
+		model = strings.TrimSpace(input.RequestedModel)
+	}
+	if model == "" {
+		return 0, ErrQuotaReservationCostRequired
+	}
+	groupID := apiKey.GroupID
+	if groupID == nil && apiKey.Group != nil {
+		id := apiKey.Group.ID
+		groupID = &id
+	}
+	multiplier := 1.0
+	if apiKey.Group != nil {
+		multiplier = apiKey.Group.RateMultiplier
+	}
+	if groupID != nil && s.apiKeyService != nil && s.apiKeyService.userGroupRateRepo != nil {
+		if userMultiplier, err := s.apiKeyService.userGroupRateRepo.GetByUserAndGroup(ctx, apiKey.User.ID, *groupID); err == nil && userMultiplier != nil {
+			multiplier = *userMultiplier
+		}
+	}
+	isImage := isSubsiteAuthorizeImageRequest(input)
+	if isImage {
+		requestCount := maxInt(1, input.EstimatedImageCount)
+		sizeTier := normalizeSubsiteAuthorizeImageSize(input.EstimatedImageSize)
+		cost, err := s.billingService.CalculateCostUnified(CostInput{
+			Ctx:            ctx,
+			Model:          model,
+			GroupID:        groupID,
+			RequestCount:   requestCount,
+			SizeTier:       sizeTier,
+			RateMultiplier: multiplier,
+			ServiceTier:    strings.TrimSpace(input.ServiceTier),
+			Resolver:       s.resolver,
+		})
+		if err == nil && cost != nil && cost.ActualCost > 0 {
+			return cost.ActualCost, nil
+		}
+		var groupConfig *ImagePriceConfig
+		if apiKey.Group != nil {
+			groupConfig = &ImagePriceConfig{
+				Price1K: apiKey.Group.ImagePrice1K,
+				Price2K: apiKey.Group.ImagePrice2K,
+				Price4K: apiKey.Group.ImagePrice4K,
+			}
+		}
+		fallback := s.billingService.CalculateImageCost(model, sizeTier, requestCount, groupConfig, multiplier)
+		if fallback == nil || fallback.ActualCost <= 0 {
+			if err != nil {
+				return 0, err
+			}
+			return 0, ErrQuotaReservationCostRequired
+		}
+		return fallback.ActualCost, nil
+	}
+	cost, err := s.billingService.CalculateCostUnified(CostInput{
+		Ctx:            ctx,
+		Model:          model,
+		GroupID:        groupID,
+		Tokens:         authorizeEstimatedUsageTokens(input),
+		RateMultiplier: multiplier,
+		ServiceTier:    strings.TrimSpace(input.ServiceTier),
+		Resolver:       s.resolver,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if cost == nil || cost.ActualCost <= 0 {
+		return 0, ErrQuotaReservationCostRequired
+	}
+	return cost.ActualCost, nil
+}
+
+func authorizeEstimatedUsageTokens(input AuthorizeSubsiteRequestInput) UsageTokens {
+	inputTokens := input.EstimatedInputTokens
+	if inputTokens <= 0 {
+		inputTokens = DefaultSubsiteEstimatedInputTokens
+	}
+	outputTokens := input.EstimatedOutputTokens
+	if outputTokens <= 0 {
+		outputTokens = DefaultSubsiteEstimatedOutputTokens
+		if strings.Contains(strings.ToLower(input.InboundEndpoint), "responses") {
+			outputTokens = DefaultSubsiteEstimatedUnboundedOutputTokens
+		}
+	}
+	return UsageTokens{
+		InputTokens:           inputTokens,
+		OutputTokens:          outputTokens,
+		CacheCreationTokens:   maxInt(0, input.EstimatedCacheCreationTokens),
+		CacheCreation5mTokens: maxInt(0, input.EstimatedCacheCreation5mTokens),
+		CacheCreation1hTokens: maxInt(0, input.EstimatedCacheCreation1hTokens),
+		CacheReadTokens:       maxInt(0, input.EstimatedCacheReadTokens),
+		ImageOutputTokens:     maxInt(0, input.EstimatedImageOutputTokens),
+	}
+}
+
+func authorizeEstimatedLeaseTokens(input AuthorizeSubsiteRequestInput) int64 {
+	tokens := authorizeEstimatedUsageTokens(input)
+	total := tokens.InputTokens +
+		tokens.OutputTokens +
+		tokens.CacheCreationTokens +
+		tokens.CacheCreation5mTokens +
+		tokens.CacheCreation1hTokens +
+		tokens.CacheReadTokens +
+		tokens.ImageOutputTokens
+	if total < 0 {
+		return 0
+	}
+	return int64(total)
+}
+
+func isSubsiteAuthorizeImageRequest(input AuthorizeSubsiteRequestInput) bool {
+	return input.EstimatedImageCount > 0 || strings.Contains(strings.ToLower(input.InboundEndpoint), "/images/")
+}
+
+func normalizeSubsiteAuthorizeImageSize(size string) string {
+	value := strings.ToUpper(strings.TrimSpace(size))
+	switch value {
+	case "1K", "2K", "4K", "HD":
+		return value
+	case "256X256", "512X512", "1024X1024":
+		return "1K"
+	case "1024X1536", "1536X1024", "1024X1792", "1792X1024":
+		return "2K"
+	case "2048X2048":
+		return "4K"
+	default:
+		return "2K"
+	}
+}
+
+func (s *RequestAuthorizeService) selectLease(ctx context.Context, input AuthorizeSubsiteRequestInput, apiKey *APIKey) (*AccountLease, *Account, error) {
+	groupID := int64(0)
+	if apiKey != nil {
+		if apiKey.GroupID != nil {
+			groupID = *apiKey.GroupID
+		} else if apiKey.Group != nil {
+			groupID = apiKey.Group.ID
+		}
+	}
+	if groupID <= 0 {
+		return nil, nil, ErrSubsiteAuthorizeGroupRequired
+	}
 	leases, err := s.leaseRepo.ListActiveBySubsite(ctx, input.SubsiteID)
 	if err != nil {
 		return nil, nil, err
 	}
 	now := time.Now()
+	preferredOnly := input.PreferredLeaseID != "" || input.PreferredAccountID > 0
 	for i := range leases {
 		lease := &leases[i]
 		if lease.Status != AccountLeaseStatusActive && lease.Status != AccountLeaseStatusRenewing {
 			continue
 		}
 		if !lease.ExpiresAt.After(now) {
+			continue
+		}
+		if lease.MaxRequests > 0 && lease.UsedRequests >= int64(lease.MaxRequests) {
+			continue
+		}
+		if lease.MaxTokens > 0 && lease.UsedTokens >= lease.MaxTokens {
+			continue
+		}
+		if lease.GroupID != groupID {
+			continue
+		}
+		if input.PreferredLeaseID != "" && lease.LeaseID != input.PreferredLeaseID {
+			continue
+		}
+		if input.PreferredAccountID > 0 && lease.AccountID != input.PreferredAccountID {
+			continue
+		}
+		if containsStringTrimmed(input.ExcludedLeaseIDs, lease.LeaseID) {
+			continue
+		}
+		if containsInt64(input.ExcludedAccountIDs, lease.AccountID) {
 			continue
 		}
 		if input.Platform != "" && lease.Platform != "" && !strings.EqualFold(lease.Platform, input.Platform) {
@@ -826,7 +1207,7 @@ func (s *RequestAuthorizeService) selectLease(ctx context.Context, input Authori
 		if err != nil {
 			return nil, nil, err
 		}
-		if !account.IsActive() || !account.Schedulable {
+		if account == nil || !account.IsSchedulable() {
 			continue
 		}
 		if input.Platform != "" && !strings.EqualFold(account.Platform, input.Platform) {
@@ -834,64 +1215,566 @@ func (s *RequestAuthorizeService) selectLease(ctx context.Context, input Authori
 		}
 		return lease, account, nil
 	}
+	if !preferredOnly && isPrivateSubsiteAutoLeaseEligible(apiKey) {
+		lease, account, err := s.ensurePrivateLease(ctx, input, apiKey, groupID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if lease != nil && account != nil {
+			return lease, account, nil
+		}
+	}
+	if preferredOnly {
+		return nil, nil, ErrSubsiteAuthorizeNoLease
+	}
 	return nil, nil, ErrSubsiteAuthorizeNoLease
+}
+
+func isPrivateSubsiteAutoLeaseEligible(apiKey *APIKey) bool {
+	if apiKey == nil || apiKey.User == nil || apiKey.Group == nil {
+		return false
+	}
+	if apiKey.User.ID <= 0 {
+		return false
+	}
+	if !apiKey.Group.IsSubscriptionType() || !apiKey.Group.IsUserPrivateScope() {
+		return false
+	}
+	if apiKey.Group.OwnerUserID == nil || *apiKey.Group.OwnerUserID != apiKey.User.ID {
+		return false
+	}
+	return true
+}
+
+func (s *RequestAuthorizeService) authorizeAgainstLeaseCandidates(
+	ctx context.Context,
+	input AuthorizeSubsiteRequestInput,
+	apiKey *APIKey,
+	groupID *int64,
+	subscriptionID *int64,
+	estimatedCost float64,
+	billingType int8,
+	expiresAt time.Time,
+) (*AccountLease, *Account, *QuotaReservation, error) {
+	currentInput := input
+	triedLeaseIDs := make(map[string]struct{})
+	triedAccountIDs := make(map[int64]struct{})
+	for {
+		lease, account, err := s.selectLease(ctx, currentInput, apiKey)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		requestID := "subreq_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		reservationID := "qres_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		reservation := &QuotaReservation{
+			ReservationID:      reservationID,
+			RequestID:          requestID,
+			SubsiteID:          strings.TrimSpace(input.SubsiteID),
+			LeaseID:            lease.LeaseID,
+			AccountID:          account.ID,
+			APIKeyID:           apiKey.ID,
+			UserID:             apiKey.User.ID,
+			GroupID:            groupID,
+			SubscriptionID:     subscriptionID,
+			Platform:           account.Platform,
+			RequestedModel:     input.RequestedModel,
+			MappedModel:        s.resolveAuthorizeMappedModel(input, account),
+			EstimatedCost:      estimatedCost,
+			ReservedRequests:   1,
+			ReservedTokens:     authorizeEstimatedLeaseTokens(input),
+			ActiveRequestUnits: 1,
+			BillingType:        billingType,
+			Status:             QuotaReservationStatusReserved,
+			RequestFingerprint: input.RequestFingerprint,
+			ExpiresAt:          expiresAt,
+		}
+		if err := s.reservationRepo.Create(ctx, reservation); err != nil {
+			if errors.Is(err, ErrSubsiteLeaseCapacityExceeded) && currentInput.PreferredLeaseID == "" && currentInput.PreferredAccountID <= 0 {
+				if _, seen := triedLeaseIDs[lease.LeaseID]; !seen {
+					triedLeaseIDs[lease.LeaseID] = struct{}{}
+					currentInput.ExcludedLeaseIDs = append(currentInput.ExcludedLeaseIDs, lease.LeaseID)
+				}
+				if _, seen := triedAccountIDs[account.ID]; !seen {
+					triedAccountIDs[account.ID] = struct{}{}
+					currentInput.ExcludedAccountIDs = append(currentInput.ExcludedAccountIDs, account.ID)
+				}
+				continue
+			}
+			return nil, nil, nil, err
+		}
+		return lease, account, reservation, nil
+	}
+}
+
+func (s *RequestAuthorizeService) ensurePrivateLease(ctx context.Context, input AuthorizeSubsiteRequestInput, apiKey *APIKey, groupID int64) (*AccountLease, *Account, error) {
+	if s == nil || s.accountRepo == nil || s.leaseRepo == nil {
+		return nil, nil, nil
+	}
+	if groupID <= 0 || strings.TrimSpace(input.SubsiteID) == "" {
+		return nil, nil, nil
+	}
+	accounts, err := s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, input.Platform)
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	for i := range accounts {
+		account := &accounts[i]
+		if containsInt64(input.ExcludedAccountIDs, account.ID) {
+			continue
+		}
+		if !isPrivateLeaseCandidate(apiKey.User.ID, input.Platform, account) {
+			continue
+		}
+		lease := &AccountLease{
+			LeaseID:        "lease_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+			SubsiteID:      strings.TrimSpace(input.SubsiteID),
+			AccountID:      account.ID,
+			GroupID:        groupID,
+			Platform:       account.Platform,
+			Status:         AccountLeaseStatusActive,
+			MaxConcurrency: 0,
+			AssignedAt:     now,
+			ExpiresAt:      now.Add(30 * time.Minute),
+		}
+		if err := s.leaseRepo.Create(ctx, lease); err != nil {
+			if errors.Is(err, ErrAccountLeaseConflict) {
+				continue
+			}
+			return nil, nil, err
+		}
+		return lease, account, nil
+	}
+	return nil, nil, nil
+}
+
+func isPrivateLeaseCandidate(ownerUserID int64, requestedPlatform string, account *Account) bool {
+	if account == nil {
+		return false
+	}
+	if !account.IsSchedulable() {
+		return false
+	}
+	if ownerUserID <= 0 || account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+		return false
+	}
+	if NormalizeAccountShareMode(account.ShareMode) != AccountShareModePrivate {
+		return false
+	}
+	if requestedPlatform != "" && !strings.EqualFold(account.Platform, requestedPlatform) {
+		return false
+	}
+	return true
+}
+
+func containsStringTrimmed(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
 }
 
 type UsageIngestService struct {
 	billingRepo     UsageBillingRepository
 	reservationRepo QuotaReservationRepository
+	billingService  *BillingService
+	resolver        *ModelPricingResolver
+	apiKeyService   *APIKeyService
+	settingService  *SettingService
+	accountRepo     AccountRepository
 }
 
-func NewUsageIngestService(billingRepo UsageBillingRepository, reservationRepo QuotaReservationRepository) *UsageIngestService {
-	return &UsageIngestService{billingRepo: billingRepo, reservationRepo: reservationRepo}
+func NewUsageIngestService(
+	billingRepo UsageBillingRepository,
+	reservationRepo QuotaReservationRepository,
+	billingService *BillingService,
+	resolver *ModelPricingResolver,
+	apiKeyService *APIKeyService,
+	settingService *SettingService,
+	accountRepo AccountRepository,
+) *UsageIngestService {
+	return &UsageIngestService{
+		billingRepo:     billingRepo,
+		reservationRepo: reservationRepo,
+		billingService:  billingService,
+		resolver:        resolver,
+		apiKeyService:   apiKeyService,
+		settingService:  settingService,
+		accountRepo:     accountRepo,
+	}
 }
 
 func (s *UsageIngestService) Ingest(ctx context.Context, batch UsageIngestBatch) (*UsageIngestResult, error) {
 	if len(batch.Items) == 0 {
 		return nil, ErrSubsiteUsageBatchEmpty
 	}
-	result := &UsageIngestResult{Accepted: len(batch.Items)}
+	result := &UsageIngestResult{
+		Accepted: len(batch.Items),
+		Items:    make([]UsageIngestItemResult, 0, len(batch.Items)),
+	}
 	for i := range batch.Items {
 		item := batch.Items[i]
-		if strings.TrimSpace(item.RequestFingerprint) == "" {
-			return nil, ErrSubsiteUsagePayloadFingerprintMiss
+		itemResult := UsageIngestItemResult{
+			RequestID:     strings.TrimSpace(item.RequestID),
+			ReservationID: strings.TrimSpace(item.ReservationID),
 		}
-		reservation, err := s.reservationRepo.GetByReservationID(ctx, item.ReservationID)
+		applied, duplicate, err := s.ingestOne(ctx, strings.TrimSpace(batch.SubsiteID), item)
 		if err != nil {
-			return nil, err
+			itemResult.Error = infraerrors.Reason(err)
+			if itemResult.Error == "" {
+				itemResult.Error = infraerrors.Message(err)
+			}
+			result.Failed++
+			result.Items = append(result.Items, itemResult)
+			continue
 		}
-		if reservation.SubsiteID != strings.TrimSpace(batch.SubsiteID) ||
-			reservation.RequestID != strings.TrimSpace(item.RequestID) ||
-			reservation.APIKeyID != item.APIKeyID ||
-			reservation.AccountID != item.AccountID {
-			return nil, ErrSubsiteUsageReservationMismatch
-		}
-		cmd := usageIngestItemToBillingCommand(item)
-		applyResult, err := s.billingRepo.Apply(ctx, cmd)
-		if err != nil {
-			return nil, err
-		}
-		actualCost := cmd.BalanceCost
-		if cmd.SubscriptionCost > actualCost {
-			actualCost = cmd.SubscriptionCost
-		}
-		if err := s.reservationRepo.Settle(ctx, item.RequestID, actualCost); err != nil {
-			return nil, err
-		}
-		if applyResult != nil && applyResult.Applied {
+		itemResult.Applied = applied
+		itemResult.Duplicate = duplicate
+		if applied {
 			result.Applied++
-		} else {
+		} else if duplicate {
 			result.Duplicate++
 		}
+		result.Items = append(result.Items, itemResult)
 	}
 	return result, nil
 }
 
-func usageIngestItemToBillingCommand(item UsageIngestItem) *UsageBillingCommand {
+func (s *UsageIngestService) ingestOne(ctx context.Context, batchSubsiteID string, item UsageIngestItem) (bool, bool, error) {
+	if strings.TrimSpace(item.RequestFingerprint) == "" {
+		return false, false, ErrSubsiteUsagePayloadFingerprintMiss
+	}
+	reservation, err := s.reservationRepo.GetByReservationID(ctx, item.ReservationID)
+	if err != nil {
+		return false, false, err
+	}
+	if reservation.SubsiteID != batchSubsiteID ||
+		reservation.RequestID != strings.TrimSpace(item.RequestID) ||
+		reservation.APIKeyID != item.APIKeyID ||
+		reservation.UserID != item.UserID ||
+		reservation.AccountID != item.AccountID ||
+		reservation.BillingType != item.BillingType ||
+		!sameInt64Ptr(reservation.GroupID, item.GroupID) ||
+		!sameInt64Ptr(reservation.SubscriptionID, item.SubscriptionID) {
+		return false, false, ErrSubsiteUsageReservationMismatch
+	}
+	enriched, err := s.enrichUsageCosts(ctx, item, reservation)
+	if err != nil {
+		return false, false, err
+	}
+	cmd := usageIngestItemToBillingCommand(enriched, reservation)
+	alreadySettled, err := validateUsageReservation(reservation, cmd)
+	if err != nil {
+		return false, false, err
+	}
+	if alreadySettled {
+		return false, true, nil
+	}
+	applyResult, err := s.billingRepo.Apply(ctx, cmd)
+	if err != nil {
+		return false, false, err
+	}
+	if applyResult != nil && applyResult.Applied {
+		return true, false, nil
+	}
+	return false, true, nil
+}
+
+func (s *UsageIngestService) enrichUsageCosts(ctx context.Context, item UsageIngestItem, reservation *QuotaReservation) (UsageIngestItem, error) {
+	if reservation != nil {
+		item.RequestedModel = reservation.RequestedModel
+		item.Model = reservation.MappedModel
+		item.GroupID = reservation.GroupID
+		item.SubscriptionID = reservation.SubscriptionID
+		item.BillingType = reservation.BillingType
+	}
+	if s == nil || s.billingService == nil || s.apiKeyService == nil || s.accountRepo == nil {
+		return item, ErrQuotaReservationCostRequired
+	}
+	apiKey, err := s.apiKeyService.GetByID(ctx, item.APIKeyID)
+	if err != nil {
+		return item, err
+	}
+	if apiKey == nil || apiKey.User == nil {
+		return item, ErrSubsiteUsageReservationMismatch
+	}
+	account, err := s.accountRepo.GetByID(ctx, item.AccountID)
+	if err != nil {
+		return item, err
+	}
+	if account == nil {
+		return item, ErrSubsiteUsageReservationMismatch
+	}
+	billingModel := ""
+	if reservation != nil {
+		billingModel = strings.TrimSpace(reservation.MappedModel)
+	}
+	if billingModel == "" {
+		billingModel = strings.TrimSpace(item.Model)
+	}
+	if billingModel == "" {
+		billingModel = strings.TrimSpace(item.RequestedModel)
+	}
+	if billingModel == "" {
+		return item, ErrQuotaReservationCostRequired
+	}
+	item.Model = billingModel
+	if strings.TrimSpace(item.RequestedModel) == "" {
+		item.RequestedModel = billingModel
+	}
+	item.AccountType = account.Type
+	var groupID *int64
+	if reservation != nil {
+		groupID = reservation.GroupID
+	}
+	if groupID == nil {
+		groupID = apiKey.GroupID
+	}
+	multiplier := 1.0
+	if apiKey.Group != nil {
+		multiplier = apiKey.Group.RateMultiplier
+	}
+	if groupID != nil && s.apiKeyService.userGroupRateRepo != nil {
+		if userMultiplier, err := s.apiKeyService.userGroupRateRepo.GetByUserAndGroup(ctx, apiKey.User.ID, *groupID); err == nil && userMultiplier != nil {
+			multiplier = *userMultiplier
+		}
+	}
+	accountRateMultiplier := account.BillingRateMultiplier()
+	cost, err := s.billingService.CalculateCostUnified(CostInput{
+		Ctx:     ctx,
+		Model:   billingModel,
+		GroupID: groupID,
+		Tokens: UsageTokens{
+			InputTokens:           item.InputTokens,
+			OutputTokens:          item.OutputTokens,
+			CacheCreationTokens:   item.CacheCreationTokens,
+			CacheCreation5mTokens: item.CacheCreation5mTokens,
+			CacheCreation1hTokens: item.CacheCreation1hTokens,
+			CacheReadTokens:       item.CacheReadTokens,
+			ImageOutputTokens:     item.ImageOutputTokens,
+		},
+		RequestCount:   maxInt(1, item.ImageCount),
+		SizeTier:       strings.TrimSpace(item.ImageSize),
+		RateMultiplier: multiplier,
+		ServiceTier:    strings.TrimSpace(item.ServiceTier),
+		Resolver:       s.resolver,
+	})
+	if err != nil {
+		return item, err
+	}
+	if cost == nil {
+		return item, ErrQuotaReservationCostRequired
+	}
+	if item.BillingType == BillingTypeSubscription {
+		item.SubscriptionCost = cost.ActualCost
+	} else {
+		item.BalanceCost = cost.ActualCost
+	}
+	item.InputCost = cost.InputCost
+	item.OutputCost = cost.OutputCost
+	item.CacheCreationCost = cost.CacheCreationCost
+	item.CacheReadCost = cost.CacheReadCost
+	item.ImageOutputCost = cost.ImageOutputCost
+	item.TotalCost = cost.TotalCost
+	item.APIKeyQuotaCost = cost.ActualCost
+	item.APIKeyRateLimitCost = cost.ActualCost
+	item.RateMultiplier = multiplier
+	item.AccountRateMultiplier = accountRateMultiplier
+	item.AccountQuotaCost = cost.TotalCost * accountRateMultiplier
+	item.PrivateGroupCommissionCost = s.calculatePrivateGroupCommissionCost(ctx, apiKey, cost, item.BillingType)
+	item.costCalculatedByMaster = true
+	return item, nil
+}
+
+func (s *UsageIngestService) calculatePrivateGroupCommissionCost(ctx context.Context, apiKey *APIKey, cost *CostBreakdown, billingType int8) float64 {
+	if s == nil || s.settingService == nil || apiKey == nil || apiKey.Group == nil || cost == nil {
+		return 0
+	}
+	if billingType != BillingTypeSubscription || !apiKey.Group.IsUserPrivateScope() || cost.ActualCost <= 0 {
+		return 0
+	}
+	settings, err := s.settingService.GetAllSettings(ctx)
+	if err != nil || settings == nil {
+		return 0
+	}
+	rate := settings.UserPrivateGroupCommissionRate
+	if rate <= 0 {
+		return 0
+	}
+	if rate > 1 {
+		rate = 1
+	}
+	return cost.ActualCost * rate
+}
+
+func validateUsageReservation(reservation *QuotaReservation, cmd *UsageBillingCommand) (bool, error) {
+	if reservation == nil || cmd == nil {
+		return false, ErrSubsiteUsageReservationMismatch
+	}
+	if reservation.BillingType != cmd.BillingType {
+		return false, ErrSubsiteUsageReservationMismatch
+	}
+	cmd.QuotaReservationID = reservation.ReservationID
+	cmd.LeaseID = reservation.LeaseID
+	if strings.TrimSpace(reservation.RequestFingerprint) != "" &&
+		!strings.EqualFold(strings.TrimSpace(reservation.RequestFingerprint), strings.TrimSpace(cmd.RequestFingerprint)) {
+		return false, ErrSubsiteUsageReservationMismatch
+	}
+	if cmd.BillingType == BillingTypeBalance && cmd.SubscriptionCost > 0 {
+		return false, ErrSubsiteUsageReservationMismatch
+	}
+	if cmd.BillingType == BillingTypeSubscription && cmd.BalanceCost > 0 {
+		return false, ErrSubsiteUsageReservationMismatch
+	}
+	actualCost := cmd.BalanceCost
+	if cmd.SubscriptionCost > actualCost {
+		actualCost = cmd.SubscriptionCost
+	}
+	if actualCost < 0 || actualCost-reservation.EstimatedCost > 0.0000000001 {
+		return false, ErrSubsiteUsageCostExceedsReservation
+	}
+	if reservation.Status == QuotaReservationStatusSettled {
+		if reservation.ActualCost != nil && math.Abs(*reservation.ActualCost-actualCost) > 0.0000000001 {
+			return false, ErrSubsiteUsageReservationMismatch
+		}
+		return true, nil
+	}
+	if reservation.Status != QuotaReservationStatusReserved {
+		return false, ErrSubsiteUsageReservationNotActive
+	}
+	return false, nil
+}
+
+type SubsiteMaintenanceService struct {
+	subsiteRepo     SubsiteRepository
+	leaseRepo       AccountLeaseRepository
+	reservationRepo QuotaReservationRepository
+	interval        time.Duration
+	stopCh          chan struct{}
+	startOnce       sync.Once
+	stopOnce        sync.Once
+	wg              sync.WaitGroup
+}
+
+func NewSubsiteMaintenanceService(
+	subsiteRepo SubsiteRepository,
+	leaseRepo AccountLeaseRepository,
+	reservationRepo QuotaReservationRepository,
+) *SubsiteMaintenanceService {
+	return &SubsiteMaintenanceService{
+		subsiteRepo:     subsiteRepo,
+		leaseRepo:       leaseRepo,
+		reservationRepo: reservationRepo,
+		interval:        DefaultSubsiteMaintenanceInterval,
+		stopCh:          make(chan struct{}),
+	}
+}
+
+func (s *SubsiteMaintenanceService) Start() {
+	if s == nil || s.subsiteRepo == nil || s.leaseRepo == nil || s.reservationRepo == nil || s.interval <= 0 {
+		return
+	}
+	if s.stopCh == nil {
+		s.stopCh = make(chan struct{})
+	}
+	s.startOnce.Do(func() {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			ticker := time.NewTicker(s.interval)
+			defer ticker.Stop()
+
+			s.runOnce()
+			for {
+				select {
+				case <-ticker.C:
+					s.runOnce()
+				case <-s.stopCh:
+					return
+				}
+			}
+		}()
+	})
+}
+
+func (s *SubsiteMaintenanceService) Stop() {
+	if s == nil || s.stopCh == nil {
+		return
+	}
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
+	s.wg.Wait()
+}
+
+func (s *SubsiteMaintenanceService) runOnce() {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultSubsiteMaintenanceRunTimeout)
+	defer cancel()
+
+	result, err := s.RunOnce(ctx, SubsiteMaintenanceInput{})
+	if err != nil {
+		log.Printf("[SubsiteMaintenance] run failed: %v", err)
+		return
+	}
+	if result.ExpiredLeases > 0 || result.ExpiredReservations > 0 || result.UnhealthySubsites > 0 {
+		log.Printf(
+			"[SubsiteMaintenance] expired_leases=%d expired_reservations=%d unhealthy_subsites=%d",
+			result.ExpiredLeases,
+			result.ExpiredReservations,
+			result.UnhealthySubsites,
+		)
+	}
+}
+
+func (s *SubsiteMaintenanceService) RunOnce(ctx context.Context, input SubsiteMaintenanceInput) (*SubsiteMaintenanceResult, error) {
+	if s == nil || s.subsiteRepo == nil || s.leaseRepo == nil || s.reservationRepo == nil {
+		return nil, errors.New("subsite maintenance service dependencies are nil")
+	}
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	heartbeatTimeout := input.HeartbeatTimeout
+	if heartbeatTimeout <= 0 {
+		heartbeatTimeout = DefaultSubsiteHeartbeatTimeout
+	}
+	reservationExpiryGrace := input.ReservationExpiryGrace
+	if reservationExpiryGrace <= 0 {
+		reservationExpiryGrace = DefaultSubsiteReservationExpiryGrace
+	}
+	expiredLeases, err := s.leaseRepo.ExpireStale(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	expiredReservations, err := s.reservationRepo.ExpireStale(ctx, now.Add(-reservationExpiryGrace))
+	if err != nil {
+		return nil, err
+	}
+	unhealthySubsites, err := s.subsiteRepo.MarkHeartbeatTimeouts(ctx, now.Add(-heartbeatTimeout))
+	if err != nil {
+		return nil, err
+	}
+	return &SubsiteMaintenanceResult{
+		ExpiredLeases:              expiredLeases,
+		ExpiredReservations:        expiredReservations,
+		UnhealthySubsites:          unhealthySubsites,
+		HeartbeatTimeoutSecs:       int64(heartbeatTimeout.Seconds()),
+		ReservationExpiryGraceSecs: int64(reservationExpiryGrace.Seconds()),
+	}, nil
+}
+
+func usageIngestItemToBillingCommand(item UsageIngestItem, reservation *QuotaReservation) *UsageBillingCommand {
 	occurredAt := item.OccurredAt
 	if occurredAt.IsZero() {
 		occurredAt = time.Now()
 	}
+	item = ensureUsageIngestCostDefaults(item)
 	var serviceTier, reasoningEffort, inboundEndpoint, upstreamEndpoint, userAgent, ipAddress, mediaType *string
 	if strings.TrimSpace(item.ServiceTier) != "" {
 		serviceTier = stringPtr(strings.TrimSpace(item.ServiceTier))
@@ -915,61 +1798,81 @@ func usageIngestItemToBillingCommand(item UsageIngestItem) *UsageBillingCommand 
 		mediaType = stringPtr(strings.TrimSpace(item.MediaType))
 	}
 	usageLog := &UsageLog{
-		UserID:              item.UserID,
-		APIKeyID:            item.APIKeyID,
-		AccountID:           item.AccountID,
-		RequestID:           strings.TrimSpace(item.RequestID),
-		Model:               strings.TrimSpace(item.Model),
-		RequestedModel:      strings.TrimSpace(item.RequestedModel),
-		UpstreamModel:       item.UpstreamModel,
-		GroupID:             item.GroupID,
-		SubscriptionID:      item.SubscriptionID,
-		InputTokens:         item.InputTokens,
-		OutputTokens:        item.OutputTokens,
-		CacheCreationTokens: item.CacheCreationTokens,
-		CacheReadTokens:     item.CacheReadTokens,
-		TotalCost:           math.Max(item.BalanceCost, item.SubscriptionCost),
-		ActualCost:          math.Max(item.BalanceCost, item.SubscriptionCost),
-		BillingType:         item.BillingType,
-		RequestType:         RequestTypeFromInt16(item.RequestType),
-		Stream:              RequestTypeFromInt16(item.RequestType) == RequestTypeStream,
-		OpenAIWSMode:        RequestTypeFromInt16(item.RequestType) == RequestTypeWSV2,
-		UserAgent:           userAgent,
-		IPAddress:           ipAddress,
-		ImageCount:          item.ImageCount,
-		MediaType:           mediaType,
-		ServiceTier:         serviceTier,
-		ReasoningEffort:     reasoningEffort,
-		InboundEndpoint:     inboundEndpoint,
-		UpstreamEndpoint:    upstreamEndpoint,
-		CreatedAt:           occurredAt,
+		UserID:                item.UserID,
+		APIKeyID:              item.APIKeyID,
+		AccountID:             item.AccountID,
+		RequestID:             strings.TrimSpace(item.RequestID),
+		Model:                 strings.TrimSpace(item.Model),
+		RequestedModel:        strings.TrimSpace(item.RequestedModel),
+		UpstreamModel:         item.UpstreamModel,
+		GroupID:               item.GroupID,
+		SubscriptionID:        item.SubscriptionID,
+		InputTokens:           item.InputTokens,
+		OutputTokens:          item.OutputTokens,
+		CacheCreationTokens:   item.CacheCreationTokens,
+		CacheCreation5mTokens: item.CacheCreation5mTokens,
+		CacheCreation1hTokens: item.CacheCreation1hTokens,
+		CacheReadTokens:       item.CacheReadTokens,
+		ImageOutputTokens:     item.ImageOutputTokens,
+		ImageOutputCost:       item.ImageOutputCost,
+		InputCost:             item.InputCost,
+		OutputCost:            item.OutputCost,
+		CacheCreationCost:     item.CacheCreationCost,
+		CacheReadCost:         item.CacheReadCost,
+		TotalCost:             item.TotalCost,
+		ActualCost:            math.Max(item.BalanceCost, item.SubscriptionCost),
+		RateMultiplier:        item.RateMultiplier,
+		AccountRateMultiplier: &item.AccountRateMultiplier,
+		BillingType:           item.BillingType,
+		RequestType:           RequestTypeFromInt16(item.RequestType),
+		Stream:                RequestTypeFromInt16(item.RequestType) == RequestTypeStream,
+		OpenAIWSMode:          RequestTypeFromInt16(item.RequestType) == RequestTypeWSV2,
+		UserAgent:             userAgent,
+		IPAddress:             ipAddress,
+		ImageCount:            item.ImageCount,
+		ImageSize:             optionalStringPtr(strings.TrimSpace(item.ImageSize)),
+		MediaType:             mediaType,
+		ServiceTier:           serviceTier,
+		ReasoningEffort:       reasoningEffort,
+		InboundEndpoint:       inboundEndpoint,
+		UpstreamEndpoint:      upstreamEndpoint,
+		DurationMs:            item.DurationMs,
+		FirstTokenMs:          item.FirstTokenMs,
+		CreatedAt:             occurredAt,
 	}
 	usageLog.SyncRequestTypeAndLegacyFields()
 	cmd := &UsageBillingCommand{
-		RequestID:           strings.TrimSpace(item.RequestID),
-		APIKeyID:            item.APIKeyID,
-		RequestFingerprint:  strings.TrimSpace(item.RequestFingerprint),
-		RequestPayloadHash:  strings.TrimSpace(item.RequestPayloadHash),
-		UserID:              item.UserID,
-		AccountID:           item.AccountID,
-		GroupID:             item.GroupID,
-		SubscriptionID:      item.SubscriptionID,
-		AccountType:         strings.TrimSpace(item.AccountType),
-		Model:               strings.TrimSpace(item.Model),
-		BillingType:         item.BillingType,
-		InputTokens:         item.InputTokens,
-		OutputTokens:        item.OutputTokens,
-		CacheCreationTokens: item.CacheCreationTokens,
-		CacheReadTokens:     item.CacheReadTokens,
-		ImageCount:          item.ImageCount,
-		MediaType:           strings.TrimSpace(item.MediaType),
-		BalanceCost:         item.BalanceCost,
-		SubscriptionCost:    item.SubscriptionCost,
-		APIKeyQuotaCost:     item.APIKeyQuotaCost,
-		APIKeyRateLimitCost: item.APIKeyRateLimitCost,
-		AccountQuotaCost:    item.AccountQuotaCost,
-		UsageOccurredAt:     occurredAt,
-		UsageLog:            usageLog,
+		RequestID:                  strings.TrimSpace(item.RequestID),
+		APIKeyID:                   item.APIKeyID,
+		RequestFingerprint:         strings.TrimSpace(item.RequestFingerprint),
+		RequestPayloadHash:         strings.TrimSpace(item.RequestPayloadHash),
+		QuotaReservationID:         strings.TrimSpace(item.ReservationID),
+		UserID:                     item.UserID,
+		AccountID:                  item.AccountID,
+		GroupID:                    item.GroupID,
+		SubscriptionID:             item.SubscriptionID,
+		AccountType:                strings.TrimSpace(item.AccountType),
+		Model:                      strings.TrimSpace(item.Model),
+		BillingType:                item.BillingType,
+		InputTokens:                item.InputTokens,
+		OutputTokens:               item.OutputTokens,
+		CacheCreationTokens:        item.CacheCreationTokens,
+		CacheReadTokens:            item.CacheReadTokens,
+		ImageCount:                 item.ImageCount,
+		MediaType:                  strings.TrimSpace(item.MediaType),
+		BalanceCost:                item.BalanceCost,
+		SubscriptionCost:           item.SubscriptionCost,
+		PrivateGroupCommissionCost: item.PrivateGroupCommissionCost,
+		APIKeyQuotaCost:            item.APIKeyQuotaCost,
+		APIKeyRateLimitCost:        item.APIKeyRateLimitCost,
+		AccountQuotaCost:           item.AccountQuotaCost,
+		LeaseUsageRequests:         1,
+		LeaseUsageTokens:           usageIngestItemLeaseTokenCount(item),
+		UsageOccurredAt:            occurredAt,
+		UsageLog:                   usageLog,
+	}
+	if reservation != nil && reservation.ReservedTokens > 0 {
+		cmd.LeaseUsageTokens = minInt64(cmd.LeaseUsageTokens, reservation.ReservedTokens)
 	}
 	if serviceTier != nil {
 		cmd.ServiceTier = *serviceTier
@@ -979,6 +1882,61 @@ func usageIngestItemToBillingCommand(item UsageIngestItem) *UsageBillingCommand 
 	}
 	cmd.Normalize()
 	return cmd
+}
+
+func usageIngestItemLeaseTokenCount(item UsageIngestItem) int64 {
+	total := item.InputTokens +
+		item.OutputTokens +
+		item.CacheCreationTokens +
+		item.CacheCreation5mTokens +
+		item.CacheCreation1hTokens +
+		item.CacheReadTokens +
+		item.ImageOutputTokens
+	if total < 0 {
+		return 0
+	}
+	return int64(total)
+}
+
+func ensureUsageIngestCostDefaults(item UsageIngestItem) UsageIngestItem {
+	actualCost := math.Max(item.BalanceCost, item.SubscriptionCost)
+	componentTotal := item.InputCost + item.OutputCost + item.CacheCreationCost + item.CacheReadCost + item.ImageOutputCost
+	if item.TotalCost < 0 {
+		item.TotalCost = 0
+	}
+	if item.TotalCost == 0 {
+		if componentTotal > 0 {
+			item.TotalCost = componentTotal
+		} else {
+			item.TotalCost = actualCost
+		}
+	}
+	if item.RateMultiplier < 0 {
+		item.RateMultiplier = 0
+	}
+	if item.AccountRateMultiplier < 0 {
+		item.AccountRateMultiplier = 0
+	}
+	if item.AccountQuotaCost < 0 {
+		item.AccountQuotaCost = 0
+	}
+	if item.PrivateGroupCommissionCost < 0 {
+		item.PrivateGroupCommissionCost = 0
+	}
+	if item.costCalculatedByMaster {
+		return item
+	}
+	if item.RateMultiplier == 0 && actualCost > 0 {
+		item.RateMultiplier = 1
+	}
+	if item.AccountRateMultiplier == 0 {
+		if item.TotalCost > 0 && item.AccountQuotaCost > 0 {
+			item.AccountRateMultiplier = item.AccountQuotaCost / item.TotalCost
+		} else if item.AccountQuotaCost > 0 {
+			item.AccountRateMultiplier = 1
+		}
+	}
+	return item
 }
 
 func generateSubsiteSecret() (string, error) {
@@ -1051,6 +2009,27 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func sameInt64Ptr(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
 func stringPtr(v string) *string {
 	return &v
+}
+
+func optionalStringPtr(v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return stringPtr(strings.TrimSpace(v))
 }

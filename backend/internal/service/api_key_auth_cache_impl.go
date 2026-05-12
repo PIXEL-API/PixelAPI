@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 8 // v8: added API key group routes
+const apiKeyAuthSnapshotVersion = 9 // v9: preserve private-group fields in auth snapshot
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -250,6 +250,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Name:                            apiKey.Group.Name,
 			Platform:                        apiKey.Group.Platform,
 			Status:                          apiKey.Group.Status,
+			OwnerUserID:                     apiKey.Group.OwnerUserID,
+			Scope:                           apiKey.Group.Scope,
 			SubscriptionType:                apiKey.Group.SubscriptionType,
 			RateMultiplier:                  apiKey.Group.RateMultiplier,
 			DailyLimitUSD:                   apiKey.Group.DailyLimitUSD,
@@ -357,6 +359,8 @@ func groupAuthSnapshotFromService(group *Group) *APIKeyAuthGroupSnapshot {
 		Name:                            group.Name,
 		Platform:                        group.Platform,
 		Status:                          group.Status,
+		OwnerUserID:                     group.OwnerUserID,
+		Scope:                           group.Scope,
 		SubscriptionType:                group.SubscriptionType,
 		RateMultiplier:                  group.RateMultiplier,
 		DailyLimitUSD:                   group.DailyLimitUSD,
@@ -389,6 +393,8 @@ func groupFromAuthSnapshot(snapshot *APIKeyAuthGroupSnapshot) *Group {
 		Platform:                        snapshot.Platform,
 		Status:                          snapshot.Status,
 		Hydrated:                        true,
+		OwnerUserID:                     snapshot.OwnerUserID,
+		Scope:                           snapshot.Scope,
 		SubscriptionType:                snapshot.SubscriptionType,
 		RateMultiplier:                  snapshot.RateMultiplier,
 		DailyLimitUSD:                   snapshot.DailyLimitUSD,

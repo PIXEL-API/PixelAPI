@@ -96,7 +96,7 @@ export async function listWithEtag(
     },
     headers,
     signal: options?.signal,
-    validateStatus: (status) => (status >= 200 && status < 300) || status === 304
+    validateStatus: (status: number) => (status >= 200 && status < 300) || status === 304
   })
 
   const etagHeader = typeof response.headers?.etag === 'string' ? response.headers.etag : null

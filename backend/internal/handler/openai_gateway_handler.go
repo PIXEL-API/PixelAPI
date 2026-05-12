@@ -1271,6 +1271,25 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		firstMessage,
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
+	if previousResponseID != "" && sessionHash != "" {
+		repairedFirstMessage, repairedPreviousResponseID, repaired := h.gatewayService.RepairOpenAIWSPreviousResponseIDForSession(
+			ctx,
+			apiKeyGroupIDValue(apiKey),
+			sessionHash,
+			firstMessage,
+			true,
+		)
+		if repaired {
+			firstMessage = repairedFirstMessage
+			previousResponseID = repairedPreviousResponseID
+			previousResponseIDKind = service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
+			reqLog = reqLog.With(
+				zap.String("previous_response_id_kind", previousResponseIDKind),
+				zap.Bool("previous_response_id_repaired", true),
+			)
+			setOpsRequestContext(c, reqModel, true, firstMessage)
+		}
+	}
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
 	var currentAPIKey *service.APIKey

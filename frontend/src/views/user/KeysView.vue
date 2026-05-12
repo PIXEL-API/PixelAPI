@@ -34,7 +34,7 @@
       <template #actions>
         <div class="flex justify-end gap-3">
         <button
-          @click="loadApiKeys"
+          @click="refreshKeyPageData"
           :disabled="loading"
           class="btn btn-secondary"
           :title="t('common.refresh')"
@@ -1618,6 +1618,10 @@ const handlePageSizeChange = (pageSize: number) => {
   pagination.value.page_size = pageSize
   pagination.value.page = 1
   loadApiKeys()
+}
+
+const refreshKeyPageData = async () => {
+  await Promise.all([loadApiKeys(), loadGroups(), loadUserGroupRates()])
 }
 
 const handleSort = (key: string, order: 'asc' | 'desc') => {

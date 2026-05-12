@@ -246,8 +246,8 @@ export async function getGroupRPMOverrides(id: number): Promise<GroupRPMOverride
     `/admin/groups/${id}/rate-multipliers`
   )
   return data
-    .filter(e => e.rpm_override != null)
-    .map(e => ({
+    .filter((e: GroupRateMultiplierEntry) => e.rpm_override != null)
+    .map((e: GroupRateMultiplierEntry) => ({
       user_id: e.user_id,
       user_name: e.user_name,
       user_email: e.user_email,

@@ -287,6 +287,118 @@ func TestUsageBillingRepositoryApply_EnqueuesSchedulerOutboxOnQuotaCrossing(t *t
 	})
 }
 
+func TestUsageBillingRepositoryApply_SettlesQuotaReservation(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewUsageBillingRepository(client, integrationDB)
+
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("usage-billing-resv-user-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      100,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name:             "usage-billing-resv-group-" + uuid.NewString(),
+		Platform:         service.PlatformOpenAI,
+		SubscriptionType: service.SubscriptionTypeStandard,
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name:        "usage-billing-resv-account-" + uuid.NewString(),
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+	})
+	mustBindAccountToGroup(t, client, account.ID, group.ID, 0)
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID:  user.ID,
+		GroupID: &group.ID,
+		Key:     "sk-usage-billing-resv-" + uuid.NewString(),
+		Name:    "billing-resv",
+	})
+
+	now := time.Now().UTC()
+	subsiteID := "usage-billing-resv-site-" + uuid.NewString()
+	publicURL := "http://127.0.0.1:19/" + subsiteID
+	leaseID := "lease_usage_billing_resv_" + uuid.NewString()
+	reservationID := "qres_usage_billing_" + uuid.NewString()
+	requestID := "subreq_usage_billing_" + uuid.NewString()
+
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), "DELETE FROM subsites WHERE subsite_id = $1", subsiteID)
+	})
+
+	_, err := integrationDB.ExecContext(ctx, `
+		INSERT INTO subsites (
+			subsite_id, name, public_url, region, capabilities, status,
+			secret_hash, secret_ciphertext, max_qps, max_concurrency,
+			version, health_score, metadata
+		)
+		VALUES (
+			$1, 'Usage Billing Reservation Subsite', $2, 'local', '[]'::jsonb, 'active',
+			'hash', 'ciphertext', 10, 1, 'test', 100, '{}'::jsonb
+		)
+	`, subsiteID, publicURL)
+	require.NoError(t, err)
+
+	_, err = integrationDB.ExecContext(ctx, `
+		INSERT INTO account_leases (
+			lease_id, subsite_id, account_id, group_id, platform, status, max_concurrency,
+			max_requests, max_tokens, assigned_at, expires_at
+		)
+		VALUES ($1, $2, $3, $4, 'openai', 'active', 1, 0, 0, $5, $6)
+	`, leaseID, subsiteID, account.ID, group.ID, now, now.Add(time.Hour))
+	require.NoError(t, err)
+
+	_, err = integrationDB.ExecContext(ctx, `
+		INSERT INTO quota_reservations (
+			reservation_id, request_id, subsite_id, lease_id, account_id,
+			api_key_id, user_id, group_id, subscription_id, platform,
+			requested_model, mapped_model, estimated_cost, reserved_requests,
+			reserved_tokens, active_request_units, billing_type, status,
+			request_fingerprint, expires_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, NULL, $9,
+			$10, $11, $12, $13,
+			$14, $15, $16, $17,
+			$18, $19
+		)
+	`,
+		reservationID, requestID, subsiteID, leaseID, account.ID,
+		apiKey.ID, user.ID, group.ID, service.PlatformOpenAI,
+		"gpt-5.4", "gpt-5.4", 2.5, 1,
+		1024, 1, service.BillingTypeBalance, service.QuotaReservationStatusReserved,
+		"fp-"+uuid.NewString(), now.Add(10*time.Minute),
+	)
+	require.NoError(t, err)
+
+	result, err := repo.Apply(ctx, &service.UsageBillingCommand{
+		RequestID:           requestID,
+		APIKeyID:            apiKey.ID,
+		UserID:              user.ID,
+		AccountID:           account.ID,
+		AccountType:         service.AccountTypeAPIKey,
+		BalanceCost:         1.75,
+		QuotaReservationID:  reservationID,
+		RequestFingerprint:  strings.Repeat("a", 64),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Applied)
+
+	var status string
+	var actualCost float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT status, actual_cost::double precision
+		FROM quota_reservations
+		WHERE reservation_id = $1
+	`, reservationID).Scan(&status, &actualCost))
+	require.Equal(t, service.QuotaReservationStatusSettled, status)
+	require.InDelta(t, 1.75, actualCost, 0.000001)
+}
+
 func TestDashboardAggregationRepositoryCleanupUsageBillingDedup_BatchDeletesOldRows(t *testing.T) {
 	ctx := context.Background()
 	repo := newDashboardAggregationRepositoryWithSQL(integrationDB)

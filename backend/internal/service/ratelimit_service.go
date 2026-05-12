@@ -43,6 +43,8 @@ type AccountRecoveryOptions struct {
 	InvalidateToken bool
 }
 
+const TokenRefreshTempUnschedDuration = 10 * time.Minute
+
 type geminiUsageCacheEntry struct {
 	windowStart time.Time
 	cachedAt    time.Time
@@ -1426,6 +1428,29 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	if err := s.accountRepo.ClearModelRateLimits(ctx, accountID); err != nil {
 		slog.Warn("clear_model_rate_limits_on_temp_unsched_reset_failed", "account_id", accountID, "error", err)
 	}
+	return nil
+}
+
+func (s *RateLimitService) SetTempUnschedulable(ctx context.Context, account *Account, until time.Time, reason string) error {
+	if account == nil {
+		return nil
+	}
+
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		return err
+	}
+
+	if s.tempUnschedCache != nil {
+		state := &TempUnschedState{
+			UntilUnix:       until.Unix(),
+			TriggeredAtUnix: time.Now().Unix(),
+			ErrorMessage:    reason,
+		}
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
+			slog.Warn("temp_unsched_cache_set_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
 	return nil
 }
 

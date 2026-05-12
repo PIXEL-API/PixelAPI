@@ -633,8 +633,9 @@ func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_OpenAIRequire
 
 	accounts, err := s.repo.ListSchedulableByGroupIDAndPlatform(s.ctx, group.ID, service.PlatformOpenAI)
 	s.Require().NoError(err)
-	s.Require().Len(accounts, 1)
+	s.Require().Len(accounts, 2)
 	s.Require().Equal(plusAcc.ID, accounts[0].ID)
+	s.Require().Equal(proAcc.ID, accounts[1].ID)
 }
 
 func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_RequiredAccountLevelIgnoredForNonOpenAI() {
@@ -1052,6 +1053,24 @@ func (s *AccountRepoSuite) TestBulkUpdate_MergeExtra() {
 	got, _ := s.repo.GetByID(s.ctx, a1.ID)
 	s.Require().Equal("val", got.Extra["existing"])
 	s.Require().Equal("new_val", got.Extra["new_key"])
+}
+
+func (s *AccountRepoSuite) TestBulkUpdate_ClearLoadFactor() {
+	loadFactor := 9
+	a1 := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "bulk-clear-load-factor",
+		Concurrency: 3,
+		LoadFactor:  &loadFactor,
+	})
+
+	clearLoadFactor := 0
+	_, err := s.repo.BulkUpdate(s.ctx, []int64{a1.ID}, service.AccountBulkUpdate{
+		LoadFactor: &clearLoadFactor,
+	})
+	s.Require().NoError(err)
+
+	got, _ := s.repo.GetByID(s.ctx, a1.ID)
+	s.Require().Nil(got.LoadFactor)
 }
 
 func (s *AccountRepoSuite) TestBulkUpdate_EmptyIDs() {

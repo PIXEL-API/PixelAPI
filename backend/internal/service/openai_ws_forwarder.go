@@ -731,6 +731,19 @@ func logOpenAIWSBindResponseAccountWarn(groupID, accountID int64, responseID str
 	)
 }
 
+func logOpenAIWSBindSessionResponseWarn(groupID int64, sessionHash, responseID string, err error) {
+	if err == nil {
+		return
+	}
+	logger.L().Warn(
+		"openai.ws_bind_session_response_failed",
+		zap.Int64("group_id", groupID),
+		zap.String("session_hash", truncateOpenAIWSLogValue(sessionHash, 12)),
+		zap.String("response_id", truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)),
+		zap.Error(err),
+	)
+}
+
 func summarizeOpenAIWSReadCloseError(err error) (status string, reason string) {
 	if err == nil {
 		return "-", "-"
@@ -1418,6 +1431,186 @@ func alignStoreDisabledPreviousResponseID(
 		return payload, false, setErr
 	}
 	return updated, true, nil
+}
+
+func shouldProtectOpenAIWSFunctionCallOutputPayload(payload []byte) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	if !gjson.GetBytes(payload, `input.#(type=="function_call_output")`).Exists() {
+		return false
+	}
+	var reqBody map[string]any
+	if err := json.Unmarshal(payload, &reqBody); err != nil {
+		return true
+	}
+	return AnalyzeToolContinuationSignals(reqBody).HasFunctionCallOutput
+}
+
+func openAIWSPreviousResponseIDBelongsToSession(ctx context.Context, stateStore OpenAIWSStateStore, groupID int64, sessionHash, previousResponseID string) bool {
+	if stateStore == nil {
+		return false
+	}
+	session := strings.TrimSpace(sessionHash)
+	prev := strings.TrimSpace(previousResponseID)
+	if session == "" || prev == "" {
+		return false
+	}
+	ownerSession, err := stateStore.GetResponseSession(ctx, groupID, prev)
+	return err == nil && strings.TrimSpace(ownerSession) == session
+}
+
+func resolveOpenAIWSLatestResponseForRepair(
+	ctx context.Context,
+	stateStore OpenAIWSStateStore,
+	groupID int64,
+	sessionHash string,
+	previousResponseID string,
+	allowPreviousOwnerSession bool,
+) (string, string) {
+	if stateStore == nil {
+		return "", strings.TrimSpace(sessionHash)
+	}
+	repairSessionHash := strings.TrimSpace(sessionHash)
+	if repairSessionHash != "" {
+		if latestResponseID, err := stateStore.GetSessionLatestResponse(ctx, groupID, repairSessionHash); err == nil && strings.TrimSpace(latestResponseID) != "" {
+			return strings.TrimSpace(latestResponseID), repairSessionHash
+		}
+	}
+	if !allowPreviousOwnerSession {
+		return "", repairSessionHash
+	}
+	ownerSessionHash, err := stateStore.GetResponseSession(ctx, groupID, previousResponseID)
+	if err != nil || strings.TrimSpace(ownerSessionHash) == "" {
+		return "", repairSessionHash
+	}
+	repairSessionHash = strings.TrimSpace(ownerSessionHash)
+	latestResponseID, latestErr := stateStore.GetSessionLatestResponse(ctx, groupID, repairSessionHash)
+	if latestErr != nil || strings.TrimSpace(latestResponseID) == "" {
+		return "", repairSessionHash
+	}
+	return strings.TrimSpace(latestResponseID), repairSessionHash
+}
+
+func repairOpenAIWSPreviousResponseIDForSession(
+	ctx context.Context,
+	stateStore OpenAIWSStateStore,
+	groupID int64,
+	sessionHash string,
+	payload []byte,
+	expectedPreviousResponseID string,
+	logPrefix string,
+	accountID int64,
+	turn int,
+	connID string,
+) ([]byte, string, bool) {
+	currentPreviousResponseID := strings.TrimSpace(openAIWSPayloadStringFromRaw(payload, "previous_response_id"))
+	expected := strings.TrimSpace(expectedPreviousResponseID)
+	if currentPreviousResponseID == "" || expected == "" || currentPreviousResponseID == expected {
+		return payload, currentPreviousResponseID, false
+	}
+	if shouldProtectOpenAIWSFunctionCallOutputPayload(payload) {
+		logOpenAIWSModeInfo(
+			"%s account_id=%d turn=%d conn_id=%s action=skip reason=function_call_output previous_response_id=%s expected_previous_response_id=%s session_hash=%s",
+			logPrefix,
+			accountID,
+			turn,
+			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(expected, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(sessionHash, 12),
+		)
+		return payload, currentPreviousResponseID, false
+	}
+
+	if !openAIWSPreviousResponseIDBelongsToSession(ctx, stateStore, groupID, sessionHash, currentPreviousResponseID) {
+		logOpenAIWSModeInfo(
+			"%s account_id=%d turn=%d conn_id=%s action=skip reason=response_not_bound_to_session previous_response_id=%s expected_previous_response_id=%s session_hash=%s",
+			logPrefix,
+			accountID,
+			turn,
+			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(expected, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(sessionHash, 12),
+		)
+		return payload, currentPreviousResponseID, false
+	}
+
+	updatedPayload, changed, err := alignStoreDisabledPreviousResponseID(payload, expected)
+	if err != nil || !changed {
+		reason := "not_changed"
+		if err != nil {
+			reason = "set_previous_response_id_error"
+		}
+		logOpenAIWSModeInfo(
+			"%s account_id=%d turn=%d conn_id=%s action=skip reason=%s previous_response_id=%s expected_previous_response_id=%s session_hash=%s cause=%s",
+			logPrefix,
+			accountID,
+			turn,
+			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+			normalizeOpenAIWSLogValue(reason),
+			truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(expected, openAIWSIDValueMaxLen),
+			truncateOpenAIWSLogValue(sessionHash, 12),
+			func() string {
+				if err == nil {
+					return ""
+				}
+				return truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen)
+			}(),
+		)
+		return payload, currentPreviousResponseID, false
+	}
+
+	logOpenAIWSModeInfo(
+		"%s account_id=%d turn=%d conn_id=%s action=repair previous_response_id=%s repaired_previous_response_id=%s session_hash=%s",
+		logPrefix,
+		accountID,
+		turn,
+		truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+		truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+		truncateOpenAIWSLogValue(expected, openAIWSIDValueMaxLen),
+		truncateOpenAIWSLogValue(sessionHash, 12),
+	)
+	return updatedPayload, expected, true
+}
+
+func (s *OpenAIGatewayService) RepairOpenAIWSPreviousResponseIDForSession(
+	ctx context.Context,
+	groupID int64,
+	sessionHash string,
+	payload []byte,
+	allowPreviousOwnerSession bool,
+) ([]byte, string, bool) {
+	stateStore := s.getOpenAIWSStateStore()
+	if stateStore == nil {
+		return payload, strings.TrimSpace(openAIWSPayloadStringFromRaw(payload, "previous_response_id")), false
+	}
+	previousResponseID := strings.TrimSpace(openAIWSPayloadStringFromRaw(payload, "previous_response_id"))
+	latestResponseID, repairSessionHash := resolveOpenAIWSLatestResponseForRepair(
+		ctx,
+		stateStore,
+		groupID,
+		sessionHash,
+		previousResponseID,
+		allowPreviousOwnerSession,
+	)
+	if latestResponseID == "" {
+		return payload, strings.TrimSpace(openAIWSPayloadStringFromRaw(payload, "previous_response_id")), false
+	}
+	return repairOpenAIWSPreviousResponseIDForSession(
+		ctx,
+		stateStore,
+		groupID,
+		repairSessionHash,
+		payload,
+		latestResponseID,
+		"ingress_ws_initial_chain_repair",
+		0,
+		1,
+		"",
+	)
 }
 
 func cloneOpenAIWSPayloadBytes(payload []byte) []byte {
@@ -2321,6 +2514,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		ttl := s.openAIWSResponseStickyTTL()
 		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 		stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
+		if sessionHash != "" {
+			logOpenAIWSBindSessionResponseWarn(groupID, sessionHash, responseID, stateStore.BindSessionResponse(ctx, groupID, sessionHash, responseID, ttl))
+		}
 	}
 	if stateStore != nil && storeDisabled && sessionHash != "" {
 		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
@@ -2624,6 +2820,30 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if stateStore != nil && firstPayload.previousResponseID != "" {
 		if connID, ok := stateStore.GetResponseConn(firstPayload.previousResponseID); ok {
 			preferredConnID = connID
+		}
+	}
+	if stateStore != nil && firstPayload.previousResponseID != "" {
+		if latestResponseID, repairSessionHash := resolveOpenAIWSLatestResponseForRepair(ctx, stateStore, groupID, sessionHash, firstPayload.previousResponseID, true); latestResponseID != "" {
+			repairedPayload, repairedPreviousResponseID, repaired := repairOpenAIWSPreviousResponseIDForSession(
+				ctx,
+				stateStore,
+				groupID,
+				repairSessionHash,
+				firstPayload.payloadRaw,
+				latestResponseID,
+				"ingress_ws_first_turn_chain_repair",
+				account.ID,
+				1,
+				preferredConnID,
+			)
+			if repaired {
+				firstPayload.payloadRaw = repairedPayload
+				firstPayload.previousResponseID = repairedPreviousResponseID
+				firstPayload.payloadBytes = len(repairedPayload)
+				if connID, ok := stateStore.GetResponseConn(firstPayload.previousResponseID); ok {
+					preferredConnID = connID
+				}
+			}
 		}
 	}
 
@@ -3225,6 +3445,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		hasFunctionCallOutput := toolSignals.HasFunctionCallOutput
+		if stateStore != nil && sessionHash != "" && currentPreviousResponseID != "" && expectedPrev != "" && currentPreviousResponseID != expectedPrev && !hasFunctionCallOutput {
+			repairedPayload, repairedPreviousResponseID, repaired := repairOpenAIWSPreviousResponseIDForSession(
+				ctx,
+				stateStore,
+				groupID,
+				sessionHash,
+				currentPayload,
+				expectedPrev,
+				"ingress_ws_turn_chain_repair",
+				account.ID,
+				turn,
+				sessionConnID,
+			)
+			if repaired {
+				currentPayload = repairedPayload
+				currentPayloadBytes = len(repairedPayload)
+				currentPreviousResponseID = repairedPreviousResponseID
+			}
+		}
 		// store=false + function_call_output 场景必须有续链锚点。
 		// 若客户端未传 previous_response_id，优先回填上一轮响应 ID，避免上游报 call_id 无法关联。
 		if shouldInferIngressFunctionCallOutputPreviousResponseID(
@@ -3534,6 +3773,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			ttl := s.openAIWSResponseStickyTTL()
 			logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 			stateStore.BindResponseConn(responseID, connID, ttl)
+			if sessionHash != "" {
+				logOpenAIWSBindSessionResponseWarn(groupID, sessionHash, responseID, stateStore.BindSessionResponse(ctx, groupID, sessionHash, responseID, ttl))
+			}
 		}
 		if stateStore != nil && storeDisabled && sessionHash != "" {
 			stateStore.BindSessionConn(groupID, sessionHash, connID, s.openAIWSSessionStickyTTL())
@@ -3570,6 +3812,26 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		if nextPayload.previousResponseID != "" {
 			expectedPrev := strings.TrimSpace(lastTurnResponseID)
+			if stateStore != nil && sessionHash != "" && expectedPrev != "" && nextPayload.previousResponseID != expectedPrev {
+				repairedPayload, repairedPreviousResponseID, repaired := repairOpenAIWSPreviousResponseIDForSession(
+					ctx,
+					stateStore,
+					groupID,
+					sessionHash,
+					nextPayload.payloadRaw,
+					expectedPrev,
+					"ingress_ws_next_turn_chain_repair",
+					account.ID,
+					turn+1,
+					connID,
+				)
+				if repaired {
+					nextPayload.payloadRaw = repairedPayload
+					nextPayload.previousResponseID = repairedPreviousResponseID
+					nextPayload.payloadBytes = len(repairedPayload)
+				}
+			}
+			expectedPrev = strings.TrimSpace(lastTurnResponseID)
 			chainedFromLast := expectedPrev != "" && nextPayload.previousResponseID == expectedPrev
 			nextPreviousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(nextPayload.previousResponseID)
 			logOpenAIWSModeInfo(

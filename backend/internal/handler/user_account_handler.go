@@ -14,6 +14,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -117,6 +118,9 @@ type bulkDeleteUserAccountsRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
 
+const userOwnedDefaultConcurrency = 3
+const userOwnedDefaultPriority = 1
+
 type userOAuthProxyRequest struct {
 	ProxyID *int64 `json:"proxy_id"`
 }
@@ -169,6 +173,12 @@ type userAntigravityExchangeCodeRequest struct {
 
 type userBatchTodayStatsRequest struct {
 	AccountIDs []int64 `json:"account_ids" binding:"required"`
+}
+
+type userTestAccountRequest struct {
+	ModelID string `json:"model_id"`
+	Prompt  string `json:"prompt"`
+	Mode    string `json:"mode"`
 }
 
 const userPublicShareValidationTimeout = 30 * time.Second
@@ -429,6 +439,41 @@ func (h *UserAccountHandler) GetUsage(c *gin.Context) {
 	response.Success(c, usage)
 }
 
+func (h *UserAccountHandler) GetStats(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	days := 30
+	if daysStr := c.Query("days"); daysStr != "" {
+		if parsedDays, err := strconv.Atoi(daysStr); err == nil && parsedDays > 0 && parsedDays <= 90 {
+			days = parsedDays
+		}
+	}
+
+	now := timezone.Now()
+	endTime := timezone.StartOfDay(now.AddDate(0, 0, 1))
+	startTime := timezone.StartOfDay(now.AddDate(0, 0, -days+1))
+
+	stats, err := h.accountUsageService.GetAccountUsageStats(c.Request.Context(), accountID, startTime, endTime)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, stats)
+}
+
 func (h *UserAccountHandler) GetTodayStats(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -503,10 +548,10 @@ func (h *UserAccountHandler) Create(c *gin.Context) {
 		return
 	}
 	if req.Concurrency <= 0 {
-		req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+		req.Concurrency = userOwnedDefaultConcurrency
 	}
 	if req.Priority <= 0 {
-		req.Priority = 50
+		req.Priority = userOwnedDefaultPriority
 	}
 
 	executeUserIdempotentJSON(c, "user.accounts.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
@@ -553,10 +598,10 @@ func (h *UserAccountHandler) Import(c *gin.Context) {
 		return
 	}
 	if req.Concurrency <= 0 {
-		req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+		req.Concurrency = userOwnedDefaultConcurrency
 	}
 	if req.Priority <= 0 {
-		req.Priority = 50
+		req.Priority = userOwnedDefaultPriority
 	}
 
 	executeUserIdempotentJSON(c, "user.accounts.import", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
@@ -601,7 +646,10 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		return
 	}
 	if req.Priority <= 0 {
-		req.Priority = 50
+		req.Priority = userOwnedDefaultPriority
+	}
+	if req.Concurrency <= 0 {
+		req.Concurrency = userOwnedDefaultConcurrency
 	}
 
 	sources, parseErrors := service.ParseAccountCredentialImportContents(req.Contents)
@@ -664,7 +712,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		AutoPauseOnExpired: defaults.AutoPauseOnExpired,
 	}
 	if req.Concurrency <= 0 {
-		req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+		req.Concurrency = userOwnedDefaultConcurrency
 	}
 
 	switch source.Kind {
@@ -681,7 +729,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		req.Credentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 		req.Extra = service.BuildOpenAIAccountCredentialImportExtra(tokenInfo)
 		if defaults.Concurrency <= 0 {
-			req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+			req.Concurrency = userOwnedDefaultConcurrency
 		}
 		if req.Name == "" {
 			req.Name = strings.TrimSpace(tokenInfo.Email)
@@ -702,7 +750,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		req.Credentials = service.BuildClaudeAccountCredentials(tokenInfo)
 		req.Extra = service.BuildClaudeAccountCredentialImportExtra(tokenInfo)
 		if defaults.Concurrency <= 0 {
-			req.Concurrency = service.DefaultOAuthAccountConcurrencyForPlatform(req.Platform)
+			req.Concurrency = userOwnedDefaultConcurrency
 		}
 		if req.Name == "" {
 			req.Name = strings.TrimSpace(tokenInfo.EmailAddress)
@@ -772,6 +820,34 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
+	}
+	response.Success(c, dto.AccountFromService(account))
+}
+
+func (h *UserAccountHandler) RevalidatePublicShare(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if service.NormalizeAccountShareMode(account.ShareMode) != service.AccountShareModePublic {
+		response.BadRequest(c, "Only public shared accounts can be revalidated")
+		return
+	}
+	account, err = h.activateOwnedPublicShareIfRequested(c.Request.Context(), subject.UserID, account)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
 	}
 	response.Success(c, dto.AccountFromService(account))
 }
@@ -913,6 +989,235 @@ func (h *UserAccountHandler) BulkDelete(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+func (h *UserAccountHandler) Test(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	var req userTestAccountRequest
+	_ = c.ShouldBindJSON(&req)
+
+	if err := h.accountTestService.TestAccountConnection(c, accountID, req.ModelID, req.Prompt, req.Mode); err != nil {
+		return
+	}
+}
+
+func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserID int64, account *service.Account) (*service.Account, string, error) {
+	if account == nil {
+		return nil, "", service.ErrAccountNotFound
+	}
+	if !account.IsOAuth() {
+		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
+	}
+
+	var newCredentials map[string]any
+	switch {
+	case account.IsOpenAI():
+		tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", err
+		}
+		newCredentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
+		for k, v := range account.Credentials {
+			if _, exists := newCredentials[k]; !exists {
+				newCredentials[k] = v
+			}
+		}
+	case account.Platform == service.PlatformGemini:
+		tokenInfo, err := h.geminiOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to refresh credentials: %w", err)
+		}
+		newCredentials = h.geminiOAuthService.BuildAccountCredentials(tokenInfo)
+		for k, v := range account.Credentials {
+			if _, exists := newCredentials[k]; !exists {
+				newCredentials[k] = v
+			}
+		}
+	case account.Platform == service.PlatformAntigravity:
+		tokenInfo, err := h.antigravityOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", err
+		}
+		newCredentials = h.antigravityOAuthService.BuildAccountCredentials(tokenInfo)
+		for k, v := range account.Credentials {
+			if _, exists := newCredentials[k]; !exists {
+				newCredentials[k] = v
+			}
+		}
+		if newProjectID, _ := newCredentials["project_id"].(string); newProjectID == "" {
+			if oldProjectID := strings.TrimSpace(account.GetCredential("project_id")); oldProjectID != "" {
+				newCredentials["project_id"] = oldProjectID
+			}
+		}
+		if tokenInfo.ProjectIDMissing {
+			updatedAccount, updateErr := h.accountService.UpdateOwned(ctx, ownerUserID, account.ID, service.UpdateAccountRequest{
+				Credentials: &newCredentials,
+			})
+			if updateErr != nil {
+				return nil, "", fmt.Errorf("failed to update credentials: %w", updateErr)
+			}
+			_, _ = h.setOwnedAccountPrivacy(ctx, ownerUserID, updatedAccount)
+			return updatedAccount, "missing_project_id_temporary", nil
+		}
+	default:
+		tokenInfo, err := h.oauthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", err
+		}
+		newCredentials = make(map[string]any)
+		for k, v := range account.Credentials {
+			newCredentials[k] = v
+		}
+		newCredentials["access_token"] = tokenInfo.AccessToken
+		newCredentials["token_type"] = tokenInfo.TokenType
+		newCredentials["expires_in"] = strconv.FormatInt(tokenInfo.ExpiresIn, 10)
+		newCredentials["expires_at"] = strconv.FormatInt(tokenInfo.ExpiresAt, 10)
+		if strings.TrimSpace(tokenInfo.RefreshToken) != "" {
+			newCredentials["refresh_token"] = tokenInfo.RefreshToken
+		}
+		if strings.TrimSpace(tokenInfo.Scope) != "" {
+			newCredentials["scope"] = tokenInfo.Scope
+		}
+	}
+
+	updatedAccount, err := h.accountService.UpdateOwned(ctx, ownerUserID, account.ID, service.UpdateAccountRequest{
+		Credentials: &newCredentials,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	_, _ = h.setOwnedAccountPrivacy(ctx, ownerUserID, updatedAccount)
+	return updatedAccount, "", nil
+}
+
+func (h *UserAccountHandler) Refresh(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	updatedAccount, warning, err := h.refreshOwnedAccount(c.Request.Context(), subject.UserID, account)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if warning == "missing_project_id_temporary" {
+		response.Success(c, gin.H{
+			"account": dto.AccountFromService(updatedAccount),
+			"message": "Token refreshed successfully, but project_id could not be retrieved (will retry automatically)",
+			"warning": "missing_project_id_temporary",
+		})
+		return
+	}
+	response.Success(c, dto.AccountFromService(updatedAccount))
+}
+
+func (h *UserAccountHandler) setOwnedAccountPrivacy(ctx context.Context, ownerUserID int64, account *service.Account) (string, error) {
+	if account == nil {
+		return "", service.ErrAccountNotFound
+	}
+	if account.Type != service.AccountTypeOAuth {
+		return "", infraerrors.BadRequest("PRIVACY_UNSUPPORTED", "Only OAuth accounts support privacy setting")
+	}
+	if account.ProxyID != nil {
+		return "", infraerrors.BadRequest("PROXY_NOT_ALLOWED", "proxy is not allowed for user accounts")
+	}
+
+	mode := ""
+	switch account.Platform {
+	case service.PlatformOpenAI:
+		if h.openaiOAuthService == nil || h.openaiOAuthService.PrivacyClientFactory() == nil {
+			return "", infraerrors.BadRequest("PRIVACY_UNAVAILABLE", "privacy client is unavailable")
+		}
+		token, _ := account.Credentials["access_token"].(string)
+		if token == "" {
+			return "", infraerrors.BadRequest("PRIVACY_TOKEN_MISSING", "Cannot set privacy: missing access_token")
+		}
+		mode = service.DisableOpenAITraining(ctx, h.openaiOAuthService.PrivacyClientFactory(), token, "")
+	case service.PlatformAntigravity:
+		token, _ := account.Credentials["access_token"].(string)
+		if token == "" {
+			return "", infraerrors.BadRequest("PRIVACY_TOKEN_MISSING", "Cannot set privacy: missing access_token")
+		}
+		projectID, _ := account.Credentials["project_id"].(string)
+		mode = service.SetAntigravityPrivacy(ctx, token, projectID, "")
+	default:
+		return "", infraerrors.BadRequest("PRIVACY_UNSUPPORTED", "Only OpenAI and Antigravity OAuth accounts support privacy setting")
+	}
+	if mode == "" {
+		return "", infraerrors.BadRequest("PRIVACY_FAILED", "Cannot set privacy")
+	}
+
+	extra := make(map[string]any, len(account.Extra)+1)
+	for k, v := range account.Extra {
+		extra[k] = v
+	}
+	extra["privacy_mode"] = mode
+	if _, err := h.accountService.UpdateOwned(ctx, ownerUserID, account.ID, service.UpdateAccountRequest{Extra: &extra}); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+func (h *UserAccountHandler) SetPrivacy(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	mode, err := h.setOwnedAccountPrivacy(c.Request.Context(), subject.UserID, account)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	updated, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		if account.Extra == nil {
+			account.Extra = make(map[string]any)
+		}
+		account.Extra["privacy_mode"] = mode
+		response.Success(c, dto.AccountFromService(account))
+		return
+	}
+	response.Success(c, dto.AccountFromService(updated))
 }
 
 func (h *UserAccountHandler) GenerateAnthropicOAuthURL(c *gin.Context) {

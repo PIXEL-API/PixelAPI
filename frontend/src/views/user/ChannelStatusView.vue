@@ -104,6 +104,14 @@ const countdown = autoRefresh.countdown
 
 // ── Computed ──
 const overallStatus = computed<OverallStatus>(() => {
+  if (quotaPoolDashboard.value?.platform?.group_summaries?.some(summary => {
+    if (summary.group_status && summary.group_status !== 'active') return true
+    if (summary.account_count > 0 && summary.schedulable_account_count === 0) return true
+    if (summary.schedulable_account_count < summary.active_account_count) return true
+    return summary.usage_windows?.some(window => window.average_utilization >= 80) ?? false
+  })) {
+    return 'degraded'
+  }
   if (items.value.length === 0) return 'operational'
   for (const it of items.value) {
     if (it.primary_status === 'failed' || it.primary_status === 'error') return 'degraded'

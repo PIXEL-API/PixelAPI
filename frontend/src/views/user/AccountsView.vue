@@ -93,11 +93,23 @@
             </button>
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            <button type="button" class="btn btn-danger btn-sm" @click="openBulkDeleteDialog">
+              {{ t('admin.accounts.bulkActions.delete') }}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" @click="bulkRefreshTokens">
+              {{ t('admin.accounts.bulkActions.refreshToken') }}
+            </button>
+            <button type="button" class="btn btn-success btn-sm" @click="bulkToggleSchedulable(true)">
+              {{ t('admin.accounts.bulkActions.enableScheduling') }}
+            </button>
+            <button type="button" class="btn btn-warning btn-sm" @click="bulkToggleSchedulable(false)">
+              {{ t('admin.accounts.bulkActions.disableScheduling') }}
+            </button>
             <button type="button" class="btn btn-secondary btn-sm" @click="openBulkEditModal">
               {{ t('admin.accounts.bulkActions.edit') }}
             </button>
-            <button type="button" class="btn btn-danger btn-sm" @click="openBulkDeleteDialog">
-              {{ t('admin.accounts.bulkActions.delete') }}
+            <button type="button" class="btn btn-primary btn-sm" @click="openBulkEditModal">
+              {{ t('admin.accounts.bulkEdit.submit') }}
             </button>
           </div>
         </div>
@@ -173,9 +185,45 @@
               <span :class="shareModeBadgeClass(row.share_mode)">
                 {{ shareModeLabel(row.share_mode) }}
               </span>
-              <span v-if="row.share_mode === 'public'" :class="shareStatusBadgeClass(row.share_status)">
-                {{ shareStatusLabel(row.share_status) }}
-              </span>
+              <div v-if="row.share_mode === 'public'" class="flex items-center gap-1">
+                <span :class="shareStatusBadgeClass(row.share_status)" :title="shareStatusTitle(row)">
+                  {{ shareStatusLabel(row.share_status) }}
+                </span>
+                <button
+                  v-if="canRevalidatePublicShare(row)"
+                  type="button"
+                  class="inline-flex h-5 w-5 items-center justify-center rounded text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-300 dark:hover:bg-amber-900/30 dark:hover:text-amber-200"
+                  :disabled="revalidatingShareId === row.id"
+                  :title="t('userAccounts.revalidateShare')"
+                  @click="revalidatePublicShare(row)"
+                >
+                  <Icon
+                    name="refresh"
+                    size="xs"
+                    :class="revalidatingShareId === row.id ? 'animate-spin' : ''"
+                  />
+                </button>
+                <div v-if="shareStatusHelpText(row)" class="group/share relative inline-flex">
+                  <Icon
+                    name="infoCircle"
+                    size="xs"
+                    class="cursor-help text-amber-500 transition-colors group-hover/share:text-amber-600 dark:text-amber-300 dark:group-hover/share:text-amber-200"
+                  />
+                  <div
+                    class="pointer-events-none invisible absolute left-0 top-full z-[100] mt-1.5 w-72 max-w-[calc(100vw-2rem)] rounded-lg bg-gray-900 px-3 py-2 text-xs text-white opacity-0 shadow-xl transition-all duration-200 group-hover/share:visible group-hover/share:opacity-100 dark:bg-gray-800"
+                  >
+                    <div class="mb-1 font-medium text-amber-200">
+                      {{ t('userAccounts.shareValidationTitle') }}
+                    </div>
+                    <div class="whitespace-pre-wrap break-words leading-relaxed text-gray-200">
+                      {{ shareStatusHelpText(row) }}
+                    </div>
+                    <div
+                      class="absolute bottom-full left-3 border-[6px] border-transparent border-b-gray-900 dark:border-b-gray-800"
+                    ></div>
+                  </div>
+                </div>
+              </div>
             </div>
           </template>
 
@@ -288,6 +336,14 @@
               >
                 <Icon name="trash" size="sm" />
               </button>
+              <button
+                type="button"
+                class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-white"
+                :title="t('common.more')"
+                @click="openActionMenu(row, $event)"
+              >
+                <Icon name="more" size="sm" />
+              </button>
             </div>
           </template>
 
@@ -379,11 +435,46 @@
       @close="showImportModal = false"
       @imported="handleAccountsImported"
     />
+
+    <AccountTestModal
+      :show="showTestModal"
+      :account="testingAccount"
+      account-scope="user"
+      test-endpoint-base="/api/v1/accounts"
+      @close="closeTestModal"
+    />
+
+    <AccountStatsModal
+      :show="showStatsModal"
+      :account="statsAccount"
+      :stats-loader="accountsAPI.getStats"
+      @close="closeStatsModal"
+    />
+
+    <ReAuthAccountModal
+      :show="showReAuthModal"
+      :account="reAuthAccount"
+      account-scope="user"
+      @close="closeReAuthModal"
+      @reauthorized="handleAccountReauthorized"
+    />
+
+    <UserAccountActionMenu
+      :show="actionMenu.show"
+      :account="actionMenu.account"
+      :position="actionMenu.position"
+      @close="actionMenu.show = false"
+      @test="handleTest"
+      @stats="handleViewStats"
+      @reauth="handleReAuth"
+      @refresh-token="handleRefreshToken"
+      @set-privacy="handleSetPrivacy"
+    />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { accountsAPI, userGroupsAPI } from '@/api'
 import { useAppStore } from '@/stores/app'
@@ -407,6 +498,10 @@ import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vu
 import CreateAccountModal from '@/components/account/CreateAccountModal.vue'
 import EditAccountModal from '@/components/account/EditAccountModal.vue'
 import BulkEditAccountModal from '@/components/account/BulkEditAccountModal.vue'
+import AccountStatsModal from '@/components/account/AccountStatsModal.vue'
+import ReAuthAccountModal from '@/components/account/ReAuthAccountModal.vue'
+import AccountTestModal from '@/components/account/AccountTestModal.vue'
+import UserAccountActionMenu from '@/components/account/UserAccountActionMenu.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
 import type { Account, AccountPlatform, AccountType, AdminGroup, Group, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -426,16 +521,32 @@ const showImportModal = ref(false)
 const showBulkEditModal = ref(false)
 const showDeleteDialog = ref(false)
 const showBulkDeleteDialog = ref(false)
+const showTestModal = ref(false)
+const showStatsModal = ref(false)
+const showReAuthModal = ref(false)
 const editingAccount = ref<Account | null>(null)
 const accountToDelete = ref<Account | null>(null)
+const testingAccount = ref<Account | null>(null)
+const statsAccount = ref<Account | null>(null)
+const reAuthAccount = ref<Account | null>(null)
 const togglingStatusId = ref<number | null>(null)
 const togglingSchedulableId = ref<number | null>(null)
+const revalidatingShareId = ref<number | null>(null)
 const usageManualRefreshToken = ref(0)
 const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
 const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
 let abortController: AbortController | null = null
+const actionMenu = reactive<{
+  show: boolean
+  account: Account | null
+  position: { top: number; left: number } | null
+}>({
+  show: false,
+  account: null,
+  position: null
+})
 
 const pagination = ref({
   page: 1,
@@ -548,6 +659,10 @@ const bulkDeleteConfirmMessage = computed(() =>
 
 function isAccountActive(account: Account): boolean {
   return account.status === 'active'
+}
+
+function isRefreshableAccount(account: Account): boolean {
+  return account.type === 'oauth' || account.type === 'setup-token'
 }
 
 function buildDefaultTodayStats(): WindowStats {
@@ -694,6 +809,33 @@ function shareStatusLabel(status?: string): string {
     default:
       return t('userAccounts.approved')
   }
+}
+
+function accountErrorMessage(row: Account): string {
+  return typeof row.error_message === 'string' ? row.error_message.trim() : ''
+}
+
+function shareStatusHelpText(row: Account): string {
+  if (row.share_mode !== 'public') return ''
+  const reason = accountErrorMessage(row)
+  switch (row.share_status) {
+    case 'pending':
+      return reason
+        ? t('userAccounts.shareValidationFailed', { reason })
+        : t('userAccounts.shareValidationPendingHint')
+    case 'suspended':
+      return reason ? t('userAccounts.shareValidationSuspended', { reason }) : ''
+    default:
+      return ''
+  }
+}
+
+function shareStatusTitle(row: Account): string {
+  return shareStatusHelpText(row) || shareStatusLabel(row.share_status)
+}
+
+function canRevalidatePublicShare(row: Account): boolean {
+  return row.share_mode === 'public' && row.share_status !== 'approved'
 }
 
 function shareModeBadgeClass(mode?: string): string {
@@ -893,6 +1035,32 @@ function openDeleteDialog(account: Account): void {
   showDeleteDialog.value = true
 }
 
+function openActionMenu(account: Account, event: MouseEvent): void {
+  actionMenu.account = account
+  const target = event.currentTarget as HTMLElement | null
+  const menuWidth = 208
+  const menuHeight = 220
+  const padding = 8
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+
+  if (target) {
+    const rect = target.getBoundingClientRect()
+    let left = Math.max(padding, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - padding))
+    let top = rect.bottom + 4
+    if (top + menuHeight > viewportHeight - padding) {
+      top = Math.max(padding, rect.top - menuHeight - 4)
+    }
+    if (viewportWidth < 768) {
+      left = Math.max(padding, Math.min(rect.left + rect.width / 2 - menuWidth / 2, viewportWidth - menuWidth - padding))
+    }
+    actionMenu.position = { top, left }
+  } else {
+    actionMenu.position = { top: event.clientY, left: Math.max(padding, event.clientX - menuWidth) }
+  }
+  actionMenu.show = true
+}
+
 function closeDeleteDialog(): void {
   showDeleteDialog.value = false
   accountToDelete.value = null
@@ -900,6 +1068,71 @@ function closeDeleteDialog(): void {
 
 function patchAccountInList(account: Account): void {
   accounts.value = accounts.value.map((item) => (item.id === account.id ? account : item))
+}
+
+function closeTestModal(): void {
+  showTestModal.value = false
+  testingAccount.value = null
+}
+
+function closeStatsModal(): void {
+  showStatsModal.value = false
+  statsAccount.value = null
+}
+
+function closeReAuthModal(): void {
+  showReAuthModal.value = false
+  reAuthAccount.value = null
+}
+
+function handleTest(account: Account): void {
+  testingAccount.value = account
+  showTestModal.value = true
+}
+
+function handleViewStats(account: Account): void {
+  statsAccount.value = account
+  showStatsModal.value = true
+}
+
+function handleReAuth(account: Account): void {
+  reAuthAccount.value = account
+  showReAuthModal.value = true
+}
+
+async function handleAccountReauthorized(): Promise<void> {
+  showReAuthModal.value = false
+  reAuthAccount.value = null
+  usageManualRefreshToken.value += 1
+  await loadAccounts()
+}
+
+async function handleRefreshToken(account: Account): Promise<void> {
+  try {
+    const result = await accountsAPI.refreshCredentials(account.id)
+    patchAccountInList(result.account)
+    usageManualRefreshToken.value += 1
+    await refreshTodayStatsBatch()
+    if (result.warning === 'missing_project_id_temporary') {
+      appStore.showWarning(result.message || t('common.warning'))
+    } else {
+      appStore.showSuccess(t('common.success'))
+    }
+  } catch (error: any) {
+    console.error('Failed to refresh user account token:', error)
+    appStore.showError(error?.response?.data?.message || t('admin.accounts.oauth.authFailed'))
+  }
+}
+
+async function handleSetPrivacy(account: Account): Promise<void> {
+  try {
+    const updated = await accountsAPI.setPrivacy(account.id)
+    patchAccountInList(updated)
+    appStore.showSuccess(t('common.success'))
+  } catch (error: any) {
+    console.error('Failed to set user account privacy:', error)
+    appStore.showError(error?.response?.data?.message || t('admin.accounts.privacyFailed'))
+  }
 }
 
 async function toggleAccountStatus(account: Account): Promise<void> {
@@ -933,6 +1166,93 @@ async function toggleSchedulable(account: Account): Promise<void> {
     appStore.showError(t('admin.accounts.failedToToggleSchedulable'))
   } finally {
     togglingSchedulableId.value = null
+  }
+}
+
+async function bulkToggleSchedulable(schedulable: boolean): Promise<void> {
+  const accountIds = [...selectedIds.value]
+  if (accountIds.length === 0) return
+
+  try {
+    const result = await accountsAPI.bulkUpdate(accountIds, { schedulable })
+    const successIds = result.success_ids?.length
+      ? result.success_ids
+      : result.results.filter((item) => item.success).map((item) => item.account_id)
+    if (successIds.length > 0) {
+      const idSet = new Set(successIds)
+      accounts.value = accounts.value.map((account) =>
+        idSet.has(account.id) ? { ...account, schedulable } : account
+      )
+    }
+    if (result.failed > 0) {
+      appStore.showError(
+        t('admin.accounts.bulkSchedulablePartial', {
+          success: result.success,
+          failed: result.failed
+        })
+      )
+    } else {
+      appStore.showSuccess(
+        schedulable
+          ? t('admin.accounts.bulkSchedulableEnabled', { count: result.success })
+          : t('admin.accounts.bulkSchedulableDisabled', { count: result.success })
+      )
+      clearSelection()
+    }
+    usageManualRefreshToken.value += 1
+    await refreshTodayStatsBatch()
+  } catch (error: any) {
+    console.error('Failed to bulk toggle user account schedulable:', error)
+    appStore.showError(error?.response?.data?.message || t('common.error'))
+  }
+}
+
+async function bulkRefreshTokens(): Promise<void> {
+  const selected = selectedAccounts.value.filter(isRefreshableAccount)
+  if (selected.length === 0) {
+    appStore.showError(t('admin.accounts.bulkActions.noRefreshableAccounts'))
+    return
+  }
+
+  let success = 0
+  let failed = 0
+  for (const account of selected) {
+    try {
+      const result = await accountsAPI.refreshCredentials(account.id)
+      patchAccountInList(result.account)
+      success++
+    } catch (error) {
+      failed++
+      console.error('Failed to bulk refresh user account token:', error)
+    }
+  }
+
+  if (failed > 0) {
+    appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success, failed }))
+  } else {
+    appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: success }))
+    clearSelection()
+  }
+  usageManualRefreshToken.value += 1
+  await refreshTodayStatsBatch()
+}
+
+async function revalidatePublicShare(account: Account): Promise<void> {
+  revalidatingShareId.value = account.id
+  try {
+    const updated = await accountsAPI.revalidatePublicShare(account.id)
+    patchAccountInList(updated)
+    await refreshTodayStatsBatch()
+    appStore.showSuccess(
+      updated.share_status === 'approved'
+        ? t('userAccounts.shareValidationApproved')
+        : t('userAccounts.shareValidationStillPending')
+    )
+  } catch (error: any) {
+    console.error('Failed to revalidate public share account:', error)
+    appStore.showError(error?.response?.data?.message || t('userAccounts.shareValidationFailedToRun'))
+  } finally {
+    revalidatingShareId.value = null
   }
 }
 

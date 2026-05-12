@@ -173,6 +173,7 @@ const emit = defineEmits<{
 
 // Computed: is rate limited (429)
 const isRateLimited = computed(() => {
+  if (hasError.value) return false
   if (!props.account.rate_limit_reset_at) return false
   return new Date(props.account.rate_limit_reset_at) > new Date()
 })
@@ -269,6 +270,7 @@ const formatModelResetTime = (resetAt: string): string => {
 
 // Computed: is overloaded (529)
 const isOverloaded = computed(() => {
+  if (hasError.value) return false
   if (!props.account.overload_until) return false
   return new Date(props.account.overload_until) > new Date()
 })

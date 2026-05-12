@@ -319,6 +319,7 @@ export interface SystemSettings {
   user_private_group_monthly_limit_usd: number | null;
   user_private_group_rate_multiplier: number;
   user_private_group_rpm_limit: number;
+  user_private_group_commission_rate: number;
   default_subscriptions: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
@@ -353,6 +354,7 @@ export interface SystemSettings {
   table_default_page_size: number;
   table_page_size_options: number[];
   backend_mode_enabled: boolean;
+  master_data_plane_enabled: boolean;
   custom_menu_items: CustomMenuItem[];
   custom_endpoints: CustomEndpoint[];
   // SMTP settings
@@ -473,6 +475,8 @@ export interface SystemSettings {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  openai_free_account_repair_enabled?: boolean;
+  openai_free_account_repair_weekly_threshold_usd?: number;
 
   // Balance & quota notification
   balance_low_notify_enabled: boolean;
@@ -516,6 +520,7 @@ export interface UpdateSettingsRequest {
   user_private_group_monthly_limit_usd?: number | null;
   user_private_group_rate_multiplier?: number;
   user_private_group_rpm_limit?: number;
+  user_private_group_commission_rate?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
@@ -549,6 +554,7 @@ export interface UpdateSettingsRequest {
   table_default_page_size?: number;
   table_page_size_options?: number[];
   backend_mode_enabled?: boolean;
+  master_data_plane_enabled?: boolean;
   custom_menu_items?: CustomMenuItem[];
   custom_endpoints?: CustomEndpoint[];
   smtp_host?: string;
@@ -647,6 +653,8 @@ export interface UpdateSettingsRequest {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  openai_free_account_repair_enabled?: boolean;
+  openai_free_account_repair_weekly_threshold_usd?: number;
   // Balance & quota notification
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;

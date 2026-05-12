@@ -53,6 +53,7 @@ const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
+	openAITestMaxOutputTokens    = 16
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
@@ -1174,9 +1175,13 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 		"stream": true,
 	}
 
-	// OAuth accounts using ChatGPT internal API require store: false
+	// OAuth accounts using ChatGPT internal API reject max_output_tokens and
+	// require store=false. API key accounts still use the public Responses API
+	// and can keep max_output_tokens to bound the test response size.
 	if isOAuth {
 		payload["store"] = false
+	} else {
+		payload["max_output_tokens"] = openAITestMaxOutputTokens
 	}
 
 	// All accounts require instructions for Responses API

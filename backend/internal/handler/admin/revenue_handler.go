@@ -44,12 +44,23 @@ func (h *RevenueHandler) GetSummary(c *gin.Context) {
 		topLimit = parsed
 	}
 
+	var userID *int64
+	if rawUserID := strings.TrimSpace(c.Query("user_id")); rawUserID != "" {
+		parsed, err := strconv.ParseInt(rawUserID, 10, 64)
+		if err != nil || parsed <= 0 {
+			response.BadRequest(c, "user_id must be a positive integer")
+			return
+		}
+		userID = &parsed
+	}
+
 	stats, err := h.revenueService.GetSummary(c.Request.Context(), service.RevenueQueryParams{
 		StartTime:   startTime,
 		EndTime:     endTime,
 		Granularity: granularity,
 		Timezone:    normalizeRevenueTimezone(c.Query("timezone")),
 		TopLimit:    topLimit,
+		UserID:      userID,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

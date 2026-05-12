@@ -466,6 +466,7 @@ func findDisallowedCredentialImportField(value any) (string, bool) {
 	return findDisallowedCredentialContent(value, credentialSafetyOptions{
 		AllowClaudeSessionKeyFields: true,
 		AllowOAuthTokenValues:       true,
+		AllowOAuthMetadataURLs:      true,
 	})
 }
 

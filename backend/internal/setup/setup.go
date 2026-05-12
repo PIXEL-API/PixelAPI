@@ -78,6 +78,7 @@ type SetupConfig struct {
 	Admin    AdminConfig    `json:"admin" yaml:"-"` // Not stored in config file
 	Server   ServerConfig   `json:"server" yaml:"server"`
 	JWT      JWTConfig      `json:"jwt" yaml:"jwt"`
+	Totp     TotpConfig     `json:"totp" yaml:"totp"`
 	Timezone string         `json:"timezone" yaml:"timezone"` // e.g. "Asia/Shanghai", "UTC"
 }
 
@@ -112,6 +113,10 @@ type ServerConfig struct {
 type JWTConfig struct {
 	Secret     string `json:"secret" yaml:"secret"`
 	ExpireHour int    `json:"expire_hour" yaml:"expire_hour"`
+}
+
+type TotpConfig struct {
+	EncryptionKey string `json:"encryption_key" yaml:"encryption_key"`
 }
 
 const (
@@ -288,6 +293,13 @@ func Install(cfg *SetupConfig) error {
 		cfg.JWT.Secret = secret
 		logger.LegacyPrintf("setup", "%s", "Warning: JWT secret auto-generated. Consider setting a fixed secret for production.")
 	}
+	if cfg.Totp.EncryptionKey == "" {
+		key, err := generateSecret(32)
+		if err != nil {
+			return fmt.Errorf("failed to generate totp encryption key: %w", err)
+		}
+		cfg.Totp.EncryptionKey = key
+	}
 
 	// Test connections
 	if err := TestDatabaseConnection(&cfg.Database); err != nil {
@@ -444,6 +456,9 @@ func writeConfigFile(cfg *SetupConfig) error {
 			Secret     string `yaml:"secret"`
 			ExpireHour int    `yaml:"expire_hour"`
 		} `yaml:"jwt"`
+		Totp struct {
+			EncryptionKey string `yaml:"encryption_key"`
+		} `yaml:"totp"`
 		Default struct {
 			UserConcurrency int     `yaml:"user_concurrency"`
 			UserBalance     float64 `yaml:"user_balance"`
@@ -465,6 +480,11 @@ func writeConfigFile(cfg *SetupConfig) error {
 		}{
 			Secret:     cfg.JWT.Secret,
 			ExpireHour: cfg.JWT.ExpireHour,
+		},
+		Totp: struct {
+			EncryptionKey string `yaml:"encryption_key"`
+		}{
+			EncryptionKey: cfg.Totp.EncryptionKey,
 		},
 		Default: struct {
 			UserConcurrency int     `yaml:"user_concurrency"`
@@ -573,6 +593,9 @@ func AutoSetupFromEnv() error {
 			Secret:     getEnvOrDefault("JWT_SECRET", ""),
 			ExpireHour: getEnvIntOrDefault("JWT_EXPIRE_HOUR", 24),
 		},
+		Totp: TotpConfig{
+			EncryptionKey: getEnvOrDefault("TOTP_ENCRYPTION_KEY", ""),
+		},
 		Timezone: tz,
 	}
 
@@ -584,6 +607,13 @@ func AutoSetupFromEnv() error {
 		}
 		cfg.JWT.Secret = secret
 		logger.LegacyPrintf("setup", "%s", "Warning: JWT secret auto-generated. Consider setting a fixed secret for production.")
+	}
+	if cfg.Totp.EncryptionKey == "" {
+		key, err := generateSecret(32)
+		if err != nil {
+			return fmt.Errorf("failed to generate totp encryption key: %w", err)
+		}
+		cfg.Totp.EncryptionKey = key
 	}
 
 	// Test database connection

@@ -2494,8 +2494,18 @@
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" :max="concurrencyMax" class="input"
-            @input="normalizeConcurrencyInput" />
+          <input
+            v-model.number="form.concurrency"
+            type="number"
+            min="1"
+            :max="concurrencyMax"
+            :readonly="isUserScope"
+            :class="[
+              'input',
+              isUserScope && 'cursor-not-allowed bg-gray-50 text-gray-500 dark:bg-dark-800 dark:text-dark-400'
+            ]"
+            @input="normalizeConcurrencyInput"
+          />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
@@ -2529,7 +2539,7 @@
 
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
-        v-if="form.platform === 'openai'"
+        v-if="form.platform === 'openai' && !isUserScope"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2559,7 +2569,7 @@
 
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
-        v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
+        v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey') && !isUserScope"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2630,7 +2640,7 @@
 
       <!-- OpenAI OAuth Codex 官方客户端限制开关 -->
       <div
-        v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
+        v-if="form.platform === 'openai' && accountCategory === 'oauth-based' && !isUserScope"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -2660,7 +2670,7 @@
 
       <!-- OpenAI Compact 能力配置 -->
       <div
-        v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
+        v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey') && !isUserScope"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="flex items-center justify-between">
@@ -2697,7 +2707,7 @@
         </div>
       </div>
 
-      <div>
+      <div v-if="!isUserScope">
         <div class="flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{
@@ -3182,6 +3192,15 @@ import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
+import {
+  PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED,
+  PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
+  PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE,
+  PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE,
+  PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
+  applyPersonalAccountTemplate,
+  buildPersonalAccountModelMapping
+} from '@/components/account/personalAccountTemplate'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
@@ -3545,7 +3564,6 @@ const tempUnschedPresets = computed(() => [
 ])
 
 const DEFAULT_ACCOUNT_CONCURRENCY = 10
-const OPENAI_PLUS_DEFAULT_CONCURRENCY = 2
 const OPENAI_PLUS_MAX_CONCURRENCY = 3
 
 const form = reactive({
@@ -3557,7 +3575,7 @@ const form = reactive({
   share_mode: 'private' as AccountShareMode,
   credentials: {} as Record<string, unknown>,
   proxy_id: null as number | null,
-  concurrency: DEFAULT_ACCOUNT_CONCURRENCY,
+  concurrency: PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
   load_factor: null as number | null,
   priority: 1,
   rate_multiplier: 1,
@@ -3569,6 +3587,10 @@ const isOpenAIPlusForm = computed(() => form.platform === 'openai' && form.accou
 const concurrencyMax = computed(() => isOpenAIPlusForm.value ? OPENAI_PLUS_MAX_CONCURRENCY : undefined)
 
 const normalizeConcurrencyInput = () => {
+  if (isUserScope.value) {
+    form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+    return
+  }
   const minConcurrency = Math.max(1, form.concurrency || 1)
   form.concurrency = isOpenAIPlusForm.value
     ? Math.min(OPENAI_PLUS_MAX_CONCURRENCY, minConcurrency)
@@ -3576,9 +3598,13 @@ const normalizeConcurrencyInput = () => {
 }
 
 const applyOpenAIPlusConcurrencyDefaults = () => {
+  if (isUserScope.value) {
+    form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+    return
+  }
   if (!isOpenAIPlusForm.value) return
   if (!form.concurrency || form.concurrency > OPENAI_PLUS_MAX_CONCURRENCY || form.concurrency === DEFAULT_ACCOUNT_CONCURRENCY) {
-    form.concurrency = OPENAI_PLUS_DEFAULT_CONCURRENCY
+    form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
   }
   if (form.load_factor && form.load_factor > OPENAI_PLUS_MAX_CONCURRENCY) {
     form.load_factor = OPENAI_PLUS_MAX_CONCURRENCY
@@ -3637,6 +3663,16 @@ watch(
           .catch(() => { tlsFingerprintProfiles.value = [] })
       } else {
         tlsFingerprintProfiles.value = []
+      }
+      if (isUserScope.value) {
+        form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+        form.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+        form.load_factor = null
+        autoPauseOnExpired.value = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
+        openAICompactMode.value = PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE
+        openaiOAuthResponsesWebSocketV2Mode.value = PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE
+        openaiPassthroughEnabled.value = false
+        codexCLIOnlyEnabled.value = false
       }
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
@@ -3705,6 +3741,12 @@ watch(
       addMethod.value = 'oauth'
       antigravityAccountType.value = 'oauth'
       form.type = 'oauth'
+      form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+      form.load_factor = null
+      form.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+      autoPauseOnExpired.value = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
+      modelRestrictionMode.value = 'whitelist'
+      allowedModels.value = Object.keys(buildPersonalAccountModelMapping(newPlatform))
     }
     // Reset base URL based on platform
     apiKeyBaseUrl.value =
@@ -4098,6 +4140,17 @@ const sanitizeCreatePayload = (payload: CreateAccountRequest): CreateAccountRequ
   }
   if (isUserScope.value) {
     delete next.group_ids
+    next.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+    next.load_factor = undefined
+    next.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+    next.auto_pause_on_expired = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
+    const templated = applyPersonalAccountTemplate(
+      next.platform,
+      (next.credentials as Record<string, unknown>) || {},
+      next.extra as Record<string, unknown> | undefined
+    )
+    next.credentials = templated.credentials
+    next.extra = templated.extra
   }
   return next
 }
@@ -4142,9 +4195,9 @@ const resetForm = () => {
   form.account_level = 'unknown'
   form.credentials = {}
   form.proxy_id = null
-  form.concurrency = DEFAULT_ACCOUNT_CONCURRENCY
+  form.concurrency = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : DEFAULT_ACCOUNT_CONCURRENCY
   form.load_factor = null
-  form.priority = 1
+  form.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
   form.rate_multiplier = 1
   form.group_ids = []
   form.expires_at = null
@@ -4177,10 +4230,10 @@ const resetForm = () => {
   selectedErrorCodes.value = []
   customErrorCodeInput.value = null
   interceptWarmupRequests.value = false
-  autoPauseOnExpired.value = true
+  autoPauseOnExpired.value = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
   openaiPassthroughEnabled.value = false
-  openAICompactMode.value = 'auto'
-  openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
+  openAICompactMode.value = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE : 'auto'
+  openaiOAuthResponsesWebSocketV2Mode.value = PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   anthropicPassthroughEnabled.value = false
@@ -4239,6 +4292,17 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
+  if (isUserScope.value) {
+    extra.openai_oauth_responses_websockets_v2_mode = PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE
+    extra.openai_oauth_responses_websockets_v2_enabled = false
+    extra.openai_passthrough = false
+    extra.openai_oauth_passthrough = false
+    extra.codex_cli_only = false
+    extra.openai_compact_mode = PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE
+    delete extra.responses_websockets_v2_enabled
+    delete extra.openai_ws_enabled
+    return extra
+  }
   if (accountCategory.value === 'oauth-based') {
     extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
     extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
@@ -4675,11 +4739,18 @@ const createAccountAndFinish = async (
     }
   }
   if (platform === 'openai') {
-    const compactModelMapping = buildOpenAICompactModelMapping()
-    if (compactModelMapping) {
-      credentials.compact_model_mapping = compactModelMapping
-    } else {
+    if (isUserScope.value) {
       delete credentials.compact_model_mapping
+      const templated = applyPersonalAccountTemplate(platform, credentials, finalExtra)
+      credentials = templated.credentials
+      finalExtra = templated.extra
+    } else {
+      const compactModelMapping = buildOpenAICompactModelMapping()
+      if (compactModelMapping) {
+        credentials.compact_model_mapping = compactModelMapping
+      } else {
+        delete credentials.compact_model_mapping
+      }
     }
   }
   await doCreateAccount({

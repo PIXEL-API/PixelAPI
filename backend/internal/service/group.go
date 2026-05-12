@@ -188,6 +188,9 @@ func NormalizeRequiredAccountLevel(level string) string {
 	if normalized == AccountLevelUnknown {
 		return ""
 	}
+	if normalized == AccountLevelTeam {
+		return AccountLevelPlus
+	}
 	return normalized
 }
 

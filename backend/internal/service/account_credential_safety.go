@@ -5,6 +5,7 @@ import "strings"
 type credentialSafetyOptions struct {
 	AllowClaudeSessionKeyFields bool
 	AllowOAuthTokenValues       bool
+	AllowOAuthMetadataURLs      bool
 }
 
 func findDisallowedCredentialContent(value any, opts credentialSafetyOptions) (string, bool) {
@@ -109,6 +110,9 @@ func disallowedCredentialStringReason(key, value string, opts credentialSafetyOp
 			return "", false
 		}
 	}
+	if opts.AllowOAuthMetadataURLs && isAllowedOAuthMetadataURLField(key) {
+		return "", false
+	}
 	switch {
 	case strings.Contains(lower, "http://") || strings.Contains(lower, "https://"):
 		return "URL is not allowed", true
@@ -118,6 +122,24 @@ func disallowedCredentialStringReason(key, value string, opts credentialSafetyOp
 		return "API key-like credential is not allowed", true
 	}
 	return "", false
+}
+
+func isAllowedOAuthMetadataURLField(key string) bool {
+	switch normalizeCredentialSafetyKey(key) {
+	case "scope",
+		"issuer",
+		"iss",
+		"picture",
+		"avatar",
+		"avatar_url",
+		"avatarurl",
+		"profile",
+		"profile_url",
+		"profileurl":
+		return true
+	default:
+		return false
+	}
 }
 
 func containsForbiddenCredentialText(lower string) bool {

@@ -307,6 +307,10 @@ describe('EmailVerifyView', () => {
         password: 'secret-123',
       })
     )
+    localStorage.setItem(
+      'affiliate_referral_code',
+      JSON.stringify({ code: 'AFF123', expiresAt: Date.now() + 60_000 })
+    )
     apiClientPostMock.mockResolvedValue({
       data: {
         access_token: 'oauth-access-token',

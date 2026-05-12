@@ -12,9 +12,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
-// tokenRefreshTempUnschedDuration token 刷新重试耗尽后临时不可调度的持续时间
-const tokenRefreshTempUnschedDuration = 10 * time.Minute
-
 // TokenRefreshService OAuth token自动刷新服务
 // 定期检查并刷新即将过期的token
 type TokenRefreshService struct {
@@ -282,7 +279,7 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 		}
 
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
-		if isNonRetryableRefreshError(err) {
+		if IsNonRetryableRefreshError(err) {
 			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
 			if setErr := s.accountRepo.SetError(ctx, account.ID, errorMsg); setErr != nil {
 				slog.Error("token_refresh.set_error_status_failed",
@@ -325,7 +322,7 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 	s.ensureAntigravityPrivacy(ctx, account)
 
 	// 设置临时不可调度 10 分钟（不标记 error，保持 status=active 让下个刷新周期能继续尝试）
-	until := time.Now().Add(tokenRefreshTempUnschedDuration)
+	until := time.Now().Add(TokenRefreshTempUnschedDuration)
 	reason := fmt.Sprintf("token refresh retry exhausted: %v", lastErr)
 	if setErr := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); setErr != nil {
 		slog.Warn("token_refresh.set_temp_unschedulable_failed",
@@ -408,10 +405,10 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 // errRefreshSkipped 表示刷新被跳过（锁竞争或已被其他路径刷新），不计入 failed 或 refreshed
 var errRefreshSkipped = fmt.Errorf("refresh skipped")
 
-// isNonRetryableRefreshError 判断是否为不可重试的刷新错误
+// IsNonRetryableRefreshError 判断是否为不可重试的刷新错误
 // 这些错误通常表示凭证已失效或配置确实缺失，需要用户重新授权
 // 注意：missing_project_id 错误只在真正缺失（从未获取过）时返回，临时获取失败不会返回此错误
-func isNonRetryableRefreshError(err error) bool {
+func IsNonRetryableRefreshError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -422,6 +419,7 @@ func isNonRetryableRefreshError(err error) bool {
 		"unauthorized_client", // 客户端未授权
 		"access_denied",       // 访问被拒绝
 		"missing_project_id",  // 缺少 project_id
+		"refresh_token_reused",
 		"no refresh token available",
 	}
 	for _, needle := range nonRetryable {

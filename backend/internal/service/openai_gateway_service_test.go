@@ -36,6 +36,17 @@ type snapshotUpdateAccountRepo struct {
 }
 
 func (r *snapshotUpdateAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	for i := range r.accounts {
+		if r.accounts[i].ID == id {
+			if r.accounts[i].Extra == nil {
+				r.accounts[i].Extra = map[string]any{}
+			}
+			for key, value := range updates {
+				r.accounts[i].Extra[key] = value
+			}
+			break
+		}
+	}
 	if r.updateExtraCalls != nil {
 		copied := make(map[string]any, len(updates))
 		for k, v := range updates {
@@ -44,6 +55,16 @@ func (r *snapshotUpdateAccountRepo) UpdateExtra(ctx context.Context, id int64, u
 		r.updateExtraCalls <- copied
 	}
 	return nil
+}
+
+func (r *snapshotUpdateAccountRepo) Update(ctx context.Context, account *Account) error {
+	for i := range r.accounts {
+		if r.accounts[i].ID == account.ID {
+			r.accounts[i] = *account
+			return nil
+		}
+	}
+	return ErrAccountNotFound
 }
 
 func (r stubOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
@@ -346,6 +367,7 @@ func (c stubConcurrencyCache) GetAccountWaitingCount(ctx context.Context, accoun
 type stubGatewayCache struct {
 	sessionBindings map[string]int64
 	deletedSessions map[string]int
+	stringBindings  map[string]string
 }
 
 func (c *stubGatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
@@ -376,6 +398,30 @@ func (c *stubGatewayCache) DeleteSessionAccountID(ctx context.Context, groupID i
 	}
 	c.deletedSessions[sessionHash]++
 	delete(c.sessionBindings, sessionHash)
+	return nil
+}
+
+func (c *stubGatewayCache) GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error) {
+	if c.stringBindings != nil {
+		if value, ok := c.stringBindings[sessionHash]; ok {
+			return value, nil
+		}
+	}
+	return "", errors.New("not found")
+}
+
+func (c *stubGatewayCache) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {
+	if c.stringBindings == nil {
+		c.stringBindings = make(map[string]string)
+	}
+	c.stringBindings[sessionHash] = value
+	return nil
+}
+
+func (c *stubGatewayCache) DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error {
+	if c.stringBindings != nil {
+		delete(c.stringBindings, sessionHash)
+	}
 	return nil
 }
 
@@ -1834,6 +1880,55 @@ func TestOpenAIUpdateCodexUsageSnapshotFromHeaders(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected UpdateExtra to be called")
 	}
+}
+
+func TestOpenAIUpdateCodexUsageSnapshot_AutoRepairsSuspectedFreeAccount(t *testing.T) {
+	accountID := int64(124)
+	repo := &snapshotUpdateAccountRepo{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{{
+			ID:           accountID,
+			Platform:     PlatformOpenAI,
+			Type:         AccountTypeOAuth,
+			AccountLevel: AccountLevelPlus,
+			ShareMode:    AccountShareModePublic,
+			ShareStatus:  AccountShareStatusApproved,
+			Status:       StatusActive,
+			Extra: map[string]any{
+				"quota_weekly_limit": 50.0,
+			},
+		}}},
+		updateExtraCalls: make(chan map[string]any, 1),
+	}
+	settingSvc := NewSettingService(&openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{
+		SettingKeyOpenAIFreeAccountRepairEnabled:            "true",
+		SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD: "60",
+	}}, &config.Config{})
+	accountSvc := &AccountService{accountRepo: repo}
+	svc := &OpenAIGatewayService{
+		accountRepo:    repo,
+		settingService: settingSvc,
+		accountService: accountSvc,
+	}
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	headers.Set("x-codex-primary-reset-after-seconds", "86400")
+
+	svc.UpdateCodexUsageSnapshotFromHeaders(context.Background(), accountID, headers)
+
+	select {
+	case updates := <-repo.updateExtraCalls:
+		require.Equal(t, 100.0, updates["codex_7d_used_percent"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected UpdateExtra to be called")
+	}
+	require.Eventually(t, func() bool {
+		account, err := repo.GetByID(context.Background(), accountID)
+		return err == nil &&
+			account.AccountLevel == AccountLevelFree &&
+			account.ShareStatus == AccountShareStatusSuspended &&
+			strings.Contains(account.ErrorMessage, "weekly limit <= 60.00 USD")
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func TestOpenAIResponsesRequestPathSuffix(t *testing.T) {

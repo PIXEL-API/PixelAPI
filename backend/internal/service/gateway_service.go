@@ -398,6 +398,12 @@ type GatewayCache interface {
 	// DeleteSessionAccountID 删除粘性会话绑定，用于账号不可用时主动清理
 	// Delete sticky session binding, used to proactively clean up when account becomes unavailable
 	DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error
+	// GetSessionString 获取会话维度字符串值，用于 WS 多实例状态索引。
+	GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error)
+	// SetSessionString 设置会话维度字符串值，用于 WS 多实例状态索引。
+	SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error
+	// DeleteSessionString 删除会话维度字符串值。
+	DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error
 }
 
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
@@ -5362,6 +5368,13 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	if intervalTicker != nil {
 		intervalCh = intervalTicker.C
 	}
+	streamIdleTimedOut := func() bool {
+		if streamInterval <= 0 {
+			return false
+		}
+		lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
+		return time.Since(lastRead) >= streamInterval
+	}
 
 	for {
 		select {
@@ -5372,6 +5385,9 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 					flusher.Flush()
 				}
 				if !sawTerminalEvent {
+					if clientDisconnected && streamIdleTimedOut() {
+						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after timeout")
+					}
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
 				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
@@ -5381,6 +5397,9 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, nil
 				}
 				if clientDisconnected {
+					if streamIdleTimedOut() {
+						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after timeout")
+					}
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
 				}
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
@@ -7903,15 +7922,16 @@ type usageLogBestEffortWriter interface {
 
 // postUsageBillingParams 统一扣费所需的参数
 type postUsageBillingParams struct {
-	Cost                  *CostBreakdown
-	User                  *User
-	APIKey                *APIKey
-	Account               *Account
-	Subscription          *UserSubscription
-	RequestPayloadHash    string
-	IsSubscriptionBill    bool
-	AccountRateMultiplier float64
-	APIKeyService         APIKeyQuotaUpdater
+	Cost                       *CostBreakdown
+	User                       *User
+	APIKey                     *APIKey
+	Account                    *Account
+	Subscription               *UserSubscription
+	RequestPayloadHash         string
+	IsSubscriptionBill         bool
+	PrivateGroupCommissionRate float64
+	AccountRateMultiplier      float64
+	APIKeyService              APIKeyQuotaUpdater
 }
 
 func (p *postUsageBillingParams) shouldDeductAPIKeyQuota() bool {
@@ -8016,14 +8036,15 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	}
 
 	cmd := &UsageBillingCommand{
-		RequestID:          requestID,
-		APIKeyID:           p.APIKey.ID,
-		UserID:             p.User.ID,
-		AccountID:          p.Account.ID,
-		AccountType:        p.Account.Type,
-		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
-		UsageOccurredAt:    time.Now(),
-		UsageLog:           usageLog,
+		RequestID:                  requestID,
+		APIKeyID:                   p.APIKey.ID,
+		UserID:                     p.User.ID,
+		AccountID:                  p.Account.ID,
+		AccountType:                p.Account.Type,
+		RequestPayloadHash:         strings.TrimSpace(p.RequestPayloadHash),
+		UsageOccurredAt:            time.Now(),
+		UsageLog:                   usageLog,
+		PrivateGroupCommissionCost: calculatePrivateGroupCommissionCost(p),
 	}
 	if usageLog != nil {
 		if !usageLog.CreatedAt.IsZero() {
@@ -8075,6 +8096,23 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 
 	cmd.Normalize()
 	return cmd
+}
+
+func calculatePrivateGroupCommissionCost(p *postUsageBillingParams) float64 {
+	if p == nil || p.Cost == nil || !p.IsSubscriptionBill || p.APIKey == nil || p.APIKey.Group == nil {
+		return 0
+	}
+	if !p.APIKey.Group.IsUserPrivateScope() || p.Cost.ActualCost <= 0 {
+		return 0
+	}
+	rate := p.PrivateGroupCommissionRate
+	if rate <= 0 {
+		return 0
+	}
+	if rate > 1 {
+		rate = 1
+	}
+	return p.Cost.ActualCost * rate
 }
 
 func attachAccountShareBillingSnapshot(ctx context.Context, cmd *UsageBillingCommand, p *postUsageBillingParams, deps *billingDeps) error {
@@ -8174,6 +8212,9 @@ func finalizePostUsageBilling(p *postUsageBillingParams, deps *billingDeps, resu
 		if p.Cost.ActualCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil {
 			deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost)
 		}
+		if result != nil && result.NewBalance != nil && p.User != nil {
+			deps.billingCacheService.QueueDeductBalance(p.User.ID, calculatePrivateGroupCommissionCost(p))
+		}
 	} else if p.Cost.ActualCost > 0 && p.User != nil {
 		deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)
 	}
@@ -8207,10 +8248,14 @@ func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *Usag
 			slog.Error("panic in notifyBalanceLow", "recover", r)
 		}
 	}()
-	if p.IsSubscriptionBill || p.Cost.ActualCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
+	deductedCost := p.Cost.ActualCost
+	if p.IsSubscriptionBill {
+		deductedCost = calculatePrivateGroupCommissionCost(p)
+	}
+	if deductedCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
 		slog.Debug("notifyBalanceLow: skipped",
 			"is_subscription", p.IsSubscriptionBill,
-			"actual_cost", p.Cost.ActualCost,
+			"actual_cost", deductedCost,
 			"user_nil", p.User == nil,
 			"service_nil", deps.balanceNotifyService == nil,
 		)
@@ -8221,12 +8266,12 @@ func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *Usag
 	slog.Debug("notifyBalanceLow: calling CheckBalanceAfterDeduction",
 		"user_id", p.User.ID,
 		"old_balance", oldBalance,
-		"cost", p.Cost.ActualCost,
+		"cost", deductedCost,
 		"notify_enabled", p.User.BalanceNotifyEnabled,
 		"threshold", p.User.BalanceNotifyThreshold,
 		"result_has_new_balance", result != nil && result.NewBalance != nil,
 	)
-	deps.balanceNotifyService.CheckBalanceAfterDeduction(context.Background(), p.User, oldBalance, p.Cost.ActualCost)
+	deps.balanceNotifyService.CheckBalanceAfterDeduction(context.Background(), p.User, oldBalance, deductedCost)
 }
 
 // resolveOldBalance returns the pre-deduction balance.
@@ -8526,16 +8571,23 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	requestID := usageLog.RequestID
+	privateGroupCommissionRate := 0.0
+	if isSubscriptionBilling && apiKey.Group != nil && apiKey.Group.IsUserPrivateScope() && s.settingService != nil {
+		if settings, err := s.settingService.GetAllSettings(ctx); err == nil && settings != nil {
+			privateGroupCommissionRate = settings.UserPrivateGroupCommissionRate
+		}
+	}
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
-		Cost:                  cost,
-		User:                  user,
-		APIKey:                apiKey,
-		Account:               account,
-		Subscription:          subscription,
-		RequestPayloadHash:    resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
-		IsSubscriptionBill:    isSubscriptionBilling,
-		AccountRateMultiplier: accountRateMultiplier,
-		APIKeyService:         input.APIKeyService,
+		Cost:                       cost,
+		User:                       user,
+		APIKey:                     apiKey,
+		Account:                    account,
+		Subscription:               subscription,
+		RequestPayloadHash:         resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+		IsSubscriptionBill:         isSubscriptionBilling,
+		PrivateGroupCommissionRate: privateGroupCommissionRate,
+		AccountRateMultiplier:      accountRateMultiplier,
+		APIKeyService:              input.APIKeyService,
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {

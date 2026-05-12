@@ -15,6 +15,11 @@
 import { useI18n } from 'vue-i18n'
 import { accountsAPI } from '@/api'
 import CredentialImportModal from '@/components/account/CredentialImportModal.vue'
+import {
+  PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED,
+  PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
+  PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+} from '@/components/account/personalAccountTemplate'
 import type { ImportCredentialContentsResponse } from '@/api/accounts'
 
 interface Props {
@@ -35,9 +40,10 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
   return accountsAPI.importCredentialContents({
     contents,
     share_mode: 'private',
-    priority: 50,
+    concurrency: PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
+    priority: PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
     group_ids: [],
-    auto_pause_on_expired: true
+    auto_pause_on_expired: PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
   })
 }
 </script>

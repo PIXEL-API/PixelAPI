@@ -49,6 +49,95 @@
       </div>
     </div>
 
+    <div
+      v-if="hasGroupSummaries"
+      class="mt-3 rounded-lg border border-gray-200 p-3 dark:border-dark-700"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 class="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.quotaDashboard.groupBreakdown') }}
+          </h3>
+          <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.quotaDashboard.groupBreakdownHint') }}
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <span class="rounded-md bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+            {{ t('admin.accounts.quotaDashboard.groupNormalCount', { count: groupHealthCounts.normal }) }}
+          </span>
+          <span class="rounded-md bg-amber-50 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+            {{ t('admin.accounts.quotaDashboard.groupDegradedCount', { count: groupHealthCounts.degraded }) }}
+          </span>
+          <span class="rounded-md bg-red-50 px-2 py-0.5 font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">
+            {{ t('admin.accounts.quotaDashboard.groupUnavailableCount', { count: groupHealthCounts.unavailable }) }}
+          </span>
+        </div>
+      </div>
+
+      <div class="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+        <article
+          v-for="summary in orderedGroupSummaries"
+          :key="groupSummaryKey(summary)"
+          class="rounded-md border p-2"
+          :class="groupCardClass(groupHealth(summary))"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex min-w-0 items-center gap-2">
+              <PlatformIcon :platform="platformIconValue(summary.platform)" size="sm" />
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ groupName(summary) }}
+                </div>
+                <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ platformLabel(summary.platform) }} · {{ t('admin.accounts.quotaDashboard.accountMeta', {
+                    total: summary.account_count,
+                    active: summary.active_account_count,
+                    schedulable: summary.schedulable_account_count
+                  }) }}
+                </div>
+              </div>
+            </div>
+            <span
+              class="shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold"
+              :class="groupHealthBadgeClass(groupHealth(summary))"
+            >
+              {{ groupHealthLabel(groupHealth(summary)) }}
+            </span>
+          </div>
+
+          <div
+            v-if="summary.usage_windows?.length"
+            class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2"
+          >
+            <div
+              v-for="window in summary.usage_windows"
+              :key="window.window"
+              class="rounded-md bg-white/70 p-2 dark:bg-dark-800/70"
+            >
+              <div class="flex items-center justify-between gap-2 text-xs">
+                <span class="font-medium text-gray-700 dark:text-gray-200">{{ windowLabel(window.window) }}</span>
+                <span class="font-mono font-semibold text-gray-900 dark:text-white">
+                  {{ formatPercent(window.average_utilization) }}
+                </span>
+              </div>
+              <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
+                <div
+                  class="h-full rounded-full"
+                  :class="quotaBarClass(window.average_utilization)"
+                  :style="{ width: `${progressWidth(window.average_utilization)}%` }"
+                />
+              </div>
+              <div class="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                <span>{{ t('admin.accounts.quotaDashboard.knownSnapshots', { known: window.known_account_count, total: window.account_count }) }}</span>
+                <span>{{ t('admin.accounts.quotaDashboard.remainingAccountsEquivalent', { count: formatAccountEquivalent(window.remaining_capacity_percent) }) }}</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+
     <div v-if="loading && !dashboard" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
       <div v-for="idx in 3" :key="idx" class="h-36 animate-pulse rounded-lg bg-gray-100 dark:bg-dark-700" />
     </div>
@@ -146,7 +235,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { AccountQuotaDashboard, AccountQuotaDimensionSummary, AccountQuotaSummary, GroupPlatform } from '@/types'
+import type { AccountQuotaDashboard, AccountQuotaDimensionSummary, AccountQuotaGroupSummary, AccountQuotaSummary, GroupPlatform } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { formatDateTime } from '@/utils/format'
@@ -205,6 +294,35 @@ const visibleSummaries = computed(() => {
   })
 })
 
+type GroupHealth = 'normal' | 'degraded' | 'unavailable'
+
+const visibleGroupSummaries = computed(() => {
+  return (props.dashboard?.group_summaries ?? []).filter((summary) => {
+    return summary.account_count > 0 || (summary.usage_windows?.some(window => window.account_count > 0) ?? false)
+  })
+})
+
+const hasGroupSummaries = computed(() => visibleGroupSummaries.value.length > 0)
+
+const orderedGroupSummaries = computed(() => {
+  return [...visibleGroupSummaries.value].sort((a, b) => {
+    const healthRank = groupHealthRank(groupHealth(b)) - groupHealthRank(groupHealth(a))
+    if (healthRank !== 0) return healthRank
+    if (a.platform !== b.platform) return String(a.platform).localeCompare(String(b.platform))
+    return groupName(a).localeCompare(groupName(b))
+  })
+})
+
+const groupHealthCounts = computed(() => {
+  return visibleGroupSummaries.value.reduce(
+    (acc, summary) => {
+      acc[groupHealth(summary)]++
+      return acc
+    },
+    { normal: 0, degraded: 0, unavailable: 0 }
+  )
+})
+
 function typeLabel(type: string): string {
   switch (type) {
     case 'oauth':
@@ -237,12 +355,51 @@ function windowLabel(window: string): string {
   return window
 }
 
-function quotaDimensions(summary: AccountQuotaSummary) {
+function quotaDimensions(summary: AccountQuotaSummary | AccountQuotaGroupSummary) {
   return [
     { key: 'daily', label: t('admin.accounts.quotaDashboard.daily'), value: summary.daily },
     { key: 'weekly', label: t('admin.accounts.quotaDashboard.weekly'), value: summary.weekly },
     { key: 'total', label: t('admin.accounts.quotaDashboard.total'), value: summary.total }
   ].filter(item => item.value.enabled_account_count > 0)
+}
+
+function groupSummaryKey(summary: AccountQuotaGroupSummary): string {
+  return summary.group_id ? String(summary.group_id) : `ungrouped:${summary.platform}`
+}
+
+function groupName(summary: AccountQuotaGroupSummary): string {
+  return summary.group_name || t('admin.accounts.quotaDashboard.ungrouped')
+}
+
+function groupHealth(summary: AccountQuotaGroupSummary): GroupHealth {
+  if (summary.group_status && summary.group_status !== 'active') return 'unavailable'
+  if (summary.account_count > 0 && summary.schedulable_account_count === 0) return 'unavailable'
+  if (summary.schedulable_account_count < summary.active_account_count) return 'degraded'
+  const highWindowUsage = summary.usage_windows?.some(window => window.average_utilization >= 80) ?? false
+  if (highWindowUsage) return 'degraded'
+  return 'normal'
+}
+
+function groupHealthRank(status: GroupHealth): number {
+  if (status === 'unavailable') return 3
+  if (status === 'degraded') return 2
+  return 1
+}
+
+function groupHealthLabel(status: GroupHealth): string {
+  return t(`admin.accounts.quotaDashboard.groupHealth.${status}`)
+}
+
+function groupCardClass(status: GroupHealth): string {
+  if (status === 'unavailable') return 'border-red-200 bg-red-50/70 dark:border-red-900/40 dark:bg-red-900/10'
+  if (status === 'degraded') return 'border-amber-200 bg-amber-50/70 dark:border-amber-900/40 dark:bg-amber-900/10'
+  return 'border-gray-200 bg-gray-50/70 dark:border-dark-700 dark:bg-dark-700/40'
+}
+
+function groupHealthBadgeClass(status: GroupHealth): string {
+  if (status === 'unavailable') return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+  if (status === 'degraded') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+  return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
 }
 
 function formatCurrency(value: number): string {

@@ -9,11 +9,12 @@ import (
 )
 
 type Config struct {
-	ListenAddr string        `yaml:"listen_addr"`
-	Version    string        `yaml:"version"`
-	Subsite    SubsiteConfig `yaml:"subsite"`
-	Master     MasterConfig  `yaml:"master"`
-	Queue      QueueConfig   `yaml:"queue"`
+	ListenAddr     string        `yaml:"listen_addr"`
+	Version        string        `yaml:"version"`
+	TrustedProxies []string      `yaml:"trusted_proxies"`
+	Subsite        SubsiteConfig `yaml:"subsite"`
+	Master         MasterConfig  `yaml:"master"`
+	Queue          QueueConfig   `yaml:"queue"`
 }
 
 type SubsiteConfig struct {
@@ -96,4 +97,19 @@ func applyEnv(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("SUBSITE_VERSION")); value != "" {
 		cfg.Version = value
 	}
+	if value := strings.TrimSpace(os.Getenv("SUBSITE_TRUSTED_PROXIES")); value != "" {
+		cfg.TrustedProxies = splitCSV(value)
+	}
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

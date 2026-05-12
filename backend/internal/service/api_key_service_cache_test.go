@@ -230,6 +230,7 @@ func TestAPIKeyService_GetByKey_UsesL2Cache(t *testing.T) {
 func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t *testing.T) {
 	svc := NewAPIKeyService(nil, nil, nil, nil, nil, nil, &config.Config{})
 	groupID := int64(9)
+	ownerUserID := int64(2)
 	apiKey := &APIKey{
 		ID:      1,
 		UserID:  2,
@@ -248,6 +249,8 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t 
 			Name:                  "openai",
 			Platform:              PlatformOpenAI,
 			Status:                StatusActive,
+			OwnerUserID:           &ownerUserID,
+			Scope:                 GroupScopeUserPrivate,
 			SubscriptionType:      SubscriptionTypeStandard,
 			RateMultiplier:        1,
 			AllowMessagesDispatch: true,
@@ -269,6 +272,9 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t 
 	require.NotNil(t, roundTrip)
 	require.NotNil(t, roundTrip.Group)
 	require.Equal(t, apiKey.Group.MessagesDispatchModelConfig, roundTrip.Group.MessagesDispatchModelConfig)
+	require.Equal(t, apiKey.Group.Scope, roundTrip.Group.Scope)
+	require.NotNil(t, roundTrip.Group.OwnerUserID)
+	require.Equal(t, *apiKey.Group.OwnerUserID, *roundTrip.Group.OwnerUserID)
 }
 
 func TestAPIKeyService_GetByKey_IgnoresLegacyAuthCacheSnapshotWithoutMessagesDispatchConfig(t *testing.T) {

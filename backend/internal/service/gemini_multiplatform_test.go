@@ -255,6 +255,7 @@ var _ GroupRepository = (*mockGroupRepoForGemini)(nil)
 type mockGatewayCacheForGemini struct {
 	sessionBindings map[string]int64
 	deletedSessions map[string]int
+	stringBindings  map[string]string
 }
 
 func (m *mockGatewayCacheForGemini) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
@@ -285,6 +286,30 @@ func (m *mockGatewayCacheForGemini) DeleteSessionAccountID(ctx context.Context, 
 	}
 	m.deletedSessions[sessionHash]++
 	delete(m.sessionBindings, sessionHash)
+	return nil
+}
+
+func (m *mockGatewayCacheForGemini) GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error) {
+	if m.stringBindings != nil {
+		if value, ok := m.stringBindings[sessionHash]; ok {
+			return value, nil
+		}
+	}
+	return "", errors.New("not found")
+}
+
+func (m *mockGatewayCacheForGemini) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {
+	if m.stringBindings == nil {
+		m.stringBindings = make(map[string]string)
+	}
+	m.stringBindings[sessionHash] = value
+	return nil
+}
+
+func (m *mockGatewayCacheForGemini) DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error {
+	if m.stringBindings != nil {
+		delete(m.stringBindings, sessionHash)
+	}
 	return nil
 }
 

@@ -15,12 +15,16 @@ This directory contains files for deploying Sub2API on Linux servers.
 |------|-------------|
 | `docker-compose.yml` | Docker Compose configuration (named volumes) |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
+| `docker-compose.subsite-agent.yml` | Standalone subsite-agent compose file for edge nodes |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `.env.example` | Docker environment variables template |
+| `.env.subsite.example` | subsite-agent Docker environment variables template |
 | `DOCKER.md` | Docker Hub documentation |
 | `install.sh` | One-click binary installation script |
 | `install-datamanagementd.sh` | datamanagementd 一键安装脚本 |
 | `sub2api.service` | Systemd service unit file |
+| `sub2api-subsite-agent.service` | subsite-agent systemd service unit file |
+| `subsite-agent.env.example` | subsite-agent systemd environment template |
 | `sub2api-datamanagementd.service` | datamanagementd systemd service unit file |
 | `DATAMANAGEMENTD_CN.md` | datamanagementd 部署与联动说明（中文） |
 | `config.example.yaml` | Example configuration file |
@@ -155,6 +159,61 @@ SELECT
 - 主进程固定探测 `/tmp/sub2api-datamanagement.sock`
 - Docker 场景下需把宿主机 Socket 挂载到容器内同路径
 - 详细步骤见：`deploy/DATAMANAGEMENTD_CN.md`
+
+### subsite-agent（子站节点）部署
+
+子站服务器只部署轻量 `sub2api-subsite-agent`，不部署主站后台、用户系统、PostgreSQL 或 Redis。
+
+Docker Compose:
+
+```bash
+# On the subsite server, from this repository's deploy directory
+cd deploy
+cp .env.subsite.example .env.subsite
+nano .env.subsite
+mkdir -p subsite_data
+# If the container cannot write SQLite queue data, set SUBSITE_UID/SUBSITE_GID
+# in .env.subsite to the owner of this directory.
+docker compose --env-file .env.subsite -f docker-compose.subsite-agent.yml up -d --build
+docker compose --env-file .env.subsite -f docker-compose.subsite-agent.yml logs -f subsite-agent
+```
+
+Required values in `.env.subsite`:
+
+```text
+SUBSITE_ID              from master admin Subsites page
+SUBSITE_MASTER_SECRET   shown once when creating the subsite
+SUBSITE_MASTER_URL      public URL of the master site
+SUBSITE_PUBLIC_URL      public URL of this subsite node
+```
+
+Systemd:
+
+```bash
+# From repository root, build the agent binary
+go -C backend build -o ../sub2api-subsite-agent ./cmd/subsite-agent
+
+sudo mkdir -p /etc/sub2api /var/lib/sub2api-subsite-agent /opt/sub2api-subsite-agent
+sudo install -m 0755 sub2api-subsite-agent /opt/sub2api-subsite-agent/sub2api-subsite-agent
+sudo cp deploy/subsite-agent.env.example /etc/sub2api/subsite-agent.env
+sudo cp deploy/sub2api-subsite-agent.service /etc/systemd/system/
+sudo nano /etc/sub2api/subsite-agent.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now sub2api-subsite-agent
+sudo journalctl -u sub2api-subsite-agent -f
+```
+
+Production test order:
+
+```text
+1. Create subsite in master admin and copy the one-time secret.
+2. Start subsite-agent while the subsite is still pending.
+3. Confirm heartbeat appears in master admin.
+4. Activate the subsite manually.
+5. Create at least one account lease for the subsite.
+6. Send a request to the subsite public URL with a normal master API Key.
+7. Verify usage reaches the master and duplicate usage does not double bill.
+```
 
 ### Commands
 

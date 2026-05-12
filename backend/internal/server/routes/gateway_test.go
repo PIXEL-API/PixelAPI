@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,9 +15,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type gatewayRouteSettingRepo struct {
+	values map[string]string
+}
+
+func (r *gatewayRouteSettingRepo) Get(context.Context, string) (*service.Setting, error) {
+	return nil, service.ErrSettingNotFound
+}
+
+func (r *gatewayRouteSettingRepo) GetValue(_ context.Context, key string) (string, error) {
+	if value, ok := r.values[key]; ok {
+		return value, nil
+	}
+	return "", service.ErrSettingNotFound
+}
+
+func (r *gatewayRouteSettingRepo) Set(context.Context, string, string) error { return nil }
+
+func (r *gatewayRouteSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := r.values[key]; ok {
+			out[key] = value
+		}
+	}
+	return out, nil
+}
+
+func (r *gatewayRouteSettingRepo) SetMultiple(context.Context, map[string]string) error { return nil }
+
+func (r *gatewayRouteSettingRepo) GetAll(context.Context) (map[string]string, error) {
+	out := make(map[string]string, len(r.values))
+	for key, value := range r.values {
+		out[key] = value
+	}
+	return out, nil
+}
+
+func (r *gatewayRouteSettingRepo) Delete(context.Context, string) error { return nil }
+
 func newGatewayRoutesTestRouter() *gin.Engine {
+	return newGatewayRoutesTestRouterWithMasterDataPlane(true)
+}
+
+func newGatewayRoutesTestRouterWithMasterDataPlane(enabled bool) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+	settingSvc := service.NewSettingService(&gatewayRouteSettingRepo{values: map[string]string{
+		service.SettingKeyMasterDataPlaneEnabled: map[bool]string{true: "true", false: "false"}[enabled],
+	}}, &config.Config{})
+	_ = settingSvc.UpdateSettings(context.Background(), &service.SystemSettings{
+		MasterDataPlaneEnabled: enabled,
+	})
 
 	RegisterGatewayRoutes(
 		router,
@@ -35,11 +85,23 @@ func newGatewayRoutesTestRouter() *gin.Engine {
 		nil,
 		nil,
 		nil,
-		nil,
+		settingSvc,
 		&config.Config{},
 	)
 
 	return router
+}
+
+func TestGatewayRoutesRejectMasterDataPlaneWhenDisabled(t *testing.T) {
+	router := newGatewayRoutesTestRouterWithMasterDataPlane(false)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Contains(t, w.Body.String(), "MASTER_DATA_PLANE_DISABLED")
 }
 
 func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {

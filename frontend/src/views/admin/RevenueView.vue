@@ -18,14 +18,67 @@
           </button>
         </div>
 
-        <div v-if="activeRevenueTab === 'overview'" class="flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
+        <div v-if="activeRevenueTab === 'overview'" class="flex flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-end xl:justify-end">
+          <div ref="userSearchRef" class="relative w-full sm:w-[280px]">
+            <label class="input-label">{{ t('common.email') }}</label>
+            <div class="relative">
+              <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                v-model="userKeyword"
+                type="text"
+                class="input h-10 pl-9 pr-9"
+                :placeholder="t('common.searchPlaceholder')"
+                @input="debounceUserSearch"
+                @focus="showUserDropdown = true"
+              />
+              <button
+                v-if="selectedUserId"
+                type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+                :title="t('common.reset')"
+                @click="clearUser"
+              >
+                <Icon name="x" size="sm" />
+              </button>
+            </div>
+            <div
+              v-if="showUserDropdown && (userResults.length > 0 || userKeyword)"
+              class="absolute z-50 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+            >
+              <button
+                v-for="user in userResults"
+                :key="user.id"
+                type="button"
+                class="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-dark-700"
+                @click="selectUser(user)"
+              >
+                <span class="truncate text-sm text-gray-900 dark:text-white">{{ user.email }}</span>
+                <span class="shrink-0 text-xs text-gray-400">#{{ user.id }}</span>
+              </button>
+              <div v-if="!userResults.length && userKeyword" class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                {{ t('common.noData') }}
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 sm:w-[300px]">
+            <div>
+              <label class="input-label">{{ t('dates.startDate') }}</label>
+              <input v-model="startDate" type="date" class="input h-10" @change="applyCustomDateRange" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('dates.endDate') }}</label>
+              <input v-model="endDate" type="date" class="input h-10" @change="applyCustomDateRange" />
+            </div>
+          </div>
+
           <div class="inline-flex rounded-lg border border-gray-200 bg-white p-1 dark:border-dark-600 dark:bg-dark-800">
             <button
               v-for="option in DAYS_OPTIONS"
               :key="option"
               type="button"
               class="min-w-[64px] rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-              :class="rangeDays === option
+              :class="selectedRangeDays === option
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
               :disabled="isRangeDisabled(option)"
@@ -207,7 +260,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   CategoryScale,
@@ -233,6 +286,7 @@ import type {
   RevenueShareOwnerBreakdownItem,
   RevenueSummary
 } from '@/api/admin/revenue'
+import { adminUsageAPI, type SimpleUser } from '@/api/admin/usage'
 import { useAppStore } from '@/stores/app'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 
@@ -264,12 +318,22 @@ const { t, locale } = useI18n()
 const appStore = useAppStore()
 
 const rangeDays = ref<RangeDays>(30)
+const initialRange = getDateRange(rangeDays.value)
+const startDate = ref(initialRange.start)
+const endDate = ref(initialRange.end)
+const selectedRangeDays = ref<RangeDays | null>(rangeDays.value)
+const selectedUserId = ref<number | null>(null)
+const userSearchRef = ref<HTMLElement | null>(null)
+const userKeyword = ref('')
+const userResults = ref<SimpleUser[]>([])
+const showUserDropdown = ref(false)
 const granularity = ref<RevenueGranularity>('day')
 const loading = ref(false)
 const summary = ref<RevenueSummary | null>(null)
 const activeBreakdown = ref<BreakdownKey>('shareOwners')
 const activeRevenueTab = ref<RevenueTab>('overview')
 let requestSeq = 0
+let userSearchTimeout: ReturnType<typeof setTimeout> | null = null
 
 const amountFormatter = computed(() => new Intl.NumberFormat(locale.value, {
   minimumFractionDigits: 2,
@@ -474,6 +538,7 @@ const adjustmentRows = computed(() => {
     { key: 'affiliate-rebate', label: t('admin.revenue.fields.affiliateRebate'), value: formatAmount(data.affiliate_rebate) },
     { key: 'affiliate-transfer', label: t('admin.revenue.fields.affiliateTransfer'), value: formatAmount(data.affiliate_transfer) },
     { key: 'affiliate-count', label: t('admin.revenue.fields.affiliateRebateCount'), value: formatInteger(data.affiliate_rebate_count) },
+    { key: 'private-group-commission', label: t('admin.revenue.fields.privateGroupCommission'), value: formatAmount(data.private_group_commission) },
     { key: 'share-consumer', label: t('admin.revenue.fields.shareConsumerCharge'), value: formatAmount(data.share_consumer_charge) },
     { key: 'share-account', label: t('admin.revenue.fields.shareAccountCost'), value: formatAmount(data.share_account_cost) },
     { key: 'share-owner', label: t('admin.revenue.fields.shareOwnerCredit'), value: formatAmount(data.share_owner_credit) },
@@ -585,6 +650,10 @@ function isRangeDisabled(days: RangeDays): boolean {
 function setRangeDays(days: RangeDays) {
   if (isRangeDisabled(days) || rangeDays.value === days) return
   rangeDays.value = days
+  selectedRangeDays.value = days
+  const range = getDateRange(days)
+  startDate.value = range.start
+  endDate.value = range.end
   void loadSummary()
 }
 
@@ -593,20 +662,26 @@ function setGranularity(value: RevenueGranularity) {
   granularity.value = value
   if (value === 'hour' && rangeDays.value > 30) {
     rangeDays.value = 30
+    selectedRangeDays.value = 30
+    const range = getDateRange(30)
+    startDate.value = range.start
+    endDate.value = range.end
   }
   void loadSummary()
 }
 
 async function loadSummary() {
+  if (!validateDateRange()) return
+
   const currentRequest = ++requestSeq
   loading.value = true
   try {
-    const range = getDateRange(rangeDays.value)
     const res = await revenueAPI.getSummary({
-      start_date: range.start,
-      end_date: range.end,
+      start_date: startDate.value,
+      end_date: endDate.value,
       granularity: granularity.value,
-      top_limit: 10
+      top_limit: 10,
+      user_id: selectedUserId.value ?? undefined
     })
     if (currentRequest === requestSeq) {
       summary.value = res.data
@@ -619,6 +694,70 @@ async function loadSummary() {
     if (currentRequest === requestSeq) {
       loading.value = false
     }
+  }
+}
+
+function applyCustomDateRange() {
+  selectedRangeDays.value = null
+  void loadSummary()
+}
+
+function validateDateRange(): boolean {
+  if (!startDate.value || !endDate.value) {
+    appStore.showError(t('common.unknownError'))
+    return false
+  }
+  if (startDate.value > endDate.value) {
+    appStore.showError(t('common.unknownError'))
+    return false
+  }
+  return true
+}
+
+function debounceUserSearch() {
+  selectedUserId.value = null
+  if (userSearchTimeout) {
+    clearTimeout(userSearchTimeout)
+  }
+
+  userSearchTimeout = setTimeout(async () => {
+    const keyword = userKeyword.value.trim()
+    if (!keyword) {
+      userResults.value = []
+      showUserDropdown.value = false
+      return
+    }
+
+    try {
+      userResults.value = await adminUsageAPI.searchUsers(keyword)
+      showUserDropdown.value = true
+    } catch (err: unknown) {
+      userResults.value = []
+      appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.errors', t('common.unknownError')))
+    }
+  }, 300)
+}
+
+function selectUser(user: SimpleUser) {
+  selectedUserId.value = user.id
+  userKeyword.value = user.email
+  userResults.value = []
+  showUserDropdown.value = false
+  void loadSummary()
+}
+
+function clearUser() {
+  selectedUserId.value = null
+  userKeyword.value = ''
+  userResults.value = []
+  showUserDropdown.value = false
+  void loadSummary()
+}
+
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target as Node | null
+  if (target && !(userSearchRef.value?.contains(target) ?? false)) {
+    showUserDropdown.value = false
   }
 }
 
@@ -652,6 +791,14 @@ function formatPercent(value: number): string {
 }
 
 onMounted(() => {
+  document.addEventListener('click', onDocumentClick)
   void loadSummary()
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onDocumentClick)
+  if (userSearchTimeout) {
+    clearTimeout(userSearchTimeout)
+  }
 })
 </script>

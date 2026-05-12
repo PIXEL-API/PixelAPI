@@ -120,6 +120,9 @@ func NormalizeOpenAIAccountLevel(platform, accountLevel string, credentials, ext
 	if platform != PlatformOpenAI {
 		return level
 	}
+	if IsConcreteAccountLevel(level) {
+		return level
+	}
 	if inferred := InferOpenAIAccountLevel(credentials, extra); IsConcreteAccountLevel(inferred) {
 		return inferred
 	}
@@ -159,6 +162,66 @@ func NormalizeOpenAIPlanAccountLevel(planType string) string {
 	default:
 		return AccountLevelUnknown
 	}
+}
+
+func NormalizeOpenAISharedPoolAccountLevel(level string) string {
+	switch NormalizeAccountLevel(level) {
+	case AccountLevelTeam:
+		return AccountLevelPlus
+	default:
+		return NormalizeAccountLevel(level)
+	}
+}
+
+func NormalizeOpenAISharedPoolRequiredLevel(level string) string {
+	switch NormalizeRequiredAccountLevel(level) {
+	case AccountLevelTeam:
+		return AccountLevelPlus
+	default:
+		return NormalizeRequiredAccountLevel(level)
+	}
+}
+
+func OpenAISharedPoolLevelRank(level string) int {
+	switch NormalizeOpenAISharedPoolAccountLevel(level) {
+	case AccountLevelFree:
+		return 1
+	case AccountLevelPlus:
+		return 2
+	case AccountLevelPro:
+		return 3
+	default:
+		return 0
+	}
+}
+
+func CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel string) bool {
+	required := NormalizeOpenAISharedPoolRequiredLevel(requiredLevel)
+	if required == "" {
+		return true
+	}
+	account := NormalizeOpenAISharedPoolAccountLevel(accountLevel)
+	accountRank := OpenAISharedPoolLevelRank(account)
+	requiredRank := OpenAISharedPoolLevelRank(required)
+	return accountRank > 0 && requiredRank > 0 && accountRank >= requiredRank
+}
+
+func OpenAISharedPoolAllowedAccountLevels(requiredLevel string) []string {
+	required := NormalizeOpenAISharedPoolRequiredLevel(requiredLevel)
+	if required == "" {
+		return nil
+	}
+	requiredRank := OpenAISharedPoolLevelRank(required)
+	if requiredRank == 0 {
+		return nil
+	}
+	levels := make([]string, 0, 4)
+	for _, level := range []string{AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam} {
+		if CanOpenAIAccountJoinSharedPool(level, required) {
+			levels = append(levels, level)
+		}
+	}
+	return levels
 }
 
 func DefaultOAuthAccountConcurrencyForPlatform(platform string) int {

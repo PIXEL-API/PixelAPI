@@ -676,6 +676,14 @@ export default {
     pendingReview: 'Validation Pending',
     approved: 'Approved',
     suspended: 'Suspended',
+    shareValidationTitle: 'Public Share Validation',
+    shareValidationPendingHint: 'The system is waiting for public-share validation. It checks account test results, the shared pool, and the revenue-share policy.',
+    shareValidationFailed: 'Last validation failed: {reason}',
+    shareValidationSuspended: 'Public sharing is suspended: {reason}',
+    revalidateShare: 'Revalidate public sharing',
+    shareValidationApproved: 'Public sharing validation passed',
+    shareValidationStillPending: 'Revalidation finished, but the account is still pending. Check the validation hint for the reason.',
+    shareValidationFailedToRun: 'Failed to revalidate public sharing',
     noGroups: 'No groups',
     allPlatforms: 'All Platforms',
     allTypes: 'All Types',
@@ -1339,6 +1347,27 @@ export default {
       readFailed: 'Failed to read the selected image.',
       emptyDeleteHint: 'Avatar is already empty',
     },
+    receiptCode: {
+      title: 'Receipt Code',
+      description: 'Upload your Alipay or WeChat receipt QR code. Images are stored in OSS, not on the local server.',
+      empty: 'No image',
+      notUploaded: 'No receipt code uploaded for this method.',
+      savedAt: 'Saved at {time}',
+      hint: 'PNG, JPG, GIF, or WebP. Maximum 1MB by default.',
+      uploadAction: 'Choose image',
+      uploadRequired: 'Choose a receipt code image first',
+      invalidType: 'Please choose a PNG, JPG, GIF, or WebP image',
+      tooLarge: 'Image must be 1MB or smaller',
+      loadFailed: 'Failed to load receipt code',
+      saveSuccess: 'Receipt code saved',
+      saveFailed: 'Failed to save receipt code',
+      deleteSuccess: 'Receipt code removed',
+      deleteFailed: 'Failed to remove receipt code',
+      methods: {
+        alipay: 'Alipay',
+        wechat: 'WeChat',
+      },
+    },
     authBindings: {
       title: 'Connected Sign-In Methods',
       description: 'View current bindings and connect another provider to this account.',
@@ -1546,6 +1575,7 @@ export default {
         affiliateRebate: 'Affiliate Rebate',
         affiliateTransfer: 'Affiliate Transfer',
         affiliateRebateCount: 'Affiliate Rebate Count',
+        privateGroupCommission: 'Private Group Commission',
         shareConsumerCharge: 'Share Consumer Charge',
         shareAccountCost: 'Share Account Cost',
         shareOwnerCredit: 'Share Owner Credit',
@@ -1601,6 +1631,12 @@ export default {
         currentPolicy: 'Current Effective Policy',
         currentPolicyHint: 'Public accounts must pass this effective policy before joining the shared pool. Owner self-use does not produce owner income and is excluded from profit share statistics.',
         globalConfig: 'Global Policy Config',
+        privateGroupCommissionTitle: 'Private Group Commission',
+        privateGroupCommissionDescription: 'Configure the extra platform commission charged on private-group usage. Requests still consume subscription quota, while the commission is additionally deducted from the user wallet balance.',
+        privateGroupCommissionRate: 'Commission Rate',
+        privateGroupCommissionHint: 'Allowed range: 0% - 100%. Default is 0.5%.',
+        privateGroupCommissionExample: 'Current setting: {rate}',
+        saveCommission: 'Save Commission',
         enabled: 'Enable policy',
         ownerShare: 'Owner Share',
         inviteShare: 'Invite Share',
@@ -2839,6 +2875,17 @@ export default {
         knownSnapshots: 'Snapshots {known}/{total}',
         remainingAccountsEquivalent: '{count} account-equivalent left',
         exhaustedCount: 'Exhausted {count}',
+        groupBreakdown: 'Group capacity verdict',
+        groupBreakdownHint: 'Shared pool capacity is judged per group so a global total cannot hide a failed group.',
+        groupNormalCount: 'Normal {count}',
+        groupDegradedCount: 'Degraded {count}',
+        groupUnavailableCount: 'Unavailable {count}',
+        ungrouped: 'Ungrouped',
+        groupHealth: {
+          normal: 'Normal',
+          degraded: 'Degraded',
+          unavailable: 'Unavailable'
+        },
         empty: 'No account quota or summarizable OpenAI OAuth snapshots are available yet.',
         loadFailed: 'Failed to load quota overview'
       },
@@ -3148,6 +3195,7 @@ export default {
         refreshToken: 'Refresh Token',
         resetStatusSuccess: 'Successfully reset {count} account(s) status',
         refreshTokenSuccess: 'Successfully refreshed {count} account(s) token',
+        noRefreshableAccounts: 'No OAuth/Setup Token account selected for token refresh',
         partialSuccess: 'Partially completed: {success} succeeded, {failed} failed'
       },
       bulkEdit: {
@@ -5456,6 +5504,9 @@ export default {
         backendMode: 'Backend Mode',
         backendModeDescription:
           'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
+        masterDataPlane: 'Master Data Plane',
+        masterDataPlaneDescription:
+          'When enabled, the master can temporarily serve model requests. When disabled, model requests must enter through subsites.',
         siteName: 'Site Name',
         siteNamePlaceholder: 'Sub2API',
         siteNameHint: 'Displayed in emails and page titles',
@@ -6050,6 +6101,12 @@ export default {
       openaiExperimentalScheduler: {
         title: 'OpenAI experimental scheduler policy',
         description: "Disabled by default. When enabled, this only changes the gateway's experimental account-selection policy for OpenAI traffic; it does not indicate an upstream OpenAI capability."
+      },
+      openaiFreeAccountRepair: {
+        title: 'OpenAI Free account auto repair',
+        description: 'When Codex 7-day quota is exhausted and the weekly limit is at or below the threshold, downgrade the account to Free and suspend public sharing.',
+        threshold: 'Free detection weekly limit threshold (USD)',
+        thresholdHint: 'For example, 60 triggers repair when weekly limit is less than or equal to 60 USD and 7-day usage reaches 100%.'
       },
       saveSettings: 'Save Settings',
       saving: 'Saving...',

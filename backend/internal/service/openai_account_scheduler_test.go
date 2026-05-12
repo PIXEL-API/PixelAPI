@@ -116,6 +116,7 @@ func (c schedulerTestConcurrencyCache) GetAccountWaitingCount(ctx context.Contex
 type schedulerTestGatewayCache struct {
 	sessionBindings map[string]int64
 	deletedSessions map[string]int
+	stringBindings  map[string]string
 }
 
 func (c *schedulerTestGatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
@@ -146,6 +147,30 @@ func (c *schedulerTestGatewayCache) DeleteSessionAccountID(ctx context.Context, 
 	}
 	c.deletedSessions[sessionHash]++
 	delete(c.sessionBindings, sessionHash)
+	return nil
+}
+
+func (c *schedulerTestGatewayCache) GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error) {
+	if c.stringBindings != nil {
+		if value, ok := c.stringBindings[sessionHash]; ok {
+			return value, nil
+		}
+	}
+	return "", errors.New("not found")
+}
+
+func (c *schedulerTestGatewayCache) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {
+	if c.stringBindings == nil {
+		c.stringBindings = make(map[string]string)
+	}
+	c.stringBindings[sessionHash] = value
+	return nil
+}
+
+func (c *schedulerTestGatewayCache) DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error {
+	if c.stringBindings != nil {
+		delete(c.stringBindings, sessionHash)
+	}
 	return nil
 }
 

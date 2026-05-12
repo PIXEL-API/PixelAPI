@@ -15,7 +15,9 @@ import type {
   NotifyEmailEntry,
   UserAuthProvider,
   UserAffiliateDetail,
-  AffiliateTransferResponse
+  AffiliateTransferResponse,
+  ReceiptCode,
+  ReceiptCodePaymentMethod
 } from '@/types'
 
 /**
@@ -185,6 +187,33 @@ export async function transferAffiliateQuota(): Promise<AffiliateTransferRespons
   return data
 }
 
+export async function getReceiptCode(paymentMethod: ReceiptCodePaymentMethod): Promise<ReceiptCode | null> {
+  const { data } = await apiClient.get<ReceiptCode | null>('/user/receipt-code', {
+    params: { payment_method: paymentMethod }
+  })
+  return data
+}
+
+export async function uploadReceiptCode(
+  paymentMethod: ReceiptCodePaymentMethod,
+  file: File
+): Promise<ReceiptCode> {
+  const form = new FormData()
+  form.append('payment_method', paymentMethod)
+  form.append('file', file)
+  const { data } = await apiClient.post<ReceiptCode>('/user/receipt-code', form, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+  return data
+}
+
+export async function deleteReceiptCode(paymentMethod: ReceiptCodePaymentMethod): Promise<{ deleted: boolean }> {
+  const { data } = await apiClient.delete<{ deleted: boolean }>('/user/receipt-code', {
+    params: { payment_method: paymentMethod }
+  })
+  return data
+}
+
 export const userAPI = {
   getProfile,
   updateProfile,
@@ -199,7 +228,10 @@ export const userAPI = {
   buildOAuthBindingStartURL,
   startOAuthBinding,
   getAffiliateDetail,
-  transferAffiliateQuota
+  transferAffiliateQuota,
+  getReceiptCode,
+  uploadReceiptCode,
+  deleteReceiptCode
 }
 
 export default userAPI

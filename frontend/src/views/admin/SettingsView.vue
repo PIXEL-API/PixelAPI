@@ -3061,6 +3061,49 @@
                 </div>
                 <Toggle v-model="form.openai_advanced_scheduler_enabled" />
               </div>
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t("admin.settings.openaiFreeAccountRepair.title")
+                    }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.openaiFreeAccountRepair.description")
+                    }}
+                  </p>
+                </div>
+                <Toggle v-model="form.openai_free_account_repair_enabled" />
+              </div>
+
+              <div v-if="form.openai_free_account_repair_enabled">
+                <label
+                  class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{
+                    t("admin.settings.openaiFreeAccountRepair.threshold")
+                  }}
+                </label>
+                <input
+                  v-model.number="
+                    form.openai_free_account_repair_weekly_threshold_usd
+                  "
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  class="input mt-1"
+                  placeholder="60"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    t("admin.settings.openaiFreeAccountRepair.thresholdHint")
+                  }}
+                </p>
+              </div>
             </div>
           </div>
 
@@ -3628,6 +3671,20 @@
                   </p>
                 </div>
                 <Toggle v-model="form.backend_mode_enabled" />
+              </div>
+
+              <div
+                class="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20"
+              >
+                <div>
+                  <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.site.masterDataPlane") }}
+                  </h3>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.site.masterDataPlaneDescription") }}
+                  </p>
+                </div>
+                <Toggle v-model="form.master_data_plane_enabled" />
               </div>
 
               <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -5749,7 +5806,10 @@ type SettingsForm = Omit<
   wechat_connect_mobile_enabled: boolean;
   oidc_connect_client_secret: string;
   force_email_on_third_party_signup: boolean;
+  master_data_plane_enabled: boolean;
   openai_advanced_scheduler_enabled: boolean;
+  openai_free_account_repair_enabled: boolean;
+  openai_free_account_repair_weekly_threshold_usd: number;
 };
 
 const form = reactive<SettingsForm>({
@@ -5774,6 +5834,7 @@ const form = reactive<SettingsForm>({
   user_private_group_weekly_limit_usd: null,
   user_private_group_monthly_limit_usd: null,
   user_private_group_rate_multiplier: 1,
+  user_private_group_commission_rate: 0,
   user_private_group_rpm_limit: 0,
   site_name: "Sub2API",
   site_logo: "",
@@ -5783,6 +5844,7 @@ const form = reactive<SettingsForm>({
   doc_url: "",
   home_content: "",
   backend_mode_enabled: false,
+  master_data_plane_enabled: true,
   hide_ccs_import_button: false,
   payment_enabled: false,
   payment_min_amount: 1,
@@ -5904,6 +5966,8 @@ const form = reactive<SettingsForm>({
   // 分组隔离
   allow_ungrouped_key_scheduling: false,
   openai_advanced_scheduler_enabled: false,
+  openai_free_account_repair_enabled: false,
+  openai_free_account_repair_weekly_threshold_usd: 60,
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
@@ -6435,6 +6499,7 @@ async function loadSettings() {
     }));
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(settings));
     form.backend_mode_enabled = settings.backend_mode_enabled;
+    form.master_data_plane_enabled = settings.master_data_plane_enabled ?? true;
     form.default_subscriptions = normalizeDefaultSubscriptionSettings(
       settings.default_subscriptions,
     );
@@ -6753,6 +6818,7 @@ async function saveSettings() {
       doc_url: form.doc_url,
       home_content: form.home_content,
       backend_mode_enabled: form.backend_mode_enabled,
+      master_data_plane_enabled: form.master_data_plane_enabled,
       hide_ccs_import_button: form.hide_ccs_import_button,
       table_default_page_size: form.table_default_page_size,
       table_page_size_options: form.table_page_size_options,
@@ -6866,6 +6932,10 @@ async function saveSettings() {
       payment_cancel_rate_limit_window_mode:
         form.payment_cancel_rate_limit_window_mode,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
+      openai_free_account_repair_enabled:
+        form.openai_free_account_repair_enabled,
+      openai_free_account_repair_weekly_threshold_usd:
+        Number(form.openai_free_account_repair_weekly_threshold_usd) || 0,
       // Balance & quota notification
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:

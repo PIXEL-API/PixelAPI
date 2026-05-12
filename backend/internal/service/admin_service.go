@@ -1405,7 +1405,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
 	if !IsValidRequiredAccountLevel(input.RequiredAccountLevel) {
-		return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
+		return nil, errors.New("required_account_level must be empty, free, plus, or pro")
 	}
 
 	platform := input.Platform
@@ -1651,7 +1651,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.RequiredAccountLevel != nil {
 		if !IsValidRequiredAccountLevel(*input.RequiredAccountLevel) {
-			return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
+			return nil, errors.New("required_account_level must be empty, free, plus, or pro")
 		}
 		group.RequiredAccountLevel = NormalizeRequiredAccountLevel(*input.RequiredAccountLevel)
 	}
@@ -2162,11 +2162,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 	}
-	accountLevelInput := input.AccountLevel
-	if input.Platform == PlatformOpenAI {
-		accountLevelInput = AccountLevelUnknown
-	}
-	accountLevel := NormalizeOpenAIAccountLevel(input.Platform, accountLevelInput, input.Credentials, input.Extra)
+	accountLevel := NormalizeOpenAIAccountLevel(input.Platform, input.AccountLevel, input.Credentials, input.Extra)
 	if err := s.validateAccountLevelGroupBinding(ctx, input.Platform, accountLevel, groupIDs); err != nil {
 		return nil, err
 	}
@@ -2320,7 +2316,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		ComputeQuotaResetAt(account.Extra)
 	}
-	account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+	if input.AccountLevel != nil {
+		account.AccountLevel = NormalizeAccountLevel(*input.AccountLevel)
+	} else {
+		account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
+	}
 	if input.ProxyID != nil {
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *input.ProxyID == 0 {
@@ -2445,6 +2445,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if input == nil {
+		return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", "bulk update input is required")
+	}
+
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)
 		if err != nil {
@@ -2493,7 +2497,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			credentials := mergeAccountMap(account.Credentials, input.Credentials)
 			extra := mergeAccountMap(account.Extra, input.Extra)
 			level := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, credentials, extra)
-			if input.AccountLevel != nil && account.Platform != PlatformOpenAI {
+			if input.AccountLevel != nil {
 				level = NormalizeAccountLevel(*input.AccountLevel)
 			}
 			groupIDs := account.GroupIDs
@@ -2542,7 +2546,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier < 0 {
-			return nil, errors.New("rate_multiplier must be >= 0")
+			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", "rate_multiplier must be >= 0")
 		}
 	}
 	if input.Concurrency != nil || input.LoadFactor != nil || input.AccountLevel != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 {
@@ -2573,10 +2577,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				}
 			}
 			if err := ValidateOpenAIPlusConcurrency(account.Platform, level, concurrency); err != nil {
-				return nil, err
+				return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
 			}
 			if err := ValidateOpenAIPlusLoadFactor(account.Platform, level, loadFactor); err != nil {
-				return nil, err
+				return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
 			}
 		}
 	}
@@ -2603,9 +2607,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {
-			repoUpdates.LoadFactor = nil // 0 或负数表示清除
+			repoUpdates.LoadFactor = input.LoadFactor
 		} else if *input.LoadFactor > 10000 {
-			return nil, errors.New("load_factor must be <= 10000")
+			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", "load_factor must be <= 10000")
 		} else {
 			repoUpdates.LoadFactor = input.LoadFactor
 		}
@@ -2617,21 +2621,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		repoUpdates.Schedulable = input.Schedulable
 	}
 	if input.AccountLevel != nil {
-		accounts, err := loadPreflightAccounts()
-		if err != nil {
-			return nil, err
-		}
-		canPersistBulkAccountLevel := true
-		for _, account := range accounts {
-			if account != nil && account.Platform == PlatformOpenAI {
-				canPersistBulkAccountLevel = false
-				break
-			}
-		}
-		if canPersistBulkAccountLevel {
-			level := NormalizeAccountLevel(*input.AccountLevel)
-			repoUpdates.AccountLevel = &level
-		}
+		level := NormalizeAccountLevel(*input.AccountLevel)
+		repoUpdates.AccountLevel = &level
 	}
 
 	// Run bulk update for column/jsonb fields first.
@@ -2676,7 +2667,7 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 	default:
 		parsedGroupID, err := strconv.ParseInt(strings.TrimSpace(filters.Group), 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid group filter: %w", err)
+			return nil, infraerrors.BadRequest("INVALID_GROUP_FILTER", "invalid group filter")
 		}
 		groupID = parsedGroupID
 	}
@@ -3421,8 +3412,11 @@ func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context,
 		if group.Platform != PlatformOpenAI || required == "" {
 			continue
 		}
-		if level != required {
-			return fmt.Errorf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s", level, group.Name, required)
+		if !CanOpenAIAccountJoinSharedPool(level, required) {
+			return infraerrors.BadRequest(
+				"ACCOUNT_GROUP_BINDING_INVALID",
+				fmt.Sprintf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s or lower", NormalizeOpenAISharedPoolAccountLevel(level), group.Name, required),
+			)
 		}
 	}
 	return nil
@@ -3447,21 +3441,30 @@ func (s *adminServiceImpl) validateAccountShareGroupBinding(ctx context.Context,
 		scope := NormalizeGroupScope(group.Scope)
 		if account.OwnerUserID == nil {
 			if scope == GroupScopeUserPrivate {
-				return fmt.Errorf("platform account cannot bind to user private group %s", group.Name)
+				return infraerrors.BadRequest(
+					"ACCOUNT_GROUP_BINDING_INVALID",
+					fmt.Sprintf("platform account cannot bind to user private group %s", group.Name),
+				)
 			}
 			continue
 		}
 
 		if scope == GroupScopeUserPrivate {
 			if group.OwnerUserID == nil || *group.OwnerUserID != *account.OwnerUserID {
-				return fmt.Errorf("owned account cannot bind to another user's private group %s", group.Name)
+				return infraerrors.BadRequest(
+					"ACCOUNT_GROUP_BINDING_INVALID",
+					fmt.Sprintf("owned account cannot bind to another user's private group %s", group.Name),
+				)
 			}
 			continue
 		}
 
 		if NormalizeAccountShareMode(account.ShareMode) != AccountShareModePublic ||
 			NormalizeAccountShareStatus(account.ShareStatus) != AccountShareStatusApproved {
-			return fmt.Errorf("owned account must be approved public share before binding to public group %s", group.Name)
+			return infraerrors.BadRequest(
+				"ACCOUNT_GROUP_BINDING_INVALID",
+				fmt.Sprintf("owned account must be approved public share before binding to public group %s", group.Name),
+			)
 		}
 	}
 	return nil
@@ -3614,8 +3617,8 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 			continue
 		}
 		accountLevel := NormalizeAccountLevel(account.AccountLevel)
-		if requiresLevelCheck && account.Platform == PlatformOpenAI && accountLevel != requiredLevel {
-			return nil, fmt.Errorf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s", account.Name, accountLevel, group.Name, requiredLevel)
+		if requiresLevelCheck && account.Platform == PlatformOpenAI && !CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel) {
+			return nil, fmt.Errorf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s or lower", account.Name, NormalizeOpenAISharedPoolAccountLevel(accountLevel), group.Name, requiredLevel)
 		}
 		filtered = append(filtered, accountID)
 	}

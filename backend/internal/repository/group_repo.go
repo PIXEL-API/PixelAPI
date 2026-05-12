@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/apikeygrouproute"
 	"github.com/Wei-Shaw/sub2api/ent/group"
+	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -419,22 +420,10 @@ func (r *groupRepository) ListActive(ctx context.Context) ([]service.Group, erro
 		return nil, err
 	}
 
-	groupIDs := make([]int64, 0, len(groups))
 	outGroups := make([]service.Group, 0, len(groups))
 	for i := range groups {
 		g := groupEntityToService(groups[i])
 		outGroups = append(outGroups, *g)
-		groupIDs = append(groupIDs, g.ID)
-	}
-
-	counts, err := r.loadAccountCounts(ctx, groupIDs)
-	if err == nil {
-		for i := range outGroups {
-			c := counts[outGroups[i].ID]
-			outGroups[i].AccountCount = c.Total
-			outGroups[i].ActiveAccountCount = c.Active
-			outGroups[i].RateLimitedAccountCount = c.RateLimited
-		}
 	}
 
 	return outGroups, nil
@@ -449,25 +438,71 @@ func (r *groupRepository) ListActiveByPlatform(ctx context.Context, platform str
 		return nil, err
 	}
 
-	groupIDs := make([]int64, 0, len(groups))
 	outGroups := make([]service.Group, 0, len(groups))
 	for i := range groups {
 		g := groupEntityToService(groups[i])
 		outGroups = append(outGroups, *g)
-		groupIDs = append(groupIDs, g.ID)
-	}
-
-	counts, err := r.loadAccountCounts(ctx, groupIDs)
-	if err == nil {
-		for i := range outGroups {
-			c := counts[outGroups[i].ID]
-			outGroups[i].AccountCount = c.Total
-			outGroups[i].ActiveAccountCount = c.Active
-			outGroups[i].RateLimitedAccountCount = c.RateLimited
-		}
 	}
 
 	return outGroups, nil
+}
+
+func (r *groupRepository) ListActiveVisibleToUser(ctx context.Context, userID int64, subscribedGroupIDs []int64) ([]service.Group, error) {
+	if userID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+
+	predicates := []predicate.Group{
+		group.And(
+			group.ScopeEQ(service.GroupScopePublic),
+			group.SubscriptionTypeEQ(service.SubscriptionTypeStandard),
+		),
+		group.And(
+			group.ScopeEQ(service.GroupScopeUserPrivate),
+			group.OwnerUserIDEQ(userID),
+		),
+	}
+	if subscribedGroupIDs := uniquePositiveInt64s(subscribedGroupIDs); len(subscribedGroupIDs) > 0 {
+		predicates = append(predicates, group.And(
+			group.ScopeEQ(service.GroupScopePublic),
+			group.IDIn(subscribedGroupIDs...),
+		))
+	}
+
+	groups, err := r.client.Group.Query().
+		Where(
+			group.StatusEQ(service.StatusActive),
+			group.Or(predicates...),
+		).
+		Order(dbent.Asc(group.FieldSortOrder), dbent.Asc(group.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	outGroups := make([]service.Group, 0, len(groups))
+	for i := range groups {
+		g := groupEntityToService(groups[i])
+		outGroups = append(outGroups, *g)
+	}
+
+	return outGroups, nil
+}
+
+func uniquePositiveInt64s(values []int64) []int64 {
+	out := make([]int64, 0, len(values))
+	seen := make(map[int64]struct{}, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func (r *groupRepository) ExistsByName(ctx context.Context, name string) (bool, error) {

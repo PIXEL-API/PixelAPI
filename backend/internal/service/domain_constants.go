@@ -336,9 +336,16 @@ const (
 	SettingKeyUserPrivateGroupMonthlyLimitUSD = "user_private_group_monthly_limit_usd"
 	SettingKeyUserPrivateGroupRateMultiplier  = "user_private_group_rate_multiplier"
 	SettingKeyUserPrivateGroupRPMLimit        = "user_private_group_rpm_limit"
+	SettingKeyUserPrivateGroupCommissionRate  = "user_private_group_commission_rate"
 
 	// SettingKeyBackendModeEnabled Backend 模式：禁用用户注册和自助服务，仅管理员可登录
 	SettingKeyBackendModeEnabled = "backend_mode_enabled"
+
+	// SettingKeyMasterDataPlaneEnabled 主站数据面开关：开启时主站允许临时承接模型请求。
+	SettingKeyMasterDataPlaneEnabled = "master_data_plane_enabled"
+
+	// SettingKeySubsiteOnlyGatewayEnabled legacy inverse of master_data_plane_enabled.
+	SettingKeySubsiteOnlyGatewayEnabled = "subsite_only_gateway_enabled"
 
 	// Gateway Forwarding Behavior
 	// SettingKeyEnableFingerprintUnification 是否统一 OAuth 账号的 X-Stainless-* 指纹头（默认 true）
@@ -358,6 +365,10 @@ const (
 	// Account Quota Notification
 	SettingKeyAccountQuotaNotifyEnabled = "account_quota_notify_enabled" // 全局开关
 	SettingKeyAccountQuotaNotifyEmails  = "account_quota_notify_emails"  // 管理员通知邮箱列表（JSON 数组）
+
+	// OpenAI account repair
+	SettingKeyOpenAIFreeAccountRepairEnabled            = "openai_free_account_repair_enabled"
+	SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD = "openai_free_account_repair_weekly_threshold_usd"
 
 	// Web Search Emulation
 	SettingKeyWebSearchEmulationConfig = "web_search_emulation_config" // JSON 配置

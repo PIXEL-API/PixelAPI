@@ -70,6 +70,8 @@ type APIKeyAuthGroupSnapshot struct {
 	Name                            string   `json:"name"`
 	Platform                        string   `json:"platform"`
 	Status                          string   `json:"status"`
+	OwnerUserID                     *int64   `json:"owner_user_id,omitempty"`
+	Scope                           string   `json:"scope,omitempty"`
 	SubscriptionType                string   `json:"subscription_type"`
 	RateMultiplier                  float64  `json:"rate_multiplier"`
 	DailyLimitUSD                   *float64 `json:"daily_limit_usd,omitempty"`

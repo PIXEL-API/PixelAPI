@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -288,6 +289,7 @@ func TestAdminService_UpdateAccount_UsesInferredOpenAILevelForGroupBinding(t *te
 
 	require.Nil(t, result)
 	require.Error(t, err)
+	require.Equal(t, 400, infraerrors.Code(err))
 	require.Contains(t, err.Error(), "account_level mismatch")
 	require.Nil(t, repo.updatedAccount)
 }
@@ -321,6 +323,7 @@ func TestAdminService_UpdateOwnedPrivateAccountRejectsPublicGroupBinding(t *test
 
 	require.Nil(t, result)
 	require.Error(t, err)
+	require.Equal(t, 400, infraerrors.Code(err))
 	require.Contains(t, err.Error(), "approved public share")
 	require.Nil(t, repo.updatedAccount)
 }
@@ -355,6 +358,7 @@ func TestAdminService_BulkUpdateOwnedPrivateAccountRejectsPublicGroupBinding(t *
 
 	require.Nil(t, result)
 	require.Error(t, err)
+	require.Equal(t, 400, infraerrors.Code(err))
 	require.Contains(t, err.Error(), "approved public share")
 	require.Empty(t, repo.bulkUpdateIDs)
 }
@@ -432,4 +436,121 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	require.Equal(t, 2, result.Success)
 	require.Equal(t, 0, result.Failed)
 	require.Equal(t, []int64{7, 11}, result.SuccessIDs)
+}
+
+func TestAdminServiceBulkUpdateAccounts_OpenAIPlusConcurrencyValidationReturnsBadRequest(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{
+				ID:           1,
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPlus,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	concurrency := OpenAIPlusMaxConcurrency + 1
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{1},
+		Concurrency: &concurrency,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Equal(t, 400, infraerrors.Code(err))
+	require.Contains(t, infraerrors.Message(err), "openai plus account concurrency")
+	require.Empty(t, repo.bulkUpdateIDs)
+}
+
+func TestAdminServiceBulkUpdateAccounts_NonOpenAILoadFactorTooLargeReturnsBadRequest(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{
+				ID:           1,
+				Platform:     PlatformAnthropic,
+				AccountLevel: AccountLevelUnknown,
+				Concurrency:  3,
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	loadFactor := 10001
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1},
+		LoadFactor: &loadFactor,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Equal(t, 400, infraerrors.Code(err))
+	require.Equal(t, "load_factor must be <= 10000", infraerrors.Message(err))
+	require.Empty(t, repo.bulkUpdateIDs)
+}
+
+func TestAdminServiceBulkUpdateAccounts_PreservesClearLoadFactorIntent(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{
+				ID:           1,
+				Platform:     PlatformAnthropic,
+				AccountLevel: AccountLevelUnknown,
+				Concurrency:  3,
+				LoadFactor:   intPtrHelper(9),
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	loadFactor := 0
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1},
+		LoadFactor: &loadFactor,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, repo.bulkUpdateUpdate.LoadFactor)
+	require.Equal(t, 0, *repo.bulkUpdateUpdate.LoadFactor)
+}
+
+func TestAdminService_BulkUpdateAccounts_AllowsHigherOpenAILevelIntoLowerPool(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{
+				ID:           1,
+				Name:         "pro-account",
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPro,
+				Concurrency:  1,
+			},
+		},
+	}
+	svc := &adminServiceImpl{
+		accountRepo: repo,
+		groupRepo: &groupRepoStubForAdmin{
+			getByID: &Group{
+				ID:                   20,
+				Name:                 "Plus Pool",
+				Platform:             PlatformOpenAI,
+				RequiredAccountLevel: AccountLevelPlus,
+			},
+		},
+	}
+
+	groupIDs := []int64{20}
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:            []int64{1},
+		GroupIDs:              &groupIDs,
+		SkipMixedChannelCheck: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
+	require.NotNil(t, repo.bulkUpdateUpdate.GroupIDs)
+	require.Equal(t, []int64{20}, repo.bulkUpdateUpdate.GroupIDs)
 }

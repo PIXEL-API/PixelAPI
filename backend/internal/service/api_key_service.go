@@ -149,6 +149,10 @@ type APIKeyAuthCacheInvalidator interface {
 	InvalidateAuthCacheByGroupID(ctx context.Context, groupID int64)
 }
 
+type userVisibleGroupRepository interface {
+	ListActiveVisibleToUser(ctx context.Context, userID int64, subscribedGroupIDs []int64) ([]Group, error)
+}
+
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
 	Name        string             `json:"name"`
@@ -326,13 +330,17 @@ func (s *APIKeyService) incrementAPIKeyErrorCount(ctx context.Context, userID in
 // 对于订阅类型分组：检查用户是否有有效订阅
 // 对于标准类型分组：使用原有的 AllowedGroups 和 IsExclusive 逻辑
 func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group *Group) bool {
-	// 订阅类型分组：需要有效订阅
-	if group.IsSubscriptionType() {
-		_, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID)
-		return err == nil // 有有效订阅则允许
+	if canUserBindStandardGroup(user, group) {
+		return true
 	}
-	// 标准类型分组：使用原有逻辑
-	return user.CanBindGroup(group.ID, group.IsExclusive)
+	if group.IsSubscriptionType() {
+		if group.IsUserPrivateScope() && !isGroupOwnedByUser(group, user.ID) {
+			return false
+		}
+		_, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID)
+		return err == nil
+	}
+	return false
 }
 
 // isUngroupedKeySchedulingAllowed returns false unless the system explicitly enables ungrouped key scheduling.
@@ -890,12 +898,6 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 		return nil, fmt.Errorf("get user: %w", err)
 	}
 
-	// 获取所有活跃分组
-	allGroups, err := s.groupRepo.ListActive(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list active groups: %w", err)
-	}
-
 	// 获取用户的所有有效订阅
 	activeSubscriptions, err := s.userSubRepo.ListActiveByUserID(ctx, userID)
 	if err != nil {
@@ -904,8 +906,20 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 
 	// 构建订阅分组 ID 集合
 	subscribedGroupIDs := make(map[int64]bool)
+	subscribedGroupIDList := make([]int64, 0, len(activeSubscriptions))
 	for _, sub := range activeSubscriptions {
 		subscribedGroupIDs[sub.GroupID] = true
+		subscribedGroupIDList = append(subscribedGroupIDList, sub.GroupID)
+	}
+
+	visibleGroupRepo, ok := s.groupRepo.(userVisibleGroupRepository)
+	if !ok {
+		return nil, ErrServiceUnavailable
+	}
+
+	allGroups, err := visibleGroupRepo.ListActiveVisibleToUser(ctx, userID, subscribedGroupIDList)
+	if err != nil {
+		return nil, fmt.Errorf("list active groups visible to user: %w", err)
 	}
 
 	// 过滤出用户有权限的分组
@@ -921,12 +935,30 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 
 // canUserBindGroupInternal 内部方法，检查用户是否可以绑定分组（使用预加载的订阅数据）
 func (s *APIKeyService) canUserBindGroupInternal(user *User, group *Group, subscribedGroupIDs map[int64]bool) bool {
-	// 订阅类型分组：需要有效订阅
+	if canUserBindStandardGroup(user, group) {
+		return true
+	}
 	if group.IsSubscriptionType() {
+		if group.IsUserPrivateScope() && !isGroupOwnedByUser(group, user.ID) {
+			return false
+		}
 		return subscribedGroupIDs[group.ID]
 	}
-	// 标准类型分组：使用原有逻辑
+	return false
+}
+
+func canUserBindStandardGroup(user *User, group *Group) bool {
+	if user == nil || group == nil || group.IsSubscriptionType() {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(group.Scope), GroupScopePublic) {
+		return true
+	}
 	return user.CanBindGroup(group.ID, group.IsExclusive)
+}
+
+func isGroupOwnedByUser(group *Group, userID int64) bool {
+	return group != nil && group.OwnerUserID != nil && *group.OwnerUserID == userID
 }
 
 func (s *APIKeyService) SearchAPIKeys(ctx context.Context, userID int64, keyword string, limit int) ([]APIKey, error) {
