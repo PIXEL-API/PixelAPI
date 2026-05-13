@@ -6,6 +6,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -191,7 +192,13 @@ func (h *ChannelMonitorUserHandler) CapacitySummary(c *gin.Context) {
 		return
 	}
 
-	items, err := h.groupCapacityService.GetAllGroupCapacity(c.Request.Context())
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	items, err := h.groupCapacityService.GetUserVisibleGroupCapacity(c.Request.Context(), subject.UserID)
 	if err != nil {
 		response.Error(c, 500, "Failed to get group capacity summary")
 		return

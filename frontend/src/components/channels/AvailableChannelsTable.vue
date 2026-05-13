@@ -59,10 +59,10 @@
           </td>
 
           <!-- 平台徽章 -->
-          <td class="align-top px-4 py-3">
+          <td class="px-4 py-3 align-middle">
             <span
               :class="[
-                'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium uppercase',
+                'inline-flex min-h-7 items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium uppercase',
                 platformBadgeClass(section.platform),
               ]"
             >
@@ -72,8 +72,8 @@
           </td>
 
           <!-- 分组：专属分组在前（紫色 shield 行），公开分组在后（灰色 globe 行）。 -->
-          <td class="align-top px-4 py-3">
-            <div class="flex flex-col gap-1.5">
+          <td class="px-4 py-3 align-middle">
+            <div class="flex min-h-10 flex-col justify-center gap-1.5">
               <div
                 v-if="exclusiveGroups(section).length > 0"
                 class="flex flex-wrap items-center gap-1.5"

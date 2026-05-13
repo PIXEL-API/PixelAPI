@@ -516,7 +516,7 @@ func TestAccountServiceResolveOwnedPublicShareGroupTreatsUnknownOpenAILevelAsFre
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
-				{ID: 10, Name: "OpenAI Standard", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic},
+				{ID: 10, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
 			},
 		},
 	}
@@ -525,6 +525,36 @@ func TestAccountServiceResolveOwnedPublicShareGroupTreatsUnknownOpenAILevelAsFre
 
 	require.NoError(t, err)
 	require.Equal(t, int64(10), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupIgnoresOpenAIUnclassifiedSystemPool(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 59, Name: "Codex【兜底】", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic},
+				{ID: 1197, Name: "FREE共享号池", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelFree},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelUnknown})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1197), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupRejectsOpenAIWhenOnlyUnclassifiedSystemPoolExists(t *testing.T) {
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 59, Name: "Codex【兜底】", Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopePublic},
+			},
+		},
+	}
+
+	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelFree})
+
+	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
 }
 
 func TestShouldRepairSuspectedOpenAIFreeAccount(t *testing.T) {
@@ -1015,4 +1045,78 @@ func TestIsOwnedAccountPublicShareApprovableStillRejectsDisabledAccount(t *testi
 	}
 
 	require.False(t, isOwnedAccountPublicShareApprovable(account, true))
+}
+
+func TestAccountQuotaDashboardWindowCapacityUsesOnlySchedulableAccounts(t *testing.T) {
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	limitedUntil := now.Add(time.Hour)
+	usageReset := now.Add(2 * time.Hour).Format(time.RFC3339)
+
+	builder := newAccountQuotaDashboardBuilder(now)
+	for _, account := range []Account{
+		{
+			ID:          1,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Extra: map[string]any{
+				"codex_5h_used_percent": 40.0,
+				"codex_5h_reset_at":     usageReset,
+				"codex_7d_used_percent": 60.0,
+				"codex_7d_reset_at":     usageReset,
+			},
+		},
+		{
+			ID:               2,
+			Platform:         PlatformOpenAI,
+			Type:             AccountTypeOAuth,
+			Status:           StatusActive,
+			Schedulable:      true,
+			RateLimitResetAt: &limitedUntil,
+			Extra: map[string]any{
+				"codex_5h_used_percent": 10.0,
+				"codex_5h_reset_at":     usageReset,
+				"codex_7d_used_percent": 10.0,
+				"codex_7d_reset_at":     usageReset,
+			},
+		},
+		{
+			ID:          3,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusError,
+			Schedulable: true,
+		},
+		{
+			ID:          4,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusDisabled,
+			Schedulable: true,
+		},
+		{
+			ID:               5,
+			Platform:         PlatformOpenAI,
+			Type:             AccountTypeOAuth,
+			Status:           StatusError,
+			Schedulable:      true,
+			RateLimitResetAt: &limitedUntil,
+		},
+	} {
+		builder.addAccount(account)
+	}
+
+	dashboard := builder.finalize()
+
+	require.Equal(t, 5, dashboard.Totals.AccountCount)
+	require.Equal(t, 1, dashboard.Totals.SchedulableAccountCount)
+	require.Equal(t, 1, dashboard.Totals.RateLimitedAccountCount)
+	require.Equal(t, 2, dashboard.Totals.ErrorAccountCount)
+	require.Equal(t, 1, dashboard.Totals.DisabledAccountCount)
+	require.Len(t, dashboard.Totals.UsageWindows, 2)
+	for _, window := range dashboard.Totals.UsageWindows {
+		require.Equal(t, 1, window.AccountCount)
+		require.Equal(t, 1, window.KnownAccountCount)
+	}
 }

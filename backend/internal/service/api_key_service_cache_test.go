@@ -205,6 +205,7 @@ func TestAPIKeyService_GetByKey_UsesL2Cache(t *testing.T) {
 				Name:                "g",
 				Platform:            PlatformAnthropic,
 				Status:              StatusActive,
+				Scope:               GroupScopeUserPrivate,
 				SubscriptionType:    SubscriptionTypeStandard,
 				RateMultiplier:      1,
 				ModelRoutingEnabled: true,
@@ -223,6 +224,8 @@ func TestAPIKeyService_GetByKey_UsesL2Cache(t *testing.T) {
 	require.Equal(t, int64(1), apiKey.ID)
 	require.Equal(t, int64(2), apiKey.User.ID)
 	require.Equal(t, groupID, apiKey.Group.ID)
+	require.Equal(t, GroupScopeUserPrivate, apiKey.Group.Scope)
+	require.True(t, apiKey.Group.IsUserPrivateScope())
 	require.True(t, apiKey.Group.ModelRoutingEnabled)
 	require.Equal(t, map[string][]int64{"claude-opus-*": {1, 2}}, apiKey.Group.ModelRouting)
 }

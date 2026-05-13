@@ -92,6 +92,49 @@
         </div>
       </div>
 
+      <!-- Usage Retention Config -->
+      <div class="card p-6">
+        <div class="mb-4">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+            {{ t('admin.backup.usageRetention.title') }}
+          </h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            {{ t('admin.backup.usageRetention.description') }}
+          </p>
+        </div>
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 md:col-span-2">
+            <input v-model="usageRetentionForm.enabled" type="checkbox" />
+            <span>{{ t('admin.backup.usageRetention.enabled') }}</span>
+          </label>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.backup.usageRetention.retainDays') }}</label>
+            <input v-model.number="usageRetentionForm.retain_days" type="number" min="1" class="input w-full" />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.backup.usageRetention.retainDaysHint') }}</p>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.backup.usageRetention.runIntervalHours') }}</label>
+            <input v-model.number="usageRetentionForm.run_interval_hours" type="number" min="1" class="input w-full" />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.backup.usageRetention.runIntervalHint') }}</p>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.backup.usageRetention.windowDays') }}</label>
+            <input v-model.number="usageRetentionForm.window_days" type="number" min="1" class="input w-full" />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.backup.usageRetention.windowDaysHint') }}</p>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.backup.usageRetention.backupExpireDays') }}</label>
+            <input v-model.number="usageRetentionForm.backup_expire_days" type="number" min="0" class="input w-full" />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.backup.usageRetention.backupExpireDaysHint') }}</p>
+          </div>
+        </div>
+        <div class="mt-4">
+          <button type="button" class="btn btn-primary btn-sm" :disabled="savingUsageRetention" @click="saveUsageRetention">
+            {{ savingUsageRetention ? t('common.loading') : t('common.save') }}
+          </button>
+        </div>
+      </div>
+
       <!-- Backup Operations -->
       <div class="card p-6">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -283,7 +326,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api'
 import { useAppStore } from '@/stores'
-import type { BackupS3Config, BackupScheduleConfig, BackupRecord } from '@/api/admin/backup'
+import type { BackupS3Config, BackupScheduleConfig, BackupRecord, UsageRetentionConfig } from '@/api/admin/backup'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -310,6 +353,16 @@ const scheduleForm = ref<BackupScheduleConfig>({
   retain_count: 10,
 })
 const savingSchedule = ref(false)
+
+// Usage retention config
+const usageRetentionForm = ref<UsageRetentionConfig>({
+  enabled: false,
+  retain_days: 3,
+  run_interval_hours: 24,
+  window_days: 1,
+  backup_expire_days: 14,
+})
+const savingUsageRetention = ref(false)
 
 // Backups
 const backups = ref<BackupRecord[]>([])
@@ -508,6 +561,33 @@ async function saveSchedule() {
   }
 }
 
+async function loadUsageRetention() {
+  try {
+    const cfg = await adminAPI.backup.getUsageRetention()
+    usageRetentionForm.value = {
+      enabled: cfg.enabled,
+      retain_days: cfg.retain_days || 3,
+      run_interval_hours: cfg.run_interval_hours || 24,
+      window_days: cfg.window_days || 1,
+      backup_expire_days: cfg.backup_expire_days ?? 14,
+    }
+  } catch (error) {
+    appStore.showError((error as { message?: string })?.message || t('errors.networkError'))
+  }
+}
+
+async function saveUsageRetention() {
+  savingUsageRetention.value = true
+  try {
+    await adminAPI.backup.updateUsageRetention(usageRetentionForm.value)
+    appStore.showSuccess(t('admin.backup.usageRetention.saved'))
+  } catch (error) {
+    appStore.showError((error as { message?: string })?.message || t('errors.networkError'))
+  } finally {
+    savingUsageRetention.value = false
+  }
+}
+
 async function loadBackups() {
   loadingBackups.value = true
   try {
@@ -605,7 +685,7 @@ function formatDate(value?: string): string {
 
 onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  await Promise.all([loadS3Config(), loadSchedule(), loadBackups()])
+  await Promise.all([loadS3Config(), loadSchedule(), loadUsageRetention(), loadBackups()])
 
   // 如果有正在 running 的备份，恢复轮询
   const runningBackup = backups.value.find(r => r.status === 'running')

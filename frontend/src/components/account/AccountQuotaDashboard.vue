@@ -36,16 +36,16 @@
         <div class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ totals.account_count }}</div>
       </div>
       <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
-        <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.quotaAccounts') }}</div>
-        <div class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ totals.quota_account_count }}</div>
-      </div>
-      <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
-        <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.totalRemaining') }}</div>
-        <div class="mt-1 text-lg font-semibold text-emerald-600 dark:text-emerald-300">{{ formatCurrency(totals.total.remaining) }}</div>
-      </div>
-      <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
         <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.schedulableAccounts') }}</div>
-        <div class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ totals.schedulable_account_count }}</div>
+        <div class="mt-1 text-lg font-semibold text-emerald-600 dark:text-emerald-300">{{ totals.schedulable_account_count }}</div>
+      </div>
+      <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
+        <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.rateLimitedAccounts') }}</div>
+        <div class="mt-1 text-lg font-semibold text-amber-600 dark:text-amber-300">{{ totals.rate_limited_account_count }}</div>
+      </div>
+      <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
+        <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.exceptionAccounts') }}</div>
+        <div class="mt-1 text-lg font-semibold text-red-600 dark:text-red-300">{{ totals.error_account_count + totals.disabled_account_count }}</div>
       </div>
     </div>
 
@@ -96,6 +96,17 @@
                     schedulable: summary.schedulable_account_count
                   }) }}
                 </div>
+                <div v-if="hasAvailabilityIssues(summary)" class="mt-1 flex flex-wrap gap-1 text-[11px]">
+                  <span v-if="summary.rate_limited_account_count > 0" class="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    {{ t('admin.accounts.quotaDashboard.rateLimitedCount', { count: summary.rate_limited_account_count }) }}
+                  </span>
+                  <span v-if="summary.error_account_count > 0" class="rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                    {{ t('admin.accounts.quotaDashboard.errorCount', { count: summary.error_account_count }) }}
+                  </span>
+                  <span v-if="summary.disabled_account_count > 0" class="rounded bg-gray-200 px-1.5 py-0.5 font-medium text-gray-700 dark:bg-dark-600 dark:text-gray-200">
+                    {{ t('admin.accounts.quotaDashboard.disabledCount', { count: summary.disabled_account_count }) }}
+                  </span>
+                </div>
               </div>
             </div>
             <span
@@ -129,8 +140,8 @@
                 />
               </div>
               <div class="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500 dark:text-gray-400">
-                <span>{{ t('admin.accounts.quotaDashboard.knownSnapshots', { known: window.known_account_count, total: window.account_count }) }}</span>
-                <span>{{ t('admin.accounts.quotaDashboard.remainingAccountsEquivalent', { count: formatAccountEquivalent(window.remaining_capacity_percent) }) }}</span>
+                <span>{{ t('admin.accounts.quotaDashboard.schedulableSnapshots', { known: window.known_account_count, total: window.account_count }) }}</span>
+                <span>{{ t('admin.accounts.quotaDashboard.schedulableRemainingAccountsEquivalent', { count: formatAccountEquivalent(window.remaining_capacity_percent) }) }}</span>
               </div>
             </div>
           </div>
@@ -146,11 +157,11 @@
       {{ loadFailedText }}
     </div>
 
-    <div v-else-if="visibleSummaries.length === 0" class="mt-3 rounded-md border border-dashed border-gray-200 px-3 py-4 text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">
+    <div v-else-if="isEmpty" class="mt-3 rounded-md border border-dashed border-gray-200 px-3 py-4 text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">
       {{ emptyText }}
     </div>
 
-    <div v-else class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div v-else-if="showSummaryBreakdown" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
       <article
         v-for="summary in visibleSummaries"
         :key="`${summary.platform}:${summary.type}`"
@@ -168,6 +179,13 @@
                   total: summary.account_count,
                   active: summary.active_account_count,
                   schedulable: summary.schedulable_account_count
+                }) }}
+              </div>
+              <div v-if="hasAvailabilityIssues(summary)" class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.quotaDashboard.issueMeta', {
+                  limited: summary.rate_limited_account_count,
+                  error: summary.error_account_count,
+                  disabled: summary.disabled_account_count
                 }) }}
               </div>
             </div>
@@ -222,8 +240,8 @@
               />
             </div>
             <div class="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500 dark:text-gray-400">
-              <span>{{ t('admin.accounts.quotaDashboard.knownSnapshots', { known: window.known_account_count, total: window.account_count }) }}</span>
-              <span>{{ t('admin.accounts.quotaDashboard.remainingAccountsEquivalent', { count: formatAccountEquivalent(window.remaining_capacity_percent) }) }}</span>
+              <span>{{ t('admin.accounts.quotaDashboard.schedulableSnapshots', { known: window.known_account_count, total: window.account_count }) }}</span>
+              <span>{{ t('admin.accounts.quotaDashboard.schedulableRemainingAccountsEquivalent', { count: formatAccountEquivalent(window.remaining_capacity_percent) }) }}</span>
             </div>
           </div>
         </div>
@@ -245,6 +263,7 @@ const props = defineProps<{
   dashboard: AccountQuotaDashboard | null
   loading: boolean
   error: boolean
+  showSummaryBreakdown?: boolean
   title?: string
   subtitle?: string
   emptyMessage?: string
@@ -261,6 +280,7 @@ const panelTitle = computed(() => props.title ?? t('admin.accounts.quotaDashboar
 const panelSubtitle = computed(() => props.subtitle ?? t('admin.accounts.quotaDashboard.subtitle'))
 const emptyText = computed(() => props.emptyMessage ?? t('admin.accounts.quotaDashboard.empty'))
 const loadFailedText = computed(() => props.loadFailedMessage ?? t('admin.accounts.quotaDashboard.loadFailed'))
+const showSummaryBreakdown = computed(() => props.showSummaryBreakdown !== false)
 
 const emptyDimension: AccountQuotaDimensionSummary = {
   enabled_account_count: 0,
@@ -277,6 +297,9 @@ const totals = computed<AccountQuotaSummary>(() => props.dashboard?.totals ?? {
   account_count: 0,
   active_account_count: 0,
   schedulable_account_count: 0,
+  rate_limited_account_count: 0,
+  error_account_count: 0,
+  disabled_account_count: 0,
   quota_account_count: 0,
   unlimited_account_count: 0,
   total: emptyDimension,
@@ -303,6 +326,12 @@ const visibleGroupSummaries = computed(() => {
 })
 
 const hasGroupSummaries = computed(() => visibleGroupSummaries.value.length > 0)
+
+const isEmpty = computed(() => {
+  if (visibleGroupSummaries.value.length > 0) return false
+  if (showSummaryBreakdown.value && visibleSummaries.value.length > 0) return false
+  return totals.value.account_count === 0
+})
 
 const orderedGroupSummaries = computed(() => {
   return [...visibleGroupSummaries.value].sort((a, b) => {
@@ -369,6 +398,14 @@ function groupSummaryKey(summary: AccountQuotaGroupSummary): string {
 
 function groupName(summary: AccountQuotaGroupSummary): string {
   return summary.group_name || t('admin.accounts.quotaDashboard.ungrouped')
+}
+
+function hasAvailabilityIssues(summary: AccountQuotaSummary | AccountQuotaGroupSummary): boolean {
+  return (
+    summary.rate_limited_account_count > 0 ||
+    summary.error_account_count > 0 ||
+    summary.disabled_account_count > 0
+  )
 }
 
 function groupHealth(summary: AccountQuotaGroupSummary): GroupHealth {

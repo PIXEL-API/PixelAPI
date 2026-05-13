@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -25,6 +26,10 @@ type GroupCapacityService struct {
 	concurrencyService *ConcurrencyService
 	sessionLimitCache  SessionLimitCache
 	rpmCache           RPMCache
+}
+
+type groupCapacityVisibleGroupRepository interface {
+	ListActiveVisibleToUser(ctx context.Context, userID int64, subscribedGroupIDs []int64) ([]Group, error)
 }
 
 // NewGroupCapacityService creates a new GroupCapacityService.
@@ -51,11 +56,45 @@ func (s *GroupCapacityService) GetAllGroupCapacity(ctx context.Context) ([]Group
 		return nil, err
 	}
 
+	return s.getCapacityForGroups(ctx, groups)
+}
+
+// GetUserVisibleGroupCapacity returns capacity summary for groups the current user may see.
+func (s *GroupCapacityService) GetUserVisibleGroupCapacity(ctx context.Context, userID int64) ([]GroupCapacitySummary, error) {
+	if userID <= 0 {
+		return nil, ErrUserNotFound
+	}
+	visibleGroupRepo, ok := s.groupRepo.(groupCapacityVisibleGroupRepository)
+	if !ok {
+		return nil, fmt.Errorf("visible group repository is unavailable")
+	}
+	groups, err := visibleGroupRepo.ListActiveVisibleToUser(ctx, userID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.getCapacityForGroups(ctx, filterPublicBalanceGroups(groups))
+}
+
+func filterPublicBalanceGroups(groups []Group) []Group {
+	out := make([]Group, 0, len(groups))
+	for _, group := range groups {
+		if group.IsExclusive || group.OwnerUserID != nil || NormalizeGroupScope(group.Scope) != GroupScopePublic {
+			continue
+		}
+		if group.SubscriptionType != "" && group.SubscriptionType != SubscriptionTypeStandard {
+			continue
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+func (s *GroupCapacityService) getCapacityForGroups(ctx context.Context, groups []Group) ([]GroupCapacitySummary, error) {
 	results := make([]GroupCapacitySummary, 0, len(groups))
 	for i := range groups {
 		cap, err := s.getGroupCapacity(ctx, groups[i].ID)
 		if err != nil {
-			// Skip groups with errors, return partial results
 			continue
 		}
 		cap.GroupID = groups[i].ID
@@ -100,7 +139,10 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	}
 
 	// Batch query runtime data from Redis
-	concurrencyMap, _ := s.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs)
+	concurrencyMap := map[int64]int{}
+	if s.concurrencyService != nil {
+		concurrencyMap, _ = s.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs)
+	}
 
 	var sessionsMap map[int64]int
 	if sessionsMax > 0 && s.sessionLimitCache != nil {

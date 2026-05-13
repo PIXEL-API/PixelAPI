@@ -136,8 +136,8 @@ func ProvideDashboardAggregationService(repo DashboardAggregationRepository, tim
 }
 
 // ProvideUsageCleanupService 创建并启动使用记录清理任务服务
-func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboardAgg *DashboardAggregationService, backup *BackupService, cfg *config.Config) *UsageCleanupService {
-	svc := NewUsageCleanupServiceWithBackup(repo, timingWheel, dashboardAgg, backup, cfg)
+func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *TimingWheelService, dashboardAgg *DashboardAggregationService, backup *BackupService, settingRepo SettingRepository, cfg *config.Config) *UsageCleanupService {
+	svc := NewUsageCleanupServiceWithBackup(repo, timingWheel, dashboardAgg, backup, settingRepo, cfg)
 	svc.Start()
 	return svc
 }

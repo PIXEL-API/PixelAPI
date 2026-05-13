@@ -143,6 +143,7 @@ func (s *userPrivateGroupService) findOrCreateUserPrivateGroup(ctx context.Conte
 		OwnerUserID:                 &ownerID,
 		Scope:                       GroupScopeUserPrivate,
 		SubscriptionType:            SubscriptionTypeSubscription,
+		AllowMessagesDispatch:       defaultPrivateGroupAllowMessagesDispatch(platform),
 		DailyLimitUSD:               cloneFloat64Ptr(template.DailyLimitUSD),
 		WeeklyLimitUSD:              cloneFloat64Ptr(template.WeeklyLimitUSD),
 		MonthlyLimitUSD:             cloneFloat64Ptr(template.MonthlyLimitUSD),
@@ -229,4 +230,8 @@ func cloneFloat64Ptr(value *float64) *float64 {
 
 func normalizePrivateGroupPlatform(platform string) string {
 	return strings.ToLower(strings.TrimSpace(platform))
+}
+
+func defaultPrivateGroupAllowMessagesDispatch(platform string) bool {
+	return normalizePrivateGroupPlatform(platform) == PlatformOpenAI
 }

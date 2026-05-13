@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 9 // v9: preserve private-group fields in auth snapshot
+const apiKeyAuthSnapshotVersion = 10 // v10: require group scope for private-group billing decisions
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int

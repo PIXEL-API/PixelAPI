@@ -386,7 +386,7 @@ func TestUsageCleanupServiceAutoRetentionBacksUpThenCreatesSystemTask(t *testing
 			BackupExpireDays: 7,
 		},
 	}}
-	svc := NewUsageCleanupServiceWithBackup(repo, nil, dashboard, backup, cfg)
+	svc := NewUsageCleanupServiceWithBackup(repo, nil, dashboard, backup, nil, cfg)
 
 	svc.runAutoRetentionOnce()
 
@@ -420,7 +420,7 @@ func TestUsageCleanupServiceAutoRetentionBackupFailureDoesNotCreateTask(t *testi
 			WindowDays:       1,
 		},
 	}}
-	svc := NewUsageCleanupServiceWithBackup(repo, nil, dashboard, backup, cfg)
+	svc := NewUsageCleanupServiceWithBackup(repo, nil, dashboard, backup, nil, cfg)
 
 	svc.runAutoRetentionOnce()
 
@@ -450,7 +450,7 @@ func TestUsageCleanupServiceAutoRetentionSnapshotFailureDoesNotBackupOrDelete(t 
 			WindowDays:       1,
 		},
 	}}
-	svc := NewUsageCleanupServiceWithBackup(repo, nil, dashboard, backup, cfg)
+	svc := NewUsageCleanupServiceWithBackup(repo, nil, dashboard, backup, nil, cfg)
 
 	svc.runAutoRetentionOnce()
 

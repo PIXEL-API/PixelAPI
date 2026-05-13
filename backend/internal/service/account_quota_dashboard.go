@@ -30,6 +30,9 @@ type AccountQuotaSummary struct {
 	AccountCount            int                          `json:"account_count"`
 	ActiveAccountCount      int                          `json:"active_account_count"`
 	SchedulableAccountCount int                          `json:"schedulable_account_count"`
+	RateLimitedAccountCount int                          `json:"rate_limited_account_count"`
+	ErrorAccountCount       int                          `json:"error_account_count"`
+	DisabledAccountCount    int                          `json:"disabled_account_count"`
 	QuotaAccountCount       int                          `json:"quota_account_count"`
 	UnlimitedAccountCount   int                          `json:"unlimited_account_count"`
 	Total                   AccountQuotaDimensionSummary `json:"total"`
@@ -46,6 +49,9 @@ type AccountQuotaGroupSummary struct {
 	AccountCount            int                          `json:"account_count"`
 	ActiveAccountCount      int                          `json:"active_account_count"`
 	SchedulableAccountCount int                          `json:"schedulable_account_count"`
+	RateLimitedAccountCount int                          `json:"rate_limited_account_count"`
+	ErrorAccountCount       int                          `json:"error_account_count"`
+	DisabledAccountCount    int                          `json:"disabled_account_count"`
 	QuotaAccountCount       int                          `json:"quota_account_count"`
 	UnlimitedAccountCount   int                          `json:"unlimited_account_count"`
 	Total                   AccountQuotaDimensionSummary `json:"total"`
@@ -127,20 +133,36 @@ func (s *AccountService) GetQuotaPoolDashboard(ctx context.Context, ownerUserID 
 		return nil, fmt.Errorf("account repository is unavailable")
 	}
 
+	if cached := s.getQuotaPoolDashboardCache(ownerUserID); cached != nil {
+		return cached, nil
+	}
+
 	generatedAt := time.Now().UTC()
 	mine := newAccountQuotaDashboardBuilder(generatedAt)
 	mineGroups := newAccountQuotaGroupDashboardBuilder(generatedAt)
 	platform := newAccountQuotaDashboardBuilder(generatedAt)
 	platformGroups := newAccountQuotaGroupDashboardBuilder(generatedAt)
 
-	if err := visitAccountQuotaDashboardAccounts(ctx, s.accountRepo, func(account Account) {
+	visitAccounts := visitAccountQuotaDashboardAccounts
+	if repo, ok := s.accountRepo.(accountQuotaPoolRepository); ok {
+		visitAccounts = func(ctx context.Context, _ AccountRepository, visit func(Account)) error {
+			accounts, err := repo.ListQuotaPoolAccounts(ctx, ownerUserID)
+			if err != nil {
+				return err
+			}
+			for i := range accounts {
+				visit(accounts[i])
+			}
+			return nil
+		}
+	}
+
+	if err := visitAccounts(ctx, s.accountRepo, func(account Account) {
 		if account.OwnerUserID != nil && *account.OwnerUserID == ownerUserID {
 			mine.addAccount(account)
-			mineGroups.addAccountWithGroupFilter(account, func(group *Group) bool {
-				return isOwnUserPrivateQuotaGroup(group, ownerUserID)
-			})
+			mineGroups.addAccount(account)
 		}
-		if isPlatformQuotaPoolAccount(account) {
+		if isPlatformQuotaPoolAccount(account) && accountHasPlatformSharedQuotaGroup(account) {
 			platform.addAccount(account)
 			platformGroups.addAccountWithGroupFilter(account, isPlatformSharedQuotaGroup)
 		}
@@ -154,11 +176,107 @@ func (s *AccountService) GetQuotaPoolDashboard(ctx context.Context, ownerUserID 
 	platformDashboard := platform.finalize()
 	platformDashboard.GroupSummaries = platformGroups.finalize()
 
-	return &UserAccountQuotaPoolDashboard{
+	dashboard := &UserAccountQuotaPoolDashboard{
 		GeneratedAt: generatedAt,
 		Mine:        mineDashboard,
 		Platform:    platformDashboard,
-	}, nil
+	}
+	s.setQuotaPoolDashboardCache(ownerUserID, dashboard)
+	return dashboard, nil
+}
+
+func (s *AccountService) getQuotaPoolDashboardCache(ownerUserID int64) *UserAccountQuotaPoolDashboard {
+	if s == nil {
+		return nil
+	}
+	now := time.Now()
+	s.quotaPoolDashboardCache.mu.Lock()
+	defer s.quotaPoolDashboardCache.mu.Unlock()
+	if s.quotaPoolDashboardCache.userID != ownerUserID || s.quotaPoolDashboardCache.value == nil || !now.Before(s.quotaPoolDashboardCache.expires) {
+		return nil
+	}
+	return cloneUserAccountQuotaPoolDashboard(s.quotaPoolDashboardCache.value)
+}
+
+func (s *AccountService) setQuotaPoolDashboardCache(ownerUserID int64, dashboard *UserAccountQuotaPoolDashboard) {
+	if s == nil || dashboard == nil {
+		return
+	}
+	s.quotaPoolDashboardCache.mu.Lock()
+	defer s.quotaPoolDashboardCache.mu.Unlock()
+	s.quotaPoolDashboardCache.userID = ownerUserID
+	s.quotaPoolDashboardCache.expires = time.Now().Add(accountQuotaPoolDashboardCacheTTL)
+	s.quotaPoolDashboardCache.value = cloneUserAccountQuotaPoolDashboard(dashboard)
+}
+
+func cloneUserAccountQuotaPoolDashboard(in *UserAccountQuotaPoolDashboard) *UserAccountQuotaPoolDashboard {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Mine = cloneAccountQuotaDashboard(in.Mine)
+	out.Platform = cloneAccountQuotaDashboard(in.Platform)
+	return &out
+}
+
+func cloneAccountQuotaDashboard(in AccountQuotaDashboard) AccountQuotaDashboard {
+	out := in
+	out.Summaries = cloneAccountQuotaSummaries(in.Summaries)
+	out.GroupSummaries = cloneAccountQuotaGroupSummaries(in.GroupSummaries)
+	out.Totals = cloneAccountQuotaSummary(in.Totals)
+	return out
+}
+
+func cloneAccountQuotaSummaries(in []AccountQuotaSummary) []AccountQuotaSummary {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AccountQuotaSummary, len(in))
+	for i := range in {
+		out[i] = cloneAccountQuotaSummary(in[i])
+	}
+	return out
+}
+
+func cloneAccountQuotaGroupSummaries(in []AccountQuotaGroupSummary) []AccountQuotaGroupSummary {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AccountQuotaGroupSummary, len(in))
+	for i := range in {
+		out[i] = in[i]
+		if in[i].GroupID != nil {
+			id := *in[i].GroupID
+			out[i].GroupID = &id
+		}
+		out[i].UsageWindows = cloneAccountUsageWindowSummaries(in[i].UsageWindows)
+	}
+	return out
+}
+
+func cloneAccountQuotaSummary(in AccountQuotaSummary) AccountQuotaSummary {
+	out := in
+	out.UsageWindows = cloneAccountUsageWindowSummaries(in.UsageWindows)
+	return out
+}
+
+func cloneAccountUsageWindowSummaries(in []AccountUsageWindowSummary) []AccountUsageWindowSummary {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AccountUsageWindowSummary, len(in))
+	for i := range in {
+		out[i] = in[i]
+		if in[i].MinRemainingSeconds != nil {
+			seconds := *in[i].MinRemainingSeconds
+			out[i].MinRemainingSeconds = &seconds
+		}
+		if in[i].NextResetAt != nil {
+			next := *in[i].NextResetAt
+			out[i].NextResetAt = &next
+		}
+	}
+	return out
 }
 
 func newAccountQuotaDashboardBuilder(generatedAt time.Time) *accountQuotaDashboardBuilder {
@@ -274,7 +392,9 @@ func (b *accountQuotaGroupDashboardBuilder) addAccountWithGroupFilter(account Ac
 		return
 	}
 	if len(account.Groups) == 0 {
-		b.addAccountToGroup(account, nil, "", StatusActive, account.Platform, "", false, false)
+		if allowGroup == nil {
+			b.addAccountToGroup(account, nil, "", StatusActive, account.Platform, "", false, false)
+		}
 		return
 	}
 	for _, group := range account.Groups {
@@ -301,18 +421,23 @@ func (b *accountQuotaGroupDashboardBuilder) addAccountWithGroupFilter(account Ac
 	}
 }
 
-func isOwnUserPrivateQuotaGroup(group *Group, ownerUserID int64) bool {
-	if group == nil || ownerUserID <= 0 || !group.IsUserPrivateScope() || group.OwnerUserID == nil {
-		return false
-	}
-	return *group.OwnerUserID == ownerUserID
-}
-
 func isPlatformSharedQuotaGroup(group *Group) bool {
 	if group == nil {
 		return false
 	}
-	return group.OwnerUserID == nil && NormalizeGroupScope(group.Scope) == GroupScopePublic
+	if group.IsExclusive || group.OwnerUserID != nil || NormalizeGroupScope(group.Scope) != GroupScopePublic {
+		return false
+	}
+	return group.SubscriptionType == "" || group.SubscriptionType == SubscriptionTypeStandard
+}
+
+func accountHasPlatformSharedQuotaGroup(account Account) bool {
+	for _, group := range account.Groups {
+		if isPlatformSharedQuotaGroup(group) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *accountQuotaGroupDashboardBuilder) addAccountToGroup(account Account, groupID *int64, groupName, groupStatus, platform, requiredAccountLevel string, requireOAuthOnly, requirePrivacySet bool) {
@@ -365,6 +490,9 @@ func (a *accountQuotaGroupSummaryAccumulator) finalize() AccountQuotaGroupSummar
 		AccountCount:            summary.AccountCount,
 		ActiveAccountCount:      summary.ActiveAccountCount,
 		SchedulableAccountCount: summary.SchedulableAccountCount,
+		RateLimitedAccountCount: summary.RateLimitedAccountCount,
+		ErrorAccountCount:       summary.ErrorAccountCount,
+		DisabledAccountCount:    summary.DisabledAccountCount,
 		QuotaAccountCount:       summary.QuotaAccountCount,
 		UnlimitedAccountCount:   summary.UnlimitedAccountCount,
 		Total:                   summary.Total,
@@ -439,6 +567,13 @@ func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Ac
 	if account.Status == StatusActive {
 		a.summary.ActiveAccountCount++
 	}
+	if account.Status == StatusError {
+		a.summary.ErrorAccountCount++
+	} else if account.Status == StatusDisabled {
+		a.summary.DisabledAccountCount++
+	} else if account.IsRateLimited() || account.IsOverloaded() || isAccountTemporarilyUnschedulable(account, now) {
+		a.summary.RateLimitedAccountCount++
+	}
 	if schedulable {
 		a.summary.SchedulableAccountCount++
 	}
@@ -465,10 +600,14 @@ func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Ac
 		addQuotaDimension(&a.summary.Weekly, account.GetQuotaWeeklyLimit(), weeklyUsed)
 	}
 
-	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
+	if schedulable && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
 		a.addOpenAIUsageWindow(account, "5h", now)
 		a.addOpenAIUsageWindow(account, "7d", now)
 	}
+}
+
+func isAccountTemporarilyUnschedulable(account Account, now time.Time) bool {
+	return account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil)
 }
 
 func accountSchedulableInQuotaGroup(account Account, groupStatus, groupPlatform, requiredAccountLevel string, requireOAuthOnly, requirePrivacySet bool) bool {

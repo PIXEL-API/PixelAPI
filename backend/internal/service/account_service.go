@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
@@ -36,6 +37,7 @@ const ownedPersonalDefaultConcurrency = 3
 const ownedPersonalDefaultPriority = 1
 const ownedPersonalDefaultOpenAICompactMode = "force_on"
 const ownedPersonalDefaultOpenAIWSMode = OpenAIWSIngressModeOff
+const accountQuotaPoolDashboardCacheTTL = 15 * time.Second
 
 const (
 	AccountLevelUnknown = domain.AccountLevelUnknown
@@ -171,6 +173,14 @@ type AccountService struct {
 	userSubRepo             accountSubscriptionLookupRepository
 	accountSharePolicyRepo  AccountSharePolicyRepository
 	privateGroupProvisioner UserPrivateGroupProvisioner
+	quotaPoolDashboardCache accountQuotaPoolDashboardCache
+}
+
+type accountQuotaPoolDashboardCache struct {
+	mu      sync.Mutex
+	userID  int64
+	expires time.Time
+	value   *UserAccountQuotaPoolDashboard
 }
 
 type groupExistenceBatchChecker interface {
@@ -187,6 +197,10 @@ type accountSubscriptionLookupRepository interface {
 
 type ownedAccountFilterRepository interface {
 	ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
+}
+
+type accountQuotaPoolRepository interface {
+	ListQuotaPoolAccounts(ctx context.Context, ownerUserID int64) ([]Account, error)
 }
 
 type ownedAccountDuplicateKey struct {
@@ -1546,10 +1560,11 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 		bestRank := 0
 		for i := range groups {
 			group := groups[i]
-			if !isOwnedPublicSharePoolGroup(&group, platform) || !CanOpenAIAccountJoinSharedPool(accountLevel, group.RequiredAccountLevel) {
+			requiredLevel := NormalizeOpenAISharedPoolRequiredLevel(group.RequiredAccountLevel)
+			if requiredLevel == "" || !isOwnedPublicSharePoolGroup(&group, platform) || !CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel) {
 				continue
 			}
-			requiredRank := OpenAISharedPoolLevelRank(group.RequiredAccountLevel)
+			requiredRank := OpenAISharedPoolLevelRank(requiredLevel)
 			if matchedGroup == nil || requiredRank > bestRank {
 				candidate := group
 				matchedGroup = &candidate
