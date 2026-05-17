@@ -5495,6 +5495,15 @@ export default {
         totpKeyNotConfigured:
           'Please configure TOTP_ENCRYPTION_KEY in environment variables first. Generate a key with: openssl rand -hex 32'
       },
+      security: {
+        upstreamAllowlist: {
+          title: 'Upstream Host Allowlist',
+          description: 'Additional hosts allowed as account Base URLs. Hosts from the config file remain allowed.',
+          placeholder: 'naiccc.com\n*.naiccc.com',
+          hint: 'One host per line. Supports *.example.com. Do not include scheme, path, port, or API keys.',
+          invalid: 'Invalid upstream host allowlist. Use plain hosts or *.example.com wildcard hosts only.'
+        }
+      },
       turnstile: {
         title: 'Cloudflare Turnstile',
         description: 'Bot protection for login and registration',

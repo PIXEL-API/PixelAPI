@@ -302,6 +302,7 @@ export interface SystemSettings {
   registration_enabled: boolean;
   email_verify_enabled: boolean;
   registration_email_suffix_whitelist: string[];
+  upstream_url_allowlist_extra_hosts: string[];
   promo_code_enabled: boolean;
   password_reset_enabled: boolean;
   frontend_url: string;
@@ -544,6 +545,7 @@ export interface UpdateSettingsRequest {
   registration_enabled?: boolean;
   email_verify_enabled?: boolean;
   registration_email_suffix_whitelist?: string[];
+  upstream_url_allowlist_extra_hosts?: string[];
   promo_code_enabled?: boolean;
   password_reset_enabled?: boolean;
   frontend_url?: string;

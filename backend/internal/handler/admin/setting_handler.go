@@ -112,6 +112,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		RegistrationEnabled:                       settings.RegistrationEnabled,
 		EmailVerifyEnabled:                        settings.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:          settings.RegistrationEmailSuffixWhitelist,
+		UpstreamURLAllowlistExtraHosts:            settings.UpstreamURLAllowlistExtraHosts,
 		PromoCodeEnabled:                          settings.PromoCodeEnabled,
 		PasswordResetEnabled:                      settings.PasswordResetEnabled,
 		FrontendURL:                               settings.FrontendURL,
@@ -360,6 +361,7 @@ type UpdateSettingsRequest struct {
 	RegistrationEnabled              bool                         `json:"registration_enabled"`
 	EmailVerifyEnabled               bool                         `json:"email_verify_enabled"`
 	RegistrationEmailSuffixWhitelist []string                     `json:"registration_email_suffix_whitelist"`
+	UpstreamURLAllowlistExtraHosts   []string                     `json:"upstream_url_allowlist_extra_hosts"`
 	PromoCodeEnabled                 bool                         `json:"promo_code_enabled"`
 	PasswordResetEnabled             bool                         `json:"password_reset_enabled"`
 	FrontendURL                      string                       `json:"frontend_url"`
@@ -643,6 +645,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	// 验证参数
+	if _, err := service.NormalizeUpstreamURLAllowlistExtraHosts(req.UpstreamURLAllowlistExtraHosts); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.DefaultConcurrency < 1 {
 		req.DefaultConcurrency = 1
 	}
@@ -1274,11 +1280,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		RegistrationEnabled:              req.RegistrationEnabled,
 		EmailVerifyEnabled:               req.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist: req.RegistrationEmailSuffixWhitelist,
-		PromoCodeEnabled:                 req.PromoCodeEnabled,
-		PasswordResetEnabled:             req.PasswordResetEnabled,
-		FrontendURL:                      req.FrontendURL,
-		InvitationCodeEnabled:            req.InvitationCodeEnabled,
-		TotpEnabled:                      req.TotpEnabled,
+		UpstreamURLAllowlistExtraHosts: func() []string {
+			if fieldProvided(providedFields, "upstream_url_allowlist_extra_hosts") {
+				return req.UpstreamURLAllowlistExtraHosts
+			}
+			return previousSettings.UpstreamURLAllowlistExtraHosts
+		}(),
+		PromoCodeEnabled:      req.PromoCodeEnabled,
+		PasswordResetEnabled:  req.PasswordResetEnabled,
+		FrontendURL:           req.FrontendURL,
+		InvitationCodeEnabled: req.InvitationCodeEnabled,
+		TotpEnabled:           req.TotpEnabled,
 		LoginAgreementEnabled: func() bool {
 			if req.LoginAgreementEnabled != nil {
 				return *req.LoginAgreementEnabled
@@ -1740,6 +1752,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		RegistrationEnabled:                       updatedSettings.RegistrationEnabled,
 		EmailVerifyEnabled:                        updatedSettings.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:          updatedSettings.RegistrationEmailSuffixWhitelist,
+		UpstreamURLAllowlistExtraHosts:            updatedSettings.UpstreamURLAllowlistExtraHosts,
 		PromoCodeEnabled:                          updatedSettings.PromoCodeEnabled,
 		PasswordResetEnabled:                      updatedSettings.PasswordResetEnabled,
 		FrontendURL:                               updatedSettings.FrontendURL,
@@ -1991,6 +2004,9 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	}
 	if !fieldProvided(fields, "registration_email_suffix_whitelist") {
 		req.RegistrationEmailSuffixWhitelist = previous.RegistrationEmailSuffixWhitelist
+	}
+	if !fieldProvided(fields, "upstream_url_allowlist_extra_hosts") {
+		req.UpstreamURLAllowlistExtraHosts = previous.UpstreamURLAllowlistExtraHosts
 	}
 	if !fieldProvided(fields, "promo_code_enabled") {
 		req.PromoCodeEnabled = previous.PromoCodeEnabled
@@ -2298,6 +2314,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if !equalStringSlice(before.RegistrationEmailSuffixWhitelist, after.RegistrationEmailSuffixWhitelist) {
 		changed = append(changed, "registration_email_suffix_whitelist")
+	}
+	if !equalStringSlice(before.UpstreamURLAllowlistExtraHosts, after.UpstreamURLAllowlistExtraHosts) {
+		changed = append(changed, "upstream_url_allowlist_extra_hosts")
 	}
 	if before.PromoCodeEnabled != after.PromoCodeEnabled {
 		changed = append(changed, "promo_code_enabled")

@@ -1,4 +1,4 @@
-﻿-- 风控中心内容审计配置与记录
+-- 风控中心内容审计配置与记录
 
 INSERT INTO settings (key, value, updated_at)
 VALUES ('risk_control_enabled', 'false', NOW())

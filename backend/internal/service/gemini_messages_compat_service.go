@@ -53,6 +53,7 @@ type GeminiMessagesCompatService struct {
 	httpUpstream              HTTPUpstream
 	antigravityGatewayService *AntigravityGatewayService
 	cfg                       *config.Config
+	settingService            *SettingService
 	responseHeaderFilter      *responseheaders.CompiledHeaderFilter
 }
 
@@ -66,6 +67,7 @@ func NewGeminiMessagesCompatService(
 	httpUpstream HTTPUpstream,
 	antigravityGatewayService *AntigravityGatewayService,
 	cfg *config.Config,
+	settingService *SettingService,
 ) *GeminiMessagesCompatService {
 	return &GeminiMessagesCompatService{
 		accountRepo:               accountRepo,
@@ -77,6 +79,7 @@ func NewGeminiMessagesCompatService(
 		httpUpstream:              httpUpstream,
 		antigravityGatewayService: antigravityGatewayService,
 		cfg:                       cfg,
+		settingService:            settingService,
 		responseHeaderFilter:      compileResponseHeaderFilter(cfg),
 	}
 }
@@ -490,8 +493,12 @@ func (s *GeminiMessagesCompatService) validateUpstreamBaseURL(raw string) (strin
 		}
 		return normalized, nil
 	}
+	allowedHosts, err := upstreamAllowlistHosts(context.Background(), s.cfg, s.settingService)
+	if err != nil {
+		return "", fmt.Errorf("invalid base_url: %w", err)
+	}
 	normalized, err := urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{
-		AllowedHosts:     s.cfg.Security.URLAllowlist.UpstreamHosts,
+		AllowedHosts:     allowedHosts,
 		RequireAllowlist: true,
 		AllowPrivate:     s.cfg.Security.URLAllowlist.AllowPrivateHosts,
 	})

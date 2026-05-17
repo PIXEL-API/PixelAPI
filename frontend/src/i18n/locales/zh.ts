@@ -5658,6 +5658,15 @@ export default {
         totpKeyNotConfigured:
           '请先在环境变量中配置 TOTP_ENCRYPTION_KEY。使用命令 openssl rand -hex 32 生成密钥。'
       },
+      security: {
+        upstreamAllowlist: {
+          title: '上游域名白名单',
+          description: '追加允许作为账号 Base URL 的上游域名。配置文件中的默认白名单仍然保留。',
+          placeholder: 'naiccc.com\n*.naiccc.com',
+          hint: '每行一个域名，支持 *.example.com。不要填写协议、路径、端口或 API Key。',
+          invalid: '上游域名白名单格式不正确，请只填写域名或 *.example.com 通配域名。'
+        }
+      },
       turnstile: {
         title: 'Cloudflare Turnstile',
         description: '登录和注册的机器人防护',

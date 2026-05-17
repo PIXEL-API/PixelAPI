@@ -547,6 +547,27 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 	return s.parseSettings(settings), nil
 }
 
+// GetUpstreamURLAllowlistHosts returns config-defined upstream hosts plus DB-managed additions.
+// If the allowlist switch is disabled in config, callers should use format-only URL validation.
+func (s *SettingService) GetUpstreamURLAllowlistHosts(ctx context.Context) ([]string, error) {
+	if s == nil || s.cfg == nil {
+		return nil, nil
+	}
+	hosts := mergeStringSlices(nil, s.cfg.Security.URLAllowlist.UpstreamHosts)
+	if s.settingRepo == nil {
+		return hosts, nil
+	}
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyUpstreamURLAllowlistExtraHosts)
+	if errors.Is(err, ErrSettingNotFound) {
+		return hosts, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get upstream url allowlist extra hosts: %w", err)
+	}
+	extra := ParseUpstreamURLAllowlistExtraHosts(raw)
+	return mergeStringSlices(hosts, extra), nil
+}
+
 // GetFrontendURL 获取前端基础URL（数据库优先，fallback 到配置文件）
 func (s *SettingService) GetFrontendURL(ctx context.Context) string {
 	val, err := s.settingRepo.GetValue(ctx, SettingKeyFrontendURL)
@@ -953,6 +974,89 @@ func DefaultWeChatConnectScopesForMode(mode string) string {
 	return defaultWeChatConnectScopeForMode(mode)
 }
 
+func ParseUpstreamURLAllowlistExtraHosts(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var hosts []string
+	if err := json.Unmarshal([]byte(raw), &hosts); err != nil {
+		return []string{}
+	}
+	normalized, err := NormalizeUpstreamURLAllowlistExtraHosts(hosts)
+	if err != nil {
+		return []string{}
+	}
+	return normalized
+}
+
+func NormalizeUpstreamURLAllowlistExtraHosts(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return []string{}, nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized, err := normalizeUpstreamURLAllowlistHost(value)
+		if err != nil {
+			return nil, err
+		}
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func normalizeUpstreamURLAllowlistHost(value string) (string, error) {
+	raw := strings.ToLower(strings.TrimSpace(value))
+	if raw == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(raw, "/\\?#@: \t\r\n") {
+		return "", fmt.Errorf("invalid upstream allowlist host: %s", value)
+	}
+	if strings.HasPrefix(raw, "*.") {
+		suffix := strings.TrimPrefix(raw, "*.")
+		if suffix == "" || strings.Contains(suffix, "*") {
+			return "", fmt.Errorf("invalid upstream allowlist wildcard host: %s", value)
+		}
+		raw = "*." + suffix
+	} else if strings.Contains(raw, "*") {
+		return "", fmt.Errorf("invalid upstream allowlist wildcard host: %s", value)
+	}
+	if strings.HasPrefix(raw, ".") || strings.HasSuffix(raw, ".") || strings.Contains(raw, "..") {
+		return "", fmt.Errorf("invalid upstream allowlist host: %s", value)
+	}
+	return raw, nil
+}
+
+func mergeStringSlices(base []string, extra []string) []string {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	merged := make([]string, 0, len(base)+len(extra))
+	for _, value := range append(base, extra...) {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, trimmed)
+	}
+	return merged
+}
+
 func (s *SettingService) parseWeChatConnectOAuthConfig(settings map[string]string) (WeChatConnectOAuthConfig, error) {
 	cfg := s.effectiveWeChatConnectOAuthConfig(settings)
 
@@ -1315,6 +1419,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		normalizedWhitelist = []string{}
 	}
 	settings.RegistrationEmailSuffixWhitelist = normalizedWhitelist
+	normalizedUpstreamHosts, err := NormalizeUpstreamURLAllowlistExtraHosts(settings.UpstreamURLAllowlistExtraHosts)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_UPSTREAM_URL_ALLOWLIST_EXTRA_HOSTS", err.Error())
+	}
+	settings.UpstreamURLAllowlistExtraHosts = normalizedUpstreamHosts
 	alipaySource, err := normalizeVisibleMethodSettingSource("alipay", settings.PaymentVisibleMethodAlipaySource, settings.PaymentVisibleMethodAlipayEnabled)
 	if err != nil {
 		return nil, err
@@ -1375,6 +1484,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, fmt.Errorf("marshal registration email suffix whitelist: %w", err)
 	}
 	updates[SettingKeyRegistrationEmailSuffixWhitelist] = string(registrationEmailSuffixWhitelistJSON)
+	upstreamHostsJSON, err := json.Marshal(settings.UpstreamURLAllowlistExtraHosts)
+	if err != nil {
+		return nil, fmt.Errorf("marshal upstream url allowlist extra hosts: %w", err)
+	}
+	updates[SettingKeyUpstreamURLAllowlistExtraHosts] = string(upstreamHostsJSON)
 	updates[SettingKeyPromoCodeEnabled] = strconv.FormatBool(settings.PromoCodeEnabled)
 	updates[SettingKeyPasswordResetEnabled] = strconv.FormatBool(settings.PasswordResetEnabled)
 	updates[SettingKeyFrontendURL] = settings.FrontendURL
@@ -2279,6 +2393,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyRegistrationEnabled:                      "true",
 		SettingKeyEmailVerifyEnabled:                       "false",
 		SettingKeyRegistrationEmailSuffixWhitelist:         "[]",
+		SettingKeyUpstreamURLAllowlistExtraHosts:           "[]",
 		SettingKeyPromoCodeEnabled:                         "true", // 默认启用优惠码功能
 		SettingKeySiteName:                                 "Sub2API",
 		SettingKeyLoginAgreementEnabled:                    "false",
@@ -2447,6 +2562,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:               emailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist: ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
+		UpstreamURLAllowlistExtraHosts:   ParseUpstreamURLAllowlistExtraHosts(settings[SettingKeyUpstreamURLAllowlistExtraHosts]),
 		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
 		PasswordResetEnabled:             emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",
 		FrontendURL:                      settings[SettingKeyFrontendURL],

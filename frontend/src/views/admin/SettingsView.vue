@@ -1359,6 +1359,27 @@
                 </p>
               </div>
 
+              <!-- Upstream URL Allowlist -->
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <label class="font-medium text-gray-900 dark:text-white">{{
+                  t("admin.settings.security.upstreamAllowlist.title")
+                }}</label>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.security.upstreamAllowlist.description") }}
+                </p>
+                <textarea
+                  v-model="upstreamAllowlistInput"
+                  rows="5"
+                  class="input mt-3 font-mono text-sm"
+                  :placeholder="
+                    t('admin.settings.security.upstreamAllowlist.placeholder')
+                  "
+                ></textarea>
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.security.upstreamAllowlist.hint") }}
+                </p>
+              </div>
+
               <!-- Promo Code -->
               <div
                 class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
@@ -6520,6 +6541,7 @@ const form = reactive<SettingsForm>({
   registration_enabled: true,
   email_verify_enabled: false,
   registration_email_suffix_whitelist: [],
+  upstream_url_allowlist_extra_hosts: [],
   promo_code_enabled: true,
   invitation_code_enabled: false,
   password_reset_enabled: false,
@@ -6776,6 +6798,7 @@ const wsTestQuery = ref("");
 const wsTestLoading = ref(false);
 const wsTestResult = ref<WebSearchTestResult | null>(null);
 const wsTestDialogOpen = ref(false);
+const upstreamAllowlistInput = ref("");
 
 function openTestDialog() {
   wsTestResult.value = null;
@@ -7354,6 +7377,11 @@ async function loadSettings() {
     form.wechat_connect_mobile_app_secret = "";
     form.github_oauth_client_secret = "";
     form.google_oauth_client_secret = "";
+    upstreamAllowlistInput.value = Array.isArray(
+      settings.upstream_url_allowlist_extra_hosts,
+    )
+      ? settings.upstream_url_allowlist_extra_hosts.join("\n")
+      : "";
     const wechatCapabilities = resolveWeChatConnectModeCapabilities(
       settings.wechat_connect_open_enabled,
       settings.wechat_connect_mp_enabled,
@@ -7509,6 +7537,34 @@ function positiveNumberOrZero(value: number | null | undefined): number {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
 }
 
+function parseUpstreamAllowlistInput(): string[] | null {
+  const lines = upstreamAllowlistInput.value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    if (
+      /[\/\\?#@: \t\r\n]/.test(line) ||
+      line.startsWith(".") ||
+      line.endsWith(".") ||
+      line.includes("..") ||
+      (line.includes("*") && !line.startsWith("*."))
+    ) {
+      return null;
+    }
+    if (line.startsWith("*.") && (line === "*." || line.slice(2).includes("*"))) {
+      return null;
+    }
+    if (!seen.has(line)) {
+      seen.add(line);
+      result.push(line);
+    }
+  }
+  return result;
+}
+
 async function saveSettings() {
   saving.value = true;
   try {
@@ -7641,6 +7697,13 @@ async function saveSettings() {
     // Optional URL fields: auto-clear invalid values so they don't cause backend 400 errors
     if (!isValidHttpUrl(form.frontend_url)) form.frontend_url = "";
     if (!isValidHttpUrl(form.doc_url)) form.doc_url = "";
+    const upstreamAllowlistHosts = parseUpstreamAllowlistInput();
+    if (!upstreamAllowlistHosts) {
+      appStore.showError(
+        t("admin.settings.security.upstreamAllowlist.invalid"),
+      );
+      return;
+    }
     syncWeChatConnectMode();
     const wechatStoredMode = deriveWeChatConnectStoredMode(
       form.wechat_connect_open_enabled,
@@ -7656,6 +7719,7 @@ async function saveSettings() {
         registrationEmailSuffixWhitelistTags.value.map(
           (suffix) => `@${suffix}`,
         ),
+      upstream_url_allowlist_extra_hosts: upstreamAllowlistHosts,
       promo_code_enabled: form.promo_code_enabled,
       invitation_code_enabled: form.invitation_code_enabled,
       password_reset_enabled: form.password_reset_enabled,
@@ -7910,6 +7974,11 @@ async function saveSettings() {
       normalizeRegistrationEmailSuffixDomains(
         updated.registration_email_suffix_whitelist,
       );
+    upstreamAllowlistInput.value = Array.isArray(
+      updated.upstream_url_allowlist_extra_hosts,
+    )
+      ? updated.upstream_url_allowlist_extra_hosts.join("\n")
+      : "";
     tablePageSizeOptionsInput.value = formatTablePageSizeOptions(
       Array.isArray(updated.table_page_size_options)
         ? updated.table_page_size_options

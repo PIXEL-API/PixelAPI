@@ -4919,8 +4919,12 @@ func (s *OpenAIGatewayService) validateUpstreamBaseURL(raw string) (string, erro
 		}
 		return normalized, nil
 	}
+	allowedHosts, err := upstreamAllowlistHosts(context.Background(), s.cfg, s.settingService)
+	if err != nil {
+		return "", fmt.Errorf("invalid base_url: %w", err)
+	}
 	normalized, err := urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{
-		AllowedHosts:     s.cfg.Security.URLAllowlist.UpstreamHosts,
+		AllowedHosts:     allowedHosts,
 		RequireAllowlist: true,
 		AllowPrivate:     s.cfg.Security.URLAllowlist.AllowPrivateHosts,
 	})

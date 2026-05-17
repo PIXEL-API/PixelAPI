@@ -403,6 +403,9 @@ const (
 
 	// Web Search Emulation
 	SettingKeyWebSearchEmulationConfig = "web_search_emulation_config" // JSON 配置
+
+	// URL allowlist append-only settings. The config file still owns the security switch.
+	SettingKeyUpstreamURLAllowlistExtraHosts = "upstream_url_allowlist_extra_hosts" // JSON array
 )
 
 // AdminAPIKeyPrefix is the prefix for admin API keys (distinct from user "sk-" keys).

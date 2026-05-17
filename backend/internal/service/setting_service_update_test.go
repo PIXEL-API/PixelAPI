@@ -48,6 +48,65 @@ func (s *settingUpdateRepoStub) Delete(ctx context.Context, key string) error {
 	panic("unexpected Delete call")
 }
 
+type settingValueRepoStub struct {
+	values map[string]string
+}
+
+func (s *settingValueRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
+	if value, ok := s.values[key]; ok {
+		return &Setting{Key: key, Value: value}, nil
+	}
+	return nil, ErrSettingNotFound
+}
+
+func (s *settingValueRepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	if value, ok := s.values[key]; ok {
+		return value, nil
+	}
+	return "", ErrSettingNotFound
+}
+
+func (s *settingValueRepoStub) Set(ctx context.Context, key, value string) error {
+	if s.values == nil {
+		s.values = map[string]string{}
+	}
+	s.values[key] = value
+	return nil
+}
+
+func (s *settingValueRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := s.values[key]; ok {
+			result[key] = value
+		}
+	}
+	return result, nil
+}
+
+func (s *settingValueRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
+	if s.values == nil {
+		s.values = map[string]string{}
+	}
+	for key, value := range settings {
+		s.values[key] = value
+	}
+	return nil
+}
+
+func (s *settingValueRepoStub) GetAll(ctx context.Context) (map[string]string, error) {
+	result := make(map[string]string, len(s.values))
+	for key, value := range s.values {
+		result[key] = value
+	}
+	return result, nil
+}
+
+func (s *settingValueRepoStub) Delete(ctx context.Context, key string) error {
+	delete(s.values, key)
+	return nil
+}
+
 type defaultSubGroupReaderStub struct {
 	byID  map[int64]*Group
 	errBy map[int64]error
@@ -192,6 +251,47 @@ func TestSettingService_UpdateSettings_RegistrationEmailSuffixWhitelist_Invalid(
 	})
 	require.Error(t, err)
 	require.Equal(t, "INVALID_REGISTRATION_EMAIL_SUFFIX_WHITELIST", infraerrors.Reason(err))
+}
+
+func TestSettingService_UpdateSettings_UpstreamAllowlistExtraHosts_Normalized(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		UpstreamURLAllowlistExtraHosts: []string{" NAICCC.com ", "*.Example.com", "naiccc.com"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, `["naiccc.com","*.example.com"]`, repo.updates[SettingKeyUpstreamURLAllowlistExtraHosts])
+}
+
+func TestSettingService_UpdateSettings_UpstreamAllowlistExtraHosts_Invalid(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		UpstreamURLAllowlistExtraHosts: []string{"https://naiccc.com"},
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_UPSTREAM_URL_ALLOWLIST_EXTRA_HOSTS", infraerrors.Reason(err))
+}
+
+func TestSettingService_GetUpstreamURLAllowlistHosts_MergesConfigAndDB(t *testing.T) {
+	repo := &settingValueRepoStub{
+		values: map[string]string{
+			SettingKeyUpstreamURLAllowlistExtraHosts: `["naiccc.com","*.naiccc.com"]`,
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{
+		Security: config.SecurityConfig{
+			URLAllowlist: config.URLAllowlistConfig{
+				UpstreamHosts: []string{"api.anthropic.com", "naiccc.com"},
+			},
+		},
+	})
+
+	hosts, err := svc.GetUpstreamURLAllowlistHosts(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"api.anthropic.com", "naiccc.com", "*.naiccc.com"}, hosts)
 }
 
 func TestParseDefaultSubscriptions_NormalizesValues(t *testing.T) {
