@@ -2,6 +2,8 @@
  * Payment System Type Definitions
  */
 
+import type { StoreOrder } from '@/types/store'
+
 // ==================== Enums / Union Types ====================
 
 export type OrderStatus =
@@ -18,9 +20,9 @@ export type OrderStatus =
   | 'REFUNDED'
   | 'REFUND_FAILED'
 
-export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay'
+export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex'
 
-export type OrderType = 'balance' | 'subscription'
+export type OrderType = 'balance' | 'subscription' | 'shop'
 
 // ==================== Configuration ====================
 
@@ -40,6 +42,7 @@ export interface PaymentConfig {
 }
 
 export interface MethodLimit {
+  currency?: string
   daily_limit: number
   daily_used: number
   daily_remaining: number
@@ -61,6 +64,8 @@ export interface CheckoutInfoResponse {
   methods: Record<string, MethodLimit>
   global_min: number
   global_max: number
+  min_amount: number
+  max_amount: number
   plans: SubscriptionPlan[]
   balance_disabled: boolean
   balance_recharge_multiplier: number
@@ -77,6 +82,7 @@ export interface PaymentOrder {
   user_id: number
   amount: number
   pay_amount: number
+  currency?: string
   fee_rate: number
   payment_type: string
   out_trade_no: string
@@ -86,13 +92,31 @@ export interface PaymentOrder {
   expires_at: string
   paid_at?: string
   completed_at?: string
+  failed_at?: string
+  failed_reason?: string
   refund_amount: number
   refund_reason?: string
   refund_requested_at?: string
   refund_requested_by?: number
   refund_request_reason?: string
   plan_id?: number
+  shop_order_id?: number
   provider_instance_id?: string
+}
+
+export interface PaymentOrderAuditLog {
+  id: number
+  action: string
+  detail: string | null
+  operator: string | null
+  created_at: string
+}
+
+export interface AdminPaymentOrderDetail {
+  order: PaymentOrder
+  auditLogs?: PaymentOrderAuditLog[]
+  audit_logs?: PaymentOrderAuditLog[]
+  shop_order?: StoreOrder
 }
 
 // ==================== Plans & Channels ====================
@@ -154,6 +178,7 @@ export interface CreateOrderRequest {
   payment_type: string
   order_type: string
   plan_id?: number
+  shop_order_id?: number
   return_url?: string
   payment_source?: string
   openid?: string
@@ -187,6 +212,10 @@ export interface CreateOrderResult {
   pay_url?: string
   qr_code?: string
   client_secret?: string
+  intent_id?: string
+  currency?: string
+  country_code?: string
+  payment_env?: string
   pay_amount: number
   fee_rate: number
   expires_at: string

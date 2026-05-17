@@ -24,6 +24,7 @@ var (
 	ErrOwnedAccountTypeNotAllowed             = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
 	ErrOwnedAccountCredentialsInvalid         = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
 	ErrOwnedAccountCredentialsNotAllowed      = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
+	ErrOwnedAccountLevelNotAllowed            = infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_NOT_ALLOWED", "user accounts cannot manually change account level")
 	ErrOwnedAccountGroupPlatformMismatch      = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
 	ErrOwnedAccountGroupValidationUnavailable = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
 	ErrOwnedAccountPublicPoolUnavailable      = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "public shared account pool group is not configured for this account platform")
@@ -296,7 +297,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		return nil, err
 	}
 	account.Concurrency = concurrency
-	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+	if err := ValidateAccountLoadFactor(account.LoadFactor); err != nil {
 		return nil, err
 	}
 
@@ -386,6 +387,9 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
+	if IsConcreteAccountLevel(req.AccountLevel) {
+		return nil, ErrOwnedAccountLevelNotAllowed
+	}
 	applyOwnedPersonalAccountTemplateToCreate(&req)
 	if err := validateOwnedAccountSource(req.Type, req.Credentials, req.Extra); err != nil {
 		return nil, err
@@ -429,7 +433,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		return nil, err
 	}
 	account.Concurrency = concurrency
-	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+	if err := ValidateAccountLoadFactor(account.LoadFactor); err != nil {
 		return nil, err
 	}
 	if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, account, 0); err != nil {
@@ -507,7 +511,7 @@ func ownedPersonalDefaultModelMapping(platform string) map[string]any {
 	switch platform {
 	case PlatformOpenAI:
 		models = append(models, openai.DefaultModelIDs()...)
-		models = append(models, "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-4o-audio-preview", "gpt-4o-realtime-preview", "gpt-image-1.5", "gpt-image-2")
+		models = append(models, "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-4o-audio-preview", "gpt-4o-realtime-preview")
 	case PlatformAnthropic:
 		models = append(models, claude.DefaultModelIDs()...)
 		models = append(models, "claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20241022", "claude-3-7-sonnet-20250219", "claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-opus-4-1-20250805")
@@ -515,7 +519,6 @@ func ownedPersonalDefaultModelMapping(platform string) map[string]any {
 		for _, model := range geminicli.DefaultModels {
 			models = append(models, model.ID)
 		}
-		models = append(models, "gemini-3.1-flash-image")
 	case PlatformAntigravity:
 		for _, model := range antigravity.DefaultModels() {
 			models = append(models, model.ID)
@@ -664,7 +667,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
 		return nil, err
 	}
-	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+	if err := ValidateAccountLoadFactor(account.LoadFactor); err != nil {
 		return nil, err
 	}
 
@@ -726,6 +729,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 }
 
 func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID int64, req UpdateAccountRequest) (*Account, error) {
+	if req.AccountLevel != nil {
+		return nil, ErrOwnedAccountLevelNotAllowed
+	}
 	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
 	if err != nil {
 		return nil, err
@@ -744,9 +750,6 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if req.Extra != nil {
 		account.Extra = *req.Extra
 	}
-	if req.AccountLevel != nil {
-		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
-	}
 	if req.ProxyID != nil {
 		account.ProxyID = req.ProxyID
 	}
@@ -760,7 +763,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
 		return nil, err
 	}
-	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+	if err := ValidateAccountLoadFactor(account.LoadFactor); err != nil {
 		return nil, err
 	}
 	if req.Priority != nil {
@@ -1097,11 +1100,14 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	if input.Priority != nil && *input.Priority <= 0 {
 		return nil, fmt.Errorf("priority must be > 0")
 	}
-	if input.LoadFactor != nil && *input.LoadFactor > 10000 {
-		return nil, fmt.Errorf("load_factor must be <= 10000")
+	if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
+		return nil, err
 	}
 	if input.GroupIDs != nil {
 		return nil, ErrGroupNotAllowed
+	}
+	if input.AccountLevel != nil {
+		return nil, ErrOwnedAccountLevelNotAllowed
 	}
 	status, err := normalizeOwnedBulkStatus(input.Status)
 	if err != nil {
@@ -1128,10 +1134,6 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	}
 	if input.LoadFactor != nil {
 		input.LoadFactor = nil
-	}
-	if input.Priority == nil || *input.Priority <= 0 {
-		priority := ownedPersonalDefaultPriority
-		input.Priority = &priority
 	}
 	if input.Credentials == nil {
 		input.Credentials = map[string]any{}
@@ -1164,7 +1166,7 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		if err := ValidateOpenAIPlusConcurrency(account.Platform, nextAccountLevel, nextConcurrency); err != nil {
 			return nil, err
 		}
-		if err := ValidateOpenAIPlusLoadFactor(account.Platform, nextAccountLevel, nextLoadFactor); err != nil {
+		if err := ValidateAccountLoadFactor(nextLoadFactor); err != nil {
 			return nil, err
 		}
 		if len(input.Credentials) > 0 || len(input.Extra) > 0 {
@@ -1178,7 +1180,8 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		return nil, err
 	}
 
-	if shareMode != "" {
+	requiresPerAccountUpdate := shareMode != "" || len(input.Credentials) > 0 || len(input.Extra) > 0
+	if requiresPerAccountUpdate {
 		for _, accountID := range accountIDs {
 			account := accountsByID[accountID]
 			entry := BulkUpdateAccountResult{AccountID: accountID}
@@ -1188,10 +1191,12 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 				Priority:     input.Priority,
 				Schedulable:  input.Schedulable,
 				AccountLevel: input.AccountLevel,
-				ShareMode:    &shareMode,
 			}
 			if status != "" {
 				updateReq.Status = &status
+			}
+			if shareMode != "" {
+				updateReq.ShareMode = &shareMode
 			}
 			if len(input.Credentials) > 0 {
 				credentials := mergeAccountMap(account.Credentials, input.Credentials)
@@ -1234,31 +1239,15 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		repoUpdates.Status = &status
 	}
 
+	updated, err := s.accountRepo.BulkUpdate(ctx, accountIDs, repoUpdates)
+	if err != nil {
+		return nil, fmt.Errorf("bulk update owned accounts: %w", err)
+	}
+	if updated != int64(len(accountIDs)) {
+		return nil, ErrAccountNotFound
+	}
 	for _, accountID := range accountIDs {
-		account := accountsByID[accountID]
-		entry := BulkUpdateAccountResult{AccountID: accountID}
-		updateReq := UpdateAccountRequest{
-			Priority:     input.Priority,
-			Schedulable:  input.Schedulable,
-			AccountLevel: input.AccountLevel,
-			ShareMode:    input.ShareMode,
-		}
-		if len(input.Credentials) > 0 {
-			credentials := mergeAccountMap(account.Credentials, input.Credentials)
-			updateReq.Credentials = &credentials
-		}
-		if len(input.Extra) > 0 {
-			extra := mergeAccountMap(account.Extra, input.Extra)
-			updateReq.Extra = &extra
-		}
-		if _, err := s.UpdateOwned(ctx, ownerUserID, accountID, updateReq); err != nil {
-			entry.Error = err.Error()
-			result.Failed++
-			result.FailedIDs = append(result.FailedIDs, accountID)
-			result.Results = append(result.Results, entry)
-			continue
-		}
-		entry.Success = true
+		entry := BulkUpdateAccountResult{AccountID: accountID, Success: true}
 		result.Success++
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)

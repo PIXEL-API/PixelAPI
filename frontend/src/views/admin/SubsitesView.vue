@@ -988,7 +988,6 @@ async function copyClientConfig(row: Subsite): Promise<void> {
       '/v1/messages',
       '/v1/responses',
       '/v1/chat/completions',
-      '/v1/images/generations',
       '/v1beta/models/*'
     ]
   }

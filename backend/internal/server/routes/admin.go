@@ -72,6 +72,8 @@ func RegisterAdminRoutes(
 		// 使用记录管理
 		registerUsageRoutes(admin, h)
 		registerRevenueRoutes(admin, h)
+		registerWithdrawalRoutes(admin, h)
+		registerShopRoutes(admin, h)
 
 		// 用户属性管理
 		registerUserAttributeRoutes(admin, h)
@@ -95,8 +97,80 @@ func RegisterAdminRoutes(
 		registerChannelMonitorRoutes(admin, h)
 		registerSubsiteRoutes(admin, h)
 
+		// 风控中心
+		registerContentModerationRoutes(admin, h)
+
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
+	}
+}
+
+func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	risk := admin.Group("/risk-control")
+	{
+		risk.GET("/config", h.Admin.ContentModeration.GetConfig)
+		risk.PUT("/config", h.Admin.ContentModeration.UpdateConfig)
+		risk.POST("/api-keys/test", h.Admin.ContentModeration.TestAPIKeys)
+		risk.GET("/status", h.Admin.ContentModeration.GetStatus)
+		risk.GET("/logs", h.Admin.ContentModeration.ListLogs)
+		risk.POST("/users/:user_id/unban", h.Admin.ContentModeration.UnbanUser)
+		risk.DELETE("/hashes", h.Admin.ContentModeration.DeleteFlaggedHash)
+		risk.DELETE("/hashes/all", h.Admin.ContentModeration.ClearFlaggedHashes)
+	}
+}
+
+func registerWithdrawalRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	withdrawals := admin.Group("/withdrawals")
+	{
+		withdrawals.GET("", h.Admin.Withdrawal.List)
+		withdrawals.GET("/:id", h.Admin.Withdrawal.Get)
+		withdrawals.POST("/:id/settle", h.Admin.Withdrawal.Settle)
+		withdrawals.POST("/:id/reject", h.Admin.Withdrawal.Reject)
+	}
+}
+
+func registerShopRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	shop := admin.Group("/shop")
+	{
+		categories := shop.Group("/categories")
+		{
+			categories.GET("", h.Admin.Shop.ListCategories)
+			categories.POST("", h.Admin.Shop.CreateCategory)
+			categories.PUT("/:id", h.Admin.Shop.UpdateCategory)
+			categories.DELETE("/:id", h.Admin.Shop.DeleteCategory)
+		}
+
+		products := shop.Group("/products")
+		{
+			products.GET("", h.Admin.Shop.ListProducts)
+			products.POST("", h.Admin.Shop.CreateProduct)
+			products.PUT("/:id", h.Admin.Shop.UpdateProduct)
+			products.DELETE("/:id", h.Admin.Shop.DeleteProduct)
+		}
+
+		cardKeys := shop.Group("/card-keys")
+		{
+			cardKeys.GET("", h.Admin.Shop.ListCardKeys)
+			cardKeys.POST("", h.Admin.Shop.CreateCardKey)
+			cardKeys.POST("/import", h.Admin.Shop.ImportCardKeys)
+			cardKeys.POST("/import-files", h.Admin.Shop.ImportFileCardKeys)
+			cardKeys.PUT("/:id", h.Admin.Shop.UpdateCardKey)
+			cardKeys.DELETE("/:id", h.Admin.Shop.DeleteCardKey)
+		}
+
+		orders := shop.Group("/orders")
+		{
+			orders.GET("/:id", h.Admin.Shop.GetOrder)
+			orders.GET("/:id/files/download.zip", h.Admin.Shop.DownloadOrderFilesZip)
+			orders.GET("/:id/files/:card_id/download", h.Admin.Shop.DownloadOrderFile)
+		}
+
+		fileCardStorage := shop.Group("/file-card-storage")
+		{
+			fileCardStorage.GET("", h.Admin.Shop.GetFileCardStorage)
+			fileCardStorage.PUT("", h.Admin.Shop.UpdateFileCardStorage)
+			fileCardStorage.POST("/test", h.Admin.Shop.TestFileCardStorage)
+		}
 	}
 }
 

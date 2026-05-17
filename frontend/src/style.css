@@ -75,10 +75,10 @@
   }
 
   .btn-primary {
-    @apply bg-gradient-to-r from-primary-500 to-primary-600;
-    @apply text-white shadow-md shadow-primary-500/25;
-    @apply hover:from-primary-600 hover:to-primary-700 hover:shadow-lg hover:shadow-primary-500/30;
-    @apply dark:shadow-primary-500/20;
+    @apply bg-gradient-to-r from-primary-400 to-accent-400;
+    @apply text-white shadow-sm shadow-primary-400/20;
+    @apply hover:from-primary-500 hover:to-accent-500 hover:shadow-md hover:shadow-primary-400/25;
+    @apply dark:shadow-primary-500/15;
   }
 
   .btn-secondary {

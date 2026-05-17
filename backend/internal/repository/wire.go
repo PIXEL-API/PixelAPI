@@ -97,8 +97,10 @@ var ProviderSet = wire.NewSet(
 	NewChannelRepository,
 	NewChannelMonitorRepository,
 	NewChannelMonitorRequestTemplateRepository,
+	NewContentModerationRepository,
 	NewAffiliateRepository,
 	NewReceiptCodeRepository,
+	NewWithdrawalRepository,
 
 	// Cache implementations
 	NewGatewayCache,
@@ -126,6 +128,7 @@ var ProviderSet = wire.NewSet(
 	NewRefreshTokenCache,
 	NewErrorPassthroughCache,
 	NewTLSFingerprintProfileCache,
+	NewContentModerationHashCache,
 
 	// Encryptors
 	NewAESEncryptor,
@@ -134,6 +137,7 @@ var ProviderSet = wire.NewSet(
 	NewPgDumper,
 	NewS3BackupStoreFactory,
 	NewReceiptCodeObjectStoreFactory,
+	NewShopFileCardObjectStoreFactory,
 
 	// HTTP service ports (DI Strategy A: return interface directly)
 	NewTurnstileVerifier,

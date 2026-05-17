@@ -121,16 +121,38 @@ func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, 
 			return checkPaidResultAlreadyPaid, nil
 		}
 	}
-	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin cancel transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	c, err := tx.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
 	if err != nil {
 		return "", fmt.Errorf("update order status: %w", err)
 	}
 	if c > 0 {
+		if o.OrderType == payment.OrderTypeShop && s.shopFulfillment != nil {
+			shopStatus := ShopOrderStatusCancelled
+			if fs == OrderStatusExpired {
+				shopStatus = ShopOrderStatusFailed
+			}
+			if err := s.shopFulfillment.CancelPendingPaymentInTx(ctx, tx, o.ID, shopStatus); err != nil {
+				return "", err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return "", fmt.Errorf("commit cancel transaction: %w", err)
+		}
 		auditAction := "ORDER_CANCELLED"
 		if fs == OrderStatusExpired {
 			auditAction = "ORDER_EXPIRED"
 		}
 		s.writeAuditLog(ctx, o.ID, auditAction, op, map[string]any{"detail": ad})
+		return checkPaidResultCancelled, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit empty cancel transaction: %w", err)
 	}
 	return checkPaidResultCancelled, nil
 }
@@ -320,11 +342,20 @@ func normalizeOrderLookupOutTradeNo(raw string) (string, error) {
 
 func (s *PaymentService) ExpireTimedOutOrders(ctx context.Context) (int, error) {
 	now := time.Now()
+	if s.shopFulfillment != nil {
+		if err := s.shopFulfillment.ReleaseStalePaymentReservations(ctx, now.Add(-paymentGraceMinutes*time.Minute)); err != nil {
+			return 0, err
+		}
+	}
+	staleRecharging, err := s.failStaleRechargingOrders(ctx, now)
+	if err != nil {
+		return 0, err
+	}
 	orders, err := s.entClient.PaymentOrder.Query().Where(paymentorder.StatusEQ(OrderStatusPending), paymentorder.ExpiresAtLTE(now)).All(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("query expired: %w", err)
 	}
-	n := 0
+	n := staleRecharging
 	for _, o := range orders {
 		// Check upstream payment status before expiring — the user may have
 		// paid just before timeout and the webhook hasn't arrived yet.
@@ -338,6 +369,73 @@ func (s *PaymentService) ExpireTimedOutOrders(ctx context.Context) (int, error) 
 		}
 	}
 	return n, nil
+}
+
+func (s *PaymentService) failStaleRechargingOrders(ctx context.Context, now time.Time) (int, error) {
+	timeout, err := s.rechargingTimeout(ctx)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := now.Add(-timeout)
+	orders, err := s.entClient.PaymentOrder.Query().
+		Where(paymentorder.StatusEQ(OrderStatusRecharging), paymentorder.UpdatedAtLTE(cutoff)).
+		All(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query stale recharging orders: %w", err)
+	}
+	failed := 0
+	reason := fmt.Sprintf("fulfillment timed out after %d minutes; retry manually", int(timeout.Minutes()))
+	for _, o := range orders {
+		c, err := s.entClient.PaymentOrder.Update().
+			Where(
+				paymentorder.IDEQ(o.ID),
+				paymentorder.StatusEQ(OrderStatusRecharging),
+				paymentorder.UpdatedAtLTE(cutoff),
+			).
+			SetStatus(OrderStatusFailed).
+			SetFailedAt(now).
+			SetFailedReason(reason).
+			Save(ctx)
+		if err != nil {
+			return failed, fmt.Errorf("mark stale recharging order failed: %w", err)
+		}
+		if c == 0 {
+			continue
+		}
+		failed++
+		s.writeAuditLog(ctx, o.ID, "FULFILLMENT_TIMEOUT", "system", map[string]any{
+			"previous_status": OrderStatusRecharging,
+			"timeout_minutes": int(timeout.Minutes()),
+			"updated_at":      o.UpdatedAt,
+		})
+	}
+	return failed, nil
+}
+
+func (s *PaymentService) rechargingTimeout(ctx context.Context) (time.Duration, error) {
+	timeoutMin := defaultOrderTimeoutMin
+	if s.configService != nil {
+		cfg, err := s.configService.GetPaymentConfig(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("load payment config for fulfillment timeout: %w", err)
+		}
+		timeoutMin = cfg.OrderTimeoutMin
+	}
+	if timeoutMin < paymentGraceMinutes {
+		timeoutMin = paymentGraceMinutes
+	}
+	return time.Duration(timeoutMin) * time.Minute, nil
+}
+
+func (s *PaymentService) isRechargingOrderStale(ctx context.Context, order *dbent.PaymentOrder, now time.Time) (bool, error) {
+	if order == nil || order.Status != OrderStatusRecharging {
+		return false, nil
+	}
+	timeout, err := s.rechargingTimeout(ctx)
+	if err != nil {
+		return false, err
+	}
+	return !order.UpdatedAt.After(now.Add(-timeout)), nil
 }
 
 // getOrderProvider creates a provider using the order's original instance config.

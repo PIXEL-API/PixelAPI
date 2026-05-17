@@ -25,6 +25,7 @@ const (
 	AccountBatchTaskOperationAdminRefreshCredentials = "admin_refresh_credentials"
 	AccountBatchTaskOperationUserRefreshCredentials  = "user_refresh_credentials"
 	AccountBatchTaskOperationUserRevalidateShare     = "user_revalidate_public_share"
+	AccountBatchTaskOperationUserSetPublicShare      = "user_set_public_share"
 )
 
 const (

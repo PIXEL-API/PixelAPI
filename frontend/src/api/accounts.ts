@@ -6,6 +6,8 @@
 import { apiClient } from './client'
 import type { Account, AccountUsageInfo, AccountUsageStatsResponse, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, UserAccountQuotaPoolDashboard, WindowStats } from '@/types'
 
+const USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS = 120000
+
 export interface UserAccountListFilters {
   platform?: string
   type?: string
@@ -120,6 +122,8 @@ export interface UserBulkAccountResult {
 }
 
 export interface UserBulkAccountOperationResponse {
+  async?: boolean
+  task?: AccountBatchTask
   success: number
   failed: number
   success_ids?: number[]
@@ -164,6 +168,8 @@ export async function bulkUpdate(
   const { data } = await apiClient.post<UserBulkAccountOperationResponse>('/accounts/bulk-update', {
     account_ids: accountIds,
     ...updates
+  }, {
+    timeout: USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS
   })
   return data
 }
@@ -171,6 +177,8 @@ export async function bulkUpdate(
 export async function bulkDelete(accountIds: number[]): Promise<UserBulkAccountOperationResponse> {
   const { data } = await apiClient.post<UserBulkAccountOperationResponse>('/accounts/bulk-delete', {
     account_ids: accountIds
+  }, {
+    timeout: USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS
   })
   return data
 }

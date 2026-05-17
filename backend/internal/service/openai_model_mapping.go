@@ -3,41 +3,21 @@ package service
 import "strings"
 
 // resolveOpenAIForwardModel determines the upstream model for OpenAI-compatible
-// forwarding. Group-level default mapping only applies when the account itself
-// did not match any explicit model_mapping rule.
+// forwarding. The group-level messages default only applies to Claude-family
+// dispatch requests that did not match an explicit model_mapping rule.
 func resolveOpenAIForwardModel(account *Account, requestedModel, defaultMappedModel string) string {
 	if account == nil {
-		if defaultMappedModel != "" {
+		if defaultMappedModel != "" && claudeMessagesDispatchFamily(requestedModel) != "" {
 			return defaultMappedModel
 		}
 		return requestedModel
 	}
 
 	mappedModel, matched := account.ResolveMappedModel(requestedModel)
-	if !matched && defaultMappedModel != "" && !isExplicitCodexModel(requestedModel) {
+	if !matched && defaultMappedModel != "" && claudeMessagesDispatchFamily(requestedModel) != "" {
 		return defaultMappedModel
 	}
 	return mappedModel
-}
-
-func isExplicitCodexModel(model string) bool {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return false
-	}
-	if strings.Contains(model, "/") {
-		parts := strings.Split(model, "/")
-		model = parts[len(parts)-1]
-	}
-	model = strings.ToLower(strings.TrimSpace(model))
-	if getNormalizedCodexModel(model) != "" {
-		return true
-	}
-	if strings.HasSuffix(model, "-openai-compact") {
-		base := strings.TrimSuffix(model, "-openai-compact")
-		return getNormalizedCodexModel(base) != ""
-	}
-	return false
 }
 
 // resolveOpenAICompactForwardModel determines the compact-only upstream model

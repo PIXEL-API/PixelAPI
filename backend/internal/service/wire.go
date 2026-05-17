@@ -618,9 +618,12 @@ var ProviderSet = wire.NewSet(
 	NewGroupCapacityService,
 	NewChannelService,
 	NewModelPricingResolver,
+	NewContentModerationService,
 	NewAffiliateService,
 	NewRevenueService,
 	NewReceiptCodeService,
+	NewWithdrawalService,
+	ProvideShopService,
 	ProvidePaymentConfigService,
 	NewPaymentService,
 	ProvidePaymentOrderExpiryService,
@@ -632,8 +635,30 @@ var ProviderSet = wire.NewSet(
 
 // ProvidePaymentConfigService wraps NewPaymentConfigService to accept the named
 // payment.EncryptionKey type instead of raw []byte, avoiding Wire ambiguity.
-func ProvidePaymentConfigService(entClient *dbent.Client, settingRepo SettingRepository, key payment.EncryptionKey) *PaymentConfigService {
-	return NewPaymentConfigService(entClient, settingRepo, []byte(key))
+func ProvidePaymentConfigService(entClient *dbent.Client, settingRepo SettingRepository, key payment.EncryptionKey, cfg *config.Config) *PaymentConfigService {
+	return NewPaymentConfigService(entClient, settingRepo, []byte(key), cfg)
+}
+
+func ProvideShopService(
+	entClient *dbent.Client,
+	paymentService *PaymentService,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	billingCacheService *BillingCacheService,
+	settingRepo SettingRepository,
+	key payment.EncryptionKey,
+	fileCardStoreFactory ShopFileCardObjectStoreFactory,
+) *ShopService {
+	svc := NewShopService(
+		entClient,
+		paymentService,
+		authCacheInvalidator,
+		billingCacheService,
+		WithShopSettingRepository(settingRepo),
+		WithShopEncryptionKey([]byte(key)),
+		WithShopFileCardObjectStoreFactory(fileCardStoreFactory),
+	)
+	paymentService.SetShopFulfillment(svc)
+	return svc
 }
 
 // ProvideBalanceNotifyService creates BalanceNotifyService

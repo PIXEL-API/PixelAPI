@@ -34,7 +34,7 @@ export interface NotifyEmailEntry {
 
 // ==================== User & Auth Types ====================
 
-export type UserAuthProvider = 'email' | 'linuxdo' | 'oidc' | 'wechat'
+export type UserAuthProvider = 'email' | 'linuxdo' | 'oidc' | 'wechat' | 'github' | 'google'
 
 export interface UserAuthBindingStatus {
   bound?: boolean
@@ -110,6 +110,32 @@ export interface ReceiptCode {
   content_type: string
   byte_size: number
   sha256: string
+  created_at: string
+  updated_at: string
+}
+
+export type WithdrawalStatus = 'PENDING' | 'SETTLED' | 'CANCELLED' | 'REJECTED'
+
+export interface WithdrawalRequest {
+  id: number
+  user_id: number
+  user_email: string
+  amount: number
+  fee_amount: number
+  total_deducted: number
+  balance_before: number
+  balance_after: number
+  payment_method: ReceiptCodePaymentMethod
+  receipt_code_url?: string | null
+  receipt_code_content_type: string
+  receipt_code_byte_size: number
+  receipt_code_sha256: string
+  receipt_code_updated_at: string
+  status: WithdrawalStatus
+  user_cancel_reason?: string | null
+  admin_note?: string | null
+  processed_by_user_id?: number | null
+  processed_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -196,6 +222,12 @@ export interface CustomEndpoint {
   description: string
 }
 
+export interface LoginAgreementDocument {
+  id: string
+  title: string
+  content_md: string
+}
+
 export interface PublicSettings {
   registration_enabled: boolean
   email_verify_enabled: boolean
@@ -204,6 +236,11 @@ export interface PublicSettings {
   promo_code_enabled: boolean
   password_reset_enabled: boolean
   invitation_code_enabled: boolean
+  login_agreement_enabled?: boolean
+  login_agreement_mode?: 'modal' | 'checkbox' | string
+  login_agreement_updated_at?: string
+  login_agreement_revision?: string
+  login_agreement_documents?: LoginAgreementDocument[]
   turnstile_enabled: boolean
   turnstile_site_key: string
   site_name: string
@@ -215,6 +252,7 @@ export interface PublicSettings {
   home_content: string
   hide_ccs_import_button: boolean
   payment_enabled: boolean
+  risk_control_enabled?: boolean
   table_default_page_size: number
   table_page_size_options: number[]
   custom_menu_items: CustomMenuItem[]
@@ -226,6 +264,8 @@ export interface PublicSettings {
   wechat_oauth_mobile_enabled?: boolean
   oidc_oauth_enabled: boolean
   oidc_oauth_provider_name: string
+  github_oauth_enabled?: boolean
+  google_oauth_enabled?: boolean
   backend_mode_enabled: boolean
   version: string
   balance_low_notify_enabled: boolean

@@ -134,6 +134,8 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		Methods:                   limitsResp.Methods,
 		GlobalMin:                 limitsResp.GlobalMin,
 		GlobalMax:                 limitsResp.GlobalMax,
+		MinAmount:                 cfg.MinAmount,
+		MaxAmount:                 cfg.MaxAmount,
 		Plans:                     planList,
 		BalanceDisabled:           cfg.BalanceDisabled,
 		BalanceRechargeMultiplier: cfg.BalanceRechargeMultiplier,
@@ -148,6 +150,8 @@ type checkoutInfoResponse struct {
 	Methods                   map[string]service.MethodLimits `json:"methods"`
 	GlobalMin                 float64                         `json:"global_min"`
 	GlobalMax                 float64                         `json:"global_max"`
+	MinAmount                 float64                         `json:"min_amount"`
+	MaxAmount                 float64                         `json:"max_amount"`
 	Plans                     []checkoutPlan                  `json:"plans"`
 	BalanceDisabled           bool                            `json:"balance_disabled"`
 	BalanceRechargeMultiplier float64                         `json:"balance_recharge_multiplier"`
@@ -458,6 +462,7 @@ type PublicOrderResult struct {
 	OutTradeNo          string     `json:"out_trade_no"`
 	Amount              float64    `json:"amount"`
 	PayAmount           float64    `json:"pay_amount"`
+	Currency            string     `json:"currency"`
 	FeeRate             float64    `json:"fee_rate"`
 	PaymentType         string     `json:"payment_type"`
 	OrderType           string     `json:"order_type"`
@@ -472,6 +477,7 @@ type PublicOrderResult struct {
 	RefundRequestedBy   *string    `json:"refund_requested_by,omitempty"`
 	RefundRequestReason *string    `json:"refund_request_reason,omitempty"`
 	PlanID              *int64     `json:"plan_id,omitempty"`
+	ShopOrderID         *int64     `json:"shop_order_id,omitempty"`
 }
 
 func buildPublicOrderResult(order *dbent.PaymentOrder) PublicOrderResult {
@@ -480,6 +486,7 @@ func buildPublicOrderResult(order *dbent.PaymentOrder) PublicOrderResult {
 		OutTradeNo:          order.OutTradeNo,
 		Amount:              order.Amount,
 		PayAmount:           order.PayAmount,
+		Currency:            service.PaymentOrderCurrency(order),
 		FeeRate:             order.FeeRate,
 		PaymentType:         order.PaymentType,
 		OrderType:           order.OrderType,
@@ -494,6 +501,7 @@ func buildPublicOrderResult(order *dbent.PaymentOrder) PublicOrderResult {
 		RefundRequestedBy:   order.RefundRequestedBy,
 		RefundRequestReason: order.RefundRequestReason,
 		PlanID:              order.PlanID,
+		ShopOrderID:         order.ShopOrderID,
 	}
 }
 

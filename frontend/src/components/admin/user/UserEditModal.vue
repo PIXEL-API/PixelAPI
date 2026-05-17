@@ -35,7 +35,15 @@
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.columns.concurrency') }}</label>
-        <input v-model.number="form.concurrency" type="number" class="input" />
+        <input
+          v-model.number="form.concurrency"
+          type="number"
+          min="1"
+          max="5"
+          class="input"
+          @input="normalizeConcurrencyInput"
+        />
+        <p class="input-hint">{{ t('admin.users.concurrencyRangeHint') }}</p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.form.rpmLimit') }}</label>
@@ -80,6 +88,10 @@ const { t } = useI18n(); const appStore = useAppStore(); const { copyToClipboard
 const submitting = ref(false); const passwordCopied = ref(false)
 const form = reactive({ email: '', password: '', username: '', notes: '', concurrency: 1, rpm_limit: 0, customAttributes: {} as UserAttributeValuesMap })
 
+const normalizeConcurrencyInput = () => {
+  form.concurrency = Math.min(5, Math.max(1, form.concurrency || 1))
+}
+
 watch(() => props.user, (u) => {
   if (u) {
     Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, customAttributes: {} })
@@ -103,8 +115,9 @@ const handleUpdateUser = async () => {
     appStore.showError(t('admin.users.emailRequired'))
     return
   }
-  if (form.concurrency < 1) {
-    appStore.showError(t('admin.users.concurrencyMin'))
+  normalizeConcurrencyInput()
+  if (form.concurrency < 1 || form.concurrency > 5) {
+    appStore.showError(t('admin.users.concurrencyRange'))
     return
   }
   submitting.value = true

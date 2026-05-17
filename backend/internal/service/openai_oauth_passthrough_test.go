@@ -1041,7 +1041,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *
 
 	_, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.NoError(t, err)
-	require.True(t, logSink.ContainsMessage("检测到超时相关请求头，将按配置过滤以降低断流风险"))
+	require.True(t, logSink.ContainsMessageAtLevel("OpenAI passthrough detected client timeout headers but did not forward them", "warn"))
 	require.True(t, logSink.ContainsFieldValue("timeout_headers", "x-stainless-timeout=10000"))
 }
 
@@ -1082,8 +1082,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_InfoWhenStreamEndsWithoutDone(t *
 
 	_, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.EqualError(t, err, "stream usage incomplete: missing terminal event")
-	require.True(t, logSink.ContainsMessage("上游流在未收到 [DONE] 时结束，疑似断流"))
-	require.True(t, logSink.ContainsMessageAtLevel("上游流在未收到 [DONE] 时结束，疑似断流", "info"))
+	require.True(t, logSink.ContainsMessage("OpenAI passthrough upstream stream ended before [DONE], suspected truncated stream"))
+	require.True(t, logSink.ContainsMessageAtLevel("OpenAI passthrough upstream stream ended before [DONE], suspected truncated stream", "info"))
 	require.True(t, logSink.ContainsFieldValue("upstream_request_id", "rid-truncate"))
 }
 

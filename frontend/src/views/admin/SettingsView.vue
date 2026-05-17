@@ -12,16 +12,25 @@
       <form v-else @submit.prevent="saveSettings" class="space-y-6" novalidate>
         <!-- Tab Navigation -->
         <div class="sticky top-0 z-10 overflow-x-auto settings-tabs-scroll">
-          <nav class="settings-tabs">
+          <nav
+            class="settings-tabs"
+            role="tablist"
+            :aria-label="t('admin.settings.title')"
+          >
             <button
               v-for="tab in settingsTabs"
               :key="tab.key"
+              :id="`settings-tab-${tab.key}`"
               type="button"
+              role="tab"
+              :aria-selected="activeTab === tab.key"
+              :tabindex="activeTab === tab.key ? 0 : -1"
               :class="[
                 'settings-tab',
                 activeTab === tab.key && 'settings-tab-active',
               ]"
-              @click="activeTab = tab.key"
+              @click="selectSettingsTab(tab.key)"
+              @keydown="handleSettingsTabKeydown($event, tab.key)"
             >
               <span class="settings-tab-icon">
                 <Icon :name="tab.icon" size="sm" />
@@ -1639,6 +1648,228 @@
                     <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                       {{ t("admin.settings.linuxdo.redirectUrlHint") }}
                     </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- GitHub / Google OAuth 登录 -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ localText("GitHub / Google 登录", "GitHub / Google login") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{
+                  localText(
+                    "配置邮箱型第三方 OAuth 登录入口，用户可通过 GitHub 或 Google 完成登录与注册。",
+                    "Configure email-based OAuth login with GitHub and Google.",
+                  )
+                }}
+              </p>
+            </div>
+            <div class="space-y-6 p-6">
+              <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 class="font-medium text-gray-900 dark:text-white">GitHub</h3>
+                      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        {{
+                          localText(
+                            "GitHub OAuth App 需要 read:user user:email 权限，回调地址填写下方后端地址。",
+                            "GitHub OAuth App needs read:user user:email scopes. Use the backend callback URL below.",
+                          )
+                        }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.github_oauth_enabled" />
+                  </div>
+
+                  <div v-if="form.github_oauth_enabled" class="mt-4 space-y-4">
+                    <div class="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-dark-800 dark:text-gray-300">
+                      <template v-if="isZhLocale">
+                        开通引导：GitHub Settings → Developer settings →
+                        <a
+                          data-testid="github-oauth-apps-guide-link"
+                          href="https://github.com/settings/developers"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="font-medium text-primary-600 hover:underline dark:text-primary-400"
+                        >OAuth Apps</a>
+                        → New OAuth App；Homepage URL 填站点域名，Authorization callback URL 填下面的后端回调地址。
+                      </template>
+                      <template v-else>
+                        Setup guide: GitHub Settings → Developer settings →
+                        <a
+                          data-testid="github-oauth-apps-guide-link"
+                          href="https://github.com/settings/developers"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="font-medium text-primary-600 hover:underline dark:text-primary-400"
+                        >OAuth Apps</a>
+                        → New OAuth App. Use your site origin as Homepage URL and the backend callback URL below as Authorization callback URL.
+                      </template>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Client ID</label>
+                        <input
+                          v-model="form.github_oauth_client_id"
+                          type="text"
+                          class="input font-mono text-sm"
+                          placeholder="GitHub OAuth Client ID"
+                        />
+                      </div>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Client Secret</label>
+                        <input
+                          v-model="form.github_oauth_client_secret"
+                          type="password"
+                          class="input font-mono text-sm"
+                          :placeholder="
+                            form.github_oauth_client_secret_configured
+                              ? localText('密钥已配置，留空以保留当前值。', 'Secret configured. Leave empty to keep the current value.')
+                              : 'GitHub OAuth Client Secret'
+                          "
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ localText("后端回调地址", "Backend Callback URL") }}
+                      </label>
+                      <input
+                        v-model="form.github_oauth_redirect_url"
+                        type="url"
+                        class="input font-mono text-sm"
+                        placeholder="https://your-domain.com/api/v1/auth/oauth/github/callback"
+                      />
+                      <div class="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                        <button
+                          type="button"
+                          class="btn btn-secondary btn-sm w-fit"
+                          @click="setAndCopyEmailOAuthRedirectUrl('github')"
+                        >
+                          {{ localText("生成并复制", "Generate and copy") }}
+                        </button>
+                        <code
+                          v-if="githubOAuthRedirectUrlSuggestion"
+                          class="select-all break-all rounded bg-gray-50 px-2 py-1 font-mono text-xs text-gray-600 dark:bg-dark-800 dark:text-gray-300"
+                        >
+                          {{ githubOAuthRedirectUrlSuggestion }}
+                        </code>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ localText("前端回跳地址", "Frontend Callback URL") }}
+                      </label>
+                      <input
+                        v-model="form.github_oauth_frontend_redirect_url"
+                        type="text"
+                        class="input font-mono text-sm"
+                        placeholder="/auth/oauth/callback"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 class="font-medium text-gray-900 dark:text-white">Google</h3>
+                      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        {{
+                          localText(
+                            "Google OAuth 客户端需要 openid email profile 范围，并在凭据里登记后端回调地址。",
+                            "Google OAuth client needs openid email profile scopes and the backend callback URL registered in credentials.",
+                          )
+                        }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.google_oauth_enabled" />
+                  </div>
+
+                  <div v-if="form.google_oauth_enabled" class="mt-4 space-y-4">
+                    <div class="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-dark-800 dark:text-gray-300">
+                      {{
+                        localText(
+                          "开通引导：Google Cloud Console → APIs & Services → OAuth consent screen 完成同意屏幕；Credentials → Create Credentials → OAuth client ID，类型选择 Web application，并把下面地址加入 Authorized redirect URIs。",
+                          "Setup guide: Google Cloud Console → APIs & Services → OAuth consent screen, then Credentials → Create Credentials → OAuth client ID, choose Web application, and add the URL below to Authorized redirect URIs.",
+                        )
+                      }}
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Client ID</label>
+                        <input
+                          v-model="form.google_oauth_client_id"
+                          type="text"
+                          class="input font-mono text-sm"
+                          placeholder="Google OAuth Client ID"
+                        />
+                      </div>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Client Secret</label>
+                        <input
+                          v-model="form.google_oauth_client_secret"
+                          type="password"
+                          class="input font-mono text-sm"
+                          :placeholder="
+                            form.google_oauth_client_secret_configured
+                              ? localText('密钥已配置，留空以保留当前值。', 'Secret configured. Leave empty to keep the current value.')
+                              : 'Google OAuth Client Secret'
+                          "
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ localText("后端回调地址", "Backend Callback URL") }}
+                      </label>
+                      <input
+                        v-model="form.google_oauth_redirect_url"
+                        type="url"
+                        class="input font-mono text-sm"
+                        placeholder="https://your-domain.com/api/v1/auth/oauth/google/callback"
+                      />
+                      <div class="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                        <button
+                          type="button"
+                          class="btn btn-secondary btn-sm w-fit"
+                          @click="setAndCopyEmailOAuthRedirectUrl('google')"
+                        >
+                          {{ localText("生成并复制", "Generate and copy") }}
+                        </button>
+                        <code
+                          v-if="googleOAuthRedirectUrlSuggestion"
+                          class="select-all break-all rounded bg-gray-50 px-2 py-1 font-mono text-xs text-gray-600 dark:bg-dark-800 dark:text-gray-300"
+                        >
+                          {{ googleOAuthRedirectUrlSuggestion }}
+                        </code>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ localText("前端回跳地址", "Frontend Callback URL") }}
+                      </label>
+                      <input
+                        v-model="form.google_oauth_frontend_redirect_url"
+                        type="text"
+                        class="input font-mono text-sm"
+                        placeholder="/auth/oauth/callback"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -4220,6 +4451,208 @@
         <!-- /Tab: General -->
 
         <!-- Tab: Features (功能开关) -->
+        <!-- Tab: Login Agreement -->
+        <div v-show="activeTab === 'agreement'" class="space-y-6">
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                    {{ localText("登录条款确认", "Login agreement") }}
+                  </h2>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{
+                      localText(
+                        "控制登录页是否要求用户先阅读并同意服务条款、隐私政策或其他 Markdown 文档。",
+                        "Control whether the login page requires users to accept Markdown policy documents first.",
+                      )
+                    }}
+                  </p>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="text-sm text-gray-600 dark:text-gray-300">
+                    {{ form.login_agreement_enabled ? localText("已启用", "Enabled") : localText("未启用", "Disabled") }}
+                  </span>
+                  <Toggle v-model="form.login_agreement_enabled" />
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-6 p-6">
+              <div class="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ localText("展示形式", "Display mode") }}
+                  </label>
+                  <div class="grid grid-cols-2 gap-2 rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
+                    <button
+                      type="button"
+                      class="inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition"
+                      :class="
+                        form.login_agreement_mode === 'modal'
+                          ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                          : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                      "
+                      @click="form.login_agreement_mode = 'modal'"
+                    >
+                      <Icon name="shield" size="sm" />
+                      {{ localText("弹窗", "Modal") }}
+                    </button>
+                    <button
+                      type="button"
+                      class="inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition"
+                      :class="
+                        form.login_agreement_mode === 'checkbox'
+                          ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                          : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                      "
+                      @click="form.login_agreement_mode = 'checkbox'"
+                    >
+                      <Icon name="checkCircle" size="sm" />
+                      {{ localText("复选框", "Checkbox") }}
+                    </button>
+                  </div>
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      form.login_agreement_mode === "checkbox"
+                        ? localText("复选框会显示在登录按钮下方，未勾选前所有登录入口禁用。", "The checkbox appears below the login button and gates all login actions.")
+                        : localText("弹窗会在登录页打开，用户拒绝后所有登录入口保持禁用。", "The modal opens on the login page and gates all login actions until accepted.")
+                    }}
+                  </p>
+                </div>
+
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ localText("条款更新日期", "Updated date") }}
+                  </label>
+                  <input
+                    v-model="form.login_agreement_updated_at"
+                    type="date"
+                    class="input"
+                  />
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ localText("日期或文档内容变化后，用户需要重新同意。", "Changing the date or content requires fresh consent.") }}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+                      {{ localText("协议文档", "Agreement documents") }}
+                    </h3>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        localText(
+                          "文档名称可自定义，内容按 Markdown 保存。可参考：服务条款、使用政策、支持的国家和地区、服务特定条款。",
+                          "Document titles are customizable and content is saved as Markdown.",
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm inline-flex items-center gap-1.5"
+                    @click="addLoginAgreementDocument"
+                  >
+                    <Icon name="plus" size="sm" />
+                    {{ localText("添加文档", "Add document") }}
+                  </button>
+                </div>
+
+                <div class="mt-4 space-y-3">
+                  <div
+                    v-for="(doc, index) in form.login_agreement_documents"
+                    :key="doc.id || index"
+                    class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800/60"
+                  >
+                    <div class="mb-3 flex items-center justify-between gap-3">
+                      <div class="flex min-w-0 items-center gap-3">
+                        <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-200">
+                          <Icon
+                            :name="
+                              index === 1
+                                ? 'shield'
+                                : index === 2
+                                  ? 'globe'
+                                  : index === 3
+                                    ? 'cog'
+                                    : 'document'
+                            "
+                            size="sm"
+                          />
+                        </span>
+                        <div class="min-w-0">
+                          <p class="truncate text-sm font-semibold text-gray-900 dark:text-white">
+                            {{ doc.title || localText("未命名文档", "Untitled document") }}
+                          </p>
+                          <p class="truncate text-xs text-gray-500 dark:text-gray-400">
+                            {{ loginAgreementRoutePath(doc, index) }}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        class="rounded-md p-2 text-red-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-900/20"
+                        :disabled="
+                          form.login_agreement_enabled &&
+                          form.login_agreement_documents.length <= 1
+                        "
+                        @click="removeLoginAgreementDocument(index)"
+                      >
+                        <Icon name="trash" size="sm" />
+                      </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                      <div>
+                        <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                          {{ localText("文档名称", "Document title") }}
+                        </label>
+                        <input
+                          v-model="doc.title"
+                          type="text"
+                          class="input text-sm"
+                          :placeholder="localText('例如：服务条款', 'Example: Terms of Service')"
+                        />
+                      </div>
+                      <div>
+                        <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                          {{ localText("路由标识", "Route slug") }}
+                        </label>
+                        <div class="flex overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 dark:border-dark-600 dark:bg-dark-900">
+                          <span class="inline-flex flex-shrink-0 items-center border-r border-gray-200 bg-gray-50 px-3 text-sm text-gray-500 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-400">
+                            /legal/
+                          </span>
+                          <input
+                            v-model="doc.id"
+                            type="text"
+                            class="min-w-0 flex-1 border-0 bg-transparent px-3 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:ring-0 dark:text-white dark:placeholder:text-dark-500"
+                            placeholder="usage-policy"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div class="mt-3">
+                      <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        {{ localText("Markdown 内容", "Markdown content") }}
+                      </label>
+                      <textarea
+                        v-model="doc.content_md"
+                        rows="8"
+                        class="input font-mono text-sm"
+                        :placeholder="localText('在这里填写正式 Markdown 内容。', 'Write the final Markdown content here.')"
+                      ></textarea>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- /Tab: Login Agreement -->
+
         <div v-show="activeTab === 'features'" class="space-y-6">
 
         <div class="card">
@@ -4272,6 +4705,7 @@
           </div>
         </div>
 
+        <!-- Affiliate (邀请返利) feature card -->
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -4305,7 +4739,40 @@
           </div>
         </div>
 
-        <!-- Affiliate (邀请返利) feature card -->
+        <!-- Risk control feature card -->
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.settings.features.riskControl.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.settings.features.riskControl.description') }}
+            </p>
+            <p class="mt-1.5 text-xs">
+              <router-link
+                to="/admin/risk-control"
+                class="inline-flex items-center gap-1 text-primary-600 hover:underline dark:text-primary-400"
+              >
+                {{ t('admin.settings.features.riskControl.configureLink') }}
+                <span aria-hidden="true">→</span>
+              </router-link>
+            </p>
+          </div>
+          <div class="space-y-5 p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.features.riskControl.enabled') }}
+                </label>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.riskControl.enabledHint') }}
+                </p>
+              </div>
+              <Toggle v-model="form.risk_control_enabled" />
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -5092,6 +5559,139 @@
                     </a>
                   </p>
                 </div>
+                <div
+                  class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-800/60"
+                >
+                  <div class="flex items-center justify-between gap-4">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ t("admin.settings.payment.receiptCodeOssTitle") }}
+                      </label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.payment.receiptCodeOssHint") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.payment_receipt_code_oss_enabled" />
+                  </div>
+                  <div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssEndpoint") }}
+                      </label>
+                      <input
+                        v-model="form.payment_receipt_code_oss_endpoint"
+                        type="url"
+                        class="input"
+                        placeholder="https://oss-cn-hangzhou.aliyuncs.com"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssRegion") }}
+                      </label>
+                      <input
+                        v-model="form.payment_receipt_code_oss_region"
+                        type="text"
+                        class="input"
+                        placeholder="oss-cn-hangzhou"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssBucket") }}
+                      </label>
+                      <input
+                        v-model="form.payment_receipt_code_oss_bucket"
+                        type="text"
+                        class="input"
+                        placeholder="sub2api"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssAccessKey") }}
+                      </label>
+                      <input
+                        v-model="form.payment_receipt_code_oss_access_key_id"
+                        type="text"
+                        class="input"
+                        placeholder="LTAI..."
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssSecret") }}
+                      </label>
+                      <input
+                        v-model="form.payment_receipt_code_oss_secret_access_key"
+                        type="password"
+                        class="input"
+                        :placeholder="
+                          form.payment_receipt_code_oss_secret_access_key_configured
+                            ? t('admin.settings.payment.secretConfiguredPlaceholder')
+                            : 'AccessKey Secret'
+                        "
+                        autocomplete="new-password"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssPrefix") }}
+                      </label>
+                      <input
+                        v-model="form.payment_receipt_code_oss_prefix"
+                        type="text"
+                        class="input"
+                        placeholder="receipt-codes/"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssPublicBaseUrl") }}
+                      </label>
+                      <input
+                        v-model="form.payment_receipt_code_oss_public_base_url"
+                        type="url"
+                        class="input"
+                        placeholder="https://cdn.example.com/receipt-codes"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssMaxSize") }}
+                      </label>
+                      <input
+                        v-model.number="form.payment_receipt_code_oss_max_size_bytes"
+                        type="number"
+                        min="1"
+                        max="5242880"
+                        class="input"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">
+                        {{ t("admin.settings.payment.receiptCodeOssPresignExpire") }}
+                      </label>
+                      <input
+                        v-model.number="
+                          form.payment_receipt_code_oss_presign_expire_seconds
+                        "
+                        type="number"
+                        min="1"
+                        max="3600"
+                        class="input"
+                      />
+                    </div>
+                  </div>
+                  <label class="mt-3 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                    <input
+                      v-model="form.payment_receipt_code_oss_force_path_style"
+                      type="checkbox"
+                      class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    {{ t("admin.settings.payment.receiptCodeOssForcePathStyle") }}
+                  </label>
+                </div>
                 <!-- Row 5: Help image + text -->
                 <div class="grid grid-cols-2 gap-3">
                   <div>
@@ -5633,7 +6233,12 @@ import type {
   WebSearchProviderConfig,
   WebSearchTestResult,
 } from "@/api/admin/settings";
-import type { AdminGroup, Proxy, NotifyEmailEntry } from "@/types";
+import type {
+  AdminGroup,
+  LoginAgreementDocument,
+  NotifyEmailEntry,
+  Proxy,
+} from "@/types";
 import type { ProviderInstance } from "@/types/payment";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import Icon from "@/components/icons/Icon.vue";
@@ -5663,9 +6268,10 @@ import {
 const { t, locale } = useI18n();
 const appStore = useAppStore();
 const adminSettingsStore = useAdminSettingsStore();
+const isZhLocale = computed(() => locale.value.startsWith("zh"));
 
 function localText(zh: string, en: string): string {
-  return locale.value.startsWith("zh") ? zh : en;
+  return isZhLocale.value ? zh : en;
 }
 
 const paymentGuideHref = computed(() =>
@@ -5682,6 +6288,7 @@ const paymentMethodsHref = computed(() =>
 
 type SettingsTab =
   | "general"
+  | "agreement"
   | "features"
   | "security"
   | "users"
@@ -5692,6 +6299,7 @@ type SettingsTab =
 const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
+  { key: "agreement" as SettingsTab, icon: "document" as const },
   { key: "features" as SettingsTab, icon: "bolt" as const },
   { key: "security" as SettingsTab, icon: "shield" as const },
   { key: "users" as SettingsTab, icon: "user" as const },
@@ -5700,6 +6308,56 @@ const settingsTabs = [
   { key: "email" as SettingsTab, icon: "mail" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
+
+const settingsTabKeyboardActions = {
+  ArrowLeft: -1,
+  ArrowUp: -1,
+  ArrowRight: 1,
+  ArrowDown: 1,
+  Home: "first",
+  End: "last",
+} as const;
+
+function selectSettingsTab(tab: SettingsTab): void {
+  activeTab.value = tab;
+}
+
+function focusSettingsTab(tab: SettingsTab): void {
+  window.requestAnimationFrame(() => {
+    document.getElementById(`settings-tab-${tab}`)?.focus();
+  });
+}
+
+function handleSettingsTabKeydown(event: KeyboardEvent, tab: SettingsTab): void {
+  const action =
+    settingsTabKeyboardActions[
+      event.key as keyof typeof settingsTabKeyboardActions
+    ];
+  if (action === undefined) {
+    return;
+  }
+
+  event.preventDefault();
+  const currentIndex = settingsTabs.findIndex((item) => item.key === tab);
+  let nextIndex = currentIndex < 0 ? 0 : currentIndex;
+
+  if (action === "first") {
+    nextIndex = 0;
+  } else if (action === "last") {
+    nextIndex = settingsTabs.length - 1;
+  } else {
+    nextIndex =
+      (nextIndex + action + settingsTabs.length) % settingsTabs.length;
+  }
+
+  const nextTab = settingsTabs[nextIndex]?.key;
+  if (!nextTab) {
+    return;
+  }
+
+  selectSettingsTab(nextTab);
+  focusSettingsTab(nextTab);
+}
 const { copyToClipboard } = useClipboard();
 
 const loading = ref(true);
@@ -5778,6 +6436,49 @@ const tablePageSizeMin = 5;
 const tablePageSizeMax = 1000;
 const tablePageSizeDefault = 20;
 
+function defaultLoginAgreementDocuments(): LoginAgreementDocument[] {
+  return [
+    {
+      id: "terms",
+      title: "服务条款",
+      content_md: "",
+    },
+    {
+      id: "usage-policy",
+      title: "使用政策",
+      content_md: "",
+    },
+    {
+      id: "supported-regions",
+      title: "支持的国家和地区",
+      content_md: "",
+    },
+    {
+      id: "service-specific-terms",
+      title: "服务特定条款",
+      content_md: "",
+    },
+  ];
+}
+
+function normalizeLoginAgreementDocumentId(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/[-_]{2,}/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "");
+}
+
+function loginAgreementRoutePath(
+  doc: LoginAgreementDocument,
+  index: number,
+): string {
+  const id =
+    normalizeLoginAgreementDocumentId(doc.id || doc.title) || `doc-${index + 1}`;
+  return `/legal/${id}`;
+}
+
 interface DefaultSubscriptionGroupOption {
   value: number;
   label: string;
@@ -5805,6 +6506,9 @@ type SettingsForm = Omit<
   wechat_connect_mp_enabled: boolean;
   wechat_connect_mobile_enabled: boolean;
   oidc_connect_client_secret: string;
+  github_oauth_client_secret: string;
+  google_oauth_client_secret: string;
+  payment_receipt_code_oss_secret_access_key: string;
   force_email_on_third_party_signup: boolean;
   master_data_plane_enabled: boolean;
   openai_advanced_scheduler_enabled: boolean;
@@ -5821,6 +6525,10 @@ const form = reactive<SettingsForm>({
   password_reset_enabled: false,
   totp_enabled: false,
   totp_encryption_key_configured: false,
+  login_agreement_enabled: false,
+  login_agreement_mode: "modal",
+  login_agreement_updated_at: "2026-03-31",
+  login_agreement_documents: defaultLoginAgreementDocuments(),
   default_balance: 0,
   affiliate_rebate_rate: 20,
   affiliate_rebate_freeze_hours: 0,
@@ -5861,6 +6569,18 @@ const form = reactive<SettingsForm>({
   payment_product_name_prefix: "",
   payment_product_name_suffix: "",
   payment_load_balance_strategy: "round-robin",
+  payment_receipt_code_oss_enabled: false,
+  payment_receipt_code_oss_endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
+  payment_receipt_code_oss_region: "oss-cn-hangzhou",
+  payment_receipt_code_oss_bucket: "",
+  payment_receipt_code_oss_access_key_id: "",
+  payment_receipt_code_oss_secret_access_key: "",
+  payment_receipt_code_oss_secret_access_key_configured: false,
+  payment_receipt_code_oss_prefix: "receipt-codes/",
+  payment_receipt_code_oss_public_base_url: "",
+  payment_receipt_code_oss_force_path_style: false,
+  payment_receipt_code_oss_max_size_bytes: 1048576,
+  payment_receipt_code_oss_presign_expire_seconds: 300,
   payment_cancel_rate_limit_enabled: false,
   payment_cancel_rate_limit_max: 10,
   payment_cancel_rate_limit_window: 1,
@@ -5946,6 +6666,18 @@ const form = reactive<SettingsForm>({
   oidc_connect_userinfo_email_path: "",
   oidc_connect_userinfo_id_path: "",
   oidc_connect_userinfo_username_path: "",
+  github_oauth_enabled: false,
+  github_oauth_client_id: "",
+  github_oauth_client_secret: "",
+  github_oauth_client_secret_configured: false,
+  github_oauth_redirect_url: "",
+  github_oauth_frontend_redirect_url: "/auth/oauth/callback",
+  google_oauth_enabled: false,
+  google_oauth_client_id: "",
+  google_oauth_client_secret: "",
+  google_oauth_client_secret_configured: false,
+  google_oauth_redirect_url: "",
+  google_oauth_frontend_redirect_url: "/auth/oauth/callback",
   // Model fallback
   enable_model_fallback: false,
   fallback_model_anthropic: "claude-3-5-sonnet-20241022",
@@ -5986,6 +6718,8 @@ const form = reactive<SettingsForm>({
   available_channels_enabled: false,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
+  // Risk control feature switch
+  risk_control_enabled: false,
 });
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
@@ -6012,6 +6746,16 @@ const authSourceDefaultsMeta = computed(() => [
     source: "wechat" as AuthSourceType,
     title: t("admin.settings.authSourceDefaults.sources.wechat.title"),
     description: t("admin.settings.authSourceDefaults.sources.wechat.description"),
+  },
+  {
+    source: "github" as AuthSourceType,
+    title: t("admin.settings.authSourceDefaults.sources.github.title"),
+    description: t("admin.settings.authSourceDefaults.sources.github.description"),
+  },
+  {
+    source: "google" as AuthSourceType,
+    title: t("admin.settings.authSourceDefaults.sources.google.title"),
+    description: t("admin.settings.authSourceDefaults.sources.google.description"),
   },
 ]);
 
@@ -6320,6 +7064,42 @@ async function setAndCopyLinuxdoRedirectUrl() {
   );
 }
 
+type EmailOAuthProvider = "github" | "google";
+
+const githubOAuthRedirectUrlSuggestion = computed(() => {
+  if (typeof window === "undefined") return "";
+  const origin =
+    window.location.origin ||
+    `${window.location.protocol}//${window.location.host}`;
+  return `${origin}/api/v1/auth/oauth/github/callback`;
+});
+
+const googleOAuthRedirectUrlSuggestion = computed(() => {
+  if (typeof window === "undefined") return "";
+  const origin =
+    window.location.origin ||
+    `${window.location.protocol}//${window.location.host}`;
+  return `${origin}/api/v1/auth/oauth/google/callback`;
+});
+
+async function setAndCopyEmailOAuthRedirectUrl(provider: EmailOAuthProvider) {
+  const url =
+    provider === "github"
+      ? githubOAuthRedirectUrlSuggestion.value
+      : googleOAuthRedirectUrlSuggestion.value;
+  if (!url) return;
+
+  if (provider === "github") {
+    form.github_oauth_redirect_url = url;
+  } else {
+    form.google_oauth_redirect_url = url;
+  }
+  await copyToClipboard(
+    url,
+    localText("回调地址已写入并复制。", "Callback URL set and copied."),
+  );
+}
+
 const wechatRedirectUrlSuggestion = computed(() => {
   if (typeof window === "undefined") return "";
   const origin =
@@ -6448,6 +7228,43 @@ function removeEndpoint(index: number) {
   form.custom_endpoints.splice(index, 1);
 }
 
+function addLoginAgreementDocument() {
+  form.login_agreement_documents.push({
+    id: `custom-${Date.now().toString(36)}`,
+    title: "",
+    content_md: "",
+  });
+}
+
+function removeLoginAgreementDocument(index: number) {
+  form.login_agreement_documents.splice(index, 1);
+}
+
+function normalizeLoginAgreementDocumentsForSave(): LoginAgreementDocument[] {
+  return form.login_agreement_documents
+    .map((doc, index) => ({
+      id:
+        normalizeLoginAgreementDocumentId(doc.id || doc.title) ||
+        `doc-${index + 1}`,
+      title: doc.title.trim(),
+      content_md: doc.content_md.trim(),
+    }))
+    .filter((doc) => doc.title || doc.content_md);
+}
+
+function findDuplicateLoginAgreementDocumentId(
+  documents: LoginAgreementDocument[],
+): string | null {
+  const seen = new Set<string>();
+  for (const doc of documents) {
+    if (seen.has(doc.id)) {
+      return doc.id;
+    }
+    seen.add(doc.id);
+  }
+  return null;
+}
+
 function formatTablePageSizeOptions(options: number[]): string {
   return options.join(", ");
 }
@@ -6497,6 +7314,19 @@ async function loadSettings() {
       sort_order: Number.isInteger(item.sort_order) ? item.sort_order : index,
       open_in_new_window: Boolean(item.open_in_new_window),
     }));
+    form.login_agreement_mode =
+      settings.login_agreement_mode === "checkbox" ? "checkbox" : "modal";
+    form.login_agreement_updated_at =
+      settings.login_agreement_updated_at || "2026-03-31";
+    form.login_agreement_documents =
+      Array.isArray(settings.login_agreement_documents) &&
+      settings.login_agreement_documents.length > 0
+        ? settings.login_agreement_documents.map((doc) => ({
+            id: doc.id || "",
+            title: doc.title || "",
+            content_md: doc.content_md || "",
+          }))
+        : defaultLoginAgreementDocuments();
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(settings));
     form.backend_mode_enabled = settings.backend_mode_enabled;
     form.master_data_plane_enabled = settings.master_data_plane_enabled ?? true;
@@ -6516,11 +7346,14 @@ async function loadSettings() {
     form.smtp_password = "";
     smtpPasswordManuallyEdited.value = false;
     form.turnstile_secret_key = "";
+    form.payment_receipt_code_oss_secret_access_key = "";
     form.linuxdo_connect_client_secret = "";
     form.wechat_connect_app_secret = "";
     form.wechat_connect_open_app_secret = "";
     form.wechat_connect_mp_app_secret = "";
     form.wechat_connect_mobile_app_secret = "";
+    form.github_oauth_client_secret = "";
+    form.google_oauth_client_secret = "";
     const wechatCapabilities = resolveWeChatConnectModeCapabilities(
       settings.wechat_connect_open_enabled,
       settings.wechat_connect_mp_enabled,
@@ -6712,6 +7545,44 @@ async function saveSettings() {
     form.table_default_page_size = normalizedTableDefaultPageSize;
     form.table_page_size_options = normalizedTablePageSizeOptions;
 
+    const normalizedLoginAgreementDocuments =
+      normalizeLoginAgreementDocumentsForSave();
+    if (form.login_agreement_enabled && normalizedLoginAgreementDocuments.length === 0) {
+      appStore.showError(
+        localText(
+          "启用登录条款确认时，至少需要保留一份文档。",
+          "At least one document is required when login agreement is enabled.",
+        ),
+      );
+      return;
+    }
+    const emptyTitleDocument = normalizedLoginAgreementDocuments.find(
+      (doc) => !doc.title,
+    );
+    if (emptyTitleDocument) {
+      appStore.showError(
+        localText(
+          "登录条款文档名称不能为空。",
+          "Login agreement document title cannot be empty.",
+        ),
+      );
+      return;
+    }
+    const duplicateLoginAgreementDocumentId =
+      findDuplicateLoginAgreementDocumentId(normalizedLoginAgreementDocuments);
+    if (duplicateLoginAgreementDocumentId) {
+      appStore.showError(
+        localText(
+          `登录条款文档路由不能重复：/legal/${duplicateLoginAgreementDocumentId}`,
+          `Login agreement document routes cannot be duplicated: /legal/${duplicateLoginAgreementDocumentId}`,
+        ),
+      );
+      return;
+    }
+    form.login_agreement_mode =
+      form.login_agreement_mode === "checkbox" ? "checkbox" : "modal";
+    form.login_agreement_documents = normalizedLoginAgreementDocuments;
+
     const normalizedDefaultSubscriptions = normalizeDefaultSubscriptionSettings(
       form.default_subscriptions,
     );
@@ -6789,6 +7660,10 @@ async function saveSettings() {
       invitation_code_enabled: form.invitation_code_enabled,
       password_reset_enabled: form.password_reset_enabled,
       totp_enabled: form.totp_enabled,
+      login_agreement_enabled: form.login_agreement_enabled,
+      login_agreement_mode: form.login_agreement_mode,
+      login_agreement_updated_at: form.login_agreement_updated_at,
+      login_agreement_documents: form.login_agreement_documents,
       default_balance: form.default_balance,
       affiliate_rebate_duration_days: Math.max(0, Math.min(3650, Math.floor(Number(form.affiliate_rebate_duration_days) || 0))),
       default_concurrency: form.default_concurrency,
@@ -6890,6 +7765,20 @@ async function saveSettings() {
       oidc_connect_userinfo_id_path: form.oidc_connect_userinfo_id_path,
       oidc_connect_userinfo_username_path:
         form.oidc_connect_userinfo_username_path,
+      github_oauth_enabled: form.github_oauth_enabled,
+      github_oauth_client_id: form.github_oauth_client_id,
+      github_oauth_client_secret:
+        form.github_oauth_client_secret || undefined,
+      github_oauth_redirect_url: form.github_oauth_redirect_url,
+      github_oauth_frontend_redirect_url:
+        form.github_oauth_frontend_redirect_url,
+      google_oauth_enabled: form.google_oauth_enabled,
+      google_oauth_client_id: form.google_oauth_client_id,
+      google_oauth_client_secret:
+        form.google_oauth_client_secret || undefined,
+      google_oauth_redirect_url: form.google_oauth_redirect_url,
+      google_oauth_frontend_redirect_url:
+        form.google_oauth_frontend_redirect_url,
       enable_model_fallback: form.enable_model_fallback,
       fallback_model_anthropic: form.fallback_model_anthropic,
       fallback_model_openai: form.fallback_model_openai,
@@ -6907,6 +7796,7 @@ async function saveSettings() {
         form.enable_anthropic_cache_ttl_1h_injection,
       // Payment configuration
       payment_enabled: form.payment_enabled,
+      risk_control_enabled: form.risk_control_enabled,
       payment_min_amount: Number(form.payment_min_amount) || 0,
       payment_max_amount: Number(form.payment_max_amount) || 0,
       payment_daily_limit: Number(form.payment_daily_limit) || 0,
@@ -6931,6 +7821,28 @@ async function saveSettings() {
       payment_cancel_rate_limit_unit: form.payment_cancel_rate_limit_unit,
       payment_cancel_rate_limit_window_mode:
         form.payment_cancel_rate_limit_window_mode,
+      payment_receipt_code_oss_enabled:
+        form.payment_receipt_code_oss_enabled,
+      payment_receipt_code_oss_endpoint:
+        form.payment_receipt_code_oss_endpoint.trim(),
+      payment_receipt_code_oss_region:
+        form.payment_receipt_code_oss_region.trim(),
+      payment_receipt_code_oss_bucket:
+        form.payment_receipt_code_oss_bucket.trim(),
+      payment_receipt_code_oss_access_key_id:
+        form.payment_receipt_code_oss_access_key_id.trim(),
+      payment_receipt_code_oss_secret_access_key:
+        form.payment_receipt_code_oss_secret_access_key.trim(),
+      payment_receipt_code_oss_prefix:
+        form.payment_receipt_code_oss_prefix.trim(),
+      payment_receipt_code_oss_public_base_url:
+        form.payment_receipt_code_oss_public_base_url.trim(),
+      payment_receipt_code_oss_force_path_style:
+        form.payment_receipt_code_oss_force_path_style,
+      payment_receipt_code_oss_max_size_bytes:
+        Number(form.payment_receipt_code_oss_max_size_bytes) || 1048576,
+      payment_receipt_code_oss_presign_expire_seconds:
+        Number(form.payment_receipt_code_oss_presign_expire_seconds) || 300,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
       openai_free_account_repair_enabled:
         form.openai_free_account_repair_enabled,
@@ -8285,17 +9197,17 @@ watch(
   @apply text-primary-600 dark:text-primary-400;
   background: linear-gradient(
     135deg,
-    rgba(20, 184, 166, 0.08),
-    rgba(20, 184, 166, 0.03)
+    rgba(107, 155, 240, 0.08),
+    rgba(99, 180, 225, 0.03)
   );
-  box-shadow: 0 1px 2px rgba(20, 184, 166, 0.1);
+  box-shadow: 0 1px 2px rgba(107, 155, 240, 0.1);
 }
 
 :root.dark .settings-tab-active {
   background: linear-gradient(
     135deg,
-    rgba(45, 212, 191, 0.12),
-    rgba(45, 212, 191, 0.05)
+    rgba(143, 182, 244, 0.12),
+    rgba(99, 180, 225, 0.05)
   );
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
 }

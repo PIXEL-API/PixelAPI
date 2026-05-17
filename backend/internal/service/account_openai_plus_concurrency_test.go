@@ -6,17 +6,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalizeOpenAIPlusConcurrency_DefaultAndMax(t *testing.T) {
+func TestNormalizeOpenAIPlusConcurrency_DefaultAndAdminConfiguredValue(t *testing.T) {
 	got, err := NormalizeOpenAIPlusConcurrency(PlatformOpenAI, AccountLevelPlus, 0)
 	require.NoError(t, err)
 	require.Equal(t, OpenAIPlusDefaultConcurrency, got)
 
-	got, err = NormalizeOpenAIPlusConcurrency(PlatformOpenAI, AccountLevelPlus, OpenAIPlusMaxConcurrency)
+	got, err = NormalizeOpenAIPlusConcurrency(PlatformOpenAI, AccountLevelPlus, 5)
 	require.NoError(t, err)
-	require.Equal(t, OpenAIPlusMaxConcurrency, got)
-
-	_, err = NormalizeOpenAIPlusConcurrency(PlatformOpenAI, AccountLevelPlus, OpenAIPlusMaxConcurrency+1)
-	require.Error(t, err)
+	require.Equal(t, 5, got)
 }
 
 func TestDefaultOAuthAccountConcurrencyForPlatform(t *testing.T) {
@@ -55,10 +52,10 @@ func TestNormalizeOpenAIAccountLevel_ManualLevelTakesPriority(t *testing.T) {
 	))
 }
 
-func TestValidateOpenAIPlusLoadFactor_Max(t *testing.T) {
-	loadFactor := OpenAIPlusMaxConcurrency + 1
-	require.Error(t, ValidateOpenAIPlusLoadFactor(PlatformOpenAI, AccountLevelPlus, &loadFactor))
+func TestValidateAccountLoadFactor_Max(t *testing.T) {
+	loadFactor := AccountMaxLoadFactor + 1
+	require.Error(t, ValidateAccountLoadFactor(&loadFactor))
 
-	require.NoError(t, ValidateOpenAIPlusLoadFactor(PlatformOpenAI, AccountLevelPro, &loadFactor))
-	require.NoError(t, ValidateOpenAIPlusLoadFactor(PlatformAnthropic, AccountLevelPlus, &loadFactor))
+	loadFactor = AccountMaxLoadFactor
+	require.NoError(t, ValidateAccountLoadFactor(&loadFactor))
 }

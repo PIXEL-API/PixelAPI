@@ -62,6 +62,7 @@ func RegisterPaymentRoutes(
 		webhook.POST("/alipay", webhookHandler.AlipayNotify)
 		webhook.POST("/wxpay", webhookHandler.WxpayNotify)
 		webhook.POST("/stripe", webhookHandler.StripeWebhook)
+		webhook.POST("/airwallex", webhookHandler.AirwallexWebhook)
 	}
 
 	// --- Admin payment endpoints (admin auth) ---
@@ -82,6 +83,7 @@ func RegisterPaymentRoutes(
 			adminOrders.GET("/:id", adminPaymentHandler.GetOrderDetail)
 			adminOrders.POST("/:id/cancel", adminPaymentHandler.CancelOrder)
 			adminOrders.POST("/:id/retry", adminPaymentHandler.RetryFulfillment)
+			adminOrders.POST("/:id/manual-fulfill", adminPaymentHandler.ManualFulfillOrder)
 			adminOrders.POST("/:id/refund", adminPaymentHandler.ProcessRefund)
 		}
 

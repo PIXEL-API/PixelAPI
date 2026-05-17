@@ -66,6 +66,14 @@ type Tx struct {
 	SecuritySecret *SecuritySecretClient
 	// Setting is the client for interacting with the Setting builders.
 	Setting *SettingClient
+	// ShopCardKey is the client for interacting with the ShopCardKey builders.
+	ShopCardKey *ShopCardKeyClient
+	// ShopCategory is the client for interacting with the ShopCategory builders.
+	ShopCategory *ShopCategoryClient
+	// ShopOrder is the client for interacting with the ShopOrder builders.
+	ShopOrder *ShopOrderClient
+	// ShopProduct is the client for interacting with the ShopProduct builders.
+	ShopProduct *ShopProductClient
 	// SubscriptionPlan is the client for interacting with the SubscriptionPlan builders.
 	SubscriptionPlan *SubscriptionPlanClient
 	// TLSFingerprintProfile is the client for interacting with the TLSFingerprintProfile builders.
@@ -241,6 +249,10 @@ func (tx *Tx) init() {
 	tx.RedeemCode = NewRedeemCodeClient(tx.config)
 	tx.SecuritySecret = NewSecuritySecretClient(tx.config)
 	tx.Setting = NewSettingClient(tx.config)
+	tx.ShopCardKey = NewShopCardKeyClient(tx.config)
+	tx.ShopCategory = NewShopCategoryClient(tx.config)
+	tx.ShopOrder = NewShopOrderClient(tx.config)
+	tx.ShopProduct = NewShopProductClient(tx.config)
 	tx.SubscriptionPlan = NewSubscriptionPlanClient(tx.config)
 	tx.TLSFingerprintProfile = NewTLSFingerprintProfileClient(tx.config)
 	tx.UsageCleanupTask = NewUsageCleanupTaskClient(tx.config)

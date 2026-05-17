@@ -50,6 +50,21 @@ func TestGetModelPricing_Gpt53CodexSparkUsesGpt51CodexPricing(t *testing.T) {
 	require.Same(t, sparkPricing, got)
 }
 
+func TestGetModelPricing_NormalizesOpenAIModelAliasSpelling(t *testing.T) {
+	sparkPricing := &LiteLLMModelPricing{InputCostPerToken: 1}
+	miniPricing := &LiteLLMModelPricing{InputCostPerToken: 2}
+
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"gpt-5.1-codex": sparkPricing,
+			"gpt-5.4-mini":  miniPricing,
+		},
+	}
+
+	require.Same(t, sparkPricing, svc.GetModelPricing("openai/GPT_5.3CodexSpark"))
+	require.Same(t, miniPricing, svc.GetModelPricing("models/gpt5.4mini"))
+}
+
 func TestGetModelPricing_Gpt53CodexFallbackStillUsesGpt52Codex(t *testing.T) {
 	gpt52CodexPricing := &LiteLLMModelPricing{InputCostPerToken: 2}
 
@@ -141,6 +156,7 @@ func TestGetModelPricing_ImageModelDoesNotFallbackToTextModel(t *testing.T) {
 
 	got := svc.GetModelPricing("gpt-image-3")
 	require.Same(t, imagePricing, got)
+	require.NotSame(t, textPricing, got)
 }
 
 func TestParsePricingData_PreservesPriorityAndServiceTierFields(t *testing.T) {

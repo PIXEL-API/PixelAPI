@@ -711,6 +711,9 @@ var (
 		{Name: "weekly_limit_usd", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "monthly_limit_usd", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "default_validity_days", Type: field.TypeInt, Default: 30},
+		{Name: "allow_image_generation", Type: field.TypeBool, Default: false},
+		{Name: "image_rate_independent", Type: field.TypeBool, Default: false},
+		{Name: "image_rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
 		{Name: "image_price_1k", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "image_price_2k", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "image_price_4k", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
@@ -778,7 +781,7 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[28]},
+				Columns: []*schema.Column{GroupsColumns[31]},
 			},
 		},
 	}
@@ -905,6 +908,7 @@ var (
 		{Name: "plan_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "subscription_group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "subscription_days", Type: field.TypeInt, Nullable: true},
+		{Name: "shop_order_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "provider_instance_id", Type: field.TypeString, Nullable: true, Size: 64},
 		{Name: "provider_key", Type: field.TypeString, Nullable: true, Size: 30},
 		{Name: "provider_snapshot", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
@@ -936,7 +940,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "payment_orders_users_payment_orders",
-				Columns:    []*schema.Column{PaymentOrdersColumns[39]},
+				Columns:    []*schema.Column{PaymentOrdersColumns[40]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -953,37 +957,45 @@ var (
 			{
 				Name:    "paymentorder_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[39]},
+				Columns: []*schema.Column{PaymentOrdersColumns[40]},
 			},
 			{
 				Name:    "paymentorder_status",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[21]},
+				Columns: []*schema.Column{PaymentOrdersColumns[22]},
 			},
 			{
 				Name:    "paymentorder_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[29]},
+				Columns: []*schema.Column{PaymentOrdersColumns[30]},
 			},
 			{
 				Name:    "paymentorder_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[37]},
+				Columns: []*schema.Column{PaymentOrdersColumns[38]},
 			},
 			{
 				Name:    "paymentorder_paid_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[30]},
+				Columns: []*schema.Column{PaymentOrdersColumns[31]},
 			},
 			{
 				Name:    "paymentorder_payment_type_paid_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[9], PaymentOrdersColumns[30]},
+				Columns: []*schema.Column{PaymentOrdersColumns[9], PaymentOrdersColumns[31]},
 			},
 			{
 				Name:    "paymentorder_order_type",
 				Unique:  false,
 				Columns: []*schema.Column{PaymentOrdersColumns[14]},
+			},
+			{
+				Name:    "paymentorder_shop_order_id",
+				Unique:  true,
+				Columns: []*schema.Column{PaymentOrdersColumns[18]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "shop_order_id IS NOT NULL",
+				},
 			},
 		},
 	}
@@ -1272,6 +1284,208 @@ var (
 		Name:       "settings",
 		Columns:    SettingsColumns,
 		PrimaryKey: []*schema.Column{SettingsColumns[0]},
+	}
+	// ShopCardKeysColumns holds the columns for the "shop_card_keys" table.
+	ShopCardKeysColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "content", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "status", Type: field.TypeString, Size: 20, Default: "available"},
+		{Name: "locked_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "locked_until", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "sold_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "order_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "product_id", Type: field.TypeInt64},
+	}
+	// ShopCardKeysTable holds the schema information for the "shop_card_keys" table.
+	ShopCardKeysTable = &schema.Table{
+		Name:       "shop_card_keys",
+		Columns:    ShopCardKeysColumns,
+		PrimaryKey: []*schema.Column{ShopCardKeysColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shop_card_keys_shop_orders_card_keys",
+				Columns:    []*schema.Column{ShopCardKeysColumns[8]},
+				RefColumns: []*schema.Column{ShopOrdersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "shop_card_keys_shop_products_card_keys",
+				Columns:    []*schema.Column{ShopCardKeysColumns[9]},
+				RefColumns: []*schema.Column{ShopProductsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopcardkey_product_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{ShopCardKeysColumns[9], ShopCardKeysColumns[4]},
+			},
+			{
+				Name:    "shopcardkey_order_id",
+				Unique:  false,
+				Columns: []*schema.Column{ShopCardKeysColumns[8]},
+			},
+			{
+				Name:    "shopcardkey_status",
+				Unique:  false,
+				Columns: []*schema.Column{ShopCardKeysColumns[4]},
+			},
+			{
+				Name:    "shopcardkey_locked_until",
+				Unique:  false,
+				Columns: []*schema.Column{ShopCardKeysColumns[6]},
+			},
+		},
+	}
+	// ShopCategoriesColumns holds the columns for the "shop_categories" table.
+	ShopCategoriesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "name", Type: field.TypeString, Size: 100},
+		{Name: "icon", Type: field.TypeString, Nullable: true, Size: 255},
+		{Name: "sort_order", Type: field.TypeInt, Default: 0},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "description", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+	}
+	// ShopCategoriesTable holds the schema information for the "shop_categories" table.
+	ShopCategoriesTable = &schema.Table{
+		Name:       "shop_categories",
+		Columns:    ShopCategoriesColumns,
+		PrimaryKey: []*schema.Column{ShopCategoriesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopcategory_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{ShopCategoriesColumns[6]},
+			},
+			{
+				Name:    "shopcategory_sort_order",
+				Unique:  false,
+				Columns: []*schema.Column{ShopCategoriesColumns[5]},
+			},
+		},
+	}
+	// ShopOrdersColumns holds the columns for the "shop_orders" table.
+	ShopOrdersColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "order_no", Type: field.TypeString, Unique: true, Size: 64},
+		{Name: "product_name", Type: field.TypeString, Size: 150},
+		{Name: "product_cover_url", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "product_description", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "unit_price", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "quantity", Type: field.TypeInt},
+		{Name: "total_amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "payment_method", Type: field.TypeString, Size: 30},
+		{Name: "payment_order_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "status", Type: field.TypeString, Size: 30, Default: "pending"},
+		{Name: "delivered_cards", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "paid_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "completed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "cancelled_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "failed_reason", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "product_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+	}
+	// ShopOrdersTable holds the schema information for the "shop_orders" table.
+	ShopOrdersTable = &schema.Table{
+		Name:       "shop_orders",
+		Columns:    ShopOrdersColumns,
+		PrimaryKey: []*schema.Column{ShopOrdersColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shop_orders_shop_products_orders",
+				Columns:    []*schema.Column{ShopOrdersColumns[18]},
+				RefColumns: []*schema.Column{ShopProductsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "shop_orders_users_shop_orders",
+				Columns:    []*schema.Column{ShopOrdersColumns[19]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shoporder_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{ShopOrdersColumns[19]},
+			},
+			{
+				Name:    "shoporder_product_id",
+				Unique:  false,
+				Columns: []*schema.Column{ShopOrdersColumns[18]},
+			},
+			{
+				Name:    "shoporder_payment_order_id",
+				Unique:  true,
+				Columns: []*schema.Column{ShopOrdersColumns[11]},
+			},
+			{
+				Name:    "shoporder_status",
+				Unique:  false,
+				Columns: []*schema.Column{ShopOrdersColumns[12]},
+			},
+			{
+				Name:    "shoporder_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShopOrdersColumns[1]},
+			},
+		},
+	}
+	// ShopProductsColumns holds the columns for the "shop_products" table.
+	ShopProductsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "name", Type: field.TypeString, Size: 150},
+		{Name: "cover_url", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "description", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "price", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "original_price", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "sort_order", Type: field.TypeInt, Default: 0},
+		{Name: "min_purchase", Type: field.TypeInt, Default: 1},
+		{Name: "max_purchase", Type: field.TypeInt, Default: 1},
+		{Name: "auto_delivery", Type: field.TypeBool, Default: true},
+		{Name: "category_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// ShopProductsTable holds the schema information for the "shop_products" table.
+	ShopProductsTable = &schema.Table{
+		Name:       "shop_products",
+		Columns:    ShopProductsColumns,
+		PrimaryKey: []*schema.Column{ShopProductsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shop_products_shop_categories_products",
+				Columns:    []*schema.Column{ShopProductsColumns[13]},
+				RefColumns: []*schema.Column{ShopCategoriesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopproduct_category_id",
+				Unique:  false,
+				Columns: []*schema.Column{ShopProductsColumns[13]},
+			},
+			{
+				Name:    "shopproduct_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{ShopProductsColumns[8]},
+			},
+			{
+				Name:    "shopproduct_sort_order",
+				Unique:  false,
+				Columns: []*schema.Column{ShopProductsColumns[9]},
+			},
+		},
 	}
 	// SubscriptionPlansColumns holds the columns for the "subscription_plans" table.
 	SubscriptionPlansColumns = []*schema.Column{
@@ -1793,6 +2007,10 @@ var (
 		RedeemCodesTable,
 		SecuritySecretsTable,
 		SettingsTable,
+		ShopCardKeysTable,
+		ShopCategoriesTable,
+		ShopOrdersTable,
+		ShopProductsTable,
 		SubscriptionPlansTable,
 		TLSFingerprintProfilesTable,
 		UsageCleanupTasksTable,
@@ -1906,6 +2124,26 @@ func init() {
 	}
 	SettingsTable.Annotation = &entsql.Annotation{
 		Table: "settings",
+	}
+	ShopCardKeysTable.ForeignKeys[0].RefTable = ShopOrdersTable
+	ShopCardKeysTable.ForeignKeys[1].RefTable = ShopProductsTable
+	ShopCardKeysTable.Annotation = &entsql.Annotation{
+		Table: "shop_card_keys",
+	}
+	ShopCardKeysTable.Annotation.Checks = map[string]string{
+		"shop_card_keys_sold_requires_order": "NOT (status = 'sold' AND (order_id IS NULL OR sold_at IS NULL))",
+	}
+	ShopCategoriesTable.Annotation = &entsql.Annotation{
+		Table: "shop_categories",
+	}
+	ShopOrdersTable.ForeignKeys[0].RefTable = ShopProductsTable
+	ShopOrdersTable.ForeignKeys[1].RefTable = UsersTable
+	ShopOrdersTable.Annotation = &entsql.Annotation{
+		Table: "shop_orders",
+	}
+	ShopProductsTable.ForeignKeys[0].RefTable = ShopCategoriesTable
+	ShopProductsTable.Annotation = &entsql.Annotation{
+		Table: "shop_products",
 	}
 	SubscriptionPlansTable.Annotation = &entsql.Annotation{
 		Table: "subscription_plans",

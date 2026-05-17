@@ -20,7 +20,52 @@ import (
 
 // --- Order Creation ---
 
+type paymentProviderOrderPossiblyCreatedError struct {
+	err error
+}
+
+func (e *paymentProviderOrderPossiblyCreatedError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *paymentProviderOrderPossiblyCreatedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func paymentProviderOrderPossiblyCreated(err error) bool {
+	var target *paymentProviderOrderPossiblyCreatedError
+	return errors.As(err, &target)
+}
+
 func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*CreateOrderResponse, error) {
+	prep, err := s.prepareCreateOrder(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if prep.OAuth != nil {
+		return prep.OAuth, nil
+	}
+	order, err := s.createOrderInTx(ctx, prep.Request, prep.User, prep.Plan, prep.Config, prep.OrderAmount, prep.LimitAmount, prep.FeeRate, prep.PayAmount, prep.Selection)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.invokeProvider(ctx, order, prep.Request, prep.Config, prep.LimitAmount, prep.PayAmountStr, prep.PayAmount, prep.Plan, prep.Selection)
+	if err != nil {
+		_, _ = s.entClient.PaymentOrder.UpdateOneID(order.ID).
+			SetStatus(OrderStatusFailed).
+			Save(ctx)
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (s *PaymentService) prepareCreateOrder(ctx context.Context, req CreateOrderRequest) (*createOrderPreparation, error) {
 	if req.OrderType == "" {
 		req.OrderType = payment.OrderTypeBalance
 	}
@@ -57,8 +102,17 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		orderAmount = calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
 	}
 	feeRate := cfg.RechargeFeeRate
-	payAmountStr := payment.CalculatePayAmount(limitAmount, feeRate)
-	payAmount, _ := strconv.ParseFloat(payAmountStr, 64)
+	methodCurrency := payment.DefaultPaymentCurrency
+	if s.configService != nil {
+		methodCurrency, err = s.configService.ValidateMethodCurrencyConsistency(ctx, req.PaymentType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	payAmountStr, payAmount, err := calculateCreateOrderPayAmount(limitAmount, feeRate, methodCurrency)
+	if err != nil {
+		return nil, err
+	}
 	sel, err := s.selectCreateOrderInstance(ctx, req, cfg, payAmount)
 	if err != nil {
 		return nil, err
@@ -66,25 +120,36 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if err := s.validateSelectedCreateOrderInstance(ctx, req, sel); err != nil {
 		return nil, err
 	}
+	selectedCurrency := payment.DefaultPaymentCurrency
+	if sel != nil {
+		selectedCurrency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
+	}
+	if selectedCurrency != methodCurrency {
+		payAmountStr, payAmount, err = calculateCreateOrderPayAmount(limitAmount, feeRate, selectedCurrency)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := validateSelectedCreateOrderAmountCurrency(payAmountStr, sel); err != nil {
+		return nil, err
+	}
 	oauthResp, err := s.maybeBuildWeChatOAuthRequiredResponseForSelection(ctx, req, limitAmount, payAmount, feeRate, sel)
 	if err != nil {
 		return nil, err
 	}
-	if oauthResp != nil {
-		return oauthResp, nil
-	}
-	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
-	if err != nil {
-		_, _ = s.entClient.PaymentOrder.UpdateOneID(order.ID).
-			SetStatus(OrderStatusFailed).
-			Save(ctx)
-		return nil, err
-	}
-	return resp, nil
+	return &createOrderPreparation{
+		Request:      req,
+		Config:       cfg,
+		User:         user,
+		Plan:         plan,
+		OrderAmount:  orderAmount,
+		LimitAmount:  limitAmount,
+		FeeRate:      feeRate,
+		PayAmount:    payAmount,
+		PayAmountStr: payAmountStr,
+		Selection:    sel,
+		OAuth:        oauthResp,
+	}, nil
 }
 
 func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig) (*dbent.SubscriptionPlan, error) {
@@ -93,6 +158,9 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 	}
 	if req.OrderType == payment.OrderTypeSubscription {
 		return s.validateSubOrder(ctx, req)
+	}
+	if req.OrderType == payment.OrderTypeShop && req.ShopOrderID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_INPUT", "shop order requires a shop_order_id")
 	}
 	if math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) || req.Amount <= 0 {
 		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount must be a positive number")
@@ -128,6 +196,17 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	order, err := s.createOrderInExistingTx(ctx, tx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit order transaction: %w", err)
+	}
+	return order, nil
+}
+
+func (s *PaymentService) createOrderInExistingTx(ctx context.Context, tx *dbent.Tx, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection) (*dbent.PaymentOrder, error) {
 	if err := s.checkPendingLimit(ctx, tx, req.UserID, cfg.MaxPendingOrders); err != nil {
 		return nil, err
 	}
@@ -182,6 +261,9 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	if plan != nil {
 		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit))
 	}
+	if req.ShopOrderID > 0 {
+		b.SetShopOrderID(req.ShopOrderID)
+	}
 	order, err := b.Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create order: %w", err)
@@ -190,9 +272,6 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	order, err = tx.PaymentOrder.UpdateOneID(order.ID).SetRechargeCode(code).Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("set recharge code: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit order transaction: %w", err)
 	}
 	return order, nil
 }
@@ -257,7 +336,7 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 		if merchantID := strings.TrimSpace(sel.Config["mchId"]); merchantID != "" {
 			snapshot["merchant_id"] = merchantID
 		}
-		snapshot["currency"] = "CNY"
+		snapshot["currency"] = payment.DefaultPaymentCurrency
 	}
 	if providerKey == payment.TypeAlipay {
 		if merchantAppID := strings.TrimSpace(sel.Config["appId"]); merchantAppID != "" {
@@ -268,6 +347,15 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 		if merchantID := strings.TrimSpace(sel.Config["pid"]); merchantID != "" {
 			snapshot["merchant_id"] = merchantID
 		}
+	}
+	if providerKey == payment.TypeStripe {
+		snapshot["currency"] = paymentProviderConfigCurrency(providerKey, sel.Config)
+	}
+	if providerKey == payment.TypeAirwallex {
+		if accountID := strings.TrimSpace(sel.Config["accountId"]); accountID != "" {
+			snapshot["merchant_id"] = accountID
+		}
+		snapshot["currency"] = paymentProviderConfigCurrency(providerKey, sel.Config)
 	}
 
 	if len(snapshot) == 1 {
@@ -377,7 +465,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_PROVIDER_MISCONFIGURED", "provider_misconfigured").
 			WithMetadata(map[string]string{"provider": sel.ProviderKey, "instance_id": sel.InstanceID})
 	}
-	subject := s.buildPaymentSubject(plan, limitAmount, cfg)
+	subject := s.buildPaymentSubject(req, plan, limitAmount, cfg, sel)
 	outTradeNo := order.OutTradeNo
 	canonicalReturnURL, err := CanonicalizeReturnURL(req.ReturnURL, req.SrcHost, req.SrcURL)
 	if err != nil {
@@ -414,9 +502,9 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	if err != nil {
 		slog.Error("[PaymentService] CreatePayment failed", "provider", sel.ProviderKey, "instance", sel.InstanceID, "error", err)
 		if appErr := new(infraerrors.ApplicationError); errors.As(err, &appErr) {
-			return nil, appErr
+			return nil, &paymentProviderOrderPossiblyCreatedError{err: appErr}
 		}
-		return nil, classifyCreatePaymentError(req, sel.ProviderKey, err)
+		return nil, &paymentProviderOrderPossiblyCreatedError{err: classifyCreatePaymentError(req, sel.ProviderKey, err)}
 	}
 	_, err = s.entClient.PaymentOrder.UpdateOneID(order.ID).
 		SetNillablePaymentTradeNo(psNilIfEmpty(pr.TradeNo)).
@@ -426,7 +514,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey)).
 		Save(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("update order with payment details: %w", err)
+		return nil, &paymentProviderOrderPossiblyCreatedError{err: fmt.Errorf("update order with payment details: %w", err)}
 	}
 	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
 		"paymentAmount":  req.Amount,
@@ -466,20 +554,30 @@ func selectedInstanceSupportedTypes(sel *payment.InstanceSelection) string {
 	return sel.SupportedTypes
 }
 
-func (s *PaymentService) buildPaymentSubject(plan *dbent.SubscriptionPlan, limitAmount float64, cfg *PaymentConfig) string {
+func (s *PaymentService) buildPaymentSubject(req CreateOrderRequest, plan *dbent.SubscriptionPlan, limitAmount float64, cfg *PaymentConfig, sel *payment.InstanceSelection) string {
 	if plan != nil {
 		if plan.ProductName != "" {
 			return plan.ProductName
 		}
 		return "Sub2API Subscription " + plan.Name
 	}
-	amountStr := strconv.FormatFloat(limitAmount, 'f', 2, 64)
+	if req.OrderType == payment.OrderTypeShop {
+		if subject := strings.TrimSpace(req.Subject); subject != "" {
+			return subject
+		}
+		return "Sub2API Store Order"
+	}
+	currency := payment.DefaultPaymentCurrency
+	if sel != nil {
+		currency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
+	}
+	amountStr := payment.FormatAmountForCurrency(limitAmount, currency)
 	pf := strings.TrimSpace(cfg.ProductNamePrefix)
 	sf := strings.TrimSpace(cfg.ProductNameSuffix)
 	if pf != "" || sf != "" {
 		return strings.TrimSpace(pf + " " + amountStr + " " + sf)
 	}
-	return "Sub2API " + amountStr + " CNY"
+	return "Sub2API " + amountStr + " " + currency
 }
 
 func (s *PaymentService) maybeBuildWeChatOAuthRequiredResponse(ctx context.Context, req CreateOrderRequest, amount, payAmount, feeRate float64) (*CreateOrderResponse, error) {
@@ -540,6 +638,44 @@ func (s *PaymentService) validateSelectedCreateOrderInstance(ctx context.Context
 	return nil
 }
 
+func calculateCreateOrderPayAmount(limitAmount, feeRate float64, currency string) (string, float64, error) {
+	if err := validateCreateOrderAmountCurrency(limitAmount, currency); err != nil {
+		return "", 0, err
+	}
+	payAmountStr := payment.CalculatePayAmountForCurrency(limitAmount, feeRate, currency)
+	if _, err := payment.AmountToMinorUnit(payAmountStr, currency); err != nil {
+		return "", 0, infraerrors.BadRequest("INVALID_AMOUNT", err.Error()).
+			WithMetadata(map[string]string{"currency": currency})
+	}
+	payAmount, err := strconv.ParseFloat(payAmountStr, 64)
+	if err != nil {
+		return "", 0, infraerrors.BadRequest("INVALID_AMOUNT", "invalid payment amount").
+			WithMetadata(map[string]string{"currency": currency})
+	}
+	return payAmountStr, payAmount, nil
+}
+
+func validateCreateOrderAmountCurrency(amount float64, currency string) error {
+	amountStr := strconv.FormatFloat(amount, 'f', -1, 64)
+	if _, err := payment.AmountToMinorUnit(amountStr, currency); err != nil {
+		return infraerrors.BadRequest("INVALID_AMOUNT", err.Error()).
+			WithMetadata(map[string]string{"currency": currency})
+	}
+	return nil
+}
+
+func validateSelectedCreateOrderAmountCurrency(payAmount string, sel *payment.InstanceSelection) error {
+	if sel == nil {
+		return nil
+	}
+	currency := paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
+	if _, err := payment.AmountToMinorUnit(payAmount, currency); err != nil {
+		return infraerrors.BadRequest("INVALID_AMOUNT", err.Error()).
+			WithMetadata(map[string]string{"currency": currency})
+	}
+	return nil
+}
+
 func requiresWeChatJSAPICompatibleSelection(req CreateOrderRequest, sel *payment.InstanceSelection) bool {
 	if sel == nil || sel.ProviderKey != payment.TypeWxpay || payment.GetBasePaymentType(req.PaymentType) != payment.TypeWxpay {
 		return false
@@ -596,6 +732,10 @@ func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest,
 		PayURL:       pr.PayURL,
 		QRCode:       pr.QRCode,
 		ClientSecret: pr.ClientSecret,
+		IntentID:     pr.IntentID,
+		Currency:     pr.Currency,
+		CountryCode:  pr.CountryCode,
+		PaymentEnv:   pr.PaymentEnv,
 		OAuth:        pr.OAuth,
 		JSAPI:        pr.JSAPI,
 		JSAPIPayload: pr.JSAPI,
@@ -688,6 +828,23 @@ func (s *PaymentService) GetOrderByID(ctx context.Context, orderID int64) (*dben
 		return nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
 	return o, nil
+}
+
+func (s *PaymentService) GetShopOrderForPaymentOrder(ctx context.Context, order *dbent.PaymentOrder) (*ShopOrderDTO, error) {
+	if order == nil {
+		return nil, infraerrors.BadRequest("INVALID_ORDER", "payment order is required")
+	}
+	if order.OrderType != payment.OrderTypeShop {
+		return nil, infraerrors.BadRequest("INVALID_ORDER_TYPE", "payment order is not a shop order")
+	}
+	if order.ShopOrderID == nil || *order.ShopOrderID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_ORDER", "payment order missing shop order id")
+	}
+	reader, ok := s.shopFulfillment.(ShopPaymentDeliveryReader)
+	if !ok || reader == nil {
+		return nil, infraerrors.ServiceUnavailable("SHOP_FULFILLMENT_NOT_CONFIGURED", "shop fulfillment service is not configured")
+	}
+	return reader.GetOrderForAdmin(ctx, *order.ShopOrderID)
 }
 
 func (s *PaymentService) GetUserOrders(ctx context.Context, userID int64, p OrderListParams) ([]*dbent.PaymentOrder, int, error) {

@@ -190,9 +190,12 @@ type CreateGroupInput struct {
 	WeeklyLimitUSD       *float64 // 周限额 (USD)
 	MonthlyLimitUSD      *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	ImagePrice1K    *float64
-	ImagePrice2K    *float64
-	ImagePrice4K    *float64
+	AllowImageGeneration bool
+	ImageRateIndependent bool
+	ImageRateMultiplier  *float64
+	ImagePrice1K         *float64
+	ImagePrice2K         *float64
+	ImagePrice4K         *float64
 	ClaudeCodeOnly  bool   // 仅允许 Claude Code 客户端
 	FallbackGroupID *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
@@ -228,9 +231,12 @@ type UpdateGroupInput struct {
 	WeeklyLimitUSD       *float64 // 周限额 (USD)
 	MonthlyLimitUSD      *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	ImagePrice1K    *float64
-	ImagePrice2K    *float64
-	ImagePrice4K    *float64
+	AllowImageGeneration *bool
+	ImageRateIndependent *bool
+	ImageRateMultiplier  *float64
+	ImagePrice1K         *float64
+	ImagePrice2K         *float64
+	ImagePrice4K         *float64
 	ClaudeCodeOnly  *bool  // 仅允许 Claude Code 客户端
 	FallbackGroupID *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
@@ -675,13 +681,20 @@ func (s *adminServiceImpl) GetUser(ctx context.Context, id int64) (*User, error)
 }
 
 func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInput) (*User, error) {
+	if input == nil {
+		return nil, errors.New("user input is required")
+	}
+	concurrency := defaultPersonalUserConcurrency(input.Concurrency)
+	if err := validatePersonalUserConcurrency(concurrency); err != nil {
+		return nil, err
+	}
 	user := &User{
 		Email:         input.Email,
 		Username:      input.Username,
 		Notes:         input.Notes,
 		Role:          RoleUser, // Always create as regular user, never admin
 		Balance:       input.Balance,
-		Concurrency:   input.Concurrency,
+		Concurrency:   concurrency,
 		RPMLimit:      input.RPMLimit,
 		Status:        StatusActive,
 		AllowedGroups: input.AllowedGroups,
@@ -764,6 +777,11 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	}
 
 	if input.Concurrency != nil {
+		if user.Role == RoleUser {
+			if err := validatePersonalUserConcurrency(*input.Concurrency); err != nil {
+				return nil, err
+			}
+		}
 		user.Concurrency = *input.Concurrency
 	}
 
@@ -1424,6 +1442,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	monthlyLimit := normalizeLimit(input.MonthlyLimitUSD)
 
 	// 图片价格：负数表示清除（使用默认价格），0 保留（表示免费）
+	imageRateMultiplier := normalizeImageRateMultiplier(input.ImageRateMultiplier)
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
 	imagePrice2K := normalizePrice(input.ImagePrice2K)
 	imagePrice4K := normalizePrice(input.ImagePrice4K)
@@ -1495,6 +1514,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		DailyLimitUSD:                   dailyLimit,
 		WeeklyLimitUSD:                  weeklyLimit,
 		MonthlyLimitUSD:                 monthlyLimit,
+		AllowImageGeneration:            input.AllowImageGeneration,
+		ImageRateIndependent:            input.ImageRateIndependent,
+		ImageRateMultiplier:             imageRateMultiplier,
 		ImagePrice1K:                    imagePrice1K,
 		ImagePrice2K:                    imagePrice2K,
 		ImagePrice4K:                    imagePrice4K,
@@ -1546,6 +1568,13 @@ func normalizePrice(price *float64) *float64 {
 		return nil
 	}
 	return price
+}
+
+func normalizeImageRateMultiplier(multiplier *float64) float64 {
+	if multiplier == nil || *multiplier < 0 {
+		return 1.0
+	}
+	return *multiplier
 }
 
 // validateFallbackGroup 校验降级分组的有效性
@@ -1661,6 +1690,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
 	group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
 	// 图片生成计费配置：负数表示清除（使用默认价格）
+	if input.AllowImageGeneration != nil {
+		group.AllowImageGeneration = *input.AllowImageGeneration
+	}
+	if input.ImageRateIndependent != nil {
+		group.ImageRateIndependent = *input.ImageRateIndependent
+	}
+	if input.ImageRateMultiplier != nil {
+		group.ImageRateMultiplier = normalizeImageRateMultiplier(input.ImageRateMultiplier)
+	}
 	if input.ImagePrice1K != nil {
 		group.ImagePrice1K = normalizePrice(input.ImagePrice1K)
 	}
@@ -2178,7 +2216,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateOpenAIPlusLoadFactor(input.Platform, accountLevel, input.LoadFactor); err != nil {
+	if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
 		return nil, err
 	}
 
@@ -2223,8 +2261,8 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		account.RateMultiplier = input.RateMultiplier
 	}
 	if input.LoadFactor != nil && *input.LoadFactor > 0 {
-		if *input.LoadFactor > 10000 {
-			return nil, errors.New("load_factor must be <= 10000")
+		if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
+			return nil, err
 		}
 		account.LoadFactor = input.LoadFactor
 	}
@@ -2347,8 +2385,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {
 			account.LoadFactor = nil // 0 或负数表示清除
-		} else if *input.LoadFactor > 10000 {
-			return nil, errors.New("load_factor must be <= 10000")
+		} else if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
+			return nil, err
 		} else {
 			account.LoadFactor = input.LoadFactor
 		}
@@ -2356,7 +2394,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
 		return nil, err
 	}
-	if err := ValidateOpenAIPlusLoadFactor(account.Platform, account.AccountLevel, account.LoadFactor); err != nil {
+	if err := ValidateAccountLoadFactor(account.LoadFactor); err != nil {
 		return nil, err
 	}
 	if input.Status != "" {
@@ -2579,7 +2617,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if err := ValidateOpenAIPlusConcurrency(account.Platform, level, concurrency); err != nil {
 				return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
 			}
-			if err := ValidateOpenAIPlusLoadFactor(account.Platform, level, loadFactor); err != nil {
+			if err := ValidateAccountLoadFactor(loadFactor); err != nil {
 				return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
 			}
 		}
@@ -2608,8 +2646,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {
 			repoUpdates.LoadFactor = input.LoadFactor
-		} else if *input.LoadFactor > 10000 {
-			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", "load_factor must be <= 10000")
+		} else if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
+			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
 		} else {
 			repoUpdates.LoadFactor = input.LoadFactor
 		}

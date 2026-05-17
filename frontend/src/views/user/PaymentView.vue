@@ -43,10 +43,13 @@
             <div class="card p-6">
               <AmountInput
                 v-model="amount"
-                :amounts="[10, 20, 50, 100, 200, 500, 1000, 2000, 5000]"
-                :min="globalMinAmount"
-                :max="globalMaxAmount"
+                :amounts="RECHARGE_QUICK_AMOUNTS"
+                :min="rechargeMinAmount"
+                :max="rechargeMaxAmount"
               />
+              <p v-if="rechargeAmountHint" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {{ rechargeAmountHint }}
+              </p>
               <p v-if="amountError" class="mt-2 text-xs text-amber-600 dark:text-amber-300">{{ amountError }}</p>
             </div>
             <div v-if="enabledMethods.length >= 1" class="card p-6">
@@ -304,6 +307,8 @@ const selectedMethod = ref('')
 const selectedPlan = ref<SubscriptionPlan | null>(null)
 const previewImage = ref('')
 
+const RECHARGE_QUICK_AMOUNTS = [5, 10, 20, 30, 50, 100]
+
 const paymentPhase = ref<'select' | 'paying'>('select')
 
 interface CreateOrderOptions {
@@ -332,6 +337,10 @@ function emptyPaymentState(): PaymentRecoverySnapshot {
     payUrl: '',
     outTradeNo: '',
     clientSecret: '',
+    intentId: '',
+    currency: '',
+    countryCode: '',
+    paymentEnv: '',
     payAmount: 0,
     orderType: '',
     paymentMode: '',
@@ -470,7 +479,7 @@ function onPaymentSettled() {
 
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
-  methods: {}, global_min: 0, global_max: 0,
+  methods: {}, global_min: 0, global_max: 0, min_amount: 0, max_amount: 0,
   plans: [], balance_disabled: false, balance_recharge_multiplier: 1, recharge_fee_rate: 0, help_text: '', help_image_url: '', stripe_publishable_key: '',
 })
 
@@ -520,6 +529,21 @@ const globalMaxAmount = computed(() => {
   if (limits.some(limit => limit.single_max <= 0)) return 0
   return Math.max(...limits.map(limit => limit.single_max))
 })
+const paymentMinAmount = computed(() => checkout.value.min_amount ?? 0)
+const paymentMaxAmount = computed(() => checkout.value.max_amount ?? 0)
+const rechargeMinAmount = computed(() => Math.max(paymentMinAmount.value, globalMinAmount.value))
+const rechargeMaxAmount = computed(() => {
+  const limits = [paymentMaxAmount.value, globalMaxAmount.value].filter((limit) => limit > 0)
+  return limits.length > 0 ? Math.min(...limits) : 0
+})
+const rechargeAmountHint = computed(() => {
+  const min = rechargeMinAmount.value
+  const max = rechargeMaxAmount.value
+  if (min > 0 && max > 0) return t('payment.rechargeRangeHint', { min, max })
+  if (min > 0) return t('payment.rechargeMinHint', { min })
+  if (max > 0) return t('payment.rechargeMaxHint', { max })
+  return ''
+})
 
 // Selected method's limits (for validation and error messages)
 const selectedLimit = computed(() => visibleMethods.value[selectedMethod.value])
@@ -549,6 +573,12 @@ const totalAmount = computed(() =>
 
 const amountError = computed(() => {
   if (validAmount.value <= 0) return ''
+  if (rechargeMinAmount.value > 0 && validAmount.value < rechargeMinAmount.value) {
+    return t('payment.amountTooLow', { min: rechargeMinAmount.value })
+  }
+  if (rechargeMaxAmount.value > 0 && validAmount.value > rechargeMaxAmount.value) {
+    return t('payment.amountTooHigh', { max: rechargeMaxAmount.value })
+  }
   // No method can handle this amount
   if (!enabledMethods.value.some((m) => amountFitsMethod(validAmount.value, m))) {
     return t('payment.amountNoMethod')
@@ -564,6 +594,8 @@ const amountError = computed(() => {
 
 const canSubmit = computed(() =>
   validAmount.value > 0
+    && (rechargeMinAmount.value <= 0 || validAmount.value >= rechargeMinAmount.value)
+    && (rechargeMaxAmount.value <= 0 || validAmount.value <= rechargeMaxAmount.value)
     && amountFitsMethod(validAmount.value, selectedMethod.value)
     && selectedLimit.value?.available !== false
 )
@@ -698,13 +730,23 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     const stripeMethod = visibleMethod === 'stripe'
       ? ''
       : visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
-    const stripeRouteUrl = result.client_secret
+    const stripeRouteUrl = result.client_secret && visibleMethod !== 'airwallex'
       ? router.resolve({
         path: '/payment/stripe',
         query: {
           order_id: String(result.order_id),
           client_secret: result.client_secret,
           method: stripeMethod || undefined,
+          resume_token: result.resume_token || undefined,
+        },
+      }).href
+      : ''
+    const airwallexRouteUrl = result.client_secret && result.intent_id
+      ? router.resolve({
+        path: '/payment/airwallex',
+        query: {
+          order_id: String(result.order_id),
+          out_trade_no: result.out_trade_no || undefined,
           resume_token: result.resume_token || undefined,
         },
       }).href
@@ -716,6 +758,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       isWechatBrowser: typeof window !== 'undefined' && /MicroMessenger/i.test(window.navigator.userAgent),
       stripePopupUrl: stripeRouteUrl,
       stripeRouteUrl,
+      airwallexRouteUrl,
     })
 
     if (decision.kind === 'wechat_oauth' && decision.oauth?.authorize_url) {
@@ -742,6 +785,10 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       return
     }
     if (decision.kind === 'stripe_route') {
+      window.location.href = decision.paymentState.payUrl
+      return
+    }
+    if (decision.kind === 'airwallex_route') {
       window.location.href = decision.paymentState.payUrl
       return
     }

@@ -33,6 +33,7 @@ import revenueAPI from './revenue'
 import affiliatesAPI from './affiliates'
 import accountSharePoliciesAPI from './accountSharePolicies'
 import subsitesAPI from './subsites'
+import riskControlAPI from './riskControl'
 
 /**
  * Unified admin API object for convenient access
@@ -67,7 +68,8 @@ export const adminAPI = {
   revenue: revenueAPI,
   affiliates: affiliatesAPI,
   accountSharePolicies: accountSharePoliciesAPI,
-  subsites: subsitesAPI
+  subsites: subsitesAPI,
+  riskControl: riskControlAPI
 }
 
 export {
@@ -100,7 +102,8 @@ export {
   revenueAPI,
   affiliatesAPI,
   accountSharePoliciesAPI,
-  subsitesAPI
+  subsitesAPI,
+  riskControlAPI
 }
 
 export default adminAPI

@@ -38,6 +38,29 @@ var codexModelMap = map[string]string{
 	"gpt-5.2-medium":             "gpt-5.2",
 	"gpt-5.2-high":               "gpt-5.2",
 	"gpt-5.2-xhigh":              "gpt-5.2",
+	"gpt-5":                      "gpt-5.4",
+	"gpt-5-mini":                 "gpt-5.4",
+	"gpt-5-nano":                 "gpt-5.4",
+	"gpt-5.1":                    "gpt-5.4",
+	"gpt-5.1-codex":              "gpt-5.3-codex",
+	"gpt-5.1-codex-max":          "gpt-5.3-codex",
+	"gpt-5.1-codex-mini":         "gpt-5.3-codex",
+	"gpt-5.2-codex":              "gpt-5.2",
+	"codex-mini-latest":          "gpt-5.3-codex",
+	"gpt-5-codex":                "gpt-5.3-codex",
+}
+
+var codexVersionModelPrefixes = []struct {
+	prefix string
+	target string
+}{
+	{prefix: "gpt-5.3-codex-spark", target: "gpt-5.3-codex-spark"},
+	{prefix: "gpt-5.3-codex", target: "gpt-5.3-codex"},
+	{prefix: "gpt-5.4-mini", target: "gpt-5.4-mini"},
+	{prefix: "gpt-5.4-nano", target: "gpt-5.4-nano"},
+	{prefix: "gpt-5.5", target: "gpt-5.5"},
+	{prefix: "gpt-5.4", target: "gpt-5.4"},
+	{prefix: "gpt-5.2", target: "gpt-5.2"},
 }
 
 type codexTransformResult struct {
@@ -447,51 +470,79 @@ func normalizeCodexModel(model string) string {
 	if model == "" {
 		return "gpt-5.4"
 	}
+	if mapped, ok := normalizeKnownCodexModel(model); ok {
+		return mapped
+	}
+	return "gpt-5.4"
+}
+
+func normalizeKnownCodexModel(model string) (string, bool) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", false
+	}
 	if isOpenAIImageGenerationModel(model) {
-		return model
+		return model, true
 	}
 
-	modelID := model
+	modelID := lastOpenAIModelSegment(model)
+	if normalized := canonicalizeOpenAIModelAliasSpelling(modelID); normalized != "" {
+		modelID = normalized
+	}
+	if mapped := normalizeKnownOpenAICodexModel(modelID); mapped != "" {
+		return mapped, true
+	}
+	key := codexModelLookupKey(modelID)
+	if key == "" {
+		return "", false
+	}
+	if mapped := getNormalizedCodexModel(key); mapped != "" {
+		return mapped, true
+	}
+	for _, item := range codexVersionModelPrefixes {
+		if key == item.prefix {
+			return item.target, true
+		}
+		if suffix, ok := strings.CutPrefix(key, item.prefix+"-"); ok && isKnownCodexModelSuffix(suffix) {
+			return item.target, true
+		}
+	}
+	return "", false
+}
+
+func codexModelLookupKey(modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return ""
+	}
 	if strings.Contains(modelID, "/") {
 		parts := strings.Split(modelID, "/")
 		modelID = parts[len(parts)-1]
 	}
+	return strings.ToLower(strings.Join(strings.Fields(modelID), "-"))
+}
 
-	if mapped := getNormalizedCodexModel(modelID); mapped != "" {
-		return mapped
+func isKnownCodexModelSuffix(suffix string) bool {
+	switch suffix {
+	case "none", "minimal", "low", "medium", "high", "xhigh":
+		return true
 	}
+	return isCodexDateSuffix(suffix)
+}
 
-	normalized := strings.ToLower(modelID)
-
-	if strings.Contains(normalized, "gpt-5.5") || strings.Contains(normalized, "gpt 5.5") {
-		return "gpt-5.5"
+func isCodexDateSuffix(suffix string) bool {
+	parts := strings.Split(suffix, "-")
+	if len(parts) != 3 || len(parts[0]) != 4 || len(parts[1]) != 2 || len(parts[2]) != 2 {
+		return false
 	}
-	if strings.Contains(normalized, "gpt-5.4-mini") || strings.Contains(normalized, "gpt 5.4 mini") {
-		return "gpt-5.4-mini"
+	for _, part := range parts {
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
 	}
-	if strings.Contains(normalized, "gpt-5.4") || strings.Contains(normalized, "gpt 5.4") {
-		return "gpt-5.4"
-	}
-	if strings.Contains(normalized, "gpt-5.2") || strings.Contains(normalized, "gpt 5.2") {
-		return "gpt-5.2"
-	}
-	if strings.Contains(normalized, "gpt-5.3-codex-spark") || strings.Contains(normalized, "gpt 5.3 codex spark") {
-		return "gpt-5.3-codex-spark"
-	}
-	if strings.Contains(normalized, "gpt-5.3-codex") || strings.Contains(normalized, "gpt 5.3 codex") {
-		return "gpt-5.3-codex"
-	}
-	if strings.Contains(normalized, "gpt-5.3") || strings.Contains(normalized, "gpt 5.3") {
-		return "gpt-5.3-codex"
-	}
-	if strings.Contains(normalized, "codex") {
-		return "gpt-5.3-codex"
-	}
-	if strings.Contains(normalized, "gpt-5") || strings.Contains(normalized, "gpt 5") {
-		return "gpt-5.4"
-	}
-
-	return "gpt-5.4"
+	return true
 }
 
 func isCodexSparkModel(model string) bool {
@@ -789,23 +840,18 @@ func SupportsVerbosity(model string) bool {
 }
 
 func getNormalizedCodexModel(modelID string) string {
-	if modelID == "" {
+	key := codexModelLookupKey(modelID)
+	if key == "" {
 		return ""
 	}
-	if mapped, ok := codexModelMap[modelID]; ok {
+	if mapped, ok := codexModelMap[key]; ok {
 		return mapped
-	}
-	lower := strings.ToLower(modelID)
-	for key, value := range codexModelMap {
-		if strings.ToLower(key) == lower {
-			return value
-		}
 	}
 	return ""
 }
 
 // extractTextFromContent extracts plain text from a content value that is either
-// a Go string or a []any of content-part maps with type:"text".
+// a Go string or a []any of text-like content-part maps.
 func extractTextFromContent(content any) string {
 	switch v := content.(type) {
 	case string:
@@ -817,7 +863,8 @@ func extractTextFromContent(content any) string {
 			if !ok {
 				continue
 			}
-			if t, _ := m["type"].(string); t == "text" {
+			switch t, _ := m["type"].(string); t {
+			case "text", "input_text", "output_text":
 				if text, ok := m["text"].(string); ok {
 					parts = append(parts, text)
 				}

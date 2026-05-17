@@ -35,6 +35,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
+	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
+	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shoporder"
+	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
@@ -804,6 +808,114 @@ func (f TraverseSetting) Traverse(ctx context.Context, q ent.Query) error {
 	return fmt.Errorf("unexpected query type %T. expect *ent.SettingQuery", q)
 }
 
+// The ShopCardKeyFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ShopCardKeyFunc func(context.Context, *ent.ShopCardKeyQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ShopCardKeyFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ShopCardKeyQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ShopCardKeyQuery", q)
+}
+
+// The TraverseShopCardKey type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseShopCardKey func(context.Context, *ent.ShopCardKeyQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseShopCardKey) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseShopCardKey) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ShopCardKeyQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ShopCardKeyQuery", q)
+}
+
+// The ShopCategoryFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ShopCategoryFunc func(context.Context, *ent.ShopCategoryQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ShopCategoryFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ShopCategoryQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ShopCategoryQuery", q)
+}
+
+// The TraverseShopCategory type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseShopCategory func(context.Context, *ent.ShopCategoryQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseShopCategory) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseShopCategory) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ShopCategoryQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ShopCategoryQuery", q)
+}
+
+// The ShopOrderFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ShopOrderFunc func(context.Context, *ent.ShopOrderQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ShopOrderFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ShopOrderQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ShopOrderQuery", q)
+}
+
+// The TraverseShopOrder type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseShopOrder func(context.Context, *ent.ShopOrderQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseShopOrder) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseShopOrder) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ShopOrderQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ShopOrderQuery", q)
+}
+
+// The ShopProductFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ShopProductFunc func(context.Context, *ent.ShopProductQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ShopProductFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ShopProductQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ShopProductQuery", q)
+}
+
+// The TraverseShopProduct type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseShopProduct func(context.Context, *ent.ShopProductQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseShopProduct) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseShopProduct) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ShopProductQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ShopProductQuery", q)
+}
+
 // The SubscriptionPlanFunc type is an adapter to allow the use of ordinary function as a Querier.
 type SubscriptionPlanFunc func(context.Context, *ent.SubscriptionPlanQuery) (ent.Value, error)
 
@@ -1102,6 +1214,14 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.SecuritySecretQuery, predicate.SecuritySecret, securitysecret.OrderOption]{typ: ent.TypeSecuritySecret, tq: q}, nil
 	case *ent.SettingQuery:
 		return &query[*ent.SettingQuery, predicate.Setting, setting.OrderOption]{typ: ent.TypeSetting, tq: q}, nil
+	case *ent.ShopCardKeyQuery:
+		return &query[*ent.ShopCardKeyQuery, predicate.ShopCardKey, shopcardkey.OrderOption]{typ: ent.TypeShopCardKey, tq: q}, nil
+	case *ent.ShopCategoryQuery:
+		return &query[*ent.ShopCategoryQuery, predicate.ShopCategory, shopcategory.OrderOption]{typ: ent.TypeShopCategory, tq: q}, nil
+	case *ent.ShopOrderQuery:
+		return &query[*ent.ShopOrderQuery, predicate.ShopOrder, shoporder.OrderOption]{typ: ent.TypeShopOrder, tq: q}, nil
+	case *ent.ShopProductQuery:
+		return &query[*ent.ShopProductQuery, predicate.ShopProduct, shopproduct.OrderOption]{typ: ent.TypeShopProduct, tq: q}, nil
 	case *ent.SubscriptionPlanQuery:
 		return &query[*ent.SubscriptionPlanQuery, predicate.SubscriptionPlan, subscriptionplan.OrderOption]{typ: ent.TypeSubscriptionPlan, tq: q}, nil
 	case *ent.TLSFingerprintProfileQuery:

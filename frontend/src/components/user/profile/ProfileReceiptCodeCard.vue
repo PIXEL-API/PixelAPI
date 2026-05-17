@@ -1,5 +1,5 @@
 <template>
-  <section class="card border border-gray-100 bg-white/90 p-6 dark:border-dark-700 dark:bg-dark-900/50">
+  <section class="card border border-gray-100 bg-white/90 p-5 dark:border-dark-700 dark:bg-dark-900/50 md:p-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -26,9 +26,9 @@
       </div>
     </div>
 
-    <div class="mt-5 grid gap-5 md:grid-cols-[180px,1fr]">
+    <div class="mt-5 grid gap-5 lg:grid-cols-[220px,1fr]">
       <div
-        class="flex aspect-square w-full max-w-[180px] items-center justify-center overflow-hidden rounded-lg border border-dashed border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-900/60"
+        class="flex aspect-square w-full max-w-[220px] items-center justify-center overflow-hidden rounded-xl border border-dashed border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-900/60"
       >
         <img
           v-if="previewUrl"
@@ -42,7 +42,7 @@
         </div>
       </div>
 
-      <div class="flex min-w-0 flex-col justify-between gap-4">
+      <div class="flex min-w-0 flex-col justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50/70 p-5 dark:border-dark-700 dark:bg-dark-900/30">
         <div class="space-y-2 text-sm text-gray-600 dark:text-gray-300">
           <p>
             {{ currentCode ? t('profile.receiptCode.savedAt', { time: formatDateTime(currentCode.updated_at) }) : t('profile.receiptCode.notUploaded') }}
@@ -233,4 +233,3 @@ function formatDateTime(raw: string): string {
   }).format(date)
 }
 </script>
-

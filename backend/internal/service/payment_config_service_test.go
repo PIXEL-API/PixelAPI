@@ -432,6 +432,94 @@ func TestUpdatePaymentConfig_PersistsVisibleMethodRouting(t *testing.T) {
 	}
 }
 
+func TestPaymentConfigReceiptCodeOSS(t *testing.T) {
+	t.Parallel()
+
+	key := []byte("12345678901234567890123456789012")
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo, encryptionKey: key}
+	enabled := true
+	forcePathStyle := false
+	maxSize := int64(2 * 1024 * 1024)
+	presignExpire := 600
+
+	err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		ReceiptCodeOSSEnabled:              &enabled,
+		ReceiptCodeOSSEndpoint:             paymentConfigStrPtr("https://oss-cn-hangzhou.aliyuncs.com"),
+		ReceiptCodeOSSRegion:               paymentConfigStrPtr("oss-cn-hangzhou"),
+		ReceiptCodeOSSBucket:               paymentConfigStrPtr("sub2api"),
+		ReceiptCodeOSSAccessKeyID:          paymentConfigStrPtr("ak"),
+		ReceiptCodeOSSSecretAccessKey:      paymentConfigStrPtr("secret"),
+		ReceiptCodeOSSPrefix:               paymentConfigStrPtr("receipt-codes"),
+		ReceiptCodeOSSPublicBaseURL:        paymentConfigStrPtr("https://cdn.example.com/base/"),
+		ReceiptCodeOSSForcePathStyle:       &forcePathStyle,
+		ReceiptCodeOSSMaxSizeBytes:         &maxSize,
+		ReceiptCodeOSSPresignExpireSeconds: &presignExpire,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePaymentConfig returned error: %v", err)
+	}
+	if repo.values[SettingPaymentReceiptCodeOSSSecretAccessKey] == "secret" {
+		t.Fatal("receipt code OSS secret was stored in plaintext")
+	}
+
+	cfg, err := svc.GetPaymentConfig(context.Background())
+	if err != nil {
+		t.Fatalf("GetPaymentConfig returned error: %v", err)
+	}
+	if !cfg.ReceiptCodeOSS.Enabled {
+		t.Fatal("ReceiptCodeOSS.Enabled = false, want true")
+	}
+	if cfg.ReceiptCodeOSS.SecretAccessKey != "secret" {
+		t.Fatalf("ReceiptCodeOSS secret = %q, want secret", cfg.ReceiptCodeOSS.SecretAccessKey)
+	}
+	if !cfg.ReceiptCodeOSS.SecretAccessKeyConfigured {
+		t.Fatal("ReceiptCodeOSS.SecretAccessKeyConfigured = false, want true")
+	}
+	if cfg.ReceiptCodeOSS.Prefix != "receipt-codes/" {
+		t.Fatalf("ReceiptCodeOSS.Prefix = %q, want receipt-codes/", cfg.ReceiptCodeOSS.Prefix)
+	}
+	if cfg.ReceiptCodeOSS.PublicBaseURL != "https://cdn.example.com/base" {
+		t.Fatalf("ReceiptCodeOSS.PublicBaseURL = %q, want trimmed URL", cfg.ReceiptCodeOSS.PublicBaseURL)
+	}
+}
+
+func TestPaymentConfigReceiptCodeOSSKeepsExistingSecretOnBlankUpdate(t *testing.T) {
+	t.Parallel()
+
+	key := []byte("12345678901234567890123456789012")
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo, encryptionKey: key}
+	enabled := true
+	err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		ReceiptCodeOSSEnabled:         &enabled,
+		ReceiptCodeOSSEndpoint:        paymentConfigStrPtr("https://oss-cn-hangzhou.aliyuncs.com"),
+		ReceiptCodeOSSBucket:          paymentConfigStrPtr("sub2api"),
+		ReceiptCodeOSSAccessKeyID:     paymentConfigStrPtr("ak"),
+		ReceiptCodeOSSSecretAccessKey: paymentConfigStrPtr("secret"),
+	})
+	if err != nil {
+		t.Fatalf("initial UpdatePaymentConfig returned error: %v", err)
+	}
+	err = svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		ReceiptCodeOSSEndpoint:        paymentConfigStrPtr("https://oss-cn-shanghai.aliyuncs.com"),
+		ReceiptCodeOSSSecretAccessKey: paymentConfigStrPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("blank-secret UpdatePaymentConfig returned error: %v", err)
+	}
+	if repo.values[SettingPaymentReceiptCodeOSSSecretAccessKey] == "" {
+		t.Fatal("blank secret update cleared existing secret")
+	}
+	cfg, err := svc.GetReceiptCodeStorageConfig(context.Background())
+	if err != nil {
+		t.Fatalf("GetReceiptCodeStorageConfig returned error: %v", err)
+	}
+	if cfg.SecretAccessKey != "secret" {
+		t.Fatalf("retained secret = %q, want secret", cfg.SecretAccessKey)
+	}
+}
+
 func paymentConfigStrPtr(value string) *string {
 	return &value
 }

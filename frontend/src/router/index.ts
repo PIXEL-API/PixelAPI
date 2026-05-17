@@ -68,6 +68,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/auth/callback',
     name: 'OAuthCallback',
+    alias: '/auth/oauth/callback',
     component: () => import('@/views/auth/OAuthCallbackView.vue'),
     meta: {
       requiresAuth: false,
@@ -141,6 +142,25 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: false,
       title: 'Key Usage',
+    }
+  },
+  {
+    path: '/legal/:documentId',
+    name: 'LegalDocument',
+    component: () => import('@/views/public/LegalDocumentView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Legal Document'
+    }
+  },
+  {
+    path: '/store',
+    name: 'Store',
+    component: () => import('@/views/StoreView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Store',
+      titleKey: 'store.title'
     }
   },
 
@@ -315,6 +335,18 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: false,
       title: 'Stripe Payment',
       titleKey: 'payment.stripePay',
+      requiresPayment: false
+    }
+  },
+  {
+    path: '/payment/airwallex',
+    name: 'AirwallexPayment',
+    component: () => import('@/views/user/AirwallexPaymentView.vue'),
+    meta: {
+      requiresAuth: false,
+      requiresAdmin: false,
+      title: 'Airwallex Payment',
+      titleKey: 'payment.title',
       requiresPayment: false
     }
   },
@@ -516,6 +548,58 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/store',
+    redirect: '/admin/store/categories'
+  },
+  {
+    path: '/admin/store/categories',
+    name: 'AdminStoreCategories',
+    component: () => import('@/views/admin/store/StoreCategoriesView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Store Categories',
+      titleKey: 'admin.store.categoriesTitle',
+      descriptionKey: 'admin.store.categoriesDescription'
+    }
+  },
+  {
+    path: '/admin/store/products',
+    name: 'AdminStoreProducts',
+    component: () => import('@/views/admin/store/StoreProductsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Store Products',
+      titleKey: 'admin.store.productsTitle',
+      descriptionKey: 'admin.store.productsDescription'
+    }
+  },
+  {
+    path: '/admin/store/cards',
+    name: 'AdminStoreCards',
+    component: () => import('@/views/admin/store/StoreCardsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Store Cards',
+      titleKey: 'admin.store.cardsTitle',
+      descriptionKey: 'admin.store.cardsDescription'
+    }
+  },
+  {
+    path: '/admin/store/file-storage',
+    name: 'AdminStoreFileStorage',
+    component: () => import('@/views/admin/store/StoreFileStorageView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Store File Card Storage',
+      titleKey: 'admin.store.fileStorageTitle',
+      descriptionKey: 'admin.store.fileStorageDescription'
+    }
+  },
+  {
     path: '/admin/settings',
     name: 'AdminSettings',
     component: () => import('@/views/admin/SettingsView.vue'),
@@ -525,6 +609,19 @@ const routes: RouteRecordRaw[] = [
       title: 'System Settings',
       titleKey: 'admin.settings.title',
       descriptionKey: 'admin.settings.description'
+    }
+  },
+  {
+    path: '/admin/risk-control',
+    name: 'AdminRiskControl',
+    component: () => import('@/views/admin/RiskControlView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Risk Control',
+      titleKey: 'admin.riskControl.title',
+      descriptionKey: 'admin.riskControl.description',
+      requiresRiskControl: true
     }
   },
   {
@@ -590,6 +687,18 @@ const routes: RouteRecordRaw[] = [
       requiresPayment: true
     }
   },
+  {
+    path: '/admin/withdrawals',
+    name: 'AdminWithdrawals',
+    component: () => import('@/views/admin/orders/AdminWithdrawalsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Withdrawal Management',
+      titleKey: 'nav.withdrawalManagement',
+      requiresPayment: true
+    }
+  },
 
   // ==================== 404 Not Found ====================
   {
@@ -627,7 +736,7 @@ let authInitialized = false
 const navigationLoading = useNavigationLoadingState()
 // 延迟初始化预加载，传入 router 实例
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
-const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/payment/result']
+const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/payment/result', '/payment/airwallex', '/legal', '/store']
 const BACKEND_MODE_CALLBACK_PATHS = [
   '/auth/callback',
   '/auth/linuxdo/callback',
@@ -742,6 +851,14 @@ router.beforeEach((to, _from, next) => {
   }
 
   // 简易模式下限制访问某些页面
+  if (to.meta.requiresRiskControl) {
+    const riskControlEnabled = appStore.cachedPublicSettings?.risk_control_enabled === true
+    if (!riskControlEnabled) {
+      next(authStore.isAdmin ? '/admin/settings' : '/dashboard')
+      return
+    }
+  }
+
   if (authStore.isSimpleMode) {
     const restrictedPaths = [
       '/admin/groups',

@@ -18,6 +18,11 @@ const (
 	RoleUser  = domain.RoleUser
 )
 
+const (
+	UserMinConcurrency = 1
+	UserMaxConcurrency = 5
+)
+
 // Affiliate rebate settings
 const (
 	AffiliateRebateRateDefault          = 20.0
@@ -179,20 +184,36 @@ const (
 	SettingKeyOIDCConnectUserInfoUsernamePath = "oidc_connect_userinfo_username_path"
 
 	// OEM设置
-	SettingKeySiteName                    = "site_name"                     // 网站名称
-	SettingKeySiteLogo                    = "site_logo"                     // 网站Logo (base64)
-	SettingKeySiteSubtitle                = "site_subtitle"                 // 网站副标题
-	SettingKeyAPIBaseURL                  = "api_base_url"                  // API端点地址（用于客户端配置和导入）
-	SettingKeyContactInfo                 = "contact_info"                  // 客服联系方式
-	SettingKeyDocURL                      = "doc_url"                       // 文档链接
-	SettingKeyHomeContent                 = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
-	SettingKeyHideCcsImportButton         = "hide_ccs_import_button"        // 是否隐藏 API Keys 页面的导入 CCS 按钮
-	SettingKeyPurchaseSubscriptionEnabled = "purchase_subscription_enabled" // 是否展示"购买订阅"页面入口
-	SettingKeyPurchaseSubscriptionURL     = "purchase_subscription_url"     // "购买订阅"页面 URL（作为 iframe src）
-	SettingKeyTableDefaultPageSize        = "table_default_page_size"       // 表格默认每页条数
-	SettingKeyTablePageSizeOptions        = "table_page_size_options"       // 表格可选每页条数（JSON 数组）
-	SettingKeyCustomMenuItems             = "custom_menu_items"             // 自定义菜单项（JSON 数组）
-	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
+	SettingKeySiteName                       = "site_name"                     // 网站名称
+	SettingKeySiteLogo                       = "site_logo"                     // 网站Logo (base64)
+	SettingKeySiteSubtitle                   = "site_subtitle"                 // 网站副标题
+	SettingKeyAPIBaseURL                     = "api_base_url"                  // API端点地址（用于客户端配置和导入）
+	SettingKeyContactInfo                    = "contact_info"                  // 客服联系方式
+	SettingKeyDocURL                         = "doc_url"                       // 文档链接
+	SettingKeyHomeContent                    = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
+	SettingKeyHideCcsImportButton            = "hide_ccs_import_button"        // 是否隐藏 API Keys 页面的导入 CCS 按钮
+	SettingKeyPurchaseSubscriptionEnabled    = "purchase_subscription_enabled" // 是否展示"购买订阅"页面入口
+	SettingKeyPurchaseSubscriptionURL        = "purchase_subscription_url"     // "购买订阅"页面 URL（作为 iframe src）
+	SettingKeyTableDefaultPageSize           = "table_default_page_size"       // 表格默认每页条数
+	SettingKeyTablePageSizeOptions           = "table_page_size_options"       // 表格可选每页条数（JSON 数组）
+	SettingKeyCustomMenuItems                = "custom_menu_items"             // 自定义菜单项（JSON 数组）
+	SettingKeyCustomEndpoints                = "custom_endpoints"              // 自定义端点列表（JSON 数组）
+	SettingKeyRiskControlEnabled             = "risk_control_enabled"          // 是否启用风控中心
+	SettingKeyContentModerationConfig        = "content_moderation_config"     // 内容审计配置（JSON）
+	SettingKeyLoginAgreementEnabled          = "login_agreement_enabled"       // 登录前是否要求同意条款
+	SettingKeyLoginAgreementMode             = "login_agreement_mode"          // 条款确认展示模式：modal / checkbox
+	SettingKeyLoginAgreementUpdatedAt        = "login_agreement_updated_at"    // 条款更新日期（展示用）
+	SettingKeyLoginAgreementDocuments        = "login_agreement_documents"     // 条款文档列表（JSON，Markdown 内容）
+	SettingKeyGitHubOAuthEnabled             = "github_oauth_enabled"
+	SettingKeyGitHubOAuthClientID            = "github_oauth_client_id"
+	SettingKeyGitHubOAuthClientSecret        = "github_oauth_client_secret"
+	SettingKeyGitHubOAuthRedirectURL         = "github_oauth_redirect_url"
+	SettingKeyGitHubOAuthFrontendRedirectURL = "github_oauth_frontend_redirect_url"
+	SettingKeyGoogleOAuthEnabled             = "google_oauth_enabled"
+	SettingKeyGoogleOAuthClientID            = "google_oauth_client_id"
+	SettingKeyGoogleOAuthClientSecret        = "google_oauth_client_secret"
+	SettingKeyGoogleOAuthRedirectURL         = "google_oauth_redirect_url"
+	SettingKeyGoogleOAuthFrontendRedirectURL = "google_oauth_frontend_redirect_url"
 
 	// 默认配置
 	SettingKeyDefaultConcurrency   = "default_concurrency"    // 新用户默认并发量
@@ -221,6 +242,16 @@ const (
 	SettingKeyAuthSourceDefaultWeChatSubscriptions     = "auth_source_default_wechat_subscriptions"
 	SettingKeyAuthSourceDefaultWeChatGrantOnSignup     = "auth_source_default_wechat_grant_on_signup"
 	SettingKeyAuthSourceDefaultWeChatGrantOnFirstBind  = "auth_source_default_wechat_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultGitHubBalance           = "auth_source_default_github_balance"
+	SettingKeyAuthSourceDefaultGitHubConcurrency       = "auth_source_default_github_concurrency"
+	SettingKeyAuthSourceDefaultGitHubSubscriptions     = "auth_source_default_github_subscriptions"
+	SettingKeyAuthSourceDefaultGitHubGrantOnSignup     = "auth_source_default_github_grant_on_signup"
+	SettingKeyAuthSourceDefaultGitHubGrantOnFirstBind  = "auth_source_default_github_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultGoogleBalance           = "auth_source_default_google_balance"
+	SettingKeyAuthSourceDefaultGoogleConcurrency       = "auth_source_default_google_concurrency"
+	SettingKeyAuthSourceDefaultGoogleSubscriptions     = "auth_source_default_google_subscriptions"
+	SettingKeyAuthSourceDefaultGoogleGrantOnSignup     = "auth_source_default_google_grant_on_signup"
+	SettingKeyAuthSourceDefaultGoogleGrantOnFirstBind  = "auth_source_default_google_grant_on_first_bind"
 	SettingKeyForceEmailOnThirdPartySignup             = "force_email_on_third_party_signup"
 
 	// 管理员 API Key

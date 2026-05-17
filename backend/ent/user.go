@@ -91,6 +91,8 @@ type UserEdges struct {
 	PromoCodeUsages []*PromoCodeUsage `json:"promo_code_usages,omitempty"`
 	// PaymentOrders holds the value of the payment_orders edge.
 	PaymentOrders []*PaymentOrder `json:"payment_orders,omitempty"`
+	// ShopOrders holds the value of the shop_orders edge.
+	ShopOrders []*ShopOrder `json:"shop_orders,omitempty"`
 	// OwnedAccounts holds the value of the owned_accounts edge.
 	OwnedAccounts []*Account `json:"owned_accounts,omitempty"`
 	// AuthIdentities holds the value of the auth_identities edge.
@@ -101,7 +103,7 @@ type UserEdges struct {
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [14]bool
+	loadedTypes [15]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -194,10 +196,19 @@ func (e UserEdges) PaymentOrdersOrErr() ([]*PaymentOrder, error) {
 	return nil, &NotLoadedError{edge: "payment_orders"}
 }
 
+// ShopOrdersOrErr returns the ShopOrders value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) ShopOrdersOrErr() ([]*ShopOrder, error) {
+	if e.loadedTypes[10] {
+		return e.ShopOrders, nil
+	}
+	return nil, &NotLoadedError{edge: "shop_orders"}
+}
+
 // OwnedAccountsOrErr returns the OwnedAccounts value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) OwnedAccountsOrErr() ([]*Account, error) {
-	if e.loadedTypes[10] {
+	if e.loadedTypes[11] {
 		return e.OwnedAccounts, nil
 	}
 	return nil, &NotLoadedError{edge: "owned_accounts"}
@@ -206,7 +217,7 @@ func (e UserEdges) OwnedAccountsOrErr() ([]*Account, error) {
 // AuthIdentitiesOrErr returns the AuthIdentities value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuthIdentitiesOrErr() ([]*AuthIdentity, error) {
-	if e.loadedTypes[11] {
+	if e.loadedTypes[12] {
 		return e.AuthIdentities, nil
 	}
 	return nil, &NotLoadedError{edge: "auth_identities"}
@@ -215,7 +226,7 @@ func (e UserEdges) AuthIdentitiesOrErr() ([]*AuthIdentity, error) {
 // PendingAuthSessionsOrErr returns the PendingAuthSessions value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) PendingAuthSessionsOrErr() ([]*PendingAuthSession, error) {
-	if e.loadedTypes[12] {
+	if e.loadedTypes[13] {
 		return e.PendingAuthSessions, nil
 	}
 	return nil, &NotLoadedError{edge: "pending_auth_sessions"}
@@ -224,7 +235,7 @@ func (e UserEdges) PendingAuthSessionsOrErr() ([]*PendingAuthSession, error) {
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[13] {
+	if e.loadedTypes[14] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -471,6 +482,11 @@ func (_m *User) QueryPromoCodeUsages() *PromoCodeUsageQuery {
 // QueryPaymentOrders queries the "payment_orders" edge of the User entity.
 func (_m *User) QueryPaymentOrders() *PaymentOrderQuery {
 	return NewUserClient(_m.config).QueryPaymentOrders(_m)
+}
+
+// QueryShopOrders queries the "shop_orders" edge of the User entity.
+func (_m *User) QueryShopOrders() *ShopOrderQuery {
+	return NewUserClient(_m.config).QueryShopOrders(_m)
 }
 
 // QueryOwnedAccounts queries the "owned_accounts" edge of the User entity.

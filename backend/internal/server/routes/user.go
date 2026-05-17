@@ -15,9 +15,23 @@ func RegisterUserRoutes(
 	jwtAuth middleware.JWTAuthMiddleware,
 	settingService *service.SettingService,
 ) {
+	shopPublic := v1.Group("/shop")
+	{
+		shopPublic.GET("/categories", h.Shop.ListCategories)
+		shopPublic.GET("/products", h.Shop.ListProducts)
+		shopPublic.GET("/products/:id", h.Shop.GetProduct)
+	}
+
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
+	shop := authenticated.Group("/shop")
+	{
+		shop.POST("/orders", h.Shop.CreateOrder)
+		shop.GET("/orders/:id", h.Shop.GetOrder)
+		shop.GET("/orders/:id/files/download.zip", h.Shop.DownloadOrderFilesZip)
+		shop.GET("/orders/:id/files/:card_id/download", h.Shop.DownloadOrderFile)
+	}
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
@@ -28,6 +42,9 @@ func RegisterUserRoutes(
 			user.GET("/receipt-code", h.ReceiptCode.Get)
 			user.POST("/receipt-code", h.ReceiptCode.Upload)
 			user.DELETE("/receipt-code", h.ReceiptCode.Delete)
+			user.GET("/withdrawals", h.Withdrawal.ListMine)
+			user.POST("/withdrawals", h.Withdrawal.Submit)
+			user.POST("/withdrawals/:id/cancel", h.Withdrawal.Cancel)
 			user.GET("/aff", h.User.GetAffiliate)
 			user.POST("/aff/transfer", h.User.TransferAffiliateQuota)
 			user.POST("/account-bindings/email/send-code", h.User.SendEmailBindingCode)

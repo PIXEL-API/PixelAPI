@@ -62,12 +62,12 @@ func (s *PaymentOrderExpiryService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
 	defer cancel()
 
-	expired, err := s.paymentSvc.ExpireTimedOutOrders(ctx)
+	processed, err := s.paymentSvc.ExpireTimedOutOrders(ctx)
 	if err != nil {
 		slog.Error("[PaymentOrderExpiry] failed to expire orders", "error", err)
 		return
 	}
-	if expired > 0 {
-		slog.Info("[PaymentOrderExpiry] expired timed-out orders", "count", expired)
+	if processed > 0 {
+		slog.Info("[PaymentOrderExpiry] processed timed-out orders", "count", processed)
 	}
 }

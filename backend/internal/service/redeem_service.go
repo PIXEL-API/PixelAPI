@@ -326,8 +326,16 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 
 	case RedeemTypeConcurrency:
 		delta := int(redeemCode.Value)
-		// 负数为退款扣减，并发数最低为 0
-		if delta < 0 && user.Concurrency+delta < 0 {
+		if user.Role == RoleUser {
+			nextConcurrency := user.Concurrency + delta
+			if nextConcurrency < UserMinConcurrency {
+				delta = UserMinConcurrency - user.Concurrency
+				nextConcurrency = UserMinConcurrency
+			}
+			if err := validatePersonalUserConcurrency(nextConcurrency); err != nil {
+				return nil, err
+			}
+		} else if delta < 0 && user.Concurrency+delta < 0 {
 			delta = -user.Concurrency
 		}
 		if err := s.userRepo.UpdateConcurrency(txCtx, userID, delta); err != nil {

@@ -15,10 +15,18 @@ func mustRawJSON(t *testing.T, s string) json.RawMessage {
 
 func TestShouldAutoInjectPromptCacheKeyForCompat(t *testing.T) {
 	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.4"))
+	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt5.5"))
+	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.5"))
+	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.2"))
+	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.1"))
 	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.3"))
+	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.1-codex"))
+	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5-codex"))
+	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("codex-mini-latest"))
 	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.3-codex"))
 	require.True(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-5.3-codex-spark"))
 	require.False(t, shouldAutoInjectPromptCacheKeyForCompat("gpt-4o"))
+	require.False(t, shouldAutoInjectPromptCacheKeyForCompat("claude-opus-4-6"))
 }
 
 func TestDeriveCompatPromptCacheKey_StableAcrossLaterTurns(t *testing.T) {

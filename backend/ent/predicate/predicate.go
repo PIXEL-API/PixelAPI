@@ -84,6 +84,18 @@ type SecuritySecret func(*sql.Selector)
 // Setting is the predicate function for setting builders.
 type Setting func(*sql.Selector)
 
+// ShopCardKey is the predicate function for shopcardkey builders.
+type ShopCardKey func(*sql.Selector)
+
+// ShopCategory is the predicate function for shopcategory builders.
+type ShopCategory func(*sql.Selector)
+
+// ShopOrder is the predicate function for shoporder builders.
+type ShopOrder func(*sql.Selector)
+
+// ShopProduct is the predicate function for shopproduct builders.
+type ShopProduct func(*sql.Selector)
+
 // SubscriptionPlan is the predicate function for subscriptionplan builders.
 type SubscriptionPlan func(*sql.Selector)
 

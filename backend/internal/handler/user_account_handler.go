@@ -123,6 +123,11 @@ type bulkUpdateUserAccountsRequest struct {
 	Extra          map[string]any `json:"extra"`
 }
 
+type bulkUpdateUserAccountsAsyncResponse struct {
+	Async bool                      `json:"async"`
+	Task  *service.AccountBatchTask `json:"task"`
+}
+
 type bulkDeleteUserAccountsRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
@@ -281,6 +286,19 @@ func normalizeUserAccountStatus(status *string) *string {
 	return &normalized
 }
 
+func isUserBulkPublicShareOnlyUpdate(req bulkUpdateUserAccountsRequest, normalizedStatus string) bool {
+	return req.Concurrency == nil &&
+		req.LoadFactor == nil &&
+		req.Priority == nil &&
+		normalizedStatus == "" &&
+		req.Schedulable == nil &&
+		req.AccountLevel == nil &&
+		req.ShareMode != nil &&
+		req.GroupIDs == nil &&
+		len(req.Credentials) == 0 &&
+		len(req.Extra) == 0
+}
+
 func publicShareValidationErrorMessage(err error) string {
 	if err == nil {
 		return ""
@@ -351,6 +369,7 @@ func (h *UserAccountHandler) registerAccountBatchExecutors() {
 	}
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRefreshCredentials, h.executeUserRefreshCredentialsTaskItem)
 	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserRevalidateShare, h.executeUserRevalidateShareTaskItem)
+	h.accountBatchTaskService.RegisterExecutor(service.AccountBatchTaskOperationUserSetPublicShare, h.executeUserSetPublicShareTaskItem)
 }
 
 func (h *UserAccountHandler) executeUserRefreshCredentialsTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
@@ -389,6 +408,28 @@ func (h *UserAccountHandler) executeUserRevalidateShareTaskItem(ctx context.Cont
 	}
 	return map[string]any{
 		"account_id":   updated.ID,
+		"share_status": updated.ShareStatus,
+	}, nil
+}
+
+func (h *UserAccountHandler) executeUserSetPublicShareTaskItem(ctx context.Context, task *service.AccountBatchTask, item service.AccountBatchTaskItem) (map[string]any, error) {
+	if task == nil || task.OwnerUserID == nil {
+		return nil, service.ErrAccountNotFound
+	}
+	shareMode := service.AccountShareModePublic
+	account, err := h.accountService.UpdateOwned(ctx, *task.OwnerUserID, item.AccountID, service.UpdateAccountRequest{
+		ShareMode: &shareMode,
+	})
+	if err != nil {
+		return nil, err
+	}
+	updated, err := h.activateOwnedPublicShareIfRequested(ctx, *task.OwnerUserID, account)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"account_id":   updated.ID,
+		"share_mode":   updated.ShareMode,
 		"share_status": updated.ShareStatus,
 	}, nil
 }
@@ -1000,6 +1041,20 @@ func (h *UserAccountHandler) CreateBatchRevalidatePublicShareTask(c *gin.Context
 	response.Success(c, task)
 }
 
+func (h *UserAccountHandler) createSetPublicShareTask(ctx context.Context, ownerUserID int64, accountIDs []int64) (*service.AccountBatchTask, error) {
+	if h.accountBatchTaskService == nil {
+		return nil, infraerrors.ServiceUnavailable("ACCOUNT_BATCH_TASK_UNAVAILABLE", "Account batch task service is unavailable")
+	}
+	ownerID := ownerUserID
+	return h.accountBatchTaskService.CreateTask(ctx, service.CreateAccountBatchTaskInput{
+		Scope:       service.AccountBatchTaskScopeUser,
+		Operation:   service.AccountBatchTaskOperationUserSetPublicShare,
+		AccountIDs:  accountIDs,
+		CreatedBy:   ownerUserID,
+		OwnerUserID: &ownerID,
+	})
+}
+
 func (h *UserAccountHandler) GetBatchTask(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -1081,6 +1136,25 @@ func (h *UserAccountHandler) BulkUpdate(c *gin.Context) {
 		len(req.Extra) > 0
 	if !hasUpdates {
 		response.BadRequest(c, "No updates provided")
+		return
+	}
+
+	if req.ShareMode != nil && service.NormalizeAccountShareMode(*req.ShareMode) == service.AccountShareModePublic && isUserBulkPublicShareOnlyUpdate(req, status) {
+		for _, accountID := range accountIDs {
+			if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+		}
+		task, err := h.createSetPublicShareTask(c.Request.Context(), subject.UserID, accountIDs)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, bulkUpdateUserAccountsAsyncResponse{
+			Async: true,
+			Task:  task,
+		})
 		return
 	}
 

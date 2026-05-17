@@ -2498,7 +2498,6 @@
             v-model.number="form.concurrency"
             type="number"
             min="1"
-            :max="concurrencyMax"
             :readonly="isUserScope"
             :class="[
               'input',
@@ -3564,7 +3563,6 @@ const tempUnschedPresets = computed(() => [
 ])
 
 const DEFAULT_ACCOUNT_CONCURRENCY = 10
-const OPENAI_PLUS_MAX_CONCURRENCY = 3
 
 const form = reactive({
   name: '',
@@ -3583,18 +3581,12 @@ const form = reactive({
   expires_at: null as number | null
 })
 
-const isOpenAIPlusForm = computed(() => form.platform === 'openai' && form.account_level === 'plus')
-const concurrencyMax = computed(() => isOpenAIPlusForm.value ? OPENAI_PLUS_MAX_CONCURRENCY : undefined)
-
 const normalizeConcurrencyInput = () => {
   if (isUserScope.value) {
     form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
     return
   }
-  const minConcurrency = Math.max(1, form.concurrency || 1)
-  form.concurrency = isOpenAIPlusForm.value
-    ? Math.min(OPENAI_PLUS_MAX_CONCURRENCY, minConcurrency)
-    : minConcurrency
+  form.concurrency = Math.max(1, form.concurrency || 1)
 }
 
 const applyOpenAIPlusConcurrencyDefaults = () => {
@@ -3602,12 +3594,10 @@ const applyOpenAIPlusConcurrencyDefaults = () => {
     form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
     return
   }
-  if (!isOpenAIPlusForm.value) return
-  if (!form.concurrency || form.concurrency > OPENAI_PLUS_MAX_CONCURRENCY || form.concurrency === DEFAULT_ACCOUNT_CONCURRENCY) {
+  const isOpenAIPlusForm = form.platform === 'openai' && form.account_level === 'plus'
+  if (!isOpenAIPlusForm) return
+  if (!form.concurrency || form.concurrency === DEFAULT_ACCOUNT_CONCURRENCY) {
     form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
-  }
-  if (form.load_factor && form.load_factor > OPENAI_PLUS_MAX_CONCURRENCY) {
-    form.load_factor = OPENAI_PLUS_MAX_CONCURRENCY
   }
 }
 

@@ -128,7 +128,7 @@ func TestListAvailable_SortedByName(t *testing.T) {
 }
 
 func TestListAvailable_ListAllErrorPropagates(t *testing.T) {
-	// ListAll 返回错误时 ListAvailable 应直接返回包装后的错误，且不再访问 groupRepo（短路）。
+	// ListAll 返回错误时 ListAvailable 应返回包装后的错误；当前实现先加载活跃分组，再查询渠道。
 	sentinel := errors.New("list-all-boom")
 	repo := &mockChannelRepository{
 		listAllFn: func(ctx context.Context) ([]Channel, error) { return nil, sentinel },
@@ -139,7 +139,7 @@ func TestListAvailable_ListAllErrorPropagates(t *testing.T) {
 	require.Nil(t, out)
 	require.ErrorIs(t, err, sentinel)
 	require.Contains(t, err.Error(), "list channels", "wrap 前缀缺失，可能 %w 被改为 %v")
-	require.Equal(t, 0, groupRepo.listActiveCalls, "ListAll 失败后不应再调用 groupRepo.ListActive")
+	require.Equal(t, 1, groupRepo.listActiveCalls)
 }
 
 func TestListAvailable_ListActiveErrorPropagates(t *testing.T) {

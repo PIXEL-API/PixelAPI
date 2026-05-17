@@ -100,11 +100,19 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		})
 		return fmt.Errorf("invalid paid amount from provider: %v", paid)
 	}
-	if math.Abs(paid-o.PayAmount) > amountToleranceCNY {
+	if math.Abs(paid-o.PayAmount) > paymentAmountToleranceForCurrency(PaymentOrderCurrency(o)) {
 		s.writeAuditLog(ctx, o.ID, "PAYMENT_AMOUNT_MISMATCH", pk, map[string]any{"expected": o.PayAmount, "paid": paid, "tradeNo": tradeNo})
-		return fmt.Errorf("amount mismatch: expected %.2f, got %.2f", o.PayAmount, paid)
+		return fmt.Errorf("amount mismatch: expected %s, got %s", strconv.FormatFloat(o.PayAmount, 'f', -1, 64), strconv.FormatFloat(paid, 'f', -1, 64))
 	}
 	return s.toPaid(ctx, o, tradeNo, paid, pk)
+}
+
+func paymentAmountToleranceForCurrency(currency string) float64 {
+	minorUnit := payment.CurrencyMinorUnit(currency)
+	if minorUnit <= 2 {
+		return amountToleranceCNY
+	}
+	return math.Pow10(-minorUnit) / 2
 }
 
 func isValidProviderAmount(amount float64) bool {
@@ -139,6 +147,10 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 		paymentorder.Or(
 			paymentorder.StatusEQ(OrderStatusPending),
 			paymentorder.StatusEQ(OrderStatusCancelled),
+			paymentorder.And(
+				paymentorder.StatusEQ(OrderStatusFailed),
+				paymentorder.ExpiresAtGTE(grace),
+			),
 			paymentorder.And(
 				paymentorder.StatusEQ(OrderStatusExpired),
 				paymentorder.UpdatedAtGTE(grace),
@@ -178,6 +190,14 @@ func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentO
 	case OrderStatusCompleted, OrderStatusRefunded:
 		return nil
 	case OrderStatusFailed:
+		if cur.PaidAt == nil {
+			s.writeAuditLog(ctx, o.ID, "PAYMENT_AFTER_FAILED_UNPAID", "system", map[string]any{
+				"status":    cur.Status,
+				"updatedAt": cur.UpdatedAt,
+				"reason":    "payment arrived after failed unpaid order could no longer be recovered",
+			})
+			return nil
+		}
 		return s.executeFulfillment(ctx, o.ID)
 	case OrderStatusPaid, OrderStatusRecharging:
 		return fmt.Errorf("order %d is being processed", o.ID)
@@ -205,6 +225,12 @@ func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) erro
 	}
 	if o.OrderType == payment.OrderTypeSubscription {
 		return s.ExecuteSubscriptionFulfillment(ctx, oid)
+	}
+	if o.OrderType == payment.OrderTypeShop {
+		if s.shopFulfillment == nil {
+			return infraerrors.ServiceUnavailable("SHOP_FULFILLMENT_NOT_CONFIGURED", "shop fulfillment service is not configured")
+		}
+		return s.shopFulfillment.ConfirmPaidAndDeliver(ctx, oid)
 	}
 	return s.ExecuteBalanceFulfillment(ctx, oid)
 }
@@ -400,4 +426,109 @@ func (s *PaymentService) RetryFulfillment(ctx context.Context, oid int64) error 
 	}
 	s.writeAuditLog(ctx, oid, "RECHARGE_RETRY", "admin", map[string]any{"detail": "admin manual retry"})
 	return s.executeFulfillment(ctx, oid)
+}
+
+func (s *PaymentService) AdminManualFulfillOrder(ctx context.Context, oid int64, req AdminManualFulfillmentRequest) error {
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return infraerrors.BadRequest("INVALID_REASON", "manual fulfillment reason is required")
+	}
+	if len([]rune(reason)) > 500 {
+		return infraerrors.BadRequest("INVALID_REASON", "manual fulfillment reason is too long")
+	}
+
+	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
+	if err != nil {
+		return infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if o.Status == OrderStatusCompleted {
+		return infraerrors.BadRequest("INVALID_STATUS", "order already completed")
+	}
+	if psIsRefundStatus(o.Status) {
+		return infraerrors.BadRequest("INVALID_STATUS", "refund-related order cannot fulfill")
+	}
+
+	now := time.Now()
+	if o.Status == OrderStatusRecharging {
+		stale, err := s.isRechargingOrderStale(ctx, o, now)
+		if err != nil {
+			return err
+		}
+		if !stale {
+			return infraerrors.Conflict("ORDER_PROCESSING", "order is still being fulfilled")
+		}
+	}
+
+	switch o.Status {
+	case OrderStatusPending, OrderStatusExpired, OrderStatusCancelled, OrderStatusFailed, OrderStatusPaid, OrderStatusRecharging:
+	default:
+		return infraerrors.BadRequest("INVALID_STATUS", "order cannot be manually fulfilled in status "+o.Status)
+	}
+
+	paidAmount := o.PayAmount
+	if req.PaidAmount != nil {
+		if err := validateManualPaidAmount(*req.PaidAmount); err != nil {
+			return err
+		}
+		paidAmount = normalizeManualPaidAmount(*req.PaidAmount)
+	}
+	tradeNo := strings.TrimSpace(req.TradeNo)
+	if len(tradeNo) > 128 {
+		return infraerrors.BadRequest("INVALID_TRADE_NO", "trade no is too long")
+	}
+
+	if o.Status != OrderStatusPaid {
+		up := s.entClient.PaymentOrder.Update().
+			Where(paymentorder.IDEQ(oid), paymentorder.StatusEQ(o.Status)).
+			SetStatus(OrderStatusPaid).
+			SetPayAmount(paidAmount).
+			ClearFailedAt().
+			ClearFailedReason()
+		if o.PaidAt == nil {
+			up.SetPaidAt(now)
+		}
+		if tradeNo != "" {
+			up.SetPaymentTradeNo(tradeNo)
+		}
+		updated, err := up.Save(ctx)
+		if err != nil {
+			return fmt.Errorf("mark order paid manually: %w", err)
+		}
+		if updated == 0 {
+			return infraerrors.Conflict("CONFLICT", "order status has changed")
+		}
+	} else if tradeNo != "" || math.Abs(paidAmount-o.PayAmount) > amountToleranceCNY || o.PaidAt == nil {
+		up := s.entClient.PaymentOrder.UpdateOneID(oid).
+			SetPayAmount(paidAmount)
+		if o.PaidAt == nil {
+			up.SetPaidAt(now)
+		}
+		if tradeNo != "" {
+			up.SetPaymentTradeNo(tradeNo)
+		}
+		if _, err := up.Save(ctx); err != nil {
+			return fmt.Errorf("update paid order manual details: %w", err)
+		}
+	}
+
+	s.writeAuditLog(ctx, oid, "ORDER_MANUAL_FULFILL", "admin", map[string]any{
+		"reason":            reason,
+		"previous_status":   o.Status,
+		"expected_pay":      o.PayAmount,
+		"manual_paid":       paidAmount,
+		"trade_no":          tradeNo,
+		"amount_mismatched": math.Abs(paidAmount-o.PayAmount) > amountToleranceCNY,
+	})
+	return s.executeFulfillment(ctx, oid)
+}
+
+func validateManualPaidAmount(amount float64) error {
+	if amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return infraerrors.BadRequest("INVALID_PAID_AMOUNT", "paid amount is invalid")
+	}
+	return nil
+}
+
+func normalizeManualPaidAmount(amount float64) float64 {
+	return math.Round(amount*100) / 100
 }

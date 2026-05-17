@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -97,7 +99,10 @@ func TestForwardAsAnthropic_NormalizesRoutingAndEffortForGpt54XHigh(t *testing.T
 		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
 
-	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream: upstream,
+	}
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",
@@ -129,6 +134,73 @@ func TestForwardAsAnthropic_NormalizesRoutingAndEffortForGpt54XHigh(t *testing.T
 	require.Equal(t, "ok", gjson.GetBytes(rec.Body.Bytes(), "content.0.text").String())
 	t.Logf("upstream body: %s", string(upstream.lastBody))
 	t.Logf("response body: %s", rec.Body.String())
+}
+
+func TestForwardAsAnthropic_APIKeyCompatAppliesReplayAndTodoGuard(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	messages := make([]map[string]any, 0, openAICompatAnthropicReplayMaxTailMessages+3)
+	for i := 0; i < openAICompatAnthropicReplayMaxTailMessages+3; i++ {
+		messages = append(messages, map[string]any{
+			"role":    "user",
+			"content": fmt.Sprintf("message-%02d", i),
+		})
+	}
+	payload := map[string]any{
+		"model":      "gpt-5.4",
+		"max_tokens": 16,
+		"messages":   messages,
+		"stream":     false,
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"gpt-5.4","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_guard"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-api-key",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "sk-test",
+			"model_mapping": map[string]any{
+				"gpt-5.4": "gpt-5.4",
+			},
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "stable-cache-key", "gpt-5.1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	input := gjson.GetBytes(upstream.lastBody, "input").Array()
+	require.Len(t, input, openAICompatAnthropicReplayMaxTailMessages+1)
+	require.Contains(t, input[0].Get("content.0.text").String(), openAICompatClaudeCodeTodoGuardMarker)
+	require.Equal(t, "message-03", input[1].Get("content").String())
+	require.Equal(t, "message-14", input[len(input)-1].Get("content").String())
+	require.Equal(t, "stable-cache-key", gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 }
 
 func TestForwardAsAnthropic_ForcedCodexInstructionsTemplatePrependsRenderedInstructions(t *testing.T) {

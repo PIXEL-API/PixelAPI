@@ -118,6 +118,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		InvitationCodeEnabled:                     settings.InvitationCodeEnabled,
 		TotpEnabled:                               settings.TotpEnabled,
 		TotpEncryptionKeyConfigured:               h.settingService.IsTotpEncryptionKeyConfigured(),
+		LoginAgreementEnabled:                     settings.LoginAgreementEnabled,
+		LoginAgreementMode:                        settings.LoginAgreementMode,
+		LoginAgreementUpdatedAt:                   settings.LoginAgreementUpdatedAt,
+		LoginAgreementDocuments:                   loginAgreementDocumentsToDTO(settings.LoginAgreementDocuments),
 		SMTPHost:                                  settings.SMTPHost,
 		SMTPPort:                                  settings.SMTPPort,
 		SMTPUsername:                              settings.SMTPUsername,
@@ -170,6 +174,16 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OIDCConnectUserInfoEmailPath:              settings.OIDCConnectUserInfoEmailPath,
 		OIDCConnectUserInfoIDPath:                 settings.OIDCConnectUserInfoIDPath,
 		OIDCConnectUserInfoUsernamePath:           settings.OIDCConnectUserInfoUsernamePath,
+		GitHubOAuthEnabled:                        settings.GitHubOAuthEnabled,
+		GitHubOAuthClientID:                       settings.GitHubOAuthClientID,
+		GitHubOAuthClientSecretConfigured:         settings.GitHubOAuthClientSecretConfigured,
+		GitHubOAuthRedirectURL:                    settings.GitHubOAuthRedirectURL,
+		GitHubOAuthFrontendRedirectURL:            settings.GitHubOAuthFrontendRedirectURL,
+		GoogleOAuthEnabled:                        settings.GoogleOAuthEnabled,
+		GoogleOAuthClientID:                       settings.GoogleOAuthClientID,
+		GoogleOAuthClientSecretConfigured:         settings.GoogleOAuthClientSecretConfigured,
+		GoogleOAuthRedirectURL:                    settings.GoogleOAuthRedirectURL,
+		GoogleOAuthFrontendRedirectURL:            settings.GoogleOAuthFrontendRedirectURL,
 		SiteName:                                  settings.SiteName,
 		SiteLogo:                                  settings.SiteLogo,
 		SiteSubtitle:                              settings.SiteSubtitle,
@@ -186,6 +200,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		CustomEndpoints:                           dto.ParseCustomEndpoints(settings.CustomEndpoints),
 		DefaultConcurrency:                        settings.DefaultConcurrency,
 		DefaultBalance:                            settings.DefaultBalance,
+		RiskControlEnabled:                        settings.RiskControlEnabled,
 		AffiliateRebateRate:                       settings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                settings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:               settings.AffiliateRebateDurationDays,
@@ -246,6 +261,17 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentProductNameSuffix:                  paymentCfg.ProductNameSuffix,
 		PaymentHelpImageURL:                       paymentCfg.HelpImageURL,
 		PaymentHelpText:                           paymentCfg.HelpText,
+		PaymentReceiptCodeOSSEnabled:              paymentCfg.ReceiptCodeOSS.Enabled,
+		PaymentReceiptCodeOSSEndpoint:             paymentCfg.ReceiptCodeOSS.Endpoint,
+		PaymentReceiptCodeOSSRegion:               paymentCfg.ReceiptCodeOSS.Region,
+		PaymentReceiptCodeOSSBucket:               paymentCfg.ReceiptCodeOSS.Bucket,
+		PaymentReceiptCodeOSSAccessKeyID:          paymentCfg.ReceiptCodeOSS.AccessKeyID,
+		PaymentReceiptCodeOSSSecretConfigured:     paymentCfg.ReceiptCodeOSS.SecretAccessKeyConfigured,
+		PaymentReceiptCodeOSSPrefix:               paymentCfg.ReceiptCodeOSS.Prefix,
+		PaymentReceiptCodeOSSPublicBaseURL:        paymentCfg.ReceiptCodeOSS.PublicBaseURL,
+		PaymentReceiptCodeOSSForcePathStyle:       paymentCfg.ReceiptCodeOSS.ForcePathStyle,
+		PaymentReceiptCodeOSSMaxSizeBytes:         paymentCfg.ReceiptCodeOSS.MaxSizeBytes,
+		PaymentReceiptCodeOSSPresignExpireSeconds: paymentCfg.ReceiptCodeOSS.PresignExpireSeconds,
 		PaymentCancelRateLimitEnabled:             paymentCfg.CancelRateLimitEnabled,
 		PaymentCancelRateLimitMax:                 paymentCfg.CancelRateLimitMax,
 		PaymentCancelRateLimitWindow:              paymentCfg.CancelRateLimitWindow,
@@ -304,17 +330,45 @@ func openaiFastPolicySettingsFromDTO(s *dto.OpenAIFastPolicySettings) *service.O
 	return &service.OpenAIFastPolicySettings{Rules: rules}
 }
 
+func loginAgreementDocumentsToDTO(docs []service.LoginAgreementDocument) []dto.LoginAgreementDocument {
+	out := make([]dto.LoginAgreementDocument, 0, len(docs))
+	for _, doc := range docs {
+		out = append(out, dto.LoginAgreementDocument{
+			ID:        doc.ID,
+			Title:     doc.Title,
+			ContentMD: doc.ContentMD,
+		})
+	}
+	return out
+}
+
+func loginAgreementDocumentsToService(docs []dto.LoginAgreementDocument) []service.LoginAgreementDocument {
+	out := make([]service.LoginAgreementDocument, 0, len(docs))
+	for _, doc := range docs {
+		out = append(out, service.LoginAgreementDocument{
+			ID:        doc.ID,
+			Title:     doc.Title,
+			ContentMD: doc.ContentMD,
+		})
+	}
+	return out
+}
+
 // UpdateSettingsRequest 更新设置请求
 type UpdateSettingsRequest struct {
 	// 注册设置
-	RegistrationEnabled              bool     `json:"registration_enabled"`
-	EmailVerifyEnabled               bool     `json:"email_verify_enabled"`
-	RegistrationEmailSuffixWhitelist []string `json:"registration_email_suffix_whitelist"`
-	PromoCodeEnabled                 bool     `json:"promo_code_enabled"`
-	PasswordResetEnabled             bool     `json:"password_reset_enabled"`
-	FrontendURL                      string   `json:"frontend_url"`
-	InvitationCodeEnabled            bool     `json:"invitation_code_enabled"`
-	TotpEnabled                      bool     `json:"totp_enabled"` // TOTP 双因素认证
+	RegistrationEnabled              bool                         `json:"registration_enabled"`
+	EmailVerifyEnabled               bool                         `json:"email_verify_enabled"`
+	RegistrationEmailSuffixWhitelist []string                     `json:"registration_email_suffix_whitelist"`
+	PromoCodeEnabled                 bool                         `json:"promo_code_enabled"`
+	PasswordResetEnabled             bool                         `json:"password_reset_enabled"`
+	FrontendURL                      string                       `json:"frontend_url"`
+	InvitationCodeEnabled            bool                         `json:"invitation_code_enabled"`
+	TotpEnabled                      bool                         `json:"totp_enabled"` // TOTP 双因素认证
+	LoginAgreementEnabled            *bool                        `json:"login_agreement_enabled"`
+	LoginAgreementMode               string                       `json:"login_agreement_mode"`
+	LoginAgreementUpdatedAt          string                       `json:"login_agreement_updated_at"`
+	LoginAgreementDocuments          []dto.LoginAgreementDocument `json:"login_agreement_documents"`
 
 	// 邮件服务设置
 	SMTPHost     string `json:"smtp_host"`
@@ -378,6 +432,18 @@ type UpdateSettingsRequest struct {
 	OIDCConnectUserInfoIDPath       string `json:"oidc_connect_userinfo_id_path"`
 	OIDCConnectUserInfoUsernamePath string `json:"oidc_connect_userinfo_username_path"`
 
+	// GitHub / Google 邮箱快捷登录
+	GitHubOAuthEnabled             *bool  `json:"github_oauth_enabled"`
+	GitHubOAuthClientID            string `json:"github_oauth_client_id"`
+	GitHubOAuthClientSecret        string `json:"github_oauth_client_secret"`
+	GitHubOAuthRedirectURL         string `json:"github_oauth_redirect_url"`
+	GitHubOAuthFrontendRedirectURL string `json:"github_oauth_frontend_redirect_url"`
+	GoogleOAuthEnabled             *bool  `json:"google_oauth_enabled"`
+	GoogleOAuthClientID            string `json:"google_oauth_client_id"`
+	GoogleOAuthClientSecret        string `json:"google_oauth_client_secret"`
+	GoogleOAuthRedirectURL         string `json:"google_oauth_redirect_url"`
+	GoogleOAuthFrontendRedirectURL string `json:"google_oauth_frontend_redirect_url"`
+
 	// OEM设置
 	SiteName                    string                `json:"site_name"`
 	SiteLogo                    string                `json:"site_logo"`
@@ -397,6 +463,7 @@ type UpdateSettingsRequest struct {
 	// 默认配置
 	DefaultConcurrency                       int                               `json:"default_concurrency"`
 	DefaultBalance                           float64                           `json:"default_balance"`
+	RiskControlEnabled                       *bool                             `json:"risk_control_enabled"`
 	AffiliateRebateRate                      *float64                          `json:"affiliate_rebate_rate"`
 	AffiliateRebateFreezeHours               *int                              `json:"affiliate_rebate_freeze_hours"`
 	AffiliateRebateDurationDays              *int                              `json:"affiliate_rebate_duration_days"`
@@ -429,6 +496,16 @@ type UpdateSettingsRequest struct {
 	AuthSourceDefaultWeChatSubscriptions     *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_wechat_subscriptions"`
 	AuthSourceDefaultWeChatGrantOnSignup     *bool                             `json:"auth_source_default_wechat_grant_on_signup"`
 	AuthSourceDefaultWeChatGrantOnFirstBind  *bool                             `json:"auth_source_default_wechat_grant_on_first_bind"`
+	AuthSourceDefaultGitHubBalance           *float64                          `json:"auth_source_default_github_balance"`
+	AuthSourceDefaultGitHubConcurrency       *int                              `json:"auth_source_default_github_concurrency"`
+	AuthSourceDefaultGitHubSubscriptions     *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_github_subscriptions"`
+	AuthSourceDefaultGitHubGrantOnSignup     *bool                             `json:"auth_source_default_github_grant_on_signup"`
+	AuthSourceDefaultGitHubGrantOnFirstBind  *bool                             `json:"auth_source_default_github_grant_on_first_bind"`
+	AuthSourceDefaultGoogleBalance           *float64                          `json:"auth_source_default_google_balance"`
+	AuthSourceDefaultGoogleConcurrency       *int                              `json:"auth_source_default_google_concurrency"`
+	AuthSourceDefaultGoogleSubscriptions     *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_google_subscriptions"`
+	AuthSourceDefaultGoogleGrantOnSignup     *bool                             `json:"auth_source_default_google_grant_on_signup"`
+	AuthSourceDefaultGoogleGrantOnFirstBind  *bool                             `json:"auth_source_default_google_grant_on_first_bind"`
 	ForceEmailOnThirdPartySignup             *bool                             `json:"force_email_on_third_party_signup"`
 
 	// Model fallback configuration
@@ -500,6 +577,18 @@ type UpdateSettingsRequest struct {
 	PaymentProductNameSuffix         *string  `json:"payment_product_name_suffix"`
 	PaymentHelpImageURL              *string  `json:"payment_help_image_url"`
 	PaymentHelpText                  *string  `json:"payment_help_text"`
+
+	PaymentReceiptCodeOSSEnabled              *bool   `json:"payment_receipt_code_oss_enabled"`
+	PaymentReceiptCodeOSSEndpoint             *string `json:"payment_receipt_code_oss_endpoint"`
+	PaymentReceiptCodeOSSRegion               *string `json:"payment_receipt_code_oss_region"`
+	PaymentReceiptCodeOSSBucket               *string `json:"payment_receipt_code_oss_bucket"`
+	PaymentReceiptCodeOSSAccessKeyID          *string `json:"payment_receipt_code_oss_access_key_id"`
+	PaymentReceiptCodeOSSSecretAccessKey      *string `json:"payment_receipt_code_oss_secret_access_key"`
+	PaymentReceiptCodeOSSPrefix               *string `json:"payment_receipt_code_oss_prefix"`
+	PaymentReceiptCodeOSSPublicBaseURL        *string `json:"payment_receipt_code_oss_public_base_url"`
+	PaymentReceiptCodeOSSForcePathStyle       *bool   `json:"payment_receipt_code_oss_force_path_style"`
+	PaymentReceiptCodeOSSMaxSizeBytes         *int64  `json:"payment_receipt_code_oss_max_size_bytes"`
+	PaymentReceiptCodeOSSPresignExpireSeconds *int    `json:"payment_receipt_code_oss_presign_expire_seconds"`
 
 	// Cancel rate limit
 	PaymentCancelRateLimitEnabled *bool   `json:"payment_cancel_rate_limit_enabled"`
@@ -617,6 +706,16 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	req.AuthSourceDefaultLinuxDoSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultLinuxDoSubscriptions)
 	req.AuthSourceDefaultOIDCSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultOIDCSubscriptions)
 	req.AuthSourceDefaultWeChatSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultWeChatSubscriptions)
+	req.AuthSourceDefaultGitHubSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultGitHubSubscriptions)
+	req.AuthSourceDefaultGoogleSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultGoogleSubscriptions)
+	req.GitHubOAuthClientID = strings.TrimSpace(req.GitHubOAuthClientID)
+	req.GitHubOAuthClientSecret = strings.TrimSpace(req.GitHubOAuthClientSecret)
+	req.GitHubOAuthRedirectURL = strings.TrimSpace(req.GitHubOAuthRedirectURL)
+	req.GitHubOAuthFrontendRedirectURL = strings.TrimSpace(req.GitHubOAuthFrontendRedirectURL)
+	req.GoogleOAuthClientID = strings.TrimSpace(req.GoogleOAuthClientID)
+	req.GoogleOAuthClientSecret = strings.TrimSpace(req.GoogleOAuthClientSecret)
+	req.GoogleOAuthRedirectURL = strings.TrimSpace(req.GoogleOAuthRedirectURL)
+	req.GoogleOAuthFrontendRedirectURL = strings.TrimSpace(req.GoogleOAuthFrontendRedirectURL)
 
 	// SMTP 配置保护：如果请求中 smtp_host 为空但数据库中已有配置，则保留已有 SMTP 配置
 	// 防止前端加载设置失败时空表单覆盖已保存的 SMTP 配置
@@ -1180,6 +1279,30 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		FrontendURL:                      req.FrontendURL,
 		InvitationCodeEnabled:            req.InvitationCodeEnabled,
 		TotpEnabled:                      req.TotpEnabled,
+		LoginAgreementEnabled: func() bool {
+			if req.LoginAgreementEnabled != nil {
+				return *req.LoginAgreementEnabled
+			}
+			return previousSettings.LoginAgreementEnabled
+		}(),
+		LoginAgreementMode: func() string {
+			if fieldProvided(providedFields, "login_agreement_mode") {
+				return req.LoginAgreementMode
+			}
+			return previousSettings.LoginAgreementMode
+		}(),
+		LoginAgreementUpdatedAt: func() string {
+			if fieldProvided(providedFields, "login_agreement_updated_at") {
+				return req.LoginAgreementUpdatedAt
+			}
+			return previousSettings.LoginAgreementUpdatedAt
+		}(),
+		LoginAgreementDocuments: func() []service.LoginAgreementDocument {
+			if fieldProvided(providedFields, "login_agreement_documents") {
+				return loginAgreementDocumentsToService(req.LoginAgreementDocuments)
+			}
+			return previousSettings.LoginAgreementDocuments
+		}(),
 		SMTPHost:                         req.SMTPHost,
 		SMTPPort:                         req.SMTPPort,
 		SMTPUsername:                     req.SMTPUsername,
@@ -1232,45 +1355,101 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OIDCConnectUserInfoEmailPath:     req.OIDCConnectUserInfoEmailPath,
 		OIDCConnectUserInfoIDPath:        req.OIDCConnectUserInfoIDPath,
 		OIDCConnectUserInfoUsernamePath:  req.OIDCConnectUserInfoUsernamePath,
-		SiteName:                         req.SiteName,
-		SiteLogo:                         req.SiteLogo,
-		SiteSubtitle:                     req.SiteSubtitle,
-		APIBaseURL:                       req.APIBaseURL,
-		ContactInfo:                      req.ContactInfo,
-		DocURL:                           req.DocURL,
-		HomeContent:                      req.HomeContent,
-		HideCcsImportButton:              req.HideCcsImportButton,
-		PurchaseSubscriptionEnabled:      purchaseEnabled,
-		PurchaseSubscriptionURL:          purchaseURL,
-		TableDefaultPageSize:             req.TableDefaultPageSize,
-		TablePageSizeOptions:             req.TablePageSizeOptions,
-		CustomMenuItems:                  customMenuJSON,
-		CustomEndpoints:                  customEndpointsJSON,
-		DefaultConcurrency:               req.DefaultConcurrency,
-		DefaultBalance:                   req.DefaultBalance,
-		AffiliateRebateRate:              affiliateRebateRate,
-		AffiliateRebateFreezeHours:       affiliateRebateFreezeHours,
-		AffiliateRebateDurationDays:      affiliateRebateDurationDays,
-		AffiliateRebatePerInviteeCap:     affiliateRebatePerInviteeCap,
-		DefaultUserRPMLimit:              req.DefaultUserRPMLimit,
-		UserPrivateGroupDailyLimitUSD:    positiveFloat64Ptr(req.UserPrivateGroupDailyLimitUSD),
-		UserPrivateGroupWeeklyLimitUSD:   positiveFloat64Ptr(req.UserPrivateGroupWeeklyLimitUSD),
-		UserPrivateGroupMonthlyLimitUSD:  positiveFloat64Ptr(req.UserPrivateGroupMonthlyLimitUSD),
-		UserPrivateGroupRateMultiplier:   req.UserPrivateGroupRateMultiplier,
-		UserPrivateGroupRPMLimit:         req.UserPrivateGroupRPMLimit,
-		UserPrivateGroupCommissionRate:   req.UserPrivateGroupCommissionRate,
-		DefaultSubscriptions:             defaultSubscriptions,
-		EnableModelFallback:              req.EnableModelFallback,
-		FallbackModelAnthropic:           req.FallbackModelAnthropic,
-		FallbackModelOpenAI:              req.FallbackModelOpenAI,
-		FallbackModelGemini:              req.FallbackModelGemini,
-		FallbackModelAntigravity:         req.FallbackModelAntigravity,
-		EnableIdentityPatch:              req.EnableIdentityPatch,
-		IdentityPatchPrompt:              req.IdentityPatchPrompt,
-		MinClaudeCodeVersion:             req.MinClaudeCodeVersion,
-		MaxClaudeCodeVersion:             req.MaxClaudeCodeVersion,
-		AllowUngroupedKeyScheduling:      req.AllowUngroupedKeyScheduling,
-		BackendModeEnabled:               req.BackendModeEnabled,
+		GitHubOAuthEnabled: func() bool {
+			if req.GitHubOAuthEnabled != nil {
+				return *req.GitHubOAuthEnabled
+			}
+			return previousSettings.GitHubOAuthEnabled
+		}(),
+		GitHubOAuthClientID: func() string {
+			if fieldProvided(providedFields, "github_oauth_client_id") {
+				return req.GitHubOAuthClientID
+			}
+			return previousSettings.GitHubOAuthClientID
+		}(),
+		GitHubOAuthClientSecret: req.GitHubOAuthClientSecret,
+		GitHubOAuthRedirectURL: func() string {
+			if fieldProvided(providedFields, "github_oauth_redirect_url") {
+				return req.GitHubOAuthRedirectURL
+			}
+			return previousSettings.GitHubOAuthRedirectURL
+		}(),
+		GitHubOAuthFrontendRedirectURL: func() string {
+			if fieldProvided(providedFields, "github_oauth_frontend_redirect_url") {
+				return req.GitHubOAuthFrontendRedirectURL
+			}
+			return previousSettings.GitHubOAuthFrontendRedirectURL
+		}(),
+		GoogleOAuthEnabled: func() bool {
+			if req.GoogleOAuthEnabled != nil {
+				return *req.GoogleOAuthEnabled
+			}
+			return previousSettings.GoogleOAuthEnabled
+		}(),
+		GoogleOAuthClientID: func() string {
+			if fieldProvided(providedFields, "google_oauth_client_id") {
+				return req.GoogleOAuthClientID
+			}
+			return previousSettings.GoogleOAuthClientID
+		}(),
+		GoogleOAuthClientSecret: req.GoogleOAuthClientSecret,
+		GoogleOAuthRedirectURL: func() string {
+			if fieldProvided(providedFields, "google_oauth_redirect_url") {
+				return req.GoogleOAuthRedirectURL
+			}
+			return previousSettings.GoogleOAuthRedirectURL
+		}(),
+		GoogleOAuthFrontendRedirectURL: func() string {
+			if fieldProvided(providedFields, "google_oauth_frontend_redirect_url") {
+				return req.GoogleOAuthFrontendRedirectURL
+			}
+			return previousSettings.GoogleOAuthFrontendRedirectURL
+		}(),
+		SiteName:                    req.SiteName,
+		SiteLogo:                    req.SiteLogo,
+		SiteSubtitle:                req.SiteSubtitle,
+		APIBaseURL:                  req.APIBaseURL,
+		ContactInfo:                 req.ContactInfo,
+		DocURL:                      req.DocURL,
+		HomeContent:                 req.HomeContent,
+		HideCcsImportButton:         req.HideCcsImportButton,
+		PurchaseSubscriptionEnabled: purchaseEnabled,
+		PurchaseSubscriptionURL:     purchaseURL,
+		TableDefaultPageSize:        req.TableDefaultPageSize,
+		TablePageSizeOptions:        req.TablePageSizeOptions,
+		CustomMenuItems:             customMenuJSON,
+		CustomEndpoints:             customEndpointsJSON,
+		DefaultConcurrency:          req.DefaultConcurrency,
+		DefaultBalance:              req.DefaultBalance,
+		RiskControlEnabled: func() bool {
+			if req.RiskControlEnabled != nil {
+				return *req.RiskControlEnabled
+			}
+			return previousSettings.RiskControlEnabled
+		}(),
+		AffiliateRebateRate:             affiliateRebateRate,
+		AffiliateRebateFreezeHours:      affiliateRebateFreezeHours,
+		AffiliateRebateDurationDays:     affiliateRebateDurationDays,
+		AffiliateRebatePerInviteeCap:    affiliateRebatePerInviteeCap,
+		DefaultUserRPMLimit:             req.DefaultUserRPMLimit,
+		UserPrivateGroupDailyLimitUSD:   positiveFloat64Ptr(req.UserPrivateGroupDailyLimitUSD),
+		UserPrivateGroupWeeklyLimitUSD:  positiveFloat64Ptr(req.UserPrivateGroupWeeklyLimitUSD),
+		UserPrivateGroupMonthlyLimitUSD: positiveFloat64Ptr(req.UserPrivateGroupMonthlyLimitUSD),
+		UserPrivateGroupRateMultiplier:  req.UserPrivateGroupRateMultiplier,
+		UserPrivateGroupRPMLimit:        req.UserPrivateGroupRPMLimit,
+		UserPrivateGroupCommissionRate:  req.UserPrivateGroupCommissionRate,
+		DefaultSubscriptions:            defaultSubscriptions,
+		EnableModelFallback:             req.EnableModelFallback,
+		FallbackModelAnthropic:          req.FallbackModelAnthropic,
+		FallbackModelOpenAI:             req.FallbackModelOpenAI,
+		FallbackModelGemini:             req.FallbackModelGemini,
+		FallbackModelAntigravity:        req.FallbackModelAntigravity,
+		EnableIdentityPatch:             req.EnableIdentityPatch,
+		IdentityPatchPrompt:             req.IdentityPatchPrompt,
+		MinClaudeCodeVersion:            req.MinClaudeCodeVersion,
+		MaxClaudeCodeVersion:            req.MaxClaudeCodeVersion,
+		AllowUngroupedKeyScheduling:     req.AllowUngroupedKeyScheduling,
+		BackendModeEnabled:              req.BackendModeEnabled,
 		MasterDataPlaneEnabled: func() bool {
 			if req.MasterDataPlaneEnabled != nil {
 				return *req.MasterDataPlaneEnabled
@@ -1452,6 +1631,20 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			GrantOnSignup:    boolValueOrDefault(req.AuthSourceDefaultWeChatGrantOnSignup, previousAuthSourceDefaults.WeChat.GrantOnSignup),
 			GrantOnFirstBind: boolValueOrDefault(req.AuthSourceDefaultWeChatGrantOnFirstBind, previousAuthSourceDefaults.WeChat.GrantOnFirstBind),
 		},
+		GitHub: service.ProviderDefaultGrantSettings{
+			Balance:          float64ValueOrDefault(req.AuthSourceDefaultGitHubBalance, previousAuthSourceDefaults.GitHub.Balance),
+			Concurrency:      intValueOrDefault(req.AuthSourceDefaultGitHubConcurrency, previousAuthSourceDefaults.GitHub.Concurrency),
+			Subscriptions:    defaultSubscriptionsValueOrDefault(req.AuthSourceDefaultGitHubSubscriptions, previousAuthSourceDefaults.GitHub.Subscriptions),
+			GrantOnSignup:    boolValueOrDefault(req.AuthSourceDefaultGitHubGrantOnSignup, previousAuthSourceDefaults.GitHub.GrantOnSignup),
+			GrantOnFirstBind: boolValueOrDefault(req.AuthSourceDefaultGitHubGrantOnFirstBind, previousAuthSourceDefaults.GitHub.GrantOnFirstBind),
+		},
+		Google: service.ProviderDefaultGrantSettings{
+			Balance:          float64ValueOrDefault(req.AuthSourceDefaultGoogleBalance, previousAuthSourceDefaults.Google.Balance),
+			Concurrency:      intValueOrDefault(req.AuthSourceDefaultGoogleConcurrency, previousAuthSourceDefaults.Google.Concurrency),
+			Subscriptions:    defaultSubscriptionsValueOrDefault(req.AuthSourceDefaultGoogleSubscriptions, previousAuthSourceDefaults.Google.Subscriptions),
+			GrantOnSignup:    boolValueOrDefault(req.AuthSourceDefaultGoogleGrantOnSignup, previousAuthSourceDefaults.Google.GrantOnSignup),
+			GrantOnFirstBind: boolValueOrDefault(req.AuthSourceDefaultGoogleGrantOnFirstBind, previousAuthSourceDefaults.Google.GrantOnFirstBind),
+		},
 		ForceEmailOnThirdPartySignup: boolValueOrDefault(req.ForceEmailOnThirdPartySignup, previousAuthSourceDefaults.ForceEmailOnThirdPartySignup),
 	}
 	if err := h.settingService.UpdateSettingsWithAuthSourceDefaults(c.Request.Context(), settings, authSourceDefaults); err != nil {
@@ -1471,26 +1664,37 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	// Skip if no payment fields were provided (prevents accidental wipe).
 	if h.paymentConfigService != nil && hasPaymentFields(req) {
 		paymentReq := service.UpdatePaymentConfigRequest{
-			Enabled:                   req.PaymentEnabled,
-			MinAmount:                 req.PaymentMinAmount,
-			MaxAmount:                 req.PaymentMaxAmount,
-			DailyLimit:                req.PaymentDailyLimit,
-			OrderTimeoutMin:           req.PaymentOrderTimeoutMin,
-			MaxPendingOrders:          req.PaymentMaxPendingOrders,
-			EnabledTypes:              req.PaymentEnabledTypes,
-			BalanceDisabled:           req.PaymentBalanceDisabled,
-			BalanceRechargeMultiplier: req.PaymentBalanceRechargeMultiplier,
-			RechargeFeeRate:           req.PaymentRechargeFeeRate,
-			LoadBalanceStrategy:       req.PaymentLoadBalanceStrat,
-			ProductNamePrefix:         req.PaymentProductNamePrefix,
-			ProductNameSuffix:         req.PaymentProductNameSuffix,
-			HelpImageURL:              req.PaymentHelpImageURL,
-			HelpText:                  req.PaymentHelpText,
-			CancelRateLimitEnabled:    req.PaymentCancelRateLimitEnabled,
-			CancelRateLimitMax:        req.PaymentCancelRateLimitMax,
-			CancelRateLimitWindow:     req.PaymentCancelRateLimitWindow,
-			CancelRateLimitUnit:       req.PaymentCancelRateLimitUnit,
-			CancelRateLimitMode:       req.PaymentCancelRateLimitMode,
+			Enabled:                            req.PaymentEnabled,
+			MinAmount:                          req.PaymentMinAmount,
+			MaxAmount:                          req.PaymentMaxAmount,
+			DailyLimit:                         req.PaymentDailyLimit,
+			OrderTimeoutMin:                    req.PaymentOrderTimeoutMin,
+			MaxPendingOrders:                   req.PaymentMaxPendingOrders,
+			EnabledTypes:                       req.PaymentEnabledTypes,
+			BalanceDisabled:                    req.PaymentBalanceDisabled,
+			BalanceRechargeMultiplier:          req.PaymentBalanceRechargeMultiplier,
+			RechargeFeeRate:                    req.PaymentRechargeFeeRate,
+			LoadBalanceStrategy:                req.PaymentLoadBalanceStrat,
+			ProductNamePrefix:                  req.PaymentProductNamePrefix,
+			ProductNameSuffix:                  req.PaymentProductNameSuffix,
+			HelpImageURL:                       req.PaymentHelpImageURL,
+			HelpText:                           req.PaymentHelpText,
+			ReceiptCodeOSSEnabled:              req.PaymentReceiptCodeOSSEnabled,
+			ReceiptCodeOSSEndpoint:             req.PaymentReceiptCodeOSSEndpoint,
+			ReceiptCodeOSSRegion:               req.PaymentReceiptCodeOSSRegion,
+			ReceiptCodeOSSBucket:               req.PaymentReceiptCodeOSSBucket,
+			ReceiptCodeOSSAccessKeyID:          req.PaymentReceiptCodeOSSAccessKeyID,
+			ReceiptCodeOSSSecretAccessKey:      req.PaymentReceiptCodeOSSSecretAccessKey,
+			ReceiptCodeOSSPrefix:               req.PaymentReceiptCodeOSSPrefix,
+			ReceiptCodeOSSPublicBaseURL:        req.PaymentReceiptCodeOSSPublicBaseURL,
+			ReceiptCodeOSSForcePathStyle:       req.PaymentReceiptCodeOSSForcePathStyle,
+			ReceiptCodeOSSMaxSizeBytes:         req.PaymentReceiptCodeOSSMaxSizeBytes,
+			ReceiptCodeOSSPresignExpireSeconds: req.PaymentReceiptCodeOSSPresignExpireSeconds,
+			CancelRateLimitEnabled:             req.PaymentCancelRateLimitEnabled,
+			CancelRateLimitMax:                 req.PaymentCancelRateLimitMax,
+			CancelRateLimitWindow:              req.PaymentCancelRateLimitWindow,
+			CancelRateLimitUnit:                req.PaymentCancelRateLimitUnit,
+			CancelRateLimitMode:                req.PaymentCancelRateLimitMode,
 		}
 		if err := h.paymentConfigService.UpdatePaymentConfig(c.Request.Context(), paymentReq); err != nil {
 			response.ErrorFrom(c, err)
@@ -1542,6 +1746,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		InvitationCodeEnabled:                     updatedSettings.InvitationCodeEnabled,
 		TotpEnabled:                               updatedSettings.TotpEnabled,
 		TotpEncryptionKeyConfigured:               h.settingService.IsTotpEncryptionKeyConfigured(),
+		LoginAgreementEnabled:                     updatedSettings.LoginAgreementEnabled,
+		LoginAgreementMode:                        updatedSettings.LoginAgreementMode,
+		LoginAgreementUpdatedAt:                   updatedSettings.LoginAgreementUpdatedAt,
+		LoginAgreementDocuments:                   loginAgreementDocumentsToDTO(updatedSettings.LoginAgreementDocuments),
 		SMTPHost:                                  updatedSettings.SMTPHost,
 		SMTPPort:                                  updatedSettings.SMTPPort,
 		SMTPUsername:                              updatedSettings.SMTPUsername,
@@ -1594,6 +1802,16 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OIDCConnectUserInfoEmailPath:              updatedSettings.OIDCConnectUserInfoEmailPath,
 		OIDCConnectUserInfoIDPath:                 updatedSettings.OIDCConnectUserInfoIDPath,
 		OIDCConnectUserInfoUsernamePath:           updatedSettings.OIDCConnectUserInfoUsernamePath,
+		GitHubOAuthEnabled:                        updatedSettings.GitHubOAuthEnabled,
+		GitHubOAuthClientID:                       updatedSettings.GitHubOAuthClientID,
+		GitHubOAuthClientSecretConfigured:         updatedSettings.GitHubOAuthClientSecretConfigured,
+		GitHubOAuthRedirectURL:                    updatedSettings.GitHubOAuthRedirectURL,
+		GitHubOAuthFrontendRedirectURL:            updatedSettings.GitHubOAuthFrontendRedirectURL,
+		GoogleOAuthEnabled:                        updatedSettings.GoogleOAuthEnabled,
+		GoogleOAuthClientID:                       updatedSettings.GoogleOAuthClientID,
+		GoogleOAuthClientSecretConfigured:         updatedSettings.GoogleOAuthClientSecretConfigured,
+		GoogleOAuthRedirectURL:                    updatedSettings.GoogleOAuthRedirectURL,
+		GoogleOAuthFrontendRedirectURL:            updatedSettings.GoogleOAuthFrontendRedirectURL,
 		SiteName:                                  updatedSettings.SiteName,
 		SiteLogo:                                  updatedSettings.SiteLogo,
 		SiteSubtitle:                              updatedSettings.SiteSubtitle,
@@ -1610,6 +1828,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		CustomEndpoints:                           dto.ParseCustomEndpoints(updatedSettings.CustomEndpoints),
 		DefaultConcurrency:                        updatedSettings.DefaultConcurrency,
 		DefaultBalance:                            updatedSettings.DefaultBalance,
+		RiskControlEnabled:                        updatedSettings.RiskControlEnabled,
 		AffiliateRebateRate:                       updatedSettings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                updatedSettings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:               updatedSettings.AffiliateRebateDurationDays,
@@ -1669,6 +1888,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentProductNameSuffix:                  updatedPaymentCfg.ProductNameSuffix,
 		PaymentHelpImageURL:                       updatedPaymentCfg.HelpImageURL,
 		PaymentHelpText:                           updatedPaymentCfg.HelpText,
+		PaymentReceiptCodeOSSEnabled:              updatedPaymentCfg.ReceiptCodeOSS.Enabled,
+		PaymentReceiptCodeOSSEndpoint:             updatedPaymentCfg.ReceiptCodeOSS.Endpoint,
+		PaymentReceiptCodeOSSRegion:               updatedPaymentCfg.ReceiptCodeOSS.Region,
+		PaymentReceiptCodeOSSBucket:               updatedPaymentCfg.ReceiptCodeOSS.Bucket,
+		PaymentReceiptCodeOSSAccessKeyID:          updatedPaymentCfg.ReceiptCodeOSS.AccessKeyID,
+		PaymentReceiptCodeOSSSecretConfigured:     updatedPaymentCfg.ReceiptCodeOSS.SecretAccessKeyConfigured,
+		PaymentReceiptCodeOSSPrefix:               updatedPaymentCfg.ReceiptCodeOSS.Prefix,
+		PaymentReceiptCodeOSSPublicBaseURL:        updatedPaymentCfg.ReceiptCodeOSS.PublicBaseURL,
+		PaymentReceiptCodeOSSForcePathStyle:       updatedPaymentCfg.ReceiptCodeOSS.ForcePathStyle,
+		PaymentReceiptCodeOSSMaxSizeBytes:         updatedPaymentCfg.ReceiptCodeOSS.MaxSizeBytes,
+		PaymentReceiptCodeOSSPresignExpireSeconds: updatedPaymentCfg.ReceiptCodeOSS.PresignExpireSeconds,
 		PaymentCancelRateLimitEnabled:             updatedPaymentCfg.CancelRateLimitEnabled,
 		PaymentCancelRateLimitMax:                 updatedPaymentCfg.CancelRateLimitMax,
 		PaymentCancelRateLimitWindow:              updatedPaymentCfg.CancelRateLimitWindow,
@@ -1699,7 +1929,13 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentBalanceRechargeMultiplier != nil || req.PaymentRechargeFeeRate != nil ||
 		req.PaymentLoadBalanceStrat != nil || req.PaymentProductNamePrefix != nil ||
 		req.PaymentProductNameSuffix != nil || req.PaymentHelpImageURL != nil ||
-		req.PaymentHelpText != nil || req.PaymentCancelRateLimitEnabled != nil ||
+		req.PaymentHelpText != nil || req.PaymentReceiptCodeOSSEnabled != nil ||
+		req.PaymentReceiptCodeOSSEndpoint != nil || req.PaymentReceiptCodeOSSRegion != nil ||
+		req.PaymentReceiptCodeOSSBucket != nil || req.PaymentReceiptCodeOSSAccessKeyID != nil ||
+		req.PaymentReceiptCodeOSSSecretAccessKey != nil || req.PaymentReceiptCodeOSSPrefix != nil ||
+		req.PaymentReceiptCodeOSSPublicBaseURL != nil || req.PaymentReceiptCodeOSSForcePathStyle != nil ||
+		req.PaymentReceiptCodeOSSMaxSizeBytes != nil || req.PaymentReceiptCodeOSSPresignExpireSeconds != nil ||
+		req.PaymentCancelRateLimitEnabled != nil ||
 		req.PaymentCancelRateLimitMax != nil || req.PaymentCancelRateLimitWindow != nil ||
 		req.PaymentCancelRateLimitUnit != nil || req.PaymentCancelRateLimitMode != nil
 }
@@ -1770,6 +2006,19 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	}
 	if !fieldProvided(fields, "totp_enabled") {
 		req.TotpEnabled = previous.TotpEnabled
+	}
+	if !fieldProvided(fields, "login_agreement_enabled") {
+		req.LoginAgreementEnabled = &previous.LoginAgreementEnabled
+	}
+	if !fieldProvided(fields, "login_agreement_mode") {
+		req.LoginAgreementMode = previous.LoginAgreementMode
+	}
+	if !fieldProvided(fields, "login_agreement_updated_at") {
+		req.LoginAgreementUpdatedAt = previous.LoginAgreementUpdatedAt
+	}
+	if !fieldProvided(fields, "login_agreement_documents") {
+		docs := loginAgreementDocumentsToDTO(previous.LoginAgreementDocuments)
+		req.LoginAgreementDocuments = docs
 	}
 	if !fieldProvided(fields, "smtp_host") {
 		req.SMTPHost = previous.SMTPHost
@@ -1897,6 +2146,30 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	if !fieldProvided(fields, "oidc_connect_userinfo_username_path") {
 		req.OIDCConnectUserInfoUsernamePath = previous.OIDCConnectUserInfoUsernamePath
 	}
+	if !fieldProvided(fields, "github_oauth_enabled") {
+		req.GitHubOAuthEnabled = &previous.GitHubOAuthEnabled
+	}
+	if !fieldProvided(fields, "github_oauth_client_id") {
+		req.GitHubOAuthClientID = previous.GitHubOAuthClientID
+	}
+	if !fieldProvided(fields, "github_oauth_redirect_url") {
+		req.GitHubOAuthRedirectURL = previous.GitHubOAuthRedirectURL
+	}
+	if !fieldProvided(fields, "github_oauth_frontend_redirect_url") {
+		req.GitHubOAuthFrontendRedirectURL = previous.GitHubOAuthFrontendRedirectURL
+	}
+	if !fieldProvided(fields, "google_oauth_enabled") {
+		req.GoogleOAuthEnabled = &previous.GoogleOAuthEnabled
+	}
+	if !fieldProvided(fields, "google_oauth_client_id") {
+		req.GoogleOAuthClientID = previous.GoogleOAuthClientID
+	}
+	if !fieldProvided(fields, "google_oauth_redirect_url") {
+		req.GoogleOAuthRedirectURL = previous.GoogleOAuthRedirectURL
+	}
+	if !fieldProvided(fields, "google_oauth_frontend_redirect_url") {
+		req.GoogleOAuthFrontendRedirectURL = previous.GoogleOAuthFrontendRedirectURL
+	}
 	if !fieldProvided(fields, "site_name") {
 		req.SiteName = previous.SiteName
 	}
@@ -1932,6 +2205,9 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	}
 	if !fieldProvided(fields, "default_balance") {
 		req.DefaultBalance = previous.DefaultBalance
+	}
+	if !fieldProvided(fields, "risk_control_enabled") {
+		req.RiskControlEnabled = &previous.RiskControlEnabled
 	}
 	if !fieldProvided(fields, "default_user_rpm_limit") {
 		req.DefaultUserRPMLimit = previous.DefaultUserRPMLimit
@@ -2531,6 +2807,16 @@ func systemSettingsResponseData(settings dto.SystemSettings, authSourceDefaults 
 	data["auth_source_default_wechat_subscriptions"] = authSourceDefaults.WeChat.Subscriptions
 	data["auth_source_default_wechat_grant_on_signup"] = authSourceDefaults.WeChat.GrantOnSignup
 	data["auth_source_default_wechat_grant_on_first_bind"] = authSourceDefaults.WeChat.GrantOnFirstBind
+	data["auth_source_default_github_balance"] = authSourceDefaults.GitHub.Balance
+	data["auth_source_default_github_concurrency"] = authSourceDefaults.GitHub.Concurrency
+	data["auth_source_default_github_subscriptions"] = authSourceDefaults.GitHub.Subscriptions
+	data["auth_source_default_github_grant_on_signup"] = authSourceDefaults.GitHub.GrantOnSignup
+	data["auth_source_default_github_grant_on_first_bind"] = authSourceDefaults.GitHub.GrantOnFirstBind
+	data["auth_source_default_google_balance"] = authSourceDefaults.Google.Balance
+	data["auth_source_default_google_concurrency"] = authSourceDefaults.Google.Concurrency
+	data["auth_source_default_google_subscriptions"] = authSourceDefaults.Google.Subscriptions
+	data["auth_source_default_google_grant_on_signup"] = authSourceDefaults.Google.GrantOnSignup
+	data["auth_source_default_google_grant_on_first_bind"] = authSourceDefaults.Google.GrantOnFirstBind
 	data["force_email_on_third_party_signup"] = authSourceDefaults.ForceEmailOnThirdPartySignup
 
 	return data

@@ -13,393 +13,147 @@
   </div>
 
   <!-- Default Home Page -->
-  <div
-    v-else
-    class="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
-  >
-    <!-- Background Decorations -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden">
-      <div
-        class="absolute -right-40 -top-40 h-96 w-96 rounded-full bg-primary-400/20 blur-3xl"
-      ></div>
-      <div
-        class="absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-primary-500/15 blur-3xl"
-      ></div>
-      <div
-        class="absolute left-1/3 top-1/4 h-72 w-72 rounded-full bg-primary-300/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute bottom-1/4 right-1/4 h-64 w-64 rounded-full bg-primary-400/10 blur-3xl"
-      ></div>
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(20,184,166,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(20,184,166,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
-    </div>
-
-    <!-- Header -->
-    <header class="relative z-20 px-6 py-4">
-      <nav class="mx-auto flex max-w-6xl items-center justify-between">
-        <!-- Logo -->
-        <div class="flex items-center">
-          <div class="h-10 w-10 overflow-hidden rounded-xl shadow-md">
-            <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
-          </div>
-        </div>
-
-        <!-- Nav Actions -->
-        <div class="flex items-center gap-3">
-          <!-- Language Switcher -->
-          <LocaleSwitcher />
-
-          <!-- Doc Link -->
-          <a
-            v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
-            :title="t('home.viewDocs')"
-          >
-            <Icon name="book" size="md" />
-          </a>
-
-          <!-- Theme Toggle -->
-          <button
-            @click="toggleTheme"
-            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
-            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
-          >
-            <Icon v-if="isDark" name="sun" size="md" />
-            <Icon v-else name="moon" size="md" />
-          </button>
-
-          <!-- Login / Dashboard Button -->
-          <router-link
-            v-if="isAuthenticated"
-            :to="dashboardPath"
-            class="inline-flex items-center gap-1.5 rounded-full bg-gray-900 py-1 pl-1 pr-2.5 transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
-          >
-            <span
-              class="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-primary-400 to-primary-600 text-[10px] font-semibold text-white"
-            >
-              {{ userInitial }}
-            </span>
-            <span class="text-xs font-medium text-white">{{ t('home.dashboard') }}</span>
-            <svg
-              class="h-3 w-3 text-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
+  <div v-else class="home-page">
+    <header class="home-shell home-nav">
+      <router-link class="brand" to="/home" aria-label="Home">
+        <span class="brand-mark" aria-hidden="true">
+          <img v-if="siteLogo" :src="siteLogo" alt="" />
+          <svg v-else viewBox="0 0 24 24" fill="none">
+            <path
+              d="M7 8.5h7.5a4 4 0 0 1 0 8H9.2"
               stroke="currentColor"
-              stroke-width="2"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M4.5 19.5l15-15m0 0H8.25m11.25 0v11.25"
-              />
-            </svg>
-          </router-link>
-          <router-link
-            v-else
-            to="/login"
-            class="inline-flex items-center rounded-full bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
-          >
-            {{ t('home.login') }}
-          </router-link>
-        </div>
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+            <path
+              d="M17 15.5H9.5a4 4 0 0 1 0-8h5.3"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          </svg>
+        </span>
+        <span>{{ siteName }}</span>
+      </router-link>
+
+      <nav class="home-nav-links" aria-label="Home sections">
+        <a href="#model">新范式</a>
+        <a href="#settle">结算</a>
+        <a href="#invite">邀请</a>
       </nav>
+
+      <div class="home-actions">
+        <LocaleSwitcher />
+
+        <a
+          v-if="docUrl"
+          :href="docUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="icon-action"
+          :title="t('home.viewDocs')"
+        >
+          <Icon name="book" size="md" />
+        </a>
+
+        <button
+          type="button"
+          class="icon-action"
+          :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
+          @click="toggleTheme"
+        >
+          <Icon v-if="isDark" name="sun" size="md" />
+          <Icon v-else name="moon" size="md" />
+        </button>
+
+        <router-link
+          v-if="isAuthenticated"
+          :to="dashboardPath"
+          class="button primary nav-cta"
+        >
+          <span class="user-dot">{{ userInitial }}</span>
+          <span>{{ t('home.dashboard') }}</span>
+        </router-link>
+        <router-link v-else to="/login" class="button primary nav-cta">
+          {{ t('home.login') }}
+        </router-link>
+      </div>
     </header>
 
-    <!-- Main Content -->
-    <main class="relative z-10 flex-1 px-6 py-16">
-      <div class="mx-auto max-w-6xl">
-        <!-- Hero Section - Left/Right Layout -->
-        <div class="mb-12 flex flex-col items-center justify-between gap-12 lg:flex-row lg:gap-16">
-          <!-- Left: Text Content -->
-          <div class="flex-1 text-center lg:text-left">
-            <h1
-              class="mb-4 text-4xl font-bold text-gray-900 dark:text-white md:text-5xl lg:text-6xl"
-            >
-              {{ siteName }}
-            </h1>
-            <p class="mb-8 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
-              {{ siteSubtitle }}
-            </p>
+    <main class="home-shell hero">
+      <section class="copy">
+        <span class="eyebrow">开放式 AI 账号协作网络</span>
+        <h1>让账号能力在用户之间<span class="title-flow">自由流动</span></h1>
+        <p class="lead">
+          {{ siteName }}不再只是平台向用户提供服务，而是让个人用户提供账号、其他用户消费额度，平台完成调度中转、收益结算、邀请分成。
+        </p>
+        <div class="hero-actions" id="start">
+          <router-link :to="isAuthenticated ? dashboardPath : '/login'" class="button primary">
+            {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
+          </router-link>
+          <a class="button secondary" href="#model">查看新模式</a>
+        </div>
+        <div class="essentials" aria-label="核心特性">
+          <span id="model">B2C 转 C2C</span>
+          <span id="settle">收益自动入账</span>
+          <span id="invite">邀请消费 5% 分成</span>
+          <span>倍率与消耗透明</span>
+        </div>
+      </section>
 
-            <!-- CTA Button -->
-            <div>
-              <router-link
-                :to="isAuthenticated ? dashboardPath : '/login'"
-                class="btn btn-primary px-8 py-3 text-base shadow-lg shadow-primary-500/30"
-              >
-                {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
-                <Icon name="arrowRight" size="md" class="ml-2" :stroke-width="2" />
-              </router-link>
-            </div>
-          </div>
-
-          <!-- Right: Terminal Animation -->
-          <div class="flex flex-1 justify-center lg:justify-end">
-            <div class="terminal-container">
-              <div class="terminal-window">
-                <!-- Window header -->
-                <div class="terminal-header">
-                  <div class="terminal-buttons">
-                    <span class="btn-close"></span>
-                    <span class="btn-minimize"></span>
-                    <span class="btn-maximize"></span>
-                  </div>
-                  <span class="terminal-title">terminal</span>
-                </div>
-                <!-- Terminal content -->
-                <div class="terminal-body">
-                  <div class="code-line line-1">
-                    <span class="code-prompt">$</span>
-                    <span class="code-cmd">curl</span>
-                    <span class="code-flag">-X POST</span>
-                    <span class="code-url">/v1/messages</span>
-                  </div>
-                  <div class="code-line line-2">
-                    <span class="code-comment"># Routing to upstream...</span>
-                  </div>
-                  <div class="code-line line-3">
-                    <span class="code-success">200 OK</span>
-                    <span class="code-response">{ "content": "Hello!" }</span>
-                  </div>
-                  <div class="code-line line-4">
-                    <span class="code-prompt">$</span>
-                    <span class="cursor"></span>
-                  </div>
-                </div>
+      <aside class="visual" aria-label="2开版协作网络示意">
+        <div class="flowfield"></div>
+        <div class="flow-panel">
+          <span class="visual-kicker">settlement flow</span>
+          <div class="flow-hero">
+            <div class="flow-top">
+              <div class="flow-title">
+                <span>{{ siteName }} clearing layer</span>
+                <strong>消费额度自动结算</strong>
               </div>
+              <span class="live-pill">实时清算</span>
+            </div>
+            <div class="flow-mid">
+              <div class="role"><b>账号提供者</b><span>接入可用账号</span></div>
+              <div class="flow-core" aria-hidden="true">
+                <span class="flow-light"></span>
+                <span class="flow-chip">调度 · 计量 · 结算</span>
+              </div>
+              <div class="role"><b>收益账户</b><span>消费额度回流</span></div>
+            </div>
+            <div class="flow-bottom">
+              <div class="metric-tile"><span>模式</span><strong>C2C</strong></div>
+              <div class="metric-tile"><span>邀请分成</span><strong>5%</strong></div>
+              <div class="metric-tile"><span>计价</span><strong>透明</strong></div>
+            </div>
+          </div>
+          <div class="split">
+            <div class="split-card">
+              <b>账号供给市场化</b>
+              <span>平台不再只依赖自有账号，个人账号能力可以进入供给网络。</span>
+            </div>
+            <div class="split-card">
+              <b>邀请关系持续分成</b>
+              <span>被邀请用户消费额度的 5% 结算给邀请人。</span>
             </div>
           </div>
         </div>
-
-        <!-- Feature Tags - Centered -->
-        <div class="mb-12 flex flex-wrap items-center justify-center gap-4 md:gap-6">
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="swap" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.subscriptionToApi')
-            }}</span>
-          </div>
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="shield" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.stickySession')
-            }}</span>
-          </div>
-          <div
-            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
-          >
-            <Icon name="chart" size="sm" class="text-primary-500" />
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.tags.realtimeBilling')
-            }}</span>
-          </div>
-        </div>
-
-        <!-- Features Grid -->
-        <div class="mb-12 grid gap-6 md:grid-cols-3">
-          <!-- Feature 1: Unified Gateway -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg shadow-blue-500/30 transition-transform group-hover:scale-110"
-            >
-              <Icon name="server" size="lg" class="text-white" />
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.unifiedGateway') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.unifiedGatewayDesc') }}
-            </p>
-          </div>
-
-          <!-- Feature 2: Account Pool -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/30 transition-transform group-hover:scale-110"
-            >
-              <svg
-                class="h-6 w-6 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"
-                />
-              </svg>
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.multiAccount') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.multiAccountDesc') }}
-            </p>
-          </div>
-
-          <!-- Feature 3: Billing & Quota -->
-          <div
-            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
-          >
-            <div
-              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 shadow-lg shadow-purple-500/30 transition-transform group-hover:scale-110"
-            >
-              <svg
-                class="h-6 w-6 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z"
-                />
-              </svg>
-            </div>
-            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('home.features.balanceQuota') }}
-            </h3>
-            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
-              {{ t('home.features.balanceQuotaDesc') }}
-            </p>
-          </div>
-        </div>
-
-        <!-- Supported Providers -->
-        <div class="mb-8 text-center">
-          <h2 class="mb-3 text-2xl font-bold text-gray-900 dark:text-white">
-            {{ t('home.providers.title') }}
-          </h2>
-          <p class="text-sm text-gray-600 dark:text-dark-400">
-            {{ t('home.providers.description') }}
-          </p>
-        </div>
-
-        <div class="mb-16 flex flex-wrap items-center justify-center gap-4">
-          <!-- Claude - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-orange-400 to-orange-500"
-            >
-              <span class="text-xs font-bold text-white">C</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.claude') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- GPT - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-green-600"
-            >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">GPT</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- Gemini - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600"
-            >
-              <span class="text-xs font-bold text-white">G</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.gemini') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- Antigravity - Supported -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-pink-600"
-            >
-              <span class="text-xs font-bold text-white">A</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.antigravity') }}</span>
-            <span
-              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
-              >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- More - Coming Soon -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-gray-200/50 bg-white/40 px-5 py-3 opacity-60 backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/40"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-500 to-gray-600"
-            >
-              <span class="text-xs font-bold text-white">+</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.more') }}</span>
-            <span
-              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-400"
-              >{{ t('home.providers.soon') }}</span
-            >
-          </div>
-        </div>
-      </div>
+      </aside>
     </main>
 
-    <!-- Footer -->
-    <footer class="relative z-10 border-t border-gray-200/50 px-6 py-8 dark:border-dark-800/50">
-      <div
-        class="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 text-center sm:flex-row sm:text-left"
-      >
-        <p class="text-sm text-gray-500 dark:text-dark-400">
-          &copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}
-        </p>
-        <div class="flex items-center gap-4">
-          <a
-            v-if="docUrl"
-            :href="docUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
-          >
-            {{ t('home.docs') }}
-          </a>
-          <a
-            :href="githubUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
-          >
-            GitHub
-          </a>
-        </div>
-      </div>
+    <footer class="home-shell home-footer">
+      <span>&copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}</span>
+      <span class="footer-links">
+        <a
+          v-if="docUrl"
+          :href="docUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {{ t('home.docs') }}
+        </a>
+        <a :href="githubUrl" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </span>
     </footer>
   </div>
 </template>
@@ -419,7 +173,6 @@ const appStore = useAppStore()
 // Site settings - directly from appStore (already initialized from injected config)
 const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API')
 const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '')
-const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway Platform')
 const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 
@@ -481,103 +234,591 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* Terminal Container */
-.terminal-container {
+.home-page {
   position: relative;
-  display: inline-block;
-}
-
-/* Terminal Window */
-.terminal-window {
-  width: 420px;
-  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
-  border-radius: 14px;
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  min-height: 100vh;
   overflow: hidden;
-  transform: perspective(1000px) rotateX(2deg) rotateY(-2deg);
-  transition: transform 0.3s ease;
+  color: #10223a;
+  background: #f8fcff;
+  font-family:
+    "Segoe UI",
+    "PingFang SC",
+    "Microsoft YaHei",
+    system-ui,
+    sans-serif;
 }
 
-.terminal-window:hover {
-  transform: perspective(1000px) rotateX(0deg) rotateY(0deg) translateY(-4px);
+.home-page::before {
+  position: absolute;
+  inset: -22%;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 18% 24%, rgba(91, 168, 255, 0.38), transparent 26%),
+    radial-gradient(circle at 82% 18%, rgba(34, 198, 243, 0.28), transparent 24%),
+    radial-gradient(circle at 55% 86%, rgba(167, 208, 255, 0.34), transparent 30%),
+    linear-gradient(125deg, #ffffff 0%, #eaf6ff 36%, #ffffff 58%, #dceeff 100%);
+  background-size: 130% 130%;
+  animation: ambient-shift 18s ease-in-out infinite alternate;
+  content: "";
+  pointer-events: none;
 }
 
-/* Terminal Header */
-.terminal-header {
+.home-page::after {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.9), transparent 34%),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.72));
+  content: "";
+  pointer-events: none;
+}
+
+.home-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+}
+
+.home-nav {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 760;
+}
+
+.brand-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(107, 155, 240, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #6b9bf0;
+  box-shadow: 0 14px 34px rgba(107, 155, 240, 0.12);
+  backdrop-filter: blur(16px);
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.brand-mark svg {
+  width: 21px;
+  height: 21px;
+}
+
+.home-nav-links {
+  display: none;
+  align-items: center;
+  gap: 28px;
+  color: #60738d;
+  font-size: 0.94rem;
+}
+
+.home-nav-links a {
+  transition: color 160ms ease;
+}
+
+.home-nav-links a:hover {
+  color: #6b9bf0;
+}
+
+.home-actions {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
-  background: rgba(30, 41, 59, 0.8);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 10px;
 }
 
-.terminal-buttons {
-  display: flex;
+.icon-action {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(107, 155, 240, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.45);
+  color: #60738d;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+  backdrop-filter: blur(14px);
+}
+
+.icon-action:hover {
+  transform: translateY(-1px);
+  color: #6b9bf0;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0 18px;
+  cursor: pointer;
+  font-size: 0.94rem;
+  font-weight: 720;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease,
+    border-color 180ms ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button.primary {
+  background: #10223a;
+  color: #fff;
+  box-shadow: 0 18px 42px rgba(16, 34, 58, 0.18);
+}
+
+.button.secondary {
+  border-color: rgba(107, 155, 240, 0.18);
+  background: rgba(255, 255, 255, 0.54);
+  color: #537fd9;
+  backdrop-filter: blur(14px);
+}
+
+.nav-cta {
   gap: 8px;
 }
 
-.terminal-buttons span {
+.user-dot {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 0.72rem;
+}
+
+.hero {
+  display: grid;
+  min-height: calc(100vh - 150px);
+  align-items: center;
+  gap: 54px;
+  padding: 18px 0 76px;
+}
+
+.copy {
+  max-width: 720px;
+}
+
+.eyebrow {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(107, 155, 240, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.54);
+  color: #537fd9;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  font-weight: 750;
+  box-shadow: 0 12px 34px rgba(107, 155, 240, 0.08);
+  backdrop-filter: blur(16px);
+  animation: rise 620ms ease both;
+}
+
+.eyebrow::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b9bf0;
+  content: "";
+  box-shadow: 0 0 0 7px rgba(107, 155, 240, 0.1);
+}
+
+h1 {
+  max-width: 780px;
+  margin: 24px 0 0;
+  font-size: 2.82rem;
+  font-weight: 760;
+  line-height: 1.12;
+  letter-spacing: 0;
+  animation: rise 700ms 80ms ease both;
+}
+
+.title-flow {
+  display: inline-block;
+  background: linear-gradient(92deg, #537fd9 0%, #63b4e1 46%, #10223a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 820;
+}
+
+.lead {
+  max-width: 650px;
+  margin: 22px 0 0;
+  color: #60738d;
+  font-size: 1.09rem;
+  line-height: 1.78;
+  animation: rise 760ms 150ms ease both;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+  animation: rise 820ms 220ms ease both;
+}
+
+.essentials {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 34px;
+  animation: rise 880ms 280ms ease both;
+}
+
+.essentials span {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  border: 1px solid rgba(107, 155, 240, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.48);
+  color: #29415d;
+  padding: 0 14px;
+  font-size: 0.91rem;
+  font-weight: 680;
+  backdrop-filter: blur(14px);
+}
+
+.visual {
+  position: relative;
+  min-height: 560px;
+  animation: rise 780ms 160ms ease both;
+}
+
+.flowfield {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border: 1px solid rgba(107, 155, 240, 0.06);
+  border-radius: 46px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.5), rgba(245, 251, 255, 0.2)),
+    rgba(255, 255, 255, 0.2);
+  box-shadow: 0 26px 76px rgba(38, 86, 143, 0.08);
+  backdrop-filter: blur(20px);
+}
+
+.flowfield::before {
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(circle at 30% 24%, rgba(107, 155, 240, 0.1), transparent 26%),
+    radial-gradient(circle at 72% 66%, rgba(99, 180, 225, 0.12), transparent 28%);
+  animation: field-breathe 9s ease-in-out infinite;
+  content: "";
+}
+
+.flow-panel {
+  position: absolute;
+  z-index: 1;
+  inset: 30px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 16px;
+}
+
+.visual-kicker {
+  color: #8da0b7;
+  font-size: 0.84rem;
+  font-weight: 760;
+}
+
+.flow-hero {
+  position: relative;
+  display: grid;
+  min-height: 364px;
+  align-content: space-between;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 26px;
+}
+
+.flow-hero::before {
+  position: absolute;
+  inset: -30%;
+  background:
+    radial-gradient(circle at 20% 18%, rgba(107, 155, 240, 0.11), transparent 26%),
+    radial-gradient(circle at 86% 78%, rgba(99, 180, 225, 0.13), transparent 28%);
+  animation: field-breathe 9s ease-in-out infinite;
+  content: "";
+}
+
+.flow-top,
+.flow-bottom,
+.flow-mid {
+  position: relative;
+  z-index: 1;
+}
+
+.flow-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.flow-title span {
+  display: block;
+  color: #8da0b7;
+  font-size: 0.8rem;
+  font-weight: 720;
+}
+
+.flow-title strong {
+  display: block;
+  margin-top: 5px;
+  color: #537fd9;
+  font-size: 1.72rem;
+  line-height: 1.08;
+}
+
+.live-pill {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(107, 155, 240, 0.08);
+  color: #537fd9;
+  padding: 0 13px;
+  font-size: 0.82rem;
+  font-weight: 780;
+}
+
+.flow-mid {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: 26px 0 20px;
+}
+
+.role {
+  position: relative;
+  padding: 8px 4px;
+}
+
+.role::before {
+  display: block;
+  width: 32px;
+  height: 3px;
+  border-radius: 999px;
+  margin-bottom: 14px;
+  background: linear-gradient(90deg, #6b9bf0, rgba(99, 180, 225, 0.3));
+  content: "";
+}
+
+.role b {
+  display: block;
+  font-size: 1.06rem;
+}
+
+.role span {
+  display: block;
+  margin-top: 5px;
+  color: #60738d;
+  font-size: 0.8rem;
+}
+
+.flow-core {
+  position: relative;
+  display: grid;
+  height: 128px;
+  place-items: center;
+}
+
+.flow-core::before,
+.flow-core::after {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  height: 58px;
+  overflow: hidden;
+  border: 1px solid rgba(107, 155, 240, 0.16);
+  border-top-color: rgba(107, 155, 240, 0.3);
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 0%, rgba(107, 155, 240, 0.08), transparent 58%);
+  filter: drop-shadow(0 0 12px rgba(107, 155, 240, 0.14));
+  content: "";
+}
+
+.flow-core::before {
+  top: 18px;
+  transform: rotate(8deg);
+}
+
+.flow-core::after {
+  bottom: 18px;
+  opacity: 0.66;
+  transform: rotate(188deg);
+}
+
+.flow-light {
+  position: absolute;
+  z-index: 1;
   width: 12px;
   height: 12px;
-  border-radius: 50%;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow:
+    0 0 0 6px rgba(107, 155, 240, 0.1),
+    0 0 24px rgba(107, 155, 240, 0.3);
+  animation: light-orbit 4.8s ease-in-out infinite;
 }
 
-.btn-close {
-  background: #ef4444;
-}
-.btn-minimize {
-  background: #eab308;
-}
-.btn-maximize {
-  background: #22c55e;
-}
-
-.terminal-title {
-  flex: 1;
-  text-align: center;
-  font-size: 12px;
-  font-family: ui-monospace, monospace;
-  color: #64748b;
-  margin-right: 52px;
-}
-
-/* Terminal Body */
-.terminal-body {
-  padding: 20px 24px;
-  font-family: ui-monospace, 'Fira Code', monospace;
-  font-size: 14px;
-  line-height: 2;
-}
-
-.code-line {
-  display: flex;
+.flow-chip {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  min-height: 44px;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  opacity: 0;
-  animation: line-appear 0.5s ease forwards;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.6);
+  color: #537fd9;
+  padding: 0 16px;
+  font-size: 0.9rem;
+  font-weight: 800;
+  box-shadow: 0 12px 32px rgba(107, 155, 240, 0.08);
+  backdrop-filter: blur(14px);
 }
 
-.line-1 {
-  animation-delay: 0.3s;
-}
-.line-2 {
-  animation-delay: 1s;
-}
-.line-3 {
-  animation-delay: 1.8s;
-}
-.line-4 {
-  animation-delay: 2.5s;
+.flow-bottom {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
 
-@keyframes line-appear {
+.metric-tile {
+  position: relative;
+  padding: 12px 0 0;
+}
+
+.metric-tile::before {
+  display: block;
+  width: 100%;
+  height: 1px;
+  margin-bottom: 12px;
+  background: linear-gradient(90deg, rgba(107, 155, 240, 0.22), transparent);
+  content: "";
+}
+
+.metric-tile span {
+  display: block;
+  color: #8da0b7;
+  font-size: 0.75rem;
+}
+
+.metric-tile strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 1.14rem;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 12px;
+}
+
+.split-card {
+  border-radius: 0;
+  background: transparent;
+  padding: 4px 0 0;
+}
+
+.split-card::before {
+  display: block;
+  width: 34px;
+  height: 3px;
+  border-radius: 999px;
+  margin-bottom: 12px;
+  background: rgba(107, 155, 240, 0.24);
+  content: "";
+}
+
+.split-card b {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 0.98rem;
+}
+
+.split-card span {
+  color: #60738d;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.home-footer {
+  display: flex;
+  padding: 22px 0;
+  color: #8da0b7;
+  font-size: 0.88rem;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.footer-links {
+  display: flex;
+  gap: 14px;
+}
+
+.footer-links a {
+  transition: color 160ms ease;
+}
+
+.footer-links a:hover {
+  color: #537fd9;
+}
+
+@keyframes ambient-shift {
+  0% {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(2%, 1%, 0) scale(1.04);
+  }
+}
+
+@keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(16px);
   }
   to {
     opacity: 1;
@@ -585,60 +826,153 @@ onMounted(() => {
   }
 }
 
-.code-prompt {
-  color: #22c55e;
-  font-weight: bold;
-}
-.code-cmd {
-  color: #38bdf8;
-}
-.code-flag {
-  color: #a78bfa;
-}
-.code-url {
-  color: #14b8a6;
-}
-.code-comment {
-  color: #64748b;
-  font-style: italic;
-}
-.code-success {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.15);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 600;
-}
-.code-response {
-  color: #fbbf24;
-}
-
-/* Blinking Cursor */
-.cursor {
-  display: inline-block;
-  width: 8px;
-  height: 16px;
-  background: #22c55e;
-  animation: blink 1s step-end infinite;
-}
-
-@keyframes blink {
+@keyframes field-breathe {
   0%,
+  100% {
+    transform: translate3d(-1%, -1%, 0) scale(1);
+  }
   50% {
+    transform: translate3d(1%, 1%, 0) scale(1.08);
+  }
+}
+
+@keyframes light-orbit {
+  0% {
+    transform: translate(-92px, 18px);
+    opacity: 0;
+  }
+  18% {
     opacity: 1;
   }
-  51%,
+  50% {
+    transform: translate(0, -26px);
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
   100% {
+    transform: translate(92px, 18px);
     opacity: 0;
   }
 }
 
-/* Dark mode adjustments */
-:deep(.dark) .terminal-window {
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(20, 184, 166, 0.2),
-    0 0 40px rgba(20, 184, 166, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+@media (min-width: 768px) {
+  .home-shell {
+    width: min(1180px, calc(100% - 48px));
+  }
+
+  .home-nav-links {
+    display: flex;
+  }
+
+  .hero {
+    grid-template-columns: 0.96fr 1.04fr;
+  }
+
+  h1 {
+    font-size: 4.5rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .hero {
+    min-height: auto;
+  }
+
+  .visual {
+    min-height: 520px;
+  }
+
+  .flow-panel {
+    inset: 20px;
+  }
+
+  .flow-mid,
+  .flow-bottom,
+  .split {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-core {
+    height: 76px;
+  }
+
+  .flow-core::before,
+  .flow-core::after {
+    left: 22%;
+    right: 22%;
+    transform: rotate(90deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .home-actions :deep(.locale-switcher) {
+    display: none;
+  }
+}
+
+@media (max-width: 430px) {
+  .home-nav {
+    min-height: 70px;
+  }
+
+  .nav-cta {
+    display: none;
+  }
+
+  h1 {
+    font-size: 2.62rem;
+  }
+
+  .lead {
+    font-size: 1rem;
+  }
+
+  .hero-actions .button {
+    width: 100%;
+  }
+
+  .flow-panel {
+    inset: 16px;
+  }
+
+  .visual {
+    min-height: 620px;
+  }
+
+  .flow-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .flow-title strong {
+    font-size: 1.36rem;
+  }
+
+  .role,
+  .flow-hero,
+  .split-card {
+    border-radius: 18px;
+  }
+
+  .flow-bottom {
+    grid-template-columns: 1fr;
+  }
+
+  .home-footer {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 </style>

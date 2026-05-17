@@ -101,6 +101,19 @@ RETURNING id, user_id, payment_method, storage_provider, storage_key, url, conte
 	return code, rows.Err()
 }
 
+func (r *receiptCodeRepository) ReceiptCodeInUse(ctx context.Context, storageKey string) (bool, error) {
+	storageKey = strings.TrimSpace(storageKey)
+	if storageKey == "" {
+		return false, nil
+	}
+	var exists bool
+	err := scanSingleRow(ctx, r.sql, `
+SELECT EXISTS (
+	SELECT 1 FROM user_withdrawal_requests WHERE receipt_code_storage_key = $1
+)`, []any{storageKey}, &exists)
+	return exists, err
+}
+
 type receiptCodeScanner interface {
 	Scan(dest ...any) error
 }
@@ -128,4 +141,3 @@ func scanReceiptCodeRows(row receiptCodeScanner) (*service.ReceiptCode, error) {
 	code.UpdatedAt = updatedAt
 	return &code, nil
 }
-

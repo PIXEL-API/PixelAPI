@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock } = vi.hoisted(() => ({
+const { updateAccountMock, updateUserAccountMock, checkMixedChannelRiskMock } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
+  updateUserAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn()
 }))
 
@@ -39,6 +40,12 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
+}))
+
+vi.mock('@/api/accounts', () => ({
+  accountsAPI: {
+    update: updateUserAccountMock
+  }
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -134,6 +141,7 @@ function buildAccount() {
     concurrency: 1,
     priority: 1,
     rate_multiplier: 1,
+    account_level: 'plus',
     status: 'active',
     group_ids: [],
     expires_at: null,
@@ -188,7 +196,27 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
       'gpt-5.2': 'gpt-5.2'
     })
-    expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('account_level')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.account_level).toBe('plus')
+  })
+
+  it('keeps account level read-only for user-scoped account edits', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {
+      access_token: 'oauth-token'
+    }
+    updateAccountMock.mockReset()
+    updateUserAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateUserAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ accountScope: 'user' })
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateUserAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('account_level')
   })
 
   it('submits OpenAI compact mode and compact-only model mapping', async () => {

@@ -535,13 +535,15 @@ func TestIsNonRetryableRefreshError(t *testing.T) {
 		{name: "unauthorized_client", err: errors.New("unauthorized_client"), expected: true},
 		{name: "access_denied", err: errors.New("access_denied"), expected: true},
 		{name: "no_refresh_token", err: errors.New("no refresh token available"), expected: true},
+		{name: "try_signing_in_again", err: errors.New("Please try signing in again"), expected: true},
+		{name: "try_signing_in_again_with_context", err: errors.New("token endpoint returned 401: Please try signing in again"), expected: true},
 		{name: "invalid_grant_with_desc", err: errors.New("Error: invalid_grant - token revoked"), expected: true},
 		{name: "case_insensitive", err: errors.New("INVALID_GRANT"), expected: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isNonRetryableRefreshError(tt.err)
+			result := IsNonRetryableRefreshError(tt.err)
 			require.Equal(t, tt.expected, result)
 		})
 	}

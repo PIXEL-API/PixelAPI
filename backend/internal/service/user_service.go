@@ -32,6 +32,7 @@ var (
 	ErrUserNotFound             = infraerrors.NotFound("USER_NOT_FOUND", "user not found")
 	ErrPasswordIncorrect        = infraerrors.BadRequest("PASSWORD_INCORRECT", "current password is incorrect")
 	ErrInsufficientPerms        = infraerrors.Forbidden("INSUFFICIENT_PERMISSIONS", "insufficient permissions")
+	ErrUserConcurrencyRange     = infraerrors.BadRequest("USER_CONCURRENCY_INVALID", fmt.Sprintf("user concurrency must be between %d and %d", UserMinConcurrency, UserMaxConcurrency))
 	ErrNotifyCodeUserRateLimit  = infraerrors.TooManyRequests("NOTIFY_CODE_USER_RATE_LIMIT", "too many verification codes requested, please try again later")
 	ErrAvatarInvalid            = infraerrors.BadRequest("AVATAR_INVALID", "avatar must be a valid image data URL or http(s) URL")
 	ErrAvatarTooLarge           = infraerrors.BadRequest("AVATAR_TOO_LARGE", "avatar image must be 100KB or smaller")
@@ -43,6 +44,20 @@ var (
 		"bind another sign-in method before unbinding this provider",
 	)
 )
+
+func validatePersonalUserConcurrency(concurrency int) error {
+	if concurrency < UserMinConcurrency || concurrency > UserMaxConcurrency {
+		return ErrUserConcurrencyRange
+	}
+	return nil
+}
+
+func defaultPersonalUserConcurrency(concurrency int) int {
+	if concurrency <= 0 {
+		return UserMaxConcurrency
+	}
+	return concurrency
+}
 
 const (
 	maxNotifyEmails      = 3 // Maximum number of notification emails per user
@@ -1069,6 +1084,16 @@ func (s *UserService) UpdateBalance(ctx context.Context, userID int64, amount fl
 
 // UpdateConcurrency 更新用户并发数（管理员功能）
 func (s *UserService) UpdateConcurrency(ctx context.Context, userID int64, concurrency int) error {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	if user.Role == RoleUser {
+		nextConcurrency := user.Concurrency + concurrency
+		if err := validatePersonalUserConcurrency(nextConcurrency); err != nil {
+			return err
+		}
+	}
 	if err := s.userRepo.UpdateConcurrency(ctx, userID, concurrency); err != nil {
 		return fmt.Errorf("update concurrency: %w", err)
 	}

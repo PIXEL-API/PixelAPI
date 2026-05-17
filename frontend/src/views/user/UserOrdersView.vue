@@ -17,12 +17,16 @@
       <!-- Table -->
       <OrderTable :orders="orders" :loading="loading">
         <template #actions="{ row }">
-          <div class="flex items-center gap-2">
-            <button v-if="row.status === 'PENDING'" @click="handleCancel(row.id)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
+          <div class="flex flex-wrap items-center gap-2">
+            <button v-if="canViewStoreCards(row)" @click="openStoreOrderDialog(row)" class="inline-flex min-h-[2.25rem] items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
+              <Icon name="key" size="sm" />
+              <span>{{ t('payment.orders.viewCards') }}</span>
+            </button>
+            <button v-if="row.status === 'PENDING'" @click="handleCancel(row.id)" class="inline-flex min-h-[2.25rem] items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
               <Icon name="x" size="sm" />
               <span>{{ t('payment.orders.cancel') }}</span>
             </button>
-            <button v-if="canRequestRefund(row)" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
+            <button v-if="canRequestRefund(row)" @click="openRefundDialog(row)" class="inline-flex min-h-[2.25rem] items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
               <Icon name="dollar" size="sm" />
               <span>{{ t('payment.orders.requestRefund') }}</span>
             </button>
@@ -48,6 +52,74 @@
         <div class="flex justify-end gap-3">
           <button class="btn btn-secondary" @click="cancelTargetId = null">{{ t('common.cancel') }}</button>
           <button class="btn btn-danger" :disabled="actionLoading" @click="confirmCancel">{{ actionLoading ? t('common.processing') : t('payment.orders.cancel') }}</button>
+        </div>
+      </template>
+    </BaseDialog>
+
+    <!-- Store Delivery Dialog -->
+    <BaseDialog :show="!!storeOrderTarget" :title="t('payment.orders.storeDelivery')" width="wide" @close="closeStoreOrderDialog">
+      <div class="space-y-4">
+        <div v-if="storeOrderLoading" class="flex items-center justify-center py-8 text-sm text-gray-500 dark:text-gray-400">
+          <Icon name="refresh" size="md" class="mr-2 animate-spin" />
+          <span>{{ t('payment.orders.loadingCards') }}</span>
+        </div>
+        <template v-else-if="storeOrderDetail">
+          <div class="rounded-lg bg-gray-50 p-4 text-sm dark:bg-dark-800">
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</div>
+                <div class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ storeOrderDetail.order_no }}</div>
+              </div>
+              <div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.status') }}</div>
+                <div class="mt-1 text-gray-900 dark:text-white">{{ storeOrderDetail.status }}</div>
+              </div>
+              <div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('store.product') }}</div>
+                <div class="mt-1 text-gray-900 dark:text-white">{{ storeOrderDetail.product_name }}</div>
+              </div>
+              <div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('store.quantity') }}</div>
+                <div class="mt-1 text-gray-900 dark:text-white">{{ storeOrderDetail.quantity }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="storeOrderDetail.delivered_cards.length > 0">
+            <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
+              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</label>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm min-h-[2.25rem]"
+                @click="copyStoreCards"
+              >
+                <Icon name="copy" size="sm" />
+                <span>{{ t('common.copy') }}</span>
+              </button>
+            </div>
+            <div class="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
+              <code
+                v-for="(card, index) in storeOrderDetail.delivered_cards"
+                :key="index"
+                class="block break-all rounded-md bg-white px-3 py-2 font-mono text-xs text-gray-900 dark:bg-dark-900 dark:text-dark-100"
+              >
+                {{ card }}
+              </code>
+            </div>
+          </div>
+          <DeliveredFilesList
+            v-if="storeOrderDetail.delivered_files.length > 0"
+            :order-id="storeOrderDetail.id"
+            :files="storeOrderDetail.delivered_files"
+          />
+          <p v-if="storeOrderDetail.delivered_cards.length === 0 && storeOrderDetail.delivered_files.length === 0" class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-800 dark:text-dark-400">
+            {{ t('store.deliveryPending') }}
+          </p>
+        </template>
+      </div>
+      <template #footer>
+        <div class="flex justify-end">
+          <button class="btn btn-primary min-h-[2.75rem]" @click="closeStoreOrderDialog">{{ t('common.confirm') }}</button>
         </div>
       </template>
     </BaseDialog>
@@ -86,18 +158,23 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
+import { storeAPI } from '@/api/store'
+import { useClipboard } from '@/composables/useClipboard'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import type { PaymentOrder } from '@/types/payment'
+import type { StoreOrder } from '@/types/store'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
+import DeliveredFilesList from '@/components/store/DeliveredFilesList.vue'
 
 const { t } = useI18n()
 const router = useRouter()
 const appStore = useAppStore()
+const { copyToClipboard } = useClipboard()
 
 const loading = ref(false)
 const actionLoading = ref(false)
@@ -107,6 +184,9 @@ const currentFilter = ref('')
 const cancelTargetId = ref<number | null>(null)
 const refundTarget = ref<PaymentOrder | null>(null)
 const refundReason = ref('')
+const storeOrderTarget = ref<PaymentOrder | null>(null)
+const storeOrderDetail = ref<StoreOrder | null>(null)
+const storeOrderLoading = ref(false)
 const pagination = reactive({ page: 1, page_size: 20, total: 0 })
 
 const statusFilters = computed(() => [
@@ -138,6 +218,38 @@ function handlePageChange(page: number) { pagination.page = page; fetchOrders() 
 function handlePageSizeChange(size: number) { pagination.page_size = size; pagination.page = 1; fetchOrders() }
 
 function handleCancel(orderId: number) { cancelTargetId.value = orderId }
+
+function canViewStoreCards(order: PaymentOrder): order is PaymentOrder & { shop_order_id: number } {
+  return order.order_type === 'shop' && typeof order.shop_order_id === 'number' && order.shop_order_id > 0
+}
+
+async function openStoreOrderDialog(order: PaymentOrder): Promise<void> {
+  if (!canViewStoreCards(order)) return
+  storeOrderTarget.value = order
+  storeOrderDetail.value = null
+  storeOrderLoading.value = true
+  try {
+    const res = await storeAPI.getOrder(order.shop_order_id)
+    storeOrderDetail.value = res.data
+  } catch (err: unknown) {
+    storeOrderTarget.value = null
+    appStore.showError(extractI18nErrorMessage(err, t, 'store.errors', t('common.error')))
+  } finally {
+    storeOrderLoading.value = false
+  }
+}
+
+function closeStoreOrderDialog() {
+  storeOrderTarget.value = null
+  storeOrderDetail.value = null
+  storeOrderLoading.value = false
+}
+
+async function copyStoreCards(): Promise<void> {
+  const cards = storeOrderDetail.value?.delivered_cards || []
+  if (cards.length === 0) return
+  await copyToClipboard(cards.join('\n'), t('store.cardsCopied'))
+}
 
 async function confirmCancel() {
   if (!cancelTargetId.value) return

@@ -44,6 +44,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	normalizedModel := anthropicReq.Model
 	clientStream := anthropicReq.Stream // client's original stream preference
 
+	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
+	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	compatGuardEnabled := shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
+	compatReplayTrimmed := false
+	if compatGuardEnabled && account.Type != AccountTypeOAuth {
+		compatReplayTrimmed = applyAnthropicCompatFullReplayGuard(&anthropicReq)
+	}
+
 	// 2. Convert Anthropic → Responses
 	responsesReq, err := apicompat.AnthropicToResponses(&anthropicReq)
 	if err != nil {
@@ -61,18 +69,26 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	// 3. Model mapping
-	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
-	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	responsesReq.Model = upstreamModel
+	if compatGuardEnabled && account.Type != AccountTypeOAuth {
+		appendOpenAICompatClaudeCodeTodoGuard(responsesReq)
+	}
 
-	logger.L().Debug("openai messages: model mapping applied",
+	logFields := []zap.Field{
 		zap.Int64("account_id", account.ID),
 		zap.String("original_model", originalModel),
 		zap.String("normalized_model", normalizedModel),
 		zap.String("billing_model", billingModel),
 		zap.String("upstream_model", upstreamModel),
 		zap.Bool("stream", isStream),
-	)
+	}
+	if compatReplayTrimmed {
+		logFields = append(logFields,
+			zap.Bool("compat_full_replay_trimmed", true),
+			zap.Int("compat_messages_after_trim", len(anthropicReq.Messages)),
+		)
+	}
+	logger.L().Debug("openai messages: model mapping applied", logFields...)
 
 	// 4. Marshal Responses request body, then apply OAuth codex transform
 	responsesBody, err := json.Marshal(responsesReq)
@@ -103,6 +119,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			UpstreamModel:        templateUpstreamModel,
 		}); err != nil {
 			return nil, err
+		}
+		if compatGuardEnabled {
+			appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody)
 		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel

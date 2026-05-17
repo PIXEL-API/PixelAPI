@@ -187,7 +187,11 @@ func TestAPIContracts(t *testing.T) {
 			}`,
 		},
 		{
-			name:   "POST /api/v1/keys",
+			name: "POST /api/v1/keys",
+			setup: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				require.NoError(t, deps.settingRepo.Set(context.Background(), service.SettingKeyAllowUngroupedKeyScheduling, "true"))
+			},
 			method: http.MethodPost,
 			path:   "/api/v1/keys",
 			body:   `{"name":"Key One","custom_key":"sk_custom_1234567890"}`,
@@ -293,6 +297,7 @@ func TestAPIContracts(t *testing.T) {
 						Platform:            service.PlatformAnthropic,
 						RateMultiplier:      1.5,
 						IsExclusive:         false,
+						Scope:               service.GroupScopePublic,
 						Status:              service.StatusActive,
 						SubscriptionType:    service.SubscriptionTypeStandard,
 						ModelRoutingEnabled: true,
@@ -318,8 +323,10 @@ func TestAPIContracts(t *testing.T) {
 						"name": "Group One",
 						"description": "desc",
 						"platform": "anthropic",
+						"required_account_level": "",
 						"rate_multiplier": 1.5,
 						"is_exclusive": false,
+						"scope": "public",
 						"status": "active",
 						"subscription_type": "standard",
 						"daily_limit_usd": null,
@@ -682,6 +689,7 @@ func TestAPIContracts(t *testing.T) {
 						"oidc_connect_userinfo_email_path": "",
 						"oidc_connect_userinfo_id_path": "",
 						"oidc_connect_userinfo_username_path": "",
+						"master_data_plane_enabled": true,
 						"ops_monitoring_enabled": false,
 						"ops_realtime_monitoring_enabled": true,
 						"ops_query_mode_default": "auto",
@@ -713,6 +721,12 @@ func TestAPIContracts(t *testing.T) {
 					"auth_source_default_wechat_grant_on_signup": false,
 					"auth_source_default_wechat_grant_on_first_bind": false,
 					"force_email_on_third_party_signup": false,
+					"user_private_group_daily_limit_usd": null,
+					"user_private_group_weekly_limit_usd": null,
+					"user_private_group_monthly_limit_usd": null,
+					"user_private_group_rate_multiplier": 1,
+					"user_private_group_rpm_limit": 0,
+					"user_private_group_commission_rate": 0.005,
 					"default_concurrency": 5,
 					"default_balance": 1.25,
 					"affiliate_rebate_rate": 20,
@@ -749,6 +763,8 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_alipay_enabled": true,
 					"payment_visible_method_wxpay_enabled": false,
 					"openai_advanced_scheduler_enabled": true,
+					"openai_free_account_repair_enabled": false,
+					"openai_free_account_repair_weekly_threshold_usd": 60,
 					"openai_fast_policy_settings": {
 						"rules": [
 							{
@@ -773,6 +789,17 @@ func TestAPIContracts(t *testing.T) {
 					"payment_load_balance_strategy": "",
 					"payment_product_name_prefix": "",
 					"payment_product_name_suffix": "",
+					"payment_receipt_code_oss_enabled": false,
+					"payment_receipt_code_oss_endpoint": "",
+					"payment_receipt_code_oss_region": "",
+					"payment_receipt_code_oss_bucket": "",
+					"payment_receipt_code_oss_access_key_id": "",
+					"payment_receipt_code_oss_secret_access_key_configured": false,
+					"payment_receipt_code_oss_prefix": "",
+					"payment_receipt_code_oss_public_base_url": "",
+					"payment_receipt_code_oss_force_path_style": false,
+					"payment_receipt_code_oss_max_size_bytes": 0,
+					"payment_receipt_code_oss_presign_expire_seconds": 0,
 					"payment_help_image_url": "",
 					"payment_help_text": "",
 					"payment_enabled_types": null,
@@ -895,6 +922,7 @@ func TestAPIContracts(t *testing.T) {
 					"oidc_connect_userinfo_email_path": "",
 					"oidc_connect_userinfo_id_path": "",
 					"oidc_connect_userinfo_username_path": "",
+					"master_data_plane_enabled": true,
 					"site_name": "Sub2API",
 					"site_logo": "",
 					"site_subtitle": "Subscription to API Conversion Platform",
@@ -942,6 +970,8 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_alipay_enabled": false,
 					"payment_visible_method_wxpay_enabled": false,
 					"openai_advanced_scheduler_enabled": false,
+					"openai_free_account_repair_enabled": false,
+					"openai_free_account_repair_weekly_threshold_usd": 60,
 					"openai_fast_policy_settings": {
 						"rules": [
 							{
@@ -965,6 +995,17 @@ func TestAPIContracts(t *testing.T) {
 					"payment_load_balance_strategy": "",
 					"payment_product_name_prefix": "",
 					"payment_product_name_suffix": "",
+					"payment_receipt_code_oss_enabled": false,
+					"payment_receipt_code_oss_endpoint": "",
+					"payment_receipt_code_oss_region": "",
+					"payment_receipt_code_oss_bucket": "",
+					"payment_receipt_code_oss_access_key_id": "",
+					"payment_receipt_code_oss_secret_access_key_configured": false,
+					"payment_receipt_code_oss_prefix": "",
+					"payment_receipt_code_oss_public_base_url": "",
+					"payment_receipt_code_oss_force_path_style": false,
+					"payment_receipt_code_oss_max_size_bytes": 0,
+					"payment_receipt_code_oss_presign_expire_seconds": 0,
 					"payment_help_image_url": "",
 					"payment_help_text": "",
 					"payment_cancel_rate_limit_enabled": false,
@@ -1017,7 +1058,13 @@ func TestAPIContracts(t *testing.T) {
 					"auth_source_default_wechat_subscriptions": [],
 					"auth_source_default_wechat_grant_on_signup": false,
 					"auth_source_default_wechat_grant_on_first_bind": false,
-					"force_email_on_third_party_signup": false
+					"force_email_on_third_party_signup": false,
+					"user_private_group_daily_limit_usd": null,
+					"user_private_group_weekly_limit_usd": null,
+					"user_private_group_monthly_limit_usd": null,
+					"user_private_group_rate_multiplier": 1,
+					"user_private_group_rpm_limit": 0,
+					"user_private_group_commission_rate": 0.005
 				}
 			}`,
 		},
@@ -1055,7 +1102,7 @@ func TestAPIContracts(t *testing.T) {
 			}
 
 			status, body := doRequest(t, deps.router, tt.method, tt.path, tt.body, tt.headers)
-			require.Equal(t, tt.wantStatus, status)
+			require.Equal(t, tt.wantStatus, status, body)
 			require.JSONEq(t, tt.wantJSON, body)
 		})
 	}
@@ -1125,6 +1172,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
+	apiKeyService.SetSettingService(settingService)
 
 	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil)
@@ -1434,6 +1482,10 @@ func (r *stubGroupRepo) ListActiveByPlatform(ctx context.Context, platform strin
 		}
 	}
 	return out, nil
+}
+
+func (r *stubGroupRepo) ListActiveVisibleToUser(ctx context.Context, userID int64, subscribedGroupIDs []int64) ([]service.Group, error) {
+	return append([]service.Group(nil), r.active...), nil
 }
 
 func (stubGroupRepo) ExistsByName(ctx context.Context, name string) (bool, error) {
@@ -2267,6 +2319,10 @@ func (r *stubUsageLogRepo) GetUserUsageTrendByUserID(ctx context.Context, userID
 }
 
 func (r *stubUsageLogRepo) GetUserModelStats(ctx context.Context, userID int64, startTime, endTime time.Time) ([]usagestats.ModelStat, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (r *stubUsageLogRepo) GetUserAccountSharingDashboard(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (*usagestats.AccountSharingDashboardStats, error) {
 	return nil, errors.New("not implemented")
 }
 

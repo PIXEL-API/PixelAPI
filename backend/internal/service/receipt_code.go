@@ -79,6 +79,7 @@ type ReceiptCodeRepository interface {
 	GetReceiptCode(ctx context.Context, userID int64, paymentMethod string) (*ReceiptCode, error)
 	UpsertReceiptCode(ctx context.Context, input ReceiptCodeUpsertInput) (*ReceiptCode, error)
 	DeleteReceiptCode(ctx context.Context, userID int64, paymentMethod string) (*ReceiptCode, error)
+	ReceiptCodeInUse(ctx context.Context, storageKey string) (bool, error)
 }
 
 type ReceiptCodeObjectStore interface {
@@ -90,20 +91,20 @@ type ReceiptCodeObjectStore interface {
 
 type ReceiptCodeObjectStoreFactory func(ctx context.Context, cfg config.ReceiptCodeStorageConfig) (ReceiptCodeObjectStore, error)
 
+type ReceiptCodeStorageConfigProvider interface {
+	GetReceiptCodeStorageConfig(ctx context.Context) (config.ReceiptCodeStorageConfig, error)
+}
+
 type ReceiptCodeService struct {
 	repo         ReceiptCodeRepository
-	cfg          config.ReceiptCodeStorageConfig
+	cfgProvider  ReceiptCodeStorageConfigProvider
 	storeFactory ReceiptCodeObjectStoreFactory
 }
 
-func NewReceiptCodeService(repo ReceiptCodeRepository, cfg *config.Config, storeFactory ReceiptCodeObjectStoreFactory) *ReceiptCodeService {
-	var storageCfg config.ReceiptCodeStorageConfig
-	if cfg != nil {
-		storageCfg = cfg.ReceiptCodeStorage
-	}
+func NewReceiptCodeService(repo ReceiptCodeRepository, cfgProvider ReceiptCodeStorageConfigProvider, storeFactory ReceiptCodeObjectStoreFactory) *ReceiptCodeService {
 	return &ReceiptCodeService{
 		repo:         repo,
-		cfg:          storageCfg,
+		cfgProvider:  cfgProvider,
 		storeFactory: storeFactory,
 	}
 }
@@ -136,11 +137,12 @@ func (s *ReceiptCodeService) Upload(ctx context.Context, input ReceiptCodeUpload
 		return nil, ErrReceiptCodeFileRequired
 	}
 
-	if err := s.ensureConfigured(); err != nil {
+	cfg, err := s.storageConfig(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	maxSize := s.maxSizeBytes()
+	maxSize := maxReceiptCodeSizeBytes(cfg)
 	if input.Size > maxSize {
 		return nil, ErrReceiptCodeFileTooLarge.WithMetadata(map[string]string{
 			"max_size_bytes": fmt.Sprintf("%d", maxSize),
@@ -158,9 +160,9 @@ func (s *ReceiptCodeService) Upload(ctx context.Context, input ReceiptCodeUpload
 
 	sum := sha256.Sum256(data)
 	sha := hex.EncodeToString(sum[:])
-	key := buildReceiptCodeObjectKey(s.cfg.Prefix, input.UserID, method, ext)
+	key := buildReceiptCodeObjectKey(cfg.Prefix, input.UserID, method, ext)
 
-	store, err := s.store(ctx)
+	store, err := s.store(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +192,13 @@ func (s *ReceiptCodeService) Upload(ctx context.Context, input ReceiptCodeUpload
 	}
 
 	if old != nil && old.StorageKey != "" && old.StorageKey != key {
-		_ = store.Delete(ctx, old.StorageKey)
+		inUse, inUseErr := s.repo.ReceiptCodeInUse(ctx, old.StorageKey)
+		if inUseErr != nil {
+			return nil, fmt.Errorf("check old receipt code usage: %w", inUseErr)
+		}
+		if !inUse {
+			_ = store.Delete(ctx, old.StorageKey)
+		}
 	}
 	if err := s.attachAccessURL(ctx, code); err != nil {
 		return nil, err
@@ -211,32 +219,59 @@ func (s *ReceiptCodeService) Delete(ctx context.Context, userID int64, paymentMe
 	if deleted == nil || deleted.StorageKey == "" {
 		return nil
 	}
-	if err := s.ensureConfigured(); err != nil {
+	inUse, err := s.repo.ReceiptCodeInUse(ctx, deleted.StorageKey)
+	if err != nil {
+		return fmt.Errorf("check deleted receipt code usage: %w", err)
+	}
+	if inUse {
+		return nil
+	}
+	cfg, err := s.storageConfig(ctx)
+	if err != nil {
 		return err
 	}
-	store, err := s.store(ctx)
+	store, err := s.store(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	return store.Delete(ctx, deleted.StorageKey)
 }
 
-func (s *ReceiptCodeService) ensureConfigured() error {
-	if s == nil || s.storeFactory == nil || !s.cfg.Enabled ||
-		strings.TrimSpace(s.cfg.Endpoint) == "" ||
-		strings.TrimSpace(s.cfg.Bucket) == "" ||
-		strings.TrimSpace(s.cfg.AccessKeyID) == "" ||
-		strings.TrimSpace(s.cfg.SecretAccessKey) == "" {
-		return ErrReceiptCodeStorageNotConfigured
+func (s *ReceiptCodeService) storageConfig(ctx context.Context) (config.ReceiptCodeStorageConfig, error) {
+	if s == nil || s.cfgProvider == nil {
+		return config.ReceiptCodeStorageConfig{}, ErrReceiptCodeStorageNotConfigured
 	}
-	return nil
+	cfg, err := s.cfgProvider.GetReceiptCodeStorageConfig(ctx)
+	if err != nil {
+		return config.ReceiptCodeStorageConfig{}, fmt.Errorf("get receipt code storage config: %w", err)
+	}
+	if !receiptCodeStorageConfigured(cfg) {
+		return config.ReceiptCodeStorageConfig{}, ErrReceiptCodeStorageNotConfigured
+	}
+	return cfg, nil
 }
 
-func (s *ReceiptCodeService) store(ctx context.Context) (ReceiptCodeObjectStore, error) {
-	if err := s.ensureConfigured(); err != nil {
-		return nil, err
+func receiptCodeStorageConfigured(cfg config.ReceiptCodeStorageConfig) bool {
+	return cfg.Enabled &&
+		strings.TrimSpace(cfg.Endpoint) != "" &&
+		strings.TrimSpace(cfg.Bucket) != "" &&
+		strings.TrimSpace(cfg.AccessKeyID) != "" &&
+		strings.TrimSpace(cfg.SecretAccessKey) != ""
+}
+
+func (s *ReceiptCodeService) ensureConfigured(ctx context.Context) error {
+	if s == nil || s.storeFactory == nil {
+		return ErrReceiptCodeStorageNotConfigured
 	}
-	store, err := s.storeFactory(ctx, s.cfg)
+	_, err := s.storageConfig(ctx)
+	return err
+}
+
+func (s *ReceiptCodeService) store(ctx context.Context, cfg config.ReceiptCodeStorageConfig) (ReceiptCodeObjectStore, error) {
+	if s == nil || s.storeFactory == nil || !receiptCodeStorageConfigured(cfg) {
+		return nil, ErrReceiptCodeStorageNotConfigured
+	}
+	store, err := s.storeFactory(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create receipt code object store: %w", err)
 	}
@@ -247,7 +282,15 @@ func (s *ReceiptCodeService) attachAccessURL(ctx context.Context, code *ReceiptC
 	if code == nil || strings.TrimSpace(code.StorageKey) == "" {
 		return nil
 	}
-	store, err := s.store(ctx)
+	cfg, err := s.storageConfig(ctx)
+	if err != nil {
+		if errors.Is(err, ErrReceiptCodeStorageNotConfigured) {
+			code.URL = ""
+			return nil
+		}
+		return err
+	}
+	store, err := s.store(ctx, cfg)
 	if err != nil {
 		if errors.Is(err, ErrReceiptCodeStorageNotConfigured) {
 			code.URL = ""
@@ -259,7 +302,7 @@ func (s *ReceiptCodeService) attachAccessURL(ctx context.Context, code *ReceiptC
 		code.URL = url
 		return nil
 	}
-	expiry := time.Duration(s.cfg.PresignExpireSeconds) * time.Second
+	expiry := time.Duration(cfg.PresignExpireSeconds) * time.Second
 	if expiry <= 0 {
 		expiry = 5 * time.Minute
 	}
@@ -271,11 +314,11 @@ func (s *ReceiptCodeService) attachAccessURL(ctx context.Context, code *ReceiptC
 	return nil
 }
 
-func (s *ReceiptCodeService) maxSizeBytes() int64 {
-	if s == nil || s.cfg.MaxSizeBytes <= 0 {
+func maxReceiptCodeSizeBytes(cfg config.ReceiptCodeStorageConfig) int64 {
+	if cfg.MaxSizeBytes <= 0 {
 		return defaultReceiptCodeMaxBytes
 	}
-	return s.cfg.MaxSizeBytes
+	return cfg.MaxSizeBytes
 }
 
 func normalizeReceiptCodePaymentMethod(raw string) string {
@@ -361,4 +404,3 @@ func buildReceiptCodeObjectKey(prefix string, userID int64, paymentMethod, ext s
 	}
 	return fmt.Sprintf("%s/%d/%s-%s%s", normalizedPrefix, userID, paymentMethod, uuid.NewString(), ext)
 }
-

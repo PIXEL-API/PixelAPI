@@ -1020,9 +1020,19 @@ async function handleAccountUpdated(account: Account): Promise<void> {
   await loadAccounts()
 }
 
-async function handleBulkAccountsUpdated(): Promise<void> {
+async function handleBulkAccountsUpdated(payload?: { async?: boolean; task?: AccountBatchTask }): Promise<void> {
   showBulkEditModal.value = false
   clearSelection()
+  if (payload?.async && payload.task) {
+    void pollUserAccountBatchTask(payload.task.id, (completed) => {
+      if (completed.failed > 0) {
+        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: completed.success, failed: completed.failed }))
+      } else {
+        appStore.showSuccess(t('userAccounts.bulkRevalidateCompleted', { count: completed.success }))
+      }
+    })
+    return
+  }
   usageManualRefreshToken.value += 1
   await Promise.all([loadGroups(), loadAccounts()])
 }
@@ -1260,7 +1270,7 @@ async function pollUserAccountBatchTask(
     if (isUnmounted) return
     onCompleted(completed)
     usageManualRefreshToken.value += 1
-    await Promise.all([loadAccounts(), refreshTodayStatsBatch()])
+    await loadAccounts()
   } catch (error: any) {
     if (isUnmounted) return
     console.error('Failed to poll user account batch task:', error)

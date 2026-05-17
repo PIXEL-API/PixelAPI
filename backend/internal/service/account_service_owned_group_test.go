@@ -130,6 +130,8 @@ type ownedAccountDuplicateRepoStub struct {
 	createdAccounts     []*Account
 	updatedAccounts     []*Account
 	bulkUpdateCalls     int
+	bulkUpdateIDs       []int64
+	bulkUpdatePayload   AccountBulkUpdate
 	boundAccountIDs     []int64
 	boundGroupIDs       map[int64][]int64
 	getByIDAccounts     map[int64]*Account
@@ -159,6 +161,8 @@ func (s *ownedAccountDuplicateRepoStub) Update(_ context.Context, account *Accou
 
 func (s *ownedAccountDuplicateRepoStub) BulkUpdate(_ context.Context, ids []int64, updates AccountBulkUpdate) (int64, error) {
 	s.bulkUpdateCalls++
+	s.bulkUpdateIDs = append([]int64(nil), ids...)
+	s.bulkUpdatePayload = updates
 	return int64(len(ids)), nil
 }
 
@@ -741,6 +745,26 @@ func TestAccountServiceCreateOwnedRejectsDuplicateOpenAIIdentity(t *testing.T) {
 	require.Empty(t, repo.createdAccounts)
 }
 
+func TestAccountServiceCreateOwnedRejectsManualAccountLevel(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{accountRepo: repo}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "manual-level",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPro,
+		Credentials:  map[string]any{"access_token": "token"},
+		Concurrency:  1,
+		Priority:     1,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountLevelNotAllowed)
+	require.Empty(t, repo.createdAccounts)
+}
+
 func TestValidateOwnedAccountSourceAllowsOAuthMetadataURLs(t *testing.T) {
 	err := validateOwnedAccountSource(AccountTypeOAuth, map[string]any{
 		"access_token": "oauth-access-token",
@@ -761,6 +785,45 @@ func TestValidateOwnedAccountSourceRejectsCustomEndpointURL(t *testing.T) {
 	})
 
 	require.ErrorIs(t, err, ErrOwnedAccountCredentialsNotAllowed)
+}
+
+func TestValidateOwnedAccountSourceRejectsAPIKeyAccountAndBaseURL(t *testing.T) {
+	err := validateOwnedAccountSource(AccountTypeAPIKey, map[string]any{
+		"api_key":  "sk-test",
+		"base_url": "https://third-party.example.com",
+	}, nil)
+
+	require.ErrorIs(t, err, ErrOwnedAccountTypeNotAllowed)
+
+	err = validateOwnedAccountSource(AccountTypeOAuth, map[string]any{
+		"access_token": "oauth-access-token",
+		"base_url":     "https://third-party.example.com",
+	}, nil)
+
+	require.ErrorIs(t, err, ErrOwnedAccountCredentialsNotAllowed)
+}
+
+func TestAccountServiceCreateAllowsAdminOpenAIAPIKeyBaseURL(t *testing.T) {
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{accountRepo: repo}
+
+	account, err := svc.Create(context.Background(), CreateAccountRequest{
+		Name:         "admin-openai-proxy",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeAPIKey,
+		Credentials:  map[string]any{"api_key": "sk-test", "base_url": "https://third-party.example.com"},
+		ShareMode:    AccountShareModePrivate,
+		Concurrency:  1,
+		LoadFactor:   intPtr(1),
+		Priority:     1,
+		AccountLevel: AccountLevelFree,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Len(t, repo.createdAccounts, 1)
+	require.Equal(t, "https://third-party.example.com", repo.createdAccounts[0].Credentials["base_url"])
+	require.Equal(t, "sk-test", repo.createdAccounts[0].Credentials["api_key"])
 }
 
 func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T) {
@@ -807,6 +870,19 @@ func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T
 	require.Empty(t, repo.updatedAccounts)
 }
 
+func TestAccountServiceUpdateOwnedRejectsManualAccountLevel(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{accountRepo: repo}
+	level := AccountLevelPro
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{AccountLevel: &level})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountLevelNotAllowed)
+	require.Empty(t, repo.updatedAccounts)
+}
+
 func TestAccountServiceBulkUpdateOwnedRejectsBatchDuplicateIdentityBeforeWrite(t *testing.T) {
 	ownerID := int64(101)
 	repo := &ownedAccountDuplicateRepoStub{
@@ -846,6 +922,23 @@ func TestAccountServiceBulkUpdateOwnedRejectsBatchDuplicateIdentityBeforeWrite(t
 
 	require.Nil(t, result)
 	require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
+	require.Equal(t, 0, repo.bulkUpdateCalls)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceBulkUpdateOwnedRejectsManualAccountLevel(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{accountRepo: repo}
+	level := AccountLevelPro
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs:   []int64{1},
+		AccountLevel: &level,
+	})
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrOwnedAccountLevelNotAllowed)
 	require.Equal(t, 0, repo.bulkUpdateCalls)
 	require.Empty(t, repo.updatedAccounts)
 }
@@ -892,6 +985,49 @@ func TestAccountServiceBulkUpdateOwnedRejectsDuplicateExistingOutsideBatch(t *te
 	require.Nil(t, result)
 	require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
 	require.Equal(t, 0, repo.bulkUpdateCalls)
+}
+
+func TestAccountServiceBulkUpdateOwnedSchedulableUsesRepositoryBulkUpdate(t *testing.T) {
+	ownerID := int64(101)
+	enabled := false
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDsAccounts: map[int64]*Account{
+			1: {
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token-1"},
+				Concurrency: 1,
+				Priority:    7,
+			},
+			2: {
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token-2"},
+				Concurrency: 1,
+				Priority:    9,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs:  []int64{1, 2},
+		Schedulable: &enabled,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.Equal(t, 1, repo.bulkUpdateCalls)
+	require.Equal(t, []int64{1, 2}, repo.bulkUpdateIDs)
+	require.NotNil(t, repo.bulkUpdatePayload.Schedulable)
+	require.False(t, *repo.bulkUpdatePayload.Schedulable)
+	require.Nil(t, repo.bulkUpdatePayload.Priority)
+	require.Empty(t, repo.updatedAccounts)
 }
 
 func TestAccountServiceBulkUpdateOwnedShareModeUsesPerAccountUpdateOnly(t *testing.T) {
@@ -1119,4 +1255,33 @@ func TestAccountQuotaDashboardWindowCapacityUsesOnlySchedulableAccounts(t *testi
 		require.Equal(t, 1, window.AccountCount)
 		require.Equal(t, 1, window.KnownAccountCount)
 	}
+}
+
+func TestAccountQuotaGroupDashboardUsesGeneratedAtForSchedulability(t *testing.T) {
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	limitedUntil := now.Add(time.Hour)
+	group := &Group{
+		ID:       101,
+		Name:     "OpenAI shared pool",
+		Platform: PlatformOpenAI,
+		Status:   StatusActive,
+		Scope:    GroupScopePublic,
+	}
+
+	builder := newAccountQuotaGroupDashboardBuilder(now)
+	builder.addAccount(Account{
+		ID:               1,
+		Platform:         PlatformOpenAI,
+		Type:             AccountTypeOAuth,
+		Status:           StatusActive,
+		Schedulable:      true,
+		RateLimitResetAt: &limitedUntil,
+		Groups:           []*Group{group},
+	})
+
+	summaries := builder.finalize()
+	require.Len(t, summaries, 1)
+	require.Equal(t, 1, summaries[0].AccountCount)
+	require.Equal(t, 0, summaries[0].SchedulableAccountCount)
+	require.Equal(t, 1, summaries[0].RateLimitedAccountCount)
 }

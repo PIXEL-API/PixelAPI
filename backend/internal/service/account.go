@@ -83,8 +83,8 @@ const (
 
 const (
 	OAuthAccountDefaultConcurrency = 3
-	OpenAIPlusDefaultConcurrency   = 2
-	OpenAIPlusMaxConcurrency       = 3
+	OpenAIPlusDefaultConcurrency   = 3
+	AccountMaxLoadFactor           = 10000
 )
 
 func NormalizeAccountLevel(level string) string {
@@ -243,9 +243,6 @@ func NormalizeOpenAIPlusConcurrency(platform, accountLevel string, concurrency i
 	if concurrency <= 0 {
 		return OpenAIPlusDefaultConcurrency, nil
 	}
-	if concurrency > OpenAIPlusMaxConcurrency {
-		return 0, fmt.Errorf("openai plus account concurrency must be <= %d", OpenAIPlusMaxConcurrency)
-	}
 	return concurrency, nil
 }
 
@@ -256,18 +253,15 @@ func ValidateOpenAIPlusConcurrency(platform, accountLevel string, concurrency in
 	if concurrency <= 0 {
 		return fmt.Errorf("openai plus account concurrency must be > 0")
 	}
-	if concurrency > OpenAIPlusMaxConcurrency {
-		return fmt.Errorf("openai plus account concurrency must be <= %d", OpenAIPlusMaxConcurrency)
-	}
 	return nil
 }
 
-func ValidateOpenAIPlusLoadFactor(platform, accountLevel string, loadFactor *int) error {
-	if !IsOpenAIPlusAccount(platform, accountLevel) || loadFactor == nil || *loadFactor <= 0 {
+func ValidateAccountLoadFactor(loadFactor *int) error {
+	if loadFactor == nil || *loadFactor <= 0 {
 		return nil
 	}
-	if *loadFactor > OpenAIPlusMaxConcurrency {
-		return fmt.Errorf("openai plus account load_factor must be <= %d", OpenAIPlusMaxConcurrency)
+	if *loadFactor > AccountMaxLoadFactor {
+		return fmt.Errorf("load_factor must be <= %d", AccountMaxLoadFactor)
 	}
 	return nil
 }
@@ -351,10 +345,13 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
+	return a.IsSchedulableAt(time.Now())
+}
+
+func (a *Account) IsSchedulableAt(now time.Time) bool {
 	if !a.IsActive() || !a.Schedulable {
 		return false
 	}
-	now := time.Now()
 	if a.AutoPauseOnExpired && a.ExpiresAt != nil && !now.Before(*a.ExpiresAt) {
 		return false
 	}
@@ -367,24 +364,32 @@ func (a *Account) IsSchedulable() bool {
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
-	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
+	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceededAt(now) {
 		return false
 	}
 	return true
 }
 
 func (a *Account) IsRateLimited() bool {
+	return a.IsRateLimitedAt(time.Now())
+}
+
+func (a *Account) IsRateLimitedAt(now time.Time) bool {
 	if a.RateLimitResetAt == nil {
 		return false
 	}
-	return time.Now().Before(*a.RateLimitResetAt)
+	return now.Before(*a.RateLimitResetAt)
 }
 
 func (a *Account) IsOverloaded() bool {
+	return a.IsOverloadedAt(time.Now())
+}
+
+func (a *Account) IsOverloadedAt(now time.Time) bool {
 	if a.OverloadUntil == nil {
 		return false
 	}
-	return time.Now().Before(*a.OverloadUntil)
+	return now.Before(*a.OverloadUntil)
 }
 
 func (a *Account) IsOAuth() bool {
@@ -2036,6 +2041,10 @@ func lastFixedWeeklyReset(day, hour int, tz *time.Location, now time.Time) time.
 
 // isFixedDailyPeriodExpired 检查日配额是否在固定时间模式下已过期
 func (a *Account) isFixedDailyPeriodExpired(periodStart time.Time) bool {
+	return a.isFixedDailyPeriodExpiredAt(periodStart, time.Now())
+}
+
+func (a *Account) isFixedDailyPeriodExpiredAt(periodStart time.Time, now time.Time) bool {
 	if periodStart.IsZero() {
 		return true
 	}
@@ -2043,12 +2052,16 @@ func (a *Account) isFixedDailyPeriodExpired(periodStart time.Time) bool {
 	if err != nil {
 		tz = time.UTC
 	}
-	lastReset := lastFixedDailyReset(a.GetQuotaDailyResetHour(), tz, time.Now())
+	lastReset := lastFixedDailyReset(a.GetQuotaDailyResetHour(), tz, now)
 	return periodStart.Before(lastReset)
 }
 
 // isFixedWeeklyPeriodExpired 检查周配额是否在固定时间模式下已过期
 func (a *Account) isFixedWeeklyPeriodExpired(periodStart time.Time) bool {
+	return a.isFixedWeeklyPeriodExpiredAt(periodStart, time.Now())
+}
+
+func (a *Account) isFixedWeeklyPeriodExpiredAt(periodStart time.Time, now time.Time) bool {
 	if periodStart.IsZero() {
 		return true
 	}
@@ -2056,7 +2069,7 @@ func (a *Account) isFixedWeeklyPeriodExpired(periodStart time.Time) bool {
 	if err != nil {
 		tz = time.UTC
 	}
-	lastReset := lastFixedWeeklyReset(a.GetQuotaWeeklyResetDay(), a.GetQuotaWeeklyResetHour(), tz, time.Now())
+	lastReset := lastFixedWeeklyReset(a.GetQuotaWeeklyResetDay(), a.GetQuotaWeeklyResetHour(), tz, now)
 	return periodStart.Before(lastReset)
 }
 
@@ -2159,32 +2172,48 @@ func (a *Account) HasAnyQuotaLimit() bool {
 
 // isPeriodExpired 检查指定周期（自 periodStart 起经过 dur）是否已过期
 func isPeriodExpired(periodStart time.Time, dur time.Duration) bool {
+	return isPeriodExpiredAt(periodStart, dur, time.Now())
+}
+
+func isPeriodExpiredAt(periodStart time.Time, dur time.Duration, now time.Time) bool {
 	if periodStart.IsZero() {
 		return true // 从未使用过，视为过期（下次 increment 会初始化）
 	}
-	return time.Since(periodStart) >= dur
+	return !now.Before(periodStart.Add(dur))
 }
 
 // IsDailyQuotaPeriodExpired 检查日配额周期是否已过期（用于显示层判断是否需要将 used 归零）
 func (a *Account) IsDailyQuotaPeriodExpired() bool {
+	return a.IsDailyQuotaPeriodExpiredAt(time.Now())
+}
+
+func (a *Account) IsDailyQuotaPeriodExpiredAt(now time.Time) bool {
 	start := a.getExtraTime("quota_daily_start")
 	if a.GetQuotaDailyResetMode() == "fixed" {
-		return a.isFixedDailyPeriodExpired(start)
+		return a.isFixedDailyPeriodExpiredAt(start, now)
 	}
-	return isPeriodExpired(start, 24*time.Hour)
+	return isPeriodExpiredAt(start, 24*time.Hour, now)
 }
 
 // IsWeeklyQuotaPeriodExpired 检查周配额周期是否已过期（用于显示层判断是否需要将 used 归零）
 func (a *Account) IsWeeklyQuotaPeriodExpired() bool {
+	return a.IsWeeklyQuotaPeriodExpiredAt(time.Now())
+}
+
+func (a *Account) IsWeeklyQuotaPeriodExpiredAt(now time.Time) bool {
 	start := a.getExtraTime("quota_weekly_start")
 	if a.GetQuotaWeeklyResetMode() == "fixed" {
-		return a.isFixedWeeklyPeriodExpired(start)
+		return a.isFixedWeeklyPeriodExpiredAt(start, now)
 	}
-	return isPeriodExpired(start, 7*24*time.Hour)
+	return isPeriodExpiredAt(start, 7*24*time.Hour, now)
 }
 
 // IsQuotaExceeded 检查 API Key 账号配额是否已超限（任一维度超限即返回 true）
 func (a *Account) IsQuotaExceeded() bool {
+	return a.IsQuotaExceededAt(time.Now())
+}
+
+func (a *Account) IsQuotaExceededAt(now time.Time) bool {
 	// 总额度
 	if limit := a.GetQuotaLimit(); limit > 0 && a.GetQuotaUsed() >= limit {
 		return true
@@ -2194,9 +2223,9 @@ func (a *Account) IsQuotaExceeded() bool {
 		start := a.getExtraTime("quota_daily_start")
 		var expired bool
 		if a.GetQuotaDailyResetMode() == "fixed" {
-			expired = a.isFixedDailyPeriodExpired(start)
+			expired = a.isFixedDailyPeriodExpiredAt(start, now)
 		} else {
-			expired = isPeriodExpired(start, 24*time.Hour)
+			expired = isPeriodExpiredAt(start, 24*time.Hour, now)
 		}
 		if !expired && a.GetQuotaDailyUsed() >= limit {
 			return true
@@ -2207,9 +2236,9 @@ func (a *Account) IsQuotaExceeded() bool {
 		start := a.getExtraTime("quota_weekly_start")
 		var expired bool
 		if a.GetQuotaWeeklyResetMode() == "fixed" {
-			expired = a.isFixedWeeklyPeriodExpired(start)
+			expired = a.isFixedWeeklyPeriodExpiredAt(start, now)
 		} else {
-			expired = isPeriodExpired(start, 7*24*time.Hour)
+			expired = isPeriodExpiredAt(start, 7*24*time.Hour, now)
 		}
 		if !expired && a.GetQuotaWeeklyUsed() >= limit {
 			return true

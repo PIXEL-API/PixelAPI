@@ -81,6 +81,8 @@ const (
 	EdgePromoCodeUsages = "promo_code_usages"
 	// EdgePaymentOrders holds the string denoting the payment_orders edge name in mutations.
 	EdgePaymentOrders = "payment_orders"
+	// EdgeShopOrders holds the string denoting the shop_orders edge name in mutations.
+	EdgeShopOrders = "shop_orders"
 	// EdgeOwnedAccounts holds the string denoting the owned_accounts edge name in mutations.
 	EdgeOwnedAccounts = "owned_accounts"
 	// EdgeAuthIdentities holds the string denoting the auth_identities edge name in mutations.
@@ -159,6 +161,13 @@ const (
 	PaymentOrdersInverseTable = "payment_orders"
 	// PaymentOrdersColumn is the table column denoting the payment_orders relation/edge.
 	PaymentOrdersColumn = "user_id"
+	// ShopOrdersTable is the table that holds the shop_orders relation/edge.
+	ShopOrdersTable = "shop_orders"
+	// ShopOrdersInverseTable is the table name for the ShopOrder entity.
+	// It exists in this package in order to avoid circular dependency with the "shoporder" package.
+	ShopOrdersInverseTable = "shop_orders"
+	// ShopOrdersColumn is the table column denoting the shop_orders relation/edge.
+	ShopOrdersColumn = "user_id"
 	// OwnedAccountsTable is the table that holds the owned_accounts relation/edge.
 	OwnedAccountsTable = "accounts"
 	// OwnedAccountsInverseTable is the table name for the Account entity.
@@ -550,6 +559,20 @@ func ByPaymentOrders(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByShopOrdersCount orders the results by shop_orders count.
+func ByShopOrdersCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newShopOrdersStep(), opts...)
+	}
+}
+
+// ByShopOrders orders the results by shop_orders terms.
+func ByShopOrders(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newShopOrdersStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByOwnedAccountsCount orders the results by owned_accounts count.
 func ByOwnedAccountsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -673,6 +696,13 @@ func newPaymentOrdersStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(PaymentOrdersInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, PaymentOrdersTable, PaymentOrdersColumn),
+	)
+}
+func newShopOrdersStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ShopOrdersInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ShopOrdersTable, ShopOrdersColumn),
 	)
 }
 func newOwnedAccountsStep() *sqlgraph.Step {

@@ -37,8 +37,11 @@ func ProvideAdminHandlers(
 	channelHandler *admin.ChannelHandler,
 	channelMonitorHandler *admin.ChannelMonitorHandler,
 	channelMonitorTemplateHandler *admin.ChannelMonitorRequestTemplateHandler,
+	contentModerationHandler *admin.ContentModerationHandler,
 	paymentHandler *admin.PaymentHandler,
 	revenueHandler *admin.RevenueHandler,
+	withdrawalHandler *admin.WithdrawalHandler,
+	shopHandler *admin.ShopHandler,
 	affiliateHandler *admin.AffiliateHandler,
 	subsiteHandler *admin.SubsiteHandler,
 ) *AdminHandlers {
@@ -71,8 +74,11 @@ func ProvideAdminHandlers(
 		Channel:                channelHandler,
 		ChannelMonitor:         channelMonitorHandler,
 		ChannelMonitorTemplate: channelMonitorTemplateHandler,
+		ContentModeration:      contentModerationHandler,
 		Payment:                paymentHandler,
 		Revenue:                revenueHandler,
+		Withdrawal:             withdrawalHandler,
+		Shop:                   shopHandler,
 		Affiliate:              affiliateHandler,
 		Subsite:                subsiteHandler,
 	}
@@ -109,6 +115,8 @@ func ProvideHandlers(
 	availableChannelHandler *AvailableChannelHandler,
 	subsiteInternalHandler *SubsiteInternalHandler,
 	receiptCodeHandler *ReceiptCodeHandler,
+	withdrawalHandler *WithdrawalHandler,
+	shopHandler *ShopHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -132,6 +140,8 @@ func ProvideHandlers(
 		AvailableChannel: availableChannelHandler,
 		SubsiteInternal:  subsiteInternalHandler,
 		ReceiptCode:      receiptCodeHandler,
+		Withdrawal:       withdrawalHandler,
+		Shop:             shopHandler,
 	}
 }
 
@@ -156,6 +166,8 @@ var ProviderSet = wire.NewSet(
 	NewAvailableChannelHandler,
 	NewSubsiteInternalHandler,
 	NewReceiptCodeHandler,
+	NewWithdrawalHandler,
+	NewShopHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -186,8 +198,11 @@ var ProviderSet = wire.NewSet(
 	admin.NewChannelHandler,
 	admin.NewChannelMonitorHandler,
 	admin.NewChannelMonitorRequestTemplateHandler,
+	admin.NewContentModerationHandler,
 	admin.NewPaymentHandler,
 	admin.NewRevenueHandler,
+	admin.NewWithdrawalHandler,
+	admin.NewShopHandler,
 	admin.NewAffiliateHandler,
 	admin.NewSubsiteHandler,
 

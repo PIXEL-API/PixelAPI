@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -83,7 +84,16 @@ func (h *PaymentHandler) GetOrderDetail(c *gin.Context) {
 		return
 	}
 	auditLogs, _ := h.paymentService.GetOrderAuditLogs(c.Request.Context(), orderID)
-	response.Success(c, gin.H{"order": sanitizeAdminPaymentOrderForResponse(order), "auditLogs": auditLogs})
+	payload := gin.H{"order": sanitizeAdminPaymentOrderForResponse(order), "auditLogs": auditLogs}
+	if order.OrderType == payment.OrderTypeShop && order.ShopOrderID != nil {
+		shopOrder, err := h.paymentService.GetShopOrderForPaymentOrder(c.Request.Context(), order)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		payload["shop_order"] = shopOrder
+	}
+	response.Success(c, payload)
 }
 
 // CancelOrder cancels a pending order (admin).
@@ -113,6 +123,25 @@ func (h *PaymentHandler) RetryFulfillment(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"message": "fulfillment retried"})
+}
+
+// ManualFulfillOrder marks an externally verified order as paid and executes fulfillment.
+// POST /api/v1/admin/payment/orders/:id/manual-fulfill
+func (h *PaymentHandler) ManualFulfillOrder(c *gin.Context) {
+	orderID, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req service.AdminManualFulfillmentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := h.paymentService.AdminManualFulfillOrder(c.Request.Context(), orderID, req); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "manual fulfillment completed"})
 }
 
 func sanitizeAdminPaymentOrdersForResponse(orders []*dbent.PaymentOrder) []*dbent.PaymentOrder {

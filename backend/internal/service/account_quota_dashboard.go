@@ -447,7 +447,7 @@ func (b *accountQuotaGroupDashboardBuilder) addAccountToGroup(account Account, g
 		acc = newAccountQuotaGroupSummaryAccumulator(groupID, groupName, groupStatus, platform)
 		b.accumulators[key] = acc
 	}
-	acc.addAccount(account, b.generatedAt, accountSchedulableInQuotaGroup(account, groupStatus, platform, requiredAccountLevel, requireOAuthOnly, requirePrivacySet))
+	acc.addAccount(account, b.generatedAt, accountSchedulableInQuotaGroup(account, b.generatedAt, groupStatus, platform, requiredAccountLevel, requireOAuthOnly, requirePrivacySet))
 }
 
 func newAccountQuotaGroupSummaryAccumulator(groupID *int64, groupName, groupStatus, platform string) *accountQuotaGroupSummaryAccumulator {
@@ -559,7 +559,7 @@ func isPlatformQuotaPoolAccount(account Account) bool {
 }
 
 func (a *accountQuotaSummaryAccumulator) addAccount(account Account, now time.Time) {
-	a.addAccountWithSchedulability(account, now, account.IsSchedulable())
+	a.addAccountWithSchedulability(account, now, account.IsSchedulableAt(now))
 }
 
 func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Account, now time.Time, schedulable bool) {
@@ -571,7 +571,7 @@ func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Ac
 		a.summary.ErrorAccountCount++
 	} else if account.Status == StatusDisabled {
 		a.summary.DisabledAccountCount++
-	} else if account.IsRateLimited() || account.IsOverloaded() || isAccountTemporarilyUnschedulable(account, now) {
+	} else if account.IsRateLimitedAt(now) || account.IsOverloadedAt(now) || isAccountTemporarilyUnschedulable(account, now) {
 		a.summary.RateLimitedAccountCount++
 	}
 	if schedulable {
@@ -588,13 +588,13 @@ func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Ac
 		addQuotaDimension(&a.summary.Total, account.GetQuotaLimit(), account.GetQuotaUsed())
 
 		dailyUsed := account.GetQuotaDailyUsed()
-		if account.IsDailyQuotaPeriodExpired() {
+		if account.IsDailyQuotaPeriodExpiredAt(now) {
 			dailyUsed = 0
 		}
 		addQuotaDimension(&a.summary.Daily, account.GetQuotaDailyLimit(), dailyUsed)
 
 		weeklyUsed := account.GetQuotaWeeklyUsed()
-		if account.IsWeeklyQuotaPeriodExpired() {
+		if account.IsWeeklyQuotaPeriodExpiredAt(now) {
 			weeklyUsed = 0
 		}
 		addQuotaDimension(&a.summary.Weekly, account.GetQuotaWeeklyLimit(), weeklyUsed)
@@ -610,8 +610,8 @@ func isAccountTemporarilyUnschedulable(account Account, now time.Time) bool {
 	return account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil)
 }
 
-func accountSchedulableInQuotaGroup(account Account, groupStatus, groupPlatform, requiredAccountLevel string, requireOAuthOnly, requirePrivacySet bool) bool {
-	if !account.IsSchedulable() {
+func accountSchedulableInQuotaGroup(account Account, now time.Time, groupStatus, groupPlatform, requiredAccountLevel string, requireOAuthOnly, requirePrivacySet bool) bool {
+	if !account.IsSchedulableAt(now) {
 		return false
 	}
 	if groupStatus != "" && groupStatus != StatusActive {

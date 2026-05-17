@@ -421,6 +421,7 @@ func IsNonRetryableRefreshError(err error) bool {
 		"missing_project_id",  // 缺少 project_id
 		"refresh_token_reused",
 		"no refresh token available",
+		"please try signing in again",
 	}
 	for _, needle := range nonRetryable {
 		if strings.Contains(msg, needle) {

@@ -383,6 +383,8 @@ export async function bulkUpdate(
   accountIdsOrPayload: number[] | Record<string, unknown>,
   updates?: Record<string, unknown>
 ): Promise<{
+  async?: boolean
+  task?: AccountBatchTask
   success: number
   failed: number
   success_ids?: number[]

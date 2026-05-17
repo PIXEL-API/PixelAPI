@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
@@ -561,6 +562,21 @@ func (_u *UserUpdate) AddPaymentOrders(v ...*PaymentOrder) *UserUpdate {
 	return _u.AddPaymentOrderIDs(ids...)
 }
 
+// AddShopOrderIDs adds the "shop_orders" edge to the ShopOrder entity by IDs.
+func (_u *UserUpdate) AddShopOrderIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddShopOrderIDs(ids...)
+	return _u
+}
+
+// AddShopOrders adds the "shop_orders" edges to the ShopOrder entity.
+func (_u *UserUpdate) AddShopOrders(v ...*ShopOrder) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddShopOrderIDs(ids...)
+}
+
 // AddOwnedAccountIDs adds the "owned_accounts" edge to the Account entity by IDs.
 func (_u *UserUpdate) AddOwnedAccountIDs(ids ...int64) *UserUpdate {
 	_u.mutation.AddOwnedAccountIDs(ids...)
@@ -819,6 +835,27 @@ func (_u *UserUpdate) RemovePaymentOrders(v ...*PaymentOrder) *UserUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemovePaymentOrderIDs(ids...)
+}
+
+// ClearShopOrders clears all "shop_orders" edges to the ShopOrder entity.
+func (_u *UserUpdate) ClearShopOrders() *UserUpdate {
+	_u.mutation.ClearShopOrders()
+	return _u
+}
+
+// RemoveShopOrderIDs removes the "shop_orders" edge to ShopOrder entities by IDs.
+func (_u *UserUpdate) RemoveShopOrderIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveShopOrderIDs(ids...)
+	return _u
+}
+
+// RemoveShopOrders removes "shop_orders" edges to ShopOrder entities.
+func (_u *UserUpdate) RemoveShopOrders(v ...*ShopOrder) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveShopOrderIDs(ids...)
 }
 
 // ClearOwnedAccounts clears all "owned_accounts" edges to the Account entity.
@@ -1534,6 +1571,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.ShopOrdersCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopOrdersTable,
+			Columns: []string{user.ShopOrdersColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedShopOrdersIDs(); len(nodes) > 0 && !_u.mutation.ShopOrdersCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopOrdersTable,
+			Columns: []string{user.ShopOrdersColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ShopOrdersIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopOrdersTable,
+			Columns: []string{user.ShopOrdersColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _u.mutation.OwnedAccountsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
@@ -2210,6 +2292,21 @@ func (_u *UserUpdateOne) AddPaymentOrders(v ...*PaymentOrder) *UserUpdateOne {
 	return _u.AddPaymentOrderIDs(ids...)
 }
 
+// AddShopOrderIDs adds the "shop_orders" edge to the ShopOrder entity by IDs.
+func (_u *UserUpdateOne) AddShopOrderIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddShopOrderIDs(ids...)
+	return _u
+}
+
+// AddShopOrders adds the "shop_orders" edges to the ShopOrder entity.
+func (_u *UserUpdateOne) AddShopOrders(v ...*ShopOrder) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddShopOrderIDs(ids...)
+}
+
 // AddOwnedAccountIDs adds the "owned_accounts" edge to the Account entity by IDs.
 func (_u *UserUpdateOne) AddOwnedAccountIDs(ids ...int64) *UserUpdateOne {
 	_u.mutation.AddOwnedAccountIDs(ids...)
@@ -2468,6 +2565,27 @@ func (_u *UserUpdateOne) RemovePaymentOrders(v ...*PaymentOrder) *UserUpdateOne 
 		ids[i] = v[i].ID
 	}
 	return _u.RemovePaymentOrderIDs(ids...)
+}
+
+// ClearShopOrders clears all "shop_orders" edges to the ShopOrder entity.
+func (_u *UserUpdateOne) ClearShopOrders() *UserUpdateOne {
+	_u.mutation.ClearShopOrders()
+	return _u
+}
+
+// RemoveShopOrderIDs removes the "shop_orders" edge to ShopOrder entities by IDs.
+func (_u *UserUpdateOne) RemoveShopOrderIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveShopOrderIDs(ids...)
+	return _u
+}
+
+// RemoveShopOrders removes "shop_orders" edges to ShopOrder entities.
+func (_u *UserUpdateOne) RemoveShopOrders(v ...*ShopOrder) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveShopOrderIDs(ids...)
 }
 
 // ClearOwnedAccounts clears all "owned_accounts" edges to the Account entity.
@@ -3206,6 +3324,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(paymentorder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ShopOrdersCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopOrdersTable,
+			Columns: []string{user.ShopOrdersColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedShopOrdersIDs(); len(nodes) > 0 && !_u.mutation.ShopOrdersCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopOrdersTable,
+			Columns: []string{user.ShopOrdersColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ShopOrdersIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopOrdersTable,
+			Columns: []string{user.ShopOrdersColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

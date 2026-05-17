@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -58,6 +59,12 @@ func (h *PaymentWebhookHandler) WxpayNotify(c *gin.Context) {
 // POST /api/v1/payment/webhook/stripe
 func (h *PaymentWebhookHandler) StripeWebhook(c *gin.Context) {
 	h.handleNotify(c, payment.TypeStripe)
+}
+
+// AirwallexWebhook handles Airwallex webhook events.
+// POST /api/v1/payment/webhook/airwallex
+func (h *PaymentWebhookHandler) AirwallexWebhook(c *gin.Context) {
+	h.handleNotify(c, payment.TypeAirwallex)
 }
 
 // handleNotify is the shared logic for all provider webhook handlers.
@@ -146,6 +153,17 @@ func extractOutTradeNo(rawBody, providerKey string) string {
 		if err == nil {
 			return values.Get("out_trade_no")
 		}
+	case payment.TypeAirwallex:
+		var payload struct {
+			Data struct {
+				Object struct {
+					MerchantOrderID string `json:"merchant_order_id"`
+				} `json:"object"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(rawBody), &payload); err == nil {
+			return strings.TrimSpace(payload.Data.Object.MerchantOrderID)
+		}
 	}
 	// For other providers (Stripe, Alipay direct, WxPay direct), the registry
 	// typically has only one instance, so no instance lookup is needed.
@@ -190,7 +208,7 @@ func writeSuccessResponse(c *gin.Context, providerKey string) {
 	switch providerKey {
 	case payment.TypeWxpay:
 		c.JSON(http.StatusOK, wxpaySuccessResponse{Code: wxpaySuccessCode, Message: wxpaySuccessMessage})
-	case payment.TypeStripe:
+	case payment.TypeStripe, payment.TypeAirwallex:
 		c.String(http.StatusOK, "")
 	default:
 		c.String(http.StatusOK, "success")

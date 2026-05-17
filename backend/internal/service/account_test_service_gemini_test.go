@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateGeminiTestPayload_ImageModel(t *testing.T) {
+func TestCreateGeminiTestPayload_ImageModelFallsBackToTextOnly(t *testing.T) {
 	t.Parallel()
 
 	payload := createGeminiTestPayload("gemini-2.5-flash-image", "draw a tiny robot")
@@ -22,20 +22,14 @@ func TestCreateGeminiTestPayload_ImageModel(t *testing.T) {
 				Text string `json:"text"`
 			} `json:"parts"`
 		} `json:"contents"`
-		GenerationConfig struct {
-			ResponseModalities []string `json:"responseModalities"`
-			ImageConfig        struct {
-				AspectRatio string `json:"aspectRatio"`
-			} `json:"imageConfig"`
-		} `json:"generationConfig"`
 	}
 
 	require.NoError(t, json.Unmarshal(payload, &parsed))
 	require.Len(t, parsed.Contents, 1)
 	require.Len(t, parsed.Contents[0].Parts, 1)
 	require.Equal(t, "draw a tiny robot", parsed.Contents[0].Parts[0].Text)
-	require.Equal(t, []string{"TEXT", "IMAGE"}, parsed.GenerationConfig.ResponseModalities)
-	require.Equal(t, "1:1", parsed.GenerationConfig.ImageConfig.AspectRatio)
+	require.NotContains(t, string(payload), "responseModalities")
+	require.NotContains(t, string(payload), "imageConfig")
 }
 
 func TestProcessGeminiStream_EmitsImageEvent(t *testing.T) {

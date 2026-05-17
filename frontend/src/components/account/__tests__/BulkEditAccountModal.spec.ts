@@ -148,8 +148,8 @@ describe('BulkEditAccountModal', () => {
 
     await selector.find('div.cursor-pointer').trigger('click')
 
-    expect(wrapper.text()).toContain('gemini-3.1-flash-image')
-    expect(wrapper.text()).toContain('gemini-2.5-flash-image')
+    expect(wrapper.text()).not.toContain('gemini-3.1-flash-image')
+    expect(wrapper.text()).not.toContain('gemini-2.5-flash-image')
     expect(wrapper.text()).not.toContain('gpt-5.3-codex')
   })
 
@@ -160,8 +160,8 @@ describe('BulkEditAccountModal', () => {
     expect(mappingTab).toBeTruthy()
     await mappingTab!.trigger('click')
 
-    expect(wrapper.text()).toContain('3.1-Flash-Image透传')
-    expect(wrapper.text()).toContain('3-Pro-Image→3.1')
+    expect(wrapper.text()).not.toContain('Flash-Image')
+    expect(wrapper.text()).not.toContain('Pro-Image')
     expect(wrapper.text()).not.toContain('GPT-5.3 Codex Spark')
   })
 
@@ -412,5 +412,45 @@ describe('BulkEditAccountModal', () => {
       share_mode: 'public'
     })
     expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
+  })
+
+  it('用户作用域批量改为公共共享时支持后台任务响应', async () => {
+    vi.mocked(accountsAPI.bulkUpdate).mockResolvedValueOnce({
+      async: true,
+      task: {
+        id: 77,
+        scope: 'user',
+        operation: 'user_set_public_share',
+        status: 'pending',
+        total: 2,
+        processed: 0,
+        success: 0,
+        failed: 0,
+        created_by: 9,
+      },
+      success: 0,
+      failed: 0,
+      results: []
+    } as any)
+    const wrapper = mountModal({
+      accountScope: 'user',
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+
+    await wrapper.get('#bulk-edit-share-mode-enabled').setValue(true)
+    await wrapper.get('select[aria-labelledby="bulk-edit-share-mode-label"]').setValue('public')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(accountsAPI.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      share_mode: 'public'
+    })
+    expect(wrapper.emitted('updated')?.[0]).toEqual([
+      expect.objectContaining({
+        async: true,
+        task: expect.objectContaining({ id: 77, operation: 'user_set_public_share' })
+      })
+    ])
   })
 })

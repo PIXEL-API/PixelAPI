@@ -39,23 +39,23 @@ const (
 	chatgptCodexURL = "https://chatgpt.com/backend-api/codex/responses"
 	// OpenAI Platform API for API Key accounts (fallback)
 	openaiPlatformAPIURL   = "https://api.openai.com/v1/responses"
-	openaiStickySessionTTL = time.Hour // 粘性会话TTL
+	openaiStickySessionTTL = time.Hour // 绮樻€т細璇漈TL
 	codexCLIUserAgent      = "codex_cli_rs/0.125.0"
-	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
+	// codex_cli_only 鎷掔粷鏃跺崟涓姹傚ご鏃ュ織闀垮害涓婇檺锛堝瓧绗︼級
+	// codex_cli_only rejected request header values are truncated for diagnostics.
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
-	// OpenAIParsedRequestBodyKey 缓存 handler 侧已解析的请求体，避免重复解析。
+	// OpenAIParsedRequestBodyKey caches the request body parsed by handler.
 	OpenAIParsedRequestBodyKey = "openai_parsed_request_body"
-	// OpenAI WS Mode 失败后的重连次数上限（不含首次尝试）。
-	// 与 Codex 客户端保持一致：失败后最多重连 5 次。
+	// OpenAI WS Mode reconnect retry limit after the first failed attempt.
 	openAIWSReconnectRetryLimit = 5
-	// OpenAI WS Mode 重连退避默认值（可由配置覆盖）。
+	// OpenAI WS Mode default retry backoff values.
 	openAIWSRetryBackoffInitialDefault = 120 * time.Millisecond
 	openAIWSRetryBackoffMaxDefault     = 2 * time.Second
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
 	codexCLIVersion                    = "0.125.0"
-	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
+	// Codex rate limit snapshots are throttled to avoid write amplification.
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 )
 
@@ -72,7 +72,7 @@ var openaiAllowedHeaders = map[string]bool{
 }
 
 // OpenAI passthrough allowed headers whitelist.
-// 透传模式下仅放行这些低风险请求头，避免将非标准/环境噪声头传给上游触发风控。
+// Only low-risk request headers are forwarded in passthrough mode.
 var openaiPassthroughAllowedHeaders = map[string]bool{
 	"accept":                true,
 	"accept-language":       true,
@@ -86,7 +86,7 @@ var openaiPassthroughAllowedHeaders = map[string]bool{
 	"x-codex-turn-metadata": true,
 }
 
-// codex_cli_only 拒绝时记录的请求头白名单（仅用于诊断日志，不参与上游透传）
+// codex_cli_only debug header whitelist for rejection diagnostics.
 var codexCLIOnlyDebugHeaderWhitelist = []string{
 	"User-Agent",
 	"Content-Type",
@@ -213,8 +213,7 @@ type OpenAIUsage struct {
 type OpenAIForwardResult struct {
 	RequestID string
 	Usage     OpenAIUsage
-	Model     string // 原始模型（用于响应和日志显示）
-	// BillingModel is the model used for cost calculation.
+	Model     string // 鍘熷妯″瀷锛堢敤浜庡搷搴斿拰鏃ュ織鏄剧ず锛?	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
 	// the mapped upstream model differs from the client-facing model.
@@ -418,7 +417,7 @@ func NewOpenAIGatewayService(
 	return svc
 }
 
-// ResolveChannelMapping 解析渠道级模型映射（代理到 ChannelService）
+// ResolveChannelMapping resolves channel-level model mapping.
 func (s *OpenAIGatewayService) ResolveChannelMapping(ctx context.Context, groupID int64, model string) ChannelMappingResult {
 	if s.channelService == nil {
 		return ChannelMappingResult{MappedModel: model}
@@ -426,7 +425,7 @@ func (s *OpenAIGatewayService) ResolveChannelMapping(ctx context.Context, groupI
 	return s.channelService.ResolveChannelMapping(ctx, groupID, model)
 }
 
-// IsModelRestricted 检查模型是否被渠道限制（代理到 ChannelService）
+// IsModelRestricted checks channel model restrictions.
 func (s *OpenAIGatewayService) IsModelRestricted(ctx context.Context, groupID int64, model string) bool {
 	if s.channelService == nil {
 		return false
@@ -434,8 +433,7 @@ func (s *OpenAIGatewayService) IsModelRestricted(ctx context.Context, groupID in
 	return s.channelService.IsModelRestricted(ctx, groupID, model)
 }
 
-// ResolveChannelMappingAndRestrict 解析渠道映射。
-// 模型限制检查已移至调度阶段，restricted 始终返回 false。
+// ResolveChannelMappingAndRestrict resolves channel mapping and restriction state.
 func (s *OpenAIGatewayService) ResolveChannelMappingAndRestrict(ctx context.Context, groupID *int64, model string) (ChannelMappingResult, bool) {
 	if s.channelService == nil {
 		return ChannelMappingResult{MappedModel: model}, false
@@ -481,7 +479,7 @@ func (s *OpenAIGatewayService) needsUpstreamChannelRestrictionCheck(ctx context.
 	return ch.BillingModelSource == BillingModelSourceUpstream
 }
 
-// ReplaceModelInBody 替换请求体中的 JSON model 字段（通用 gjson/sjson 实现）。
+// ReplaceModelInBody replaces the JSON model field in a request body.
 func (s *OpenAIGatewayService) ReplaceModelInBody(body []byte, newModel string) []byte {
 	return ReplaceModelInBody(body, newModel)
 }
@@ -505,8 +503,7 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 	}
 }
 
-// CloseOpenAIWSPool 关闭 OpenAI WebSocket 连接池的后台 worker 和空闲连接。
-// 应在应用优雅关闭时调用。
+// CloseOpenAIWSPool closes the OpenAI WebSocket connection pool.
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 	if s != nil && s.openaiWSPool != nil {
 		s.openaiWSPool.Close()
@@ -939,9 +936,8 @@ func getAPIKeyIDFromContext(c *gin.Context) int64 {
 	return apiKey.ID
 }
 
-// isolateOpenAISessionID 将 apiKeyID 混入 session 标识符，
-// 确保不同 API Key 的用户即使使用相同的原始 session_id/conversation_id，
-// 到达上游的标识符也不同，防止跨用户会话碰撞。
+// isolateOpenAISessionID 灏?apiKeyID 娣峰叆 session 鏍囪瘑绗︼紝
+// isolateOpenAISessionID scopes a client session identifier by API key.
 func isolateOpenAISessionID(apiKeyID int64, raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -1289,9 +1285,7 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	return currentHash
 }
 
-// GenerateSessionHashWithFallback 先按常规信号生成会话哈希；
-// 当未携带 session_id/conversation_id/prompt_cache_key 时，使用 fallbackSeed 生成稳定哈希。
-// 该方法用于 WS ingress，避免会话信号缺失时发生跨账号漂移。
+// GenerateSessionHashWithFallback derives a stable session hash from request signals or fallback seed.
 func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, body []byte, fallbackSeed string) string {
 	sessionHash := s.GenerateSessionHash(c, body)
 	if sessionHash != "" {
@@ -1343,7 +1337,7 @@ func (s *OpenAIGatewayService) SelectAccountForModel(ctx context.Context, groupI
 }
 
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
-// SelectAccountForModelWithExclusions 选择支持指定模型的账号，同时排除指定的账号。
+// SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
 func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
 	return s.selectAccountForModelWithExclusions(ctx, groupID, sessionHash, requestedModel, excludedIDs, false, 0)
 }
@@ -1440,29 +1434,26 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.C
 		return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 	}
 
-	// 1. 尝试粘性会话命中
-	// Try sticky session hit
+	// 1. 灏濊瘯绮樻€т細璇濆懡涓?	// Try sticky session hit
 	if account := s.tryStickySessionHit(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID); account != nil {
 		return account, nil
 	}
 
-	// 2. 获取可调度的 OpenAI 账号
+	// 2. 鑾峰彇鍙皟搴︾殑 OpenAI 璐﹀彿
 	// Get schedulable OpenAI accounts
 	accounts, err := s.listSchedulableAccounts(ctx, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("query accounts failed: %w", err)
 	}
 
-	// 3. 按优先级 + LRU 选择最佳账号
-	// Select by priority + LRU
+	// 3. 鎸変紭鍏堢骇 + LRU 閫夋嫨鏈€浣宠处鍙?	// Select by priority + LRU
 	selected, compactBlocked := s.selectBestAccount(ctx, groupID, accounts, requestedModel, excludedIDs, requireCompact)
 
 	if selected == nil {
 		return nil, noAvailableOpenAISelectionError(requestedModel, compactBlocked)
 	}
 
-	// 4. 设置粘性会话绑定
-	// Set sticky session binding
+	// 4. 璁剧疆绮樻€т細璇濈粦瀹?	// Set sticky session binding
 	if sessionHash != "" {
 		_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, selected.ID, openaiStickySessionTTL)
 	}
@@ -1470,9 +1461,7 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.C
 	return s.hydrateSelectedAccount(ctx, selected)
 }
 
-// tryStickySessionHit 尝试从粘性会话获取账号。
-// 如果命中且账号可用则返回账号；如果账号不可用则清理会话并返回 nil。
-//
+// tryStickySessionHit 灏濊瘯浠庣矘鎬т細璇濊幏鍙栬处鍙枫€?// 濡傛灉鍛戒腑涓旇处鍙峰彲鐢ㄥ垯杩斿洖璐﹀彿锛涘鏋滆处鍙蜂笉鍙敤鍒欐竻鐞嗕細璇濆苟杩斿洖 nil銆?//
 // tryStickySessionHit attempts to get account from sticky session.
 // Returns account if hit and usable; clears session and returns nil if account is unavailable.
 func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID *int64, sessionHash, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64) *Account {
@@ -1502,15 +1491,13 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		return nil
 	}
 
-	// 检查账号是否需要清理粘性会话
-	// Check if sticky session should be cleared
+	// 妫€鏌ヨ处鍙锋槸鍚﹂渶瑕佹竻鐞嗙矘鎬т細璇?	// Check if sticky session should be cleared
 	if shouldClearStickySession(account, requestedModel) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
 
-	// 验证账号是否可用于当前请求
-	// Verify account is usable for current request
+	// 楠岃瘉璐﹀彿鏄惁鍙敤浜庡綋鍓嶈姹?	// Verify account is usable for current request
 	if !isOpenAIAccountEligibleForRequest(account, requestedModel, false) {
 		return nil
 	}
@@ -1525,15 +1512,12 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		return nil
 	}
 
-	// 刷新会话 TTL 并返回账号
-	// Refresh session TTL and return account
+	// 鍒锋柊浼氳瘽 TTL 骞惰繑鍥炶处鍙?	// Refresh session TTL and return account
 	_ = s.refreshStickySessionTTL(ctx, groupID, sessionHash, openaiStickySessionTTL)
 	return account
 }
 
-// selectBestAccount 从候选账号中选择最佳账号（优先级 + LRU）。
-// 返回 nil 表示无可用账号。
-//
+// selectBestAccount 浠庡€欓€夎处鍙蜂腑閫夋嫨鏈€浣宠处鍙凤紙浼樺厛绾?+ LRU锛夈€?// 杩斿洖 nil 琛ㄧず鏃犲彲鐢ㄨ处鍙枫€?//
 // selectBestAccount selects the best account from candidates (priority + LRU).
 // Returns nil if no available account. The second return reports whether at
 // least one candidate was filtered out solely because it lacks compact support
@@ -1550,7 +1534,7 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			continue
 		}
 
-		// 跳过被排除的账号
+		// 璺宠繃琚帓闄ょ殑璐﹀彿
 		// Skip excluded accounts
 		if _, excluded := excludedIDs[acc.ID]; excluded {
 			continue
@@ -1576,15 +1560,14 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			}
 		}
 
-		// 选择优先级最高且最久未使用的账号
-		// Select highest priority and least recently used
+		// 閫夋嫨浼樺厛绾ф渶楂樹笖鏈€涔呮湭浣跨敤鐨勮处鍙?		// Select highest priority and least recently used
 		if selected == nil {
 			selected = fresh
 			selectedCompactTier = compactTier
 			continue
 		}
 
-		// compact 模式下高 tier 优先；同 tier 内才比较 priority/LRU。
+		// compact 妯″紡涓嬮珮 tier 浼樺厛锛涘悓 tier 鍐呮墠姣旇緝 priority/LRU銆?
 		if requireCompact && compactTier != selectedCompactTier {
 			if compactTier > selectedCompactTier {
 				selected = fresh
@@ -1602,13 +1585,11 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 	return selected, compactBlocked
 }
 
-// isBetterAccount 判断 candidate 是否比 current 更优。
-// 规则：优先级更高（数值更小）优先；同优先级时，未使用过的优先，其次是最久未使用的。
-//
+// isBetterAccount 鍒ゆ柇 candidate 鏄惁姣?current 鏇翠紭銆?// 瑙勫垯锛氫紭鍏堢骇鏇撮珮锛堟暟鍊兼洿灏忥級浼樺厛锛涘悓浼樺厛绾ф椂锛屾湭浣跨敤杩囩殑浼樺厛锛屽叾娆℃槸鏈€涔呮湭浣跨敤鐨勩€?//
 // isBetterAccount checks if candidate is better than current.
 // Rules: higher priority (lower value) wins; same priority: never used > least recently used.
 func (s *OpenAIGatewayService) isBetterAccount(candidate, current *Account) bool {
-	// 优先级更高（数值更小）
+	// 浼樺厛绾ф洿楂橈紙鏁板€兼洿灏忥級
 	// Higher priority (lower value)
 	if candidate.Priority < current.Priority {
 		return true
@@ -1617,20 +1598,19 @@ func (s *OpenAIGatewayService) isBetterAccount(candidate, current *Account) bool
 		return false
 	}
 
-	// 同优先级，比较最后使用时间
-	// Same priority, compare last used time
+	// 鍚屼紭鍏堢骇锛屾瘮杈冩渶鍚庝娇鐢ㄦ椂闂?	// Same priority, compare last used time
 	switch {
 	case candidate.LastUsedAt == nil && current.LastUsedAt != nil:
-		// candidate 从未使用，优先
+		// candidate 浠庢湭浣跨敤锛屼紭鍏?
 		return true
 	case candidate.LastUsedAt != nil && current.LastUsedAt == nil:
-		// current 从未使用，保持
+		// current 浠庢湭浣跨敤锛屼繚鎸?
 		return false
 	case candidate.LastUsedAt == nil && current.LastUsedAt == nil:
-		// 都未使用，保持
+		// 閮芥湭浣跨敤锛屼繚鎸?
 		return false
 	default:
-		// 都使用过，选择最久未使用的
+		// 閮戒娇鐢ㄨ繃锛岄€夋嫨鏈€涔呮湭浣跨敤鐨?
 		return candidate.LastUsedAt.Before(*current.LastUsedAt)
 	}
 }
@@ -1850,8 +1830,8 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 				}
 				selectionOrder = appendTier(selectionOrder, 2)
 				selectionOrder = appendTier(selectionOrder, 1)
-				// tier 0 候选作为兜底追加：DB recheck 时若发现 cache tier 0 实际
-				// 已升级为 1/2（探测刚跑完，cache 尚未刷新），仍可正常命中。
+				// tier 0 鍊欓€変綔涓哄厹搴曡拷鍔狅細DB recheck 鏃惰嫢鍙戠幇 cache tier 0 瀹為檯
+				// 宸插崌绾т负 1/2锛堟帰娴嬪垰璺戝畬锛宑ache 灏氭湭鍒锋柊锛夛紝浠嶅彲姝ｅ父鍛戒腑銆?
 				selectionOrder = appendTier(selectionOrder, 0)
 			} else {
 				selectionOrder = append(selectionOrder, available...)
@@ -2061,7 +2041,7 @@ func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig
 func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
 	switch account.Type {
 	case AccountTypeOAuth:
-		// 使用 TokenProvider 获取缓存的 token
+		// 浣跨敤 TokenProvider 鑾峰彇缂撳瓨鐨?token
 		if s.openAITokenProvider != nil {
 			accessToken, err := s.openAITokenProvider.GetAccessToken(ctx, account)
 			if err != nil {
@@ -2069,7 +2049,7 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 			}
 			return accessToken, "oauth", nil
 		}
-		// 降级：TokenProvider 未配置时直接从账号读取
+		// 闄嶇骇锛歍okenProvider 鏈厤缃椂鐩存帴浠庤处鍙疯鍙?
 		accessToken := account.GetOpenAIAccessToken()
 		if accessToken == "" {
 			return "", "", errors.New("access_token not found in credentials")
@@ -2134,7 +2114,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	clientTransport := GetOpenAIClientTransport(c)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
+	// 浠呭厑璁?WS 鍏ョ珯璇锋眰璧?WS 涓婃父锛岄伩鍏嶅嚭鐜?HTTP -> WS 鍗忚娣风敤銆?
 	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport)
 	if c != nil {
 		c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
@@ -2151,7 +2131,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			reqStream,
 		)
 	}
-	// 当前仅支持 WSv2；WSv1 命中时直接返回错误，避免出现“配置可开但行为不确定”。
+	// 褰撳墠浠呮敮鎸?WSv2锛沇Sv1 鍛戒腑鏃剁洿鎺ヨ繑鍥為敊璇紝閬垮厤鍑虹幇鈥滈厤缃彲寮€浣嗚涓轰笉纭畾鈥濄€?
 	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocket {
 		if c != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -2165,7 +2145,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	if passthroughEnabled {
-		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
+		// 閫忎紶鍒嗘敮鍙渶瑕佽交閲忔彁鍙栧瓧娈碉紝閬垮厤鐑矾寰勫叏閲?Unmarshal銆?
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, reqModel)
 		return s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
 	}
@@ -2190,7 +2170,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	// Track if body needs re-serialization
 	bodyModified := false
-	// 单字段补丁快速路径：只要整个变更集最终可归约为同一路径的 set/delete，就避免全量 Marshal。
+	// 鍗曞瓧娈佃ˉ涓佸揩閫熻矾寰勶細鍙鏁翠釜鍙樻洿闆嗘渶缁堝彲褰掔害涓哄悓涓€璺緞鐨?set/delete锛屽氨閬垮厤鍏ㄩ噺 Marshal銆?
 	patchDisabled := false
 	patchHasOp := false
 	patchDelete := false
@@ -2239,7 +2219,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		patchDisabled = true
 	}
 
-	// 非透传模式下，instructions 为空时注入默认指令。
+	// 闈為€忎紶妯″紡涓嬶紝instructions 涓虹┖鏃舵敞鍏ラ粯璁ゆ寚浠ゃ€?
 	if isInstructionsEmpty(reqBody) {
 		reqBody["instructions"] = "You are a helpful coding assistant."
 		bodyModified = true
@@ -2263,7 +2243,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Added Codex image_generation bridge instructions")
 	}
 
-	// 对所有请求执行模型映射（包含 Codex CLI）。
+	// 瀵规墍鏈夎姹傛墽琛屾ā鍨嬫槧灏勶紙鍖呭惈 Codex CLI锛夈€?
 	billingModel := account.GetMappedModel(reqModel)
 	if billingModel != reqModel {
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", reqModel, billingModel, account.Name, isCodexCLI)
@@ -2297,15 +2277,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		})
 		return nil, err
 	}
-	if hasOpenAIImageGenerationTool(reqBody) {
-		logger.LegacyPrintf(
-			"service.openai_gateway",
-			"[OpenAI] /responses image_generation request inbound_model=%s mapped_model=%s account_type=%s",
-			reqModel,
-			upstreamModel,
-			account.Type,
-		)
-	}
 	if err := validateCodexSparkInput(reqBody, upstreamModel); err != nil {
 		setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -2318,8 +2289,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, err
 	}
 
-	// Compact-only model 映射：仅在 /responses/compact 路径生效，且优先级高于
-	// OAuth 模型规范化（避免 OAuth 规范化覆盖 compact-only 自定义模型）。
+	// Compact-only model 鏄犲皠锛氫粎鍦?/responses/compact 璺緞鐢熸晥锛屼笖浼樺厛绾ч珮浜?	// OAuth 妯″瀷瑙勮寖鍖栵紙閬垮厤 OAuth 瑙勮寖鍖栬鐩?compact-only 鑷畾涔夋ā鍨嬶級銆?
 	isCompactRequest := isOpenAIResponsesCompactPath(c)
 	compactMapped := false
 	if isCompactRequest {
@@ -2334,9 +2304,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
-	// OpenAI OAuth 账号走 ChatGPT internal Codex endpoint，需要将模型名规范化为
-	// 上游可识别的 Codex/GPT 系列。API Key 账号则应保留原始/映射后的模型名，
-	// 以兼容自定义 base_url 的 OpenAI-compatible 上游。
+	// OpenAI OAuth 璐﹀彿璧?ChatGPT internal Codex endpoint锛岄渶瑕佸皢妯″瀷鍚嶈鑼冨寲涓?	// 涓婃父鍙瘑鍒殑 Codex/GPT 绯诲垪銆侫PI Key 璐﹀彿鍒欏簲淇濈暀鍘熷/鏄犲皠鍚庣殑妯″瀷鍚嶏紝
+	// 浠ュ吋瀹硅嚜瀹氫箟 base_url 鐨?OpenAI-compatible 涓婃父銆?
 	if model, ok := reqBody["model"].(string); ok {
 		if !compactMapped {
 			upstreamModel = normalizeOpenAIModelForUpstream(account, model)
@@ -2349,8 +2318,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 
-		// 移除 gpt-5.2-codex 以下的版本 verbosity 参数
-		// 确保高版本模型向低版本模型映射不报错
+		// 绉婚櫎 gpt-5.2-codex 浠ヤ笅鐨勭増鏈?verbosity 鍙傛暟
+		// 纭繚楂樼増鏈ā鍨嬪悜浣庣増鏈ā鍨嬫槧灏勪笉鎶ラ敊
 		if !SupportsVerbosity(upstreamModel) {
 			if text, ok := reqBody["text"].(map[string]any); ok {
 				delete(text, "verbosity")
@@ -2358,7 +2327,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
-	// 规范化 reasoning.effort 参数（minimal -> none），与上游允许值对齐。
+	// 瑙勮寖鍖?reasoning.effort 鍙傛暟锛坢inimal -> none锛夛紝涓庝笂娓稿厑璁稿€煎榻愩€?
 	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok && effort == "minimal" {
 			reasoning["effort"] = "none"
@@ -2436,8 +2405,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
-	// 仅在 WSv2 模式保留 previous_response_id，其他模式（HTTP/WSv1）统一过滤。
-	// 注意：该规则同样适用于 Codex CLI 请求，避免 WSv1 向上游透传不支持字段。
+	// 浠呭湪 WSv2 妯″紡淇濈暀 previous_response_id锛屽叾浠栨ā寮忥紙HTTP/WSv1锛夌粺涓€杩囨护銆?	// 娉ㄦ剰锛氳瑙勫垯鍚屾牱閫傜敤浜?Codex CLI 璇锋眰锛岄伩鍏?WSv1 鍚戜笂娓搁€忎紶涓嶆敮鎸佸瓧娈点€?
 	if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		if _, has := reqBody["previous_response_id"]; has {
 			delete(reqBody, "previous_response_id")
@@ -2451,20 +2419,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		disablePatch()
 	}
 
-	// Apply OpenAI fast policy (参照 Claude BetaPolicy 的 fast-mode 过滤)：
-	// 针对 body 的 service_tier 字段（"priority" 即 fast，"flex"），按策略
-	// 执行 filter（删除字段）或 block（拒绝请求）。对 gpt-5.5 等模型屏蔽
-	// fast 时在此生效。
-	//
-	// 注意：
-	//   1. 此处统一使用 upstreamModel（已经过 GetMappedModel +
-	//      normalizeOpenAIModelForUpstream + Codex OAuth normalize），与
-	//      chat-completions / messages 入口保持一致，避免不同入口因为模型
-	//      维度不同而出现 whitelist 命中差异。
-	//   2. action=pass 时也要把 raw "fast" 归一化为 "priority" 写回 body，
-	//      否则 native /responses 入口透传 "fast" 给上游会被拒。chat-
-	//      completions 入口由 normalizeResponsesBodyServiceTier 完成同一
-	//      行为，这里手工实现等效逻辑。
+	// Apply OpenAI fast policy (鍙傜収 Claude BetaPolicy 鐨?fast-mode 杩囨护)锛?	// 閽堝 body 鐨?service_tier 瀛楁锛?priority" 鍗?fast锛?flex"锛夛紝鎸夌瓥鐣?	// 鎵ц filter锛堝垹闄ゅ瓧娈碉級鎴?block锛堟嫆缁濊姹傦級銆傚 gpt-5.5 绛夋ā鍨嬪睆钄?	// fast 鏃跺湪姝ょ敓鏁堛€?	//
+	// 娉ㄦ剰锛?	//   1. 姝ゅ缁熶竴浣跨敤 upstreamModel锛堝凡缁忚繃 GetMappedModel +
+	//      normalizeOpenAIModelForUpstream + Codex OAuth normalize锛夛紝涓?	//      chat-completions / messages 鍏ュ彛淇濇寔涓€鑷达紝閬垮厤涓嶅悓鍏ュ彛鍥犱负妯″瀷
+	//      缁村害涓嶅悓鑰屽嚭鐜?whitelist 鍛戒腑宸紓銆?	//   2. action=pass 鏃朵篃瑕佹妸 raw "fast" 褰掍竴鍖栦负 "priority" 鍐欏洖 body锛?	//      鍚﹀垯 native /responses 鍏ュ彛閫忎紶 "fast" 缁欎笂娓镐細琚嫆銆俢hat-
+	//      completions 鍏ュ彛鐢?normalizeResponsesBodyServiceTier 瀹屾垚鍚屼竴
+	//      琛屼负锛岃繖閲屾墜宸ュ疄鐜扮瓑鏁堥€昏緫銆?
 	if rawTier, ok := reqBody["service_tier"].(string); ok {
 		if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
 			action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, upstreamModel, normTier)
@@ -2482,8 +2442,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				bodyModified = true
 				disablePatch()
 			default:
-				// pass：若客户端传的是别名 "fast"，归一化为 "priority"
-				// 后写回 body，确保上游收到的是其能识别的规范值。
+				// pass锛氳嫢瀹㈡埛绔紶鐨勬槸鍒悕 "fast"锛屽綊涓€鍖栦负 "priority"
+				// 鍚庡啓鍥?body锛岀‘淇濅笂娓告敹鍒扮殑鏄叾鑳借瘑鍒殑瑙勮寖鍊笺€?
 				if normTier != rawTier {
 					reqBody["service_tier"] = normTier
 					bodyModified = true
@@ -2525,7 +2485,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Capture upstream request body for ops retry of this attempt.
 	setOpsUpstreamRequestBody(c, body)
 
-	// 命中 WS 时仅走 WebSocket Mode；不再自动回退 HTTP。
+	// 鍛戒腑 WS 鏃朵粎璧?WebSocket Mode锛涗笉鍐嶈嚜鍔ㄥ洖閫€ HTTP銆?
 	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
 		wsReqBody := reqBody
 		if len(reqBody) > 0 {
@@ -2644,8 +2604,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if reason != "" {
 				wsLastFailureReason = reason
 			}
-			// previous_response_not_found 说明续链锚点不可用：
-			// 对非 function_call_output 场景，允许一次“去掉 previous_response_id 后重放”。
+			// previous_response_not_found 璇存槑缁摼閿氱偣涓嶅彲鐢細
+			// 瀵归潪 function_call_output 鍦烘櫙锛屽厑璁镐竴娆♀€滃幓鎺?previous_response_id 鍚庨噸鏀锯€濄€?
 			if reason == "previous_response_not_found" && recoverPrevResponseNotFound(attempt) {
 				continue
 			}
@@ -2945,11 +2905,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	// Apply OpenAI fast policy to the passthrough body (filter/block by service_tier).
-	// 统一使用 upstream 视角的 model：透传路径下 body 已经过 compact 映射 +
-	// OAuth normalize，body 中的 model 字段即上游真正会看到的 slug。
-	// 这样可以与 chat-completions / messages / native /responses 入口的
-	// upstreamModel 保持一致，避免 whitelist 命中差异。当 body 中没有
-	// model 字段时退回 reqModel。
+	// 缁熶竴浣跨敤 upstream 瑙嗚鐨?model锛氶€忎紶璺緞涓?body 宸茬粡杩?compact 鏄犲皠 +
+	// OAuth normalize锛宐ody 涓殑 model 瀛楁鍗充笂娓哥湡姝ｄ細鐪嬪埌鐨?slug銆?	// 杩欐牱鍙互涓?chat-completions / messages / native /responses 鍏ュ彛鐨?	// upstreamModel 淇濇寔涓€鑷达紝閬垮厤 whitelist 鍛戒腑宸紓銆傚綋 body 涓病鏈?	// model 瀛楁鏃堕€€鍥?reqModel銆?
 	policyModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if policyModel == "" {
 		policyModel = reqModel
@@ -2965,7 +2922,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	body = updatedBody
 
 	logger.LegacyPrintf("service.openai_gateway",
-		"[OpenAI 自动透传] 命中自动透传分支: account=%d name=%s type=%s model=%s stream=%v",
+		"[OpenAI passthrough] matched passthrough branch: account=%d name=%s type=%s model=%s stream=%v",
 		account.ID,
 		account.Name,
 		account.Type,
@@ -2980,9 +2937,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				zap.Strings("timeout_headers", timeoutHeaders),
 			)
 			if s.isOpenAIPassthroughTimeoutHeadersAllowed() {
-				streamWarnLogger.Warn("OpenAI passthrough 透传请求包含超时相关请求头，且当前配置为放行，可能导致上游提前断流")
+				streamWarnLogger.Warn("OpenAI passthrough forwarded client timeout headers")
 			} else {
-				streamWarnLogger.Warn("OpenAI passthrough 检测到超时相关请求头，将按配置过滤以降低断流风险")
+				streamWarnLogger.Warn("OpenAI passthrough detected client timeout headers but did not forward them")
 			}
 		}
 	}
@@ -3042,8 +2999,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-		// 透传模式默认保持原样代理；但容量/过载类错误应先触发多账号
-		// failover 以维持基础 SLA。
+		// 閫忎紶妯″紡榛樿淇濇寔鍘熸牱浠ｇ悊锛涗絾瀹归噺/杩囪浇绫婚敊璇簲鍏堣Е鍙戝璐﹀彿
+		// failover 浠ョ淮鎸佸熀纭€ SLA銆?
 		if shouldFailoverOpenAIPassthroughResponse(resp.StatusCode, upstreamMsg, respBody) {
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body)
 		}
@@ -3147,7 +3104,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		return nil, err
 	}
 
-	// 透传客户端请求头（安全白名单）。
+	// 閫忎紶瀹㈡埛绔姹傚ご锛堝畨鍏ㄧ櫧鍚嶅崟锛夈€?
 	allowTimeoutHeaders := s.isOpenAIPassthroughTimeoutHeadersAllowed()
 	if c != nil && c.Request != nil {
 		for key, values := range c.Request.Header {
@@ -3161,13 +3118,13 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		}
 	}
 
-	// 覆盖入站鉴权残留，并注入上游认证
+	// 瑕嗙洊鍏ョ珯閴存潈娈嬬暀锛屽苟娉ㄥ叆涓婃父璁よ瘉
 	req.Header.Del("authorization")
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
 	req.Header.Set("authorization", "Bearer "+token)
 
-	// OAuth 透传到 ChatGPT internal API 时补齐必要头。
+	// OAuth 閫忎紶鍒?ChatGPT internal API 鏃惰ˉ榻愬繀瑕佸ご銆?
 	if account.Type == AccountTypeOAuth {
 		promptCacheKey := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
 		req.Host = "chatgpt.com"
@@ -3175,7 +3132,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 			req.Header.Set("chatgpt-account-id", chatgptAccountID)
 		}
 		apiKeyID := getAPIKeyIDFromContext(c)
-		// 先保存客户端原始值，再做 compact 补充，避免后续统一隔离时读到已处理的值。
+		// 鍏堜繚瀛樺鎴风鍘熷鍊硷紝鍐嶅仛 compact 琛ュ厖锛岄伩鍏嶅悗缁粺涓€闅旂鏃惰鍒板凡澶勭悊鐨勫€笺€?
 		clientSessionID := strings.TrimSpace(req.Header.Get("session_id"))
 		clientConversationID := strings.TrimSpace(req.Header.Get("conversation_id"))
 		if isOpenAIResponsesCompactPath(c) {
@@ -3195,7 +3152,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		if req.Header.Get("originator") == "" {
 			req.Header.Set("originator", "codex_cli_rs")
 		}
-		// 用隔离后的 session 标识符覆盖客户端透传值，防止跨用户会话碰撞。
+		// 鐢ㄩ殧绂诲悗鐨?session 鏍囪瘑绗﹁鐩栧鎴风閫忎紶鍊硷紝闃叉璺ㄧ敤鎴蜂細璇濈鎾炪€?
 		if clientSessionID == "" {
 			clientSessionID = promptCacheKey
 		}
@@ -3210,7 +3167,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		}
 	}
 
-	// 透传模式也支持账户自定义 User-Agent 与 ForceCodexCLI 兜底。
+	// 閫忎紶妯″紡涔熸敮鎸佽处鎴疯嚜瀹氫箟 User-Agent 涓?ForceCodexCLI 鍏滃簳銆?
 	customUA := account.GetOpenAIUserAgent()
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
@@ -3218,7 +3175,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
-	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
+	// OAuth 瀹夊叏閫忎紶锛氬闈?Codex UA 缁熶竴鍏滃簳锛岄檷浣庤涓婃父椋庢帶鎷︽埅姒傜巼銆?
 	if account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(req.Header.Get("user-agent")) {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
@@ -3667,7 +3624,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream usage incomplete after disconnect: %w", err)
 		}
 		logger.LegacyPrintf("service.openai_gateway",
-			"[OpenAI passthrough] 流读取异常中断: account=%d request_id=%s err=%v",
+			"[OpenAI passthrough] 娴佽鍙栧紓甯镐腑鏂? account=%d request_id=%s err=%v",
 			account.ID,
 			upstreamRequestID,
 			err,
@@ -3682,7 +3639,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			zap.String("component", "service.openai_gateway"),
 			zap.Int64("account_id", account.ID),
 			zap.String("upstream_request_id", upstreamRequestID),
-		).Info("OpenAI passthrough 上游流在未收到 [DONE] 时结束，疑似断流")
+		).Info("OpenAI passthrough upstream stream ended before [DONE], suspected truncated stream")
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs},
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event")
@@ -3723,7 +3680,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		}
 	}
 	if !usageParsed {
-		// 兜底：尝试从 SSE 文本中解析 usage
+		// 鍏滃簳锛氬皾璇曚粠 SSE 鏂囨湰涓В鏋?usage
 		usage = s.parseSSEUsageFromBody(string(body))
 	}
 
@@ -3808,14 +3765,12 @@ func writeOpenAIPassthroughResponseHeaders(dst http.Header, src http.Header, fil
 	if filter != nil {
 		responseheaders.WriteFilteredHeaders(dst, src, filter)
 	} else {
-		// 兜底：尽量保留最基础的 content-type
+		// 鍏滃簳锛氬敖閲忎繚鐣欐渶鍩虹鐨?content-type
 		if v := strings.TrimSpace(src.Get("Content-Type")); v != "" {
 			dst.Set("Content-Type", v)
 		}
 	}
-	// 透传模式强制放行 x-codex-* 响应头（若上游返回）。
-	// 注意：真实 http.Response.Header 的 key 一般会被 canonicalize；但为了兼容测试/自建响应，
-	// 这里用 EqualFold 做一次大小写不敏感的查找。
+	// 閫忎紶妯″紡寮哄埗鏀捐 x-codex-* 鍝嶅簲澶达紙鑻ヤ笂娓歌繑鍥烇級銆?	// 娉ㄦ剰锛氱湡瀹?http.Response.Header 鐨?key 涓€鑸細琚?canonicalize锛涗絾涓轰簡鍏煎娴嬭瘯/鑷缓鍝嶅簲锛?	// 杩欓噷鐢?EqualFold 鍋氫竴娆″ぇ灏忓啓涓嶆晱鎰熺殑鏌ユ壘銆?
 	getCaseInsensitiveValues := func(h http.Header, want string) []string {
 		if h == nil {
 			return nil
@@ -3902,8 +3857,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		}
 	}
 	if account.Type == AccountTypeOAuth {
-		// 清除客户端透传的 session 头，后续用隔离后的值重新设置，防止跨用户会话碰撞。
-		req.Header.Del("conversation_id")
+		// 娓呴櫎瀹㈡埛绔€忎紶鐨?session 澶达紝鍚庣画鐢ㄩ殧绂诲悗鐨勫€奸噸鏂拌缃紝闃叉璺ㄧ敤鎴蜂細璇濈鎾炪€?		req.Header.Del("conversation_id")
 		req.Header.Del("session_id")
 
 		req.Header.Set("OpenAI-Beta", "responses=experimental")
@@ -3932,8 +3886,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("user-agent", customUA)
 	}
 
-	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为 Codex CLI。
-	// 用于网关未透传/改写 User-Agent 时，仍能命中 Codex 侧识别逻辑。
+	// 鑻ュ紑鍚?ForceCodexCLI锛屽垯寮哄埗灏嗕笂娓?User-Agent 浼涓?Codex CLI銆?	// 鐢ㄤ簬缃戝叧鏈€忎紶/鏀瑰啓 User-Agent 鏃讹紝浠嶈兘鍛戒腑 Codex 渚ц瘑鍒€昏緫銆?
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
@@ -4142,7 +4095,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, upstreamMsg)
 	}
 
-	// Check custom error codes — if the account does not handle this status,
+	// Check custom error codes 鈥?if the account does not handle this status,
 	// return a generic error without exposing upstream details.
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -4258,7 +4211,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
 	}
-	// 仅监控上游数据间隔超时，不被下游写入阻塞影响
+	// 浠呯洃鎺т笂娓告暟鎹棿闅旇秴鏃讹紝涓嶈涓嬫父鍐欏叆闃诲褰卞搷
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
 		intervalTicker = time.NewTicker(streamInterval)
@@ -4273,7 +4226,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
 		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
 	}
-	// 下游 keepalive 仅用于防止代理空闲断开
+	// 涓嬫父 keepalive 浠呯敤浜庨槻姝唬鐞嗙┖闂叉柇寮€
 	var keepaliveTicker *time.Ticker
 	if keepaliveInterval > 0 {
 		keepaliveTicker = time.NewTicker(keepaliveInterval)
@@ -4288,11 +4241,9 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	// based on downstream idle time.
 	lastDownstreamWriteAt := time.Now()
 
-	// 仅发送一次错误事件，避免多次写入导致协议混乱。
-	// 注意：OpenAI `/v1/responses` streaming 事件必须符合 OpenAI Responses schema；
-	// 否则下游 SDK（例如 OpenCode）会因为类型校验失败而报错。
+	// 浠呭彂閫佷竴娆￠敊璇簨浠讹紝閬垮厤澶氭鍐欏叆瀵艰嚧鍗忚娣蜂贡銆?	// 娉ㄦ剰锛歄penAI `/v1/responses` streaming 浜嬩欢蹇呴』绗﹀悎 OpenAI Responses schema锛?	// 鍚﹀垯涓嬫父 SDK锛堜緥濡?OpenCode锛変細鍥犱负绫诲瀷鏍￠獙澶辫触鑰屾姤閿欍€?
 	errorEventSent := false
-	clientDisconnected := false // 客户端断开后继续 drain 上游以收集 usage
+	clientDisconnected := false // 瀹㈡埛绔柇寮€鍚庣户缁?drain 涓婃父浠ユ敹闆?usage
 	sawTerminalEvent := false
 	sawFailedEvent := false
 	failedMessage := ""
@@ -4365,8 +4316,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		if sawFailedEvent {
 			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage), true
 		}
-		// 客户端断开/取消请求时，上游读取往往会返回 context canceled。
-		// /v1/responses 的 SSE 事件必须符合 OpenAI 协议；这里不注入自定义 error event，避免下游 SDK 解析失败。
+		// 瀹㈡埛绔柇寮€/鍙栨秷璇锋眰鏃讹紝涓婃父璇诲彇寰€寰€浼氳繑鍥?context canceled銆?		// /v1/responses 鐨?SSE 浜嬩欢蹇呴』绗﹀悎 OpenAI 鍗忚锛涜繖閲屼笉娉ㄥ叆鑷畾涔?error event锛岄伩鍏嶄笅娓?SDK 瑙ｆ瀽澶辫触銆?
 		if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", scanErr), true
 		}
@@ -4382,7 +4332,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			}
 			return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, msg), true
 		}
-		// 客户端已断开时，上游出错仅影响体验，不影响计费；返回已收集 usage
+		// 瀹㈡埛绔凡鏂紑鏃讹紝涓婃父鍑洪敊浠呭奖鍝嶄綋楠岋紝涓嶅奖鍝嶈璐癸紱杩斿洖宸叉敹闆?usage
 		if clientDisconnected {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", scanErr), true
 		}
@@ -4431,11 +4381,11 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			}
 			startsClientOutput := forceFlushFailedEvent || openAIStreamDataStartsClientOutput(data, eventType)
 
-			// 写入客户端（客户端断开后继续 drain 上游）
+			// 鍐欏叆瀹㈡埛绔紙瀹㈡埛绔柇寮€鍚庣户缁?drain 涓婃父锛?
 			if !clientDisconnected {
 				shouldFlush := queueDrained && (clientOutputStarted || startsClientOutput)
 				if firstTokenMs == nil && startsClientOutput {
-					// 保证首个 token 事件尽快出站，避免影响 TTFT。
+					// 淇濊瘉棣栦釜 token 浜嬩欢灏藉揩鍑虹珯锛岄伩鍏嶅奖鍝?TTFT銆?
 					shouldFlush = true
 				}
 				if _, err := bufferedWriter.WriteString(line); err != nil {
@@ -4484,7 +4434,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		}
 	}
 
-	// 无超时/无 keepalive 的常见路径走同步扫描，减少 goroutine 与 channel 开销。
+	// 鏃犺秴鏃?鏃?keepalive 鐨勫父瑙佽矾寰勮蛋鍚屾鎵弿锛屽噺灏?goroutine 涓?channel 寮€閿€銆?
 	if streamInterval <= 0 && keepaliveInterval <= 0 {
 		defer putSSEScannerBuf64K(scanBuf)
 		for scanner.Scan() {
@@ -4503,7 +4453,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		line string
 		err  error
 	}
-	// 独立 goroutine 读取上游，避免读取阻塞影响 keepalive/超时处理
+	// 鐙珛 goroutine 璇诲彇涓婃父锛岄伩鍏嶈鍙栭樆濉炲奖鍝?keepalive/瓒呮椂澶勭悊
 	events := make(chan scanEvent, 16)
 	done := make(chan struct{})
 	sendEvent := func(ev scanEvent) bool {
@@ -4554,7 +4504,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete after timeout")
 			}
 			logger.LegacyPrintf("service.openai_gateway", "Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
-			// 处理流超时，可能标记账户为临时不可调度或错误状态
+			// 澶勭悊娴佽秴鏃讹紝鍙兘鏍囪璐︽埛涓轰复鏃朵笉鍙皟搴︽垨閿欒鐘舵€?
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
@@ -4584,8 +4534,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 }
 
-// extractOpenAISSEDataLine 低开销提取 SSE `data:` 行内容。
-// 兼容 `data: xxx` 与 `data:xxx` 两种格式。
+// extractOpenAISSEDataLine extracts the content after an SSE data prefix.
 func extractOpenAISSEDataLine(line string) (string, bool) {
 	if !strings.HasPrefix(line, "data:") {
 		return "", false
@@ -4609,7 +4558,7 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 		return line
 	}
 
-	// 使用 gjson 精确检查 model 字段，避免全量 JSON 反序列化
+	// 浣跨敤 gjson 绮剧‘妫€鏌?model 瀛楁锛岄伩鍏嶅叏閲?JSON 鍙嶅簭鍒楀寲
 	if m := gjson.Get(data, "model"); m.Exists() && m.Str == fromModel {
 		newData, err := sjson.Set(data, "model", toModel)
 		if err != nil {
@@ -4618,7 +4567,7 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 		return "data: " + newData
 	}
 
-	// 检查嵌套的 response.model 字段
+	// 妫€鏌ュ祵濂楃殑 response.model 瀛楁
 	if m := gjson.Get(data, "response.model"); m.Exists() && m.Str == fromModel {
 		newData, err := sjson.Set(data, "response.model", toModel)
 		if err != nil {
@@ -4630,7 +4579,7 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 	return line
 }
 
-// correctToolCallsInResponseBody 修正响应体中的工具调用
+// correctToolCallsInResponseBody fixes tool calls in an OpenAI response body.
 func (s *OpenAIGatewayService) correctToolCallsInResponseBody(body []byte) []byte {
 	if len(body) == 0 {
 		return body
@@ -4651,7 +4600,7 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 	if usage == nil || len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
 		return
 	}
-	// 选择性解析：仅在数据中包含终止事件标识时才进入字段提取。
+	// 閫夋嫨鎬цВ鏋愶細浠呭湪鏁版嵁涓寘鍚粓姝簨浠舵爣璇嗘椂鎵嶈繘鍏ュ瓧娈垫彁鍙栥€?
 	if len(data) < 72 {
 		return
 	}
@@ -4981,10 +4930,8 @@ func (s *OpenAIGatewayService) validateUpstreamBaseURL(raw string) (string, erro
 	return normalized, nil
 }
 
-// buildOpenAIResponsesURL 组装 OpenAI Responses 端点。
-// - base 以 /v1 结尾：追加 /responses
-// - base 已是 /responses：原样返回
-// - 其他情况：追加 /v1/responses
+// buildOpenAIResponsesURL 缁勮 OpenAI Responses 绔偣銆?// - base 浠?/v1 缁撳熬锛氳拷鍔?/responses
+// - base 宸叉槸 /responses锛氬師鏍疯繑鍥?// - 鍏朵粬鎯呭喌锛氳拷鍔?/v1/responses
 func buildOpenAIResponsesURL(base string) string {
 	normalized := strings.TrimRight(strings.TrimSpace(base), "/")
 	if strings.HasSuffix(normalized, "/responses") {
@@ -5200,7 +5147,7 @@ func appendOpenAIResponsesRequestPathSuffix(baseURL, suffix string) string {
 }
 
 func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel, toModel string) []byte {
-	// 使用 gjson/sjson 精确替换 model 字段，避免全量 JSON 反序列化
+	// 浣跨敤 gjson/sjson 绮剧‘鏇挎崲 model 瀛楁锛岄伩鍏嶅叏閲?JSON 鍙嶅簭鍒楀寲
 	if m := gjson.GetBytes(body, "model"); m.Exists() && m.Str == fromModel {
 		newBody, err := sjson.SetBytes(body, "model", toModel)
 		if err != nil {
@@ -5220,8 +5167,8 @@ type OpenAIRecordUsageInput struct {
 	Subscription       *UserSubscription
 	InboundEndpoint    string
 	UpstreamEndpoint   string
-	UserAgent          string // 请求的 User-Agent
-	IPAddress          string // 请求的客户端 IP 地址
+	UserAgent          string // 璇锋眰鐨?User-Agent
+	IPAddress          string // 璇锋眰鐨勫鎴风 IP 鍦板潃
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	ChannelUsageFields
@@ -5234,7 +5181,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
 
-	// 跳过所有 token 均为零的用量记录——上游未返回 usage 时不应写入数据库
+	// 璺宠繃鎵€鏈?token 鍧囦负闆剁殑鐢ㄩ噺璁板綍鈥斺€斾笂娓告湭杩斿洖 usage 鏃朵笉搴斿啓鍏ユ暟鎹簱
 	if result.Usage.InputTokens == 0 && result.Usage.OutputTokens == 0 &&
 		result.Usage.CacheCreationInputTokens == 0 && result.Usage.CacheReadInputTokens == 0 &&
 		result.Usage.ImageOutputTokens == 0 && result.ImageCount == 0 {
@@ -5246,8 +5193,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	account := input.Account
 	subscription := input.Subscription
 
-	// 计算实际的新输入token（减去缓存读取的token）
-	// 因为 input_tokens 包含了 cache_read_tokens，而缓存读取的token不应按输入价格计费
+	// 璁＄畻瀹為檯鐨勬柊杈撳叆token锛堝噺鍘荤紦瀛樿鍙栫殑token锛?	// 鍥犱负 input_tokens 鍖呭惈浜?cache_read_tokens锛岃€岀紦瀛樿鍙栫殑token涓嶅簲鎸夎緭鍏ヤ环鏍艰璐?
 	actualInputTokens := result.Usage.InputTokens - result.Usage.CacheReadInputTokens
 	if actualInputTokens < 0 {
 		actualInputTokens = 0
@@ -5311,7 +5257,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	accountRateMultiplier := account.BillingRateMultiplier()
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
 
-	// 确定 RequestedModel（渠道映射前的原始模型）
+	// 纭畾 RequestedModel锛堟笭閬撴槧灏勫墠鐨勫師濮嬫ā鍨嬶級
 	requestedModel := result.Model
 	if input.OriginalModel != "" {
 		requestedModel = input.OriginalModel
@@ -5354,10 +5300,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	usageLog.DurationMs = &durationMs
 	usageLog.FirstTokenMs = result.FirstTokenMs
 	usageLog.CreatedAt = time.Now()
-	// 设置渠道信息
+	// 璁剧疆娓犻亾淇℃伅
 	usageLog.ChannelID = optionalInt64Ptr(input.ChannelID)
 	usageLog.ModelMappingChain = optionalTrimmedStringPtr(input.ModelMappingChain)
-	// 设置计费模式
+	// 璁剧疆璁¤垂妯″紡
 	if cost != nil && cost.BillingMode != "" {
 		billingMode := cost.BillingMode
 		usageLog.BillingMode = &billingMode
@@ -5368,12 +5314,12 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		billingMode := string(BillingModeToken)
 		usageLog.BillingMode = &billingMode
 	}
-	// 添加 UserAgent
+	// 娣诲姞 UserAgent
 	if input.UserAgent != "" {
 		usageLog.UserAgent = &input.UserAgent
 	}
 
-	// 添加 IPAddress
+	// 娣诲姞 IPAddress
 	if input.IPAddress != "" {
 		usageLog.IPAddress = &input.IPAddress
 	}
@@ -5385,7 +5331,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		usageLog.SubscriptionID = &subscription.ID
 	}
 
-	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
+	// 璁＄畻璐﹀彿缁熻瀹氫环璐圭敤锛堜娇鐢ㄦ渶缁堜笂娓告ā鍨嬪尮閰嶈嚜瀹氫箟瑙勫垯锛?
 	if apiKey.GroupID != nil {
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
@@ -5609,7 +5555,7 @@ func buildCodexUsageExtraUpdates(snapshot *OpenAICodexUsageSnapshot, fallbackNow
 	baseTime := codexSnapshotBaseTime(snapshot, fallbackNow)
 	updates := make(map[string]any)
 
-	// 保存原始 primary/secondary 字段，便于排查问题
+	// 淇濆瓨鍘熷 primary/secondary 瀛楁锛屼究浜庢帓鏌ラ棶棰?
 	if snapshot.PrimaryUsedPercent != nil {
 		updates["codex_primary_used_percent"] = *snapshot.PrimaryUsedPercent
 	}
@@ -5633,7 +5579,7 @@ func buildCodexUsageExtraUpdates(snapshot *OpenAICodexUsageSnapshot, fallbackNow
 	}
 	updates["codex_usage_updated_at"] = baseTime.Format(time.RFC3339)
 
-	// 归一化到 5h/7d 规范字段
+	// 褰掍竴鍖栧埌 5h/7d 瑙勮寖瀛楁
 	if normalized := snapshot.Normalize(); normalized != nil {
 		if normalized.Used5hPercent != nil {
 			updates["codex_5h_used_percent"] = *normalized.Used5hPercent
@@ -5778,9 +5724,9 @@ func extractOpenAIRequestMetaFromBody(body []byte) (model string, stream bool, p
 	return model, stream, promptCacheKey
 }
 
-// normalizeOpenAIPassthroughOAuthBody 将透传 OAuth 请求体收敛为旧链路关键行为：
-// 1) 删除 ChatGPT internal API 不支持的顶层 Responses 参数
-// 2) store=false 3) 非 compact 保持 stream=true；compact 强制 stream=false
+// normalizeOpenAIPassthroughOAuthBody 灏嗛€忎紶 OAuth 璇锋眰浣撴敹鏁涗负鏃ч摼璺叧閿涓猴細
+// 1) 鍒犻櫎 ChatGPT internal API 涓嶆敮鎸佺殑椤跺眰 Responses 鍙傛暟
+// 2) store=false 3) 闈?compact 淇濇寔 stream=true锛沜ompact 寮哄埗 stream=false
 func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
@@ -5905,10 +5851,8 @@ func normalizeOpenAIServiceTier(raw string) *string {
 	if value == "fast" {
 		value = "priority"
 	}
-	// 放过 OpenAI 官方文档定义的所有合法 tier 值：priority/flex/auto/default/scale。
-	// 对 Codex 客户端零影响（Codex 只发 priority 或 flex，见 codex-rs/core/src/client.rs），
-	// 但能让直连 OpenAI SDK 的用户透传 auto/default/scale 以便抓包/调试。
-	// 真未知值仍返回 nil，由 normalizeResponsesBodyServiceTier 从 body 中删除。
+	// 鏀捐繃 OpenAI 瀹樻柟鏂囨。瀹氫箟鐨勬墍鏈夊悎娉?tier 鍊硷細priority/flex/auto/default/scale銆?	// 瀵?Codex 瀹㈡埛绔浂褰卞搷锛圕odex 鍙彂 priority 鎴?flex锛岃 codex-rs/core/src/client.rs锛夛紝
+	// 浣嗚兘璁╃洿杩?OpenAI SDK 鐨勭敤鎴烽€忎紶 auto/default/scale 浠ヤ究鎶撳寘/璋冭瘯銆?	// 鐪熸湭鐭ュ€间粛杩斿洖 nil锛岀敱 normalizeResponsesBodyServiceTier 浠?body 涓垹闄ゃ€?
 	switch value {
 	case "priority", "flex", "auto", "default", "scale":
 		return &value
@@ -5936,14 +5880,11 @@ func (e *OpenAIFastBlockedError) Error() string { return e.Message }
 //   - ModelWhitelist narrows the rule to specific models; FallbackAction
 //     handles the non-matching case (default: pass)
 //
-// 与 Claude BetaPolicy 的差异（保留首条匹配 short-circuit）：
-//   - BetaPolicy 处理的是 anthropic-beta header 中的 token 集合，不同
-//     规则可能针对不同 token，filter 需要累加成 set；block 则 first-match。
-//   - OpenAI fast policy 操作的是单个字段 service_tier：filter 即删字段，
-//     没有可累加的对象。一次请求只携带一个 service_tier，规则的 tier
-//     维度天然互斥；同一 (scope, tier) 下若多条规则的 model whitelist
-//     发生重叠，admin 可通过规则顺序明确意图。因此采用 first-match 而
-//     非 BetaPolicy 那样的"block 覆盖 filter 覆盖 pass"语义。
+// 涓?Claude BetaPolicy 鐨勫樊寮傦紙淇濈暀棣栨潯鍖归厤 short-circuit锛夛細
+//   - BetaPolicy 澶勭悊鐨勬槸 anthropic-beta header 涓殑 token 闆嗗悎锛屼笉鍚?//     瑙勫垯鍙兘閽堝涓嶅悓 token锛宖ilter 闇€瑕佺疮鍔犳垚 set锛沚lock 鍒?first-match銆?//   - OpenAI fast policy 鎿嶄綔鐨勬槸鍗曚釜瀛楁 service_tier锛歠ilter 鍗冲垹瀛楁锛?//     娌℃湁鍙疮鍔犵殑瀵硅薄銆備竴娆¤姹傚彧鎼哄甫涓€涓?service_tier锛岃鍒欑殑 tier
+//     缁村害澶╃劧浜掓枼锛涘悓涓€ (scope, tier) 涓嬭嫢澶氭潯瑙勫垯鐨?model whitelist
+//
+// evaluateOpenAIFastPolicy evaluates the OpenAI service tier policy for an account.
 func (s *OpenAIGatewayService) evaluateOpenAIFastPolicy(ctx context.Context, account *Account, model, serviceTier string) (action, errMsg string) {
 	if s == nil || s.settingService == nil {
 		return BetaPolicyActionPass, ""
@@ -5993,19 +5934,17 @@ func evaluateOpenAIFastPolicyWithSettings(settings *OpenAIFastPolicySettings, ac
 	return BetaPolicyActionPass, ""
 }
 
-// openAIFastPolicyCtxKey 是 context 中预取的 OpenAIFastPolicySettings 缓存
-// 键，仅用于 WebSocket 长会话内多帧复用同一份策略快照，避免每帧 DB 命中。
-//
-// Trade-off：策略变更不会影响当前 WS session（只影响新 session）。这是
-// 有意为之 —— 对长会话来说，"策略一致性"比"立刻生效"更重要，且 Claude
-// BetaPolicy 的 gin.Context 缓存也是同样取舍。需要 hot-reload 时管理员
-// 可以通过踢断 session 强制刷新。
+// openAIFastPolicyCtxKey 鏄?context 涓鍙栫殑 OpenAIFastPolicySettings 缂撳瓨
+// 閿紝浠呯敤浜?WebSocket 闀夸細璇濆唴澶氬抚澶嶇敤鍚屼竴浠界瓥鐣ュ揩鐓э紝閬垮厤姣忓抚 DB 鍛戒腑銆?//
+// Trade-off锛氱瓥鐣ュ彉鏇翠笉浼氬奖鍝嶅綋鍓?WS session锛堝彧褰卞搷鏂?session锛夈€傝繖鏄?// 鏈夋剰涓轰箣 鈥斺€?瀵归暱浼氳瘽鏉ヨ锛?绛栫暐涓€鑷存€?姣?绔嬪埢鐢熸晥"鏇撮噸瑕侊紝涓?Claude
+// BetaPolicy 鐨?gin.Context 缂撳瓨涔熸槸鍚屾牱鍙栬垗銆傞渶瑕?hot-reload 鏃剁鐞嗗憳
+// openAIFastPolicyCtxKeyType stores preloaded fast-policy settings in context.
 type openAIFastPolicyCtxKeyType struct{}
 
 var openAIFastPolicyCtxKey = openAIFastPolicyCtxKeyType{}
 
-// withOpenAIFastPolicyContext 将一份 settings 快照绑定到 context，供该 ctx
-// 衍生 goroutine 中的 evaluateOpenAIFastPolicy 复用。
+// withOpenAIFastPolicyContext 灏嗕竴浠?settings 蹇収缁戝畾鍒?context锛屼緵璇?ctx
+// withOpenAIFastPolicyContext attaches fast-policy settings to context for goroutine reuse.
 func withOpenAIFastPolicyContext(ctx context.Context, settings *OpenAIFastPolicySettings) context.Context {
 	if ctx == nil || settings == nil {
 		return ctx
@@ -6026,14 +5965,11 @@ func openAIFastPolicySettingsFromContext(ctx context.Context) *OpenAIFastPolicyS
 // applyOpenAIFastPolicyToBody applies the OpenAI fast policy to a raw request
 // body. When action=filter it removes the service_tier field; when
 // action=block it returns (body, *OpenAIFastBlockedError). On pass it
-// normalizes the service_tier value (e.g. client alias "fast" → "priority"),
+// normalizes the service_tier value (e.g. client alias "fast" 鈫?"priority"),
 // rewriting the body so the upstream receives a slug it recognizes.
 //
-// Rationale for normalize-on-pass: chat-completions / messages 入口在调用本
-// 函数之前已经通过 normalizeResponsesBodyServiceTier 把 service_tier 归一化
-// 到了上游可识别值；passthrough（OpenAI 自动透传） / native /responses 等
-// 入口没有这一前置步骤，pass 路径下若不在此处归一化，"fast" 就会被原样
-// 透传到 OpenAI 上游导致 400/拒绝。把归一化收敛到本函数，所有入口行为一致。
+// Rationale for normalize-on-pass: chat-completions / messages 鍏ュ彛鍦ㄨ皟鐢ㄦ湰
+// applyOpenAIFastPolicyToBody applies service tier policy to a request body.
 func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, account *Account, model string, body []byte) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
@@ -6061,7 +5997,7 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, 
 		}
 		return trimmed, nil
 	default:
-		// pass：把别名（如 "fast"）写回为规范值（"priority"）。
+		// pass锛氭妸鍒悕锛堝 "fast"锛夊啓鍥炰负瑙勮寖鍊硷紙"priority"锛夈€?
 		if normTier == rawTier {
 			return body, nil
 		}
@@ -6088,7 +6024,7 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 }
 
 // applyOpenAIFastPolicyToWSResponseCreate evaluates the OpenAI fast policy
-// against a single client→upstream WebSocket frame whose top-level
+// against a single client鈫抲pstream WebSocket frame whose top-level
 // "type"=="response.create". It mirrors the HTTP-side
 // applyOpenAIFastPolicyToBody contract but operates on a Realtime/Responses
 // WS payload:
@@ -6098,20 +6034,18 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 //   - block: returns (frame, *OpenAIFastBlockedError)
 //
 // Only frames whose "type" field strictly equals "response.create" are
-// inspected/mutated. Any other frame type — including the empty string —
-// passes through untouched. The OpenAI Realtime client-event spec requires
+// inspected/mutated. Any other frame type 鈥?including the empty string 鈥?// passes through untouched. The OpenAI Realtime client-event spec requires
 // "type" to be set, so an empty type is treated as a malformed frame we do
 // not police; the upstream is the source of truth for rejecting it.
 //
-// service_tier lives at the top level of response.create — same as the
+// service_tier lives at the top level of response.create 鈥?same as the
 // Responses HTTP body shape (see openai_gateway_chat_completions.go:304 +
 // extractOpenAIServiceTierFromBody at line 5593, and the test fixture at
 // openai_ws_forwarder_ingress_session_test.go:402). We therefore only need
 // to inspect / strip the top-level field; there is no nested form in the
 // schema today.
 //
-// The caller is responsible for choosing the upstream model passed in —
-// this helper does not re-derive it.
+// The caller is responsible for choosing the upstream model passed in 鈥?// this helper does not re-derive it.
 func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	ctx context.Context,
 	account *Account,
@@ -6129,7 +6063,7 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	// types pass through untouched so we never accidentally strip fields
 	// from response.cancel, conversation.item.create, or any future
 	// client-event the spec adds. The Realtime spec requires "type" on
-	// every client event, so an empty type is malformed input — let the
+	// every client event, so an empty type is malformed input 鈥?let the
 	// upstream reject it rather than guessing at our layer.
 	if frameType != "response.create" {
 		return frame, nil, nil

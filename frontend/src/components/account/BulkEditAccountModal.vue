@@ -1020,6 +1020,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
+import type { AccountBatchTask } from '@/api/accounts'
 import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType, GroupPlatform } from '@/types'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -1073,7 +1074,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 const emit = defineEmits<{
   close: []
-  updated: []
+  updated: [payload?: { async?: boolean; task?: AccountBatchTask }]
 }>()
 
 const { t } = useI18n()
@@ -1652,6 +1653,12 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
         ...payload
       })
       : await adminAPI.accounts.bulkUpdate(props.accountIds, payload)
+    if (isUserScope.value && res.async && res.task) {
+      appStore.showSuccess(t('admin.accounts.bulkActions.asyncSubmitted', { count: res.task.total }))
+      emit('updated', { async: true, task: res.task })
+      handleClose()
+      return
+    }
     const success = res.success || 0
     const failed = res.failed || 0
 

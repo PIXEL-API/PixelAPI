@@ -100,6 +100,8 @@ function checkoutInfoFixture() {
       },
       global_min: 0,
       global_max: 0,
+      min_amount: 0,
+      max_amount: 0,
       plans: [],
       balance_disabled: false,
       balance_recharge_multiplier: 1,

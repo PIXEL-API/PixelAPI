@@ -17,6 +17,7 @@ const (
 	TypeCard         PaymentType = "card"
 	TypeLink         PaymentType = "link"
 	TypeEasyPay      PaymentType = "easypay"
+	TypeAirwallex    PaymentType = "airwallex"
 )
 
 // Order status constants shared across payment and service layers.
@@ -39,6 +40,7 @@ const (
 const (
 	OrderTypeBalance      = "balance"
 	OrderTypeSubscription = "subscription"
+	OrderTypeShop         = "shop"
 )
 
 // Entity statuses shared across users, groups, etc.
@@ -82,6 +84,8 @@ func GetBasePaymentType(t string) string {
 	switch {
 	case t == TypeEasyPay:
 		return TypeEasyPay
+	case t == TypeAirwallex:
+		return TypeAirwallex
 	case t == TypeStripe || t == TypeCard || t == TypeLink:
 		return TypeStripe
 	case len(t) >= len(TypeAlipay) && t[:len(TypeAlipay)] == TypeAlipay:
@@ -96,7 +100,7 @@ func GetBasePaymentType(t string) string {
 // CreatePaymentRequest holds the parameters for creating a new payment.
 type CreatePaymentRequest struct {
 	OrderID            string // Internal order ID
-	Amount             string // Pay amount in CNY (formatted to 2 decimal places)
+	Amount             string // Pay amount in the provider instance currency
 	PaymentType        string // e.g. "alipay", "wxpay", "stripe"
 	Subject            string // Product description
 	NotifyURL          string // Webhook callback URL
@@ -141,7 +145,11 @@ type CreatePaymentResponse struct {
 	TradeNo      string                  // Third-party transaction ID
 	PayURL       string                  // H5 payment URL (alipay/wxpay)
 	QRCode       string                  // QR code content for scanning
-	ClientSecret string                  // Stripe PaymentIntent client secret
+	ClientSecret string                  // Provider client secret for frontend SDKs
+	IntentID     string                  // Provider payment intent ID for frontend SDKs
+	Currency     string                  // Provider payment currency
+	CountryCode  string                  // Provider checkout country/region code
+	PaymentEnv   string                  // Provider frontend environment
 	ResultType   CreatePaymentResultType // Typed result contract for frontend flows
 	OAuth        *WechatOAuthInfo        // WeChat OAuth bootstrap payload when required
 	JSAPI        *WechatJSAPIPayload     // WeChat JSAPI invocation payload when ready
@@ -151,7 +159,7 @@ type CreatePaymentResponse struct {
 type QueryOrderResponse struct {
 	TradeNo  string
 	Status   string  // "pending", "paid", "failed", "refunded"
-	Amount   float64 // Amount in CNY
+	Amount   float64 // Amount in the provider currency
 	PaidAt   string  // RFC3339 timestamp or empty
 	Metadata map[string]string
 }

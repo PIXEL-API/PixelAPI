@@ -34,8 +34,11 @@ type AdminHandlers struct {
 	Channel                *admin.ChannelHandler
 	ChannelMonitor         *admin.ChannelMonitorHandler
 	ChannelMonitorTemplate *admin.ChannelMonitorRequestTemplateHandler
+	ContentModeration      *admin.ContentModerationHandler
 	Payment                *admin.PaymentHandler
 	Revenue                *admin.RevenueHandler
+	Withdrawal             *admin.WithdrawalHandler
+	Shop                   *admin.ShopHandler
 	Affiliate              *admin.AffiliateHandler
 	Subsite                *admin.SubsiteHandler
 }
@@ -61,6 +64,8 @@ type Handlers struct {
 	AvailableChannel *AvailableChannelHandler
 	SubsiteInternal  *SubsiteInternalHandler
 	ReceiptCode      *ReceiptCodeHandler
+	Withdrawal       *WithdrawalHandler
+	Shop             *ShopHandler
 }
 
 // BuildInfo contains build-time information

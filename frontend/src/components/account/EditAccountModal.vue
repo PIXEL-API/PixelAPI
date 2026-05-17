@@ -60,11 +60,21 @@
 
       <div v-if="account.platform === 'openai'">
         <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
-        <div class="input flex min-h-[42px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
+        <Select
+          v-if="!isUserScope"
+          v-model="form.account_level"
+          :options="accountLevelOptions"
+        />
+        <div
+          v-else
+          class="input flex min-h-[42px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200"
+        >
           <span>{{ accountLevelLabel }}</span>
           <span class="text-xs text-gray-400 dark:text-dark-400">{{ t('admin.accounts.accountLevel.autoDetected') }}</span>
         </div>
-        <p class="input-hint">{{ t('admin.accounts.accountLevel.autoDetectedHint') }}</p>
+        <p class="input-hint">
+          {{ isUserScope ? t('admin.accounts.accountLevel.autoDetectedHint') : t('admin.accounts.accountLevel.manualHint') }}
+        </p>
       </div>
 
       <!-- API Key fields (only for apikey type) -->
@@ -1295,7 +1305,7 @@
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" :max="concurrencyMax" class="input"
+          <input v-model.number="form.concurrency" type="number" min="1" class="input"
             @input="normalizeConcurrencyInput" />
         </div>
         <div>
@@ -2475,37 +2485,31 @@ const accountLevelLabel = computed(() => {
   return t(`admin.accounts.accountLevel.${level}`)
 })
 
-const OPENAI_PLUS_MAX_CONCURRENCY = 3
-const isOpenAIPlusForm = computed(() => props.account?.platform === 'openai' && form.account_level === 'plus')
-const concurrencyMax = computed(() => isOpenAIPlusForm.value ? OPENAI_PLUS_MAX_CONCURRENCY : undefined)
+const accountLevelOptions = computed(() => [
+  { value: 'unknown', label: t('admin.accounts.accountLevel.unknown') },
+  { value: 'free', label: t('admin.accounts.accountLevel.free') },
+  { value: 'plus', label: t('admin.accounts.accountLevel.plus') },
+  { value: 'pro', label: t('admin.accounts.accountLevel.pro') },
+  { value: 'team', label: t('admin.accounts.accountLevel.team') }
+])
 
 const normalizeConcurrencyInput = () => {
   if (isUserScope.value) {
     form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
     return
   }
-  const minConcurrency = Math.max(1, form.concurrency || 1)
-  form.concurrency = isOpenAIPlusForm.value
-    ? Math.min(OPENAI_PLUS_MAX_CONCURRENCY, minConcurrency)
-    : minConcurrency
+  form.concurrency = Math.max(1, form.concurrency || 1)
 }
 
-const applyOpenAIPlusConcurrencyLimit = () => {
+const applyUserScopeConcurrencyTemplate = () => {
   if (isUserScope.value) {
     form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
     form.load_factor = null
     return
   }
-  if (!isOpenAIPlusForm.value) return
-  if (form.concurrency > OPENAI_PLUS_MAX_CONCURRENCY) {
-    form.concurrency = OPENAI_PLUS_MAX_CONCURRENCY
-  }
-  if (form.load_factor && form.load_factor > OPENAI_PLUS_MAX_CONCURRENCY) {
-    form.load_factor = OPENAI_PLUS_MAX_CONCURRENCY
-  }
 }
 
-watch(() => [props.account?.platform, form.account_level], applyOpenAIPlusConcurrencyLimit)
+watch(() => isUserScope.value, applyUserScopeConcurrencyTemplate)
 
 const statusOptions = computed(() => {
   if (isUserScope.value) {
@@ -3381,7 +3385,9 @@ const handleSubmit = async () => {
   }
 
   const updatePayload: Record<string, unknown> = { ...form }
-  delete updatePayload.account_level
+  if (isUserScope.value || props.account.platform !== 'openai') {
+    delete updatePayload.account_level
+  }
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     if (updatePayload.proxy_id === null) {

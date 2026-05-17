@@ -69,6 +69,57 @@
             </div>
           </div>
         </div>
+        <!-- Store Delivery -->
+        <div
+          v-if="isShopPayment && (shopOrder || loadingShopOrder)"
+          class="rounded-xl bg-white p-5 shadow-sm dark:bg-dark-800"
+        >
+          <div v-if="loadingShopOrder && !shopOrder" class="flex items-center justify-center py-8">
+            <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
+          </div>
+          <div v-else-if="shopOrder" class="space-y-4">
+            <div class="space-y-2 text-sm">
+              <div class="flex justify-between gap-3">
+                <span class="text-gray-500 dark:text-gray-400">{{ t('store.product') }}</span>
+                <span class="text-right font-medium text-gray-900 dark:text-white">{{ shopOrder.product_name }}</span>
+              </div>
+              <div class="flex justify-between gap-3">
+                <span class="text-gray-500 dark:text-gray-400">{{ t('store.quantity') }}</span>
+                <span class="font-medium text-gray-900 dark:text-white">{{ shopOrder.quantity }}</span>
+              </div>
+            </div>
+
+            <div v-if="shopOrder.delivered_cards.length > 0">
+              <div class="mb-2 flex items-center justify-between gap-3">
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</span>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  @click="copyShopDeliveredCards"
+                >
+                  {{ t('common.copy') }}
+                </button>
+              </div>
+              <div class="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-900">
+                <code
+                  v-for="(card, index) in shopOrder.delivered_cards"
+                  :key="index"
+                  class="block break-all rounded-md bg-white px-3 py-2 font-mono text-xs text-gray-900 dark:bg-dark-800 dark:text-dark-100"
+                >
+                  {{ card }}
+                </code>
+              </div>
+            </div>
+            <DeliveredFilesList
+              v-if="shopOrder.delivered_files.length > 0"
+              :order-id="shopOrder.id"
+              :files="shopOrder.delivered_files"
+            />
+            <p v-if="shopOrder.delivered_cards.length === 0 && shopOrder.delivered_files.length === 0" class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-900 dark:text-dark-400">
+              {{ t('store.deliveryPending') }}
+            </p>
+          </div>
+        </div>
         <!-- EasyPay return info (when no order loaded) -->
         <div v-else-if="returnInfo" class="rounded-xl bg-white p-5 shadow-sm dark:bg-dark-800">
           <div class="space-y-3 text-sm">
@@ -88,7 +139,7 @@
         </div>
         <!-- Actions -->
         <div class="flex gap-3">
-          <button class="btn btn-secondary flex-1" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
+          <button class="btn btn-secondary flex-1" @click="router.push(resultBackPath)">{{ resultBackLabel }}</button>
           <button class="btn btn-primary flex-1" @click="router.push('/orders')">{{ t('payment.result.viewOrders') }}</button>
         </div>
       </template>
@@ -101,6 +152,7 @@ import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
+import DeliveredFilesList from '@/components/store/DeliveredFilesList.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   clearPaymentRecoverySnapshot,
@@ -108,7 +160,9 @@ import {
 } from '@/components/payment/paymentFlow'
 import { usePaymentStore } from '@/stores/payment'
 import { paymentAPI } from '@/api/payment'
+import { storeAPI } from '@/api/store'
 import type { PaymentOrder } from '@/types/payment'
+import type { StoreOrder } from '@/types/store'
 import { normalizePaymentMethodForDisplay, paymentMethodI18nKey } from './paymentUx'
 
 const { t } = useI18n()
@@ -117,7 +171,9 @@ const router = useRouter()
 const paymentStore = usePaymentStore()
 
 const order = ref<PaymentOrder | null>(null)
+const shopOrder = ref<StoreOrder | null>(null)
 const loading = ref(true)
+const loadingShopOrder = ref(false)
 
 interface ReturnInfo {
   outTradeNo: string
@@ -164,6 +220,9 @@ const statusTitle = computed(() => {
   }
   return t('payment.result.failed')
 })
+const isShopPayment = computed(() => order.value?.order_type === 'shop')
+const resultBackPath = computed(() => isShopPayment.value ? '/store' : '/purchase')
+const resultBackLabel = computed(() => isShopPayment.value ? t('nav.store') : t('payment.result.backToRecharge'))
 
 function normalizedOrderPaymentType(paymentType: string): string {
   return normalizePaymentMethodForDisplay(paymentType) || paymentType
@@ -179,6 +238,76 @@ function isSuccessStatus(status: string | null | undefined): boolean {
 
 function isPendingStatus(status: string | null | undefined): boolean {
   return PENDING_STATUSES.has(normalizeOrderStatus(status))
+}
+
+function hasLocalAuthToken(): boolean {
+  if (typeof window === 'undefined') return false
+  return !!window.localStorage.getItem('auth_token')
+}
+
+function shouldLoadShopOrder(paymentOrder: PaymentOrder | null): paymentOrder is PaymentOrder & { shop_order_id: number } {
+  return hasLocalAuthToken()
+    && paymentOrder?.order_type === 'shop'
+    && typeof paymentOrder.shop_order_id === 'number'
+    && paymentOrder.shop_order_id > 0
+}
+
+function shouldRefreshShopDelivery(): boolean {
+  if (!shouldLoadShopOrder(order.value) || !isSuccessStatus(order.value.status)) {
+    return false
+  }
+  if (!shopOrder.value) {
+    return true
+  }
+  return (shopOrder.value.status === 'pending' || shopOrder.value.status === 'paid')
+    && shopOrder.value.delivered_cards.length === 0
+    && shopOrder.value.delivered_files.length === 0
+}
+
+async function loadShopOrder(paymentOrder: PaymentOrder | null = order.value): Promise<void> {
+  if (!shouldLoadShopOrder(paymentOrder)) {
+    shopOrder.value = null
+    return
+  }
+
+  loadingShopOrder.value = true
+  try {
+    const { data } = await storeAPI.getOrder(paymentOrder.shop_order_id)
+    shopOrder.value = data
+  } catch (_err: unknown) {
+    shopOrder.value = null
+  } finally {
+    loadingShopOrder.value = false
+  }
+}
+
+async function copyShopDeliveredCards(): Promise<void> {
+  const cards = shopOrder.value?.delivered_cards || []
+  if (cards.length === 0) return
+  await copyText(cards.join('\n'))
+}
+
+async function copyText(text: string): Promise<void> {
+  if (!text || typeof window === 'undefined') return
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // Continue with the DOM copy path below.
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.cssText = 'position:fixed;left:-9999px;top:-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    document.execCommand('copy')
+  } finally {
+    document.body.removeChild(textarea)
+  }
 }
 
 function readRouteQueryString(key: string): string {
@@ -268,7 +397,7 @@ function clearRecoverySnapshotForTerminalStatus(status: string | null | undefine
 
 function scheduleStatusRefresh(refreshOrder: (() => Promise<PaymentOrder | null>) | null): void {
   clearStatusRefreshTimer()
-  if (!refreshOrder || !isPending.value || refreshAttempts.value >= STATUS_REFRESH_MAX_ATTEMPTS) {
+  if (!refreshOrder || (!isPending.value && !shouldRefreshShopDelivery()) || refreshAttempts.value >= STATUS_REFRESH_MAX_ATTEMPTS) {
     return
   }
 
@@ -277,10 +406,11 @@ function scheduleStatusRefresh(refreshOrder: (() => Promise<PaymentOrder | null>
     const refreshedOrder = await refreshOrder()
     if (refreshedOrder) {
       order.value = refreshedOrder
+      await loadShopOrder(refreshedOrder)
       clearRecoverySnapshotForTerminalStatus(refreshedOrder.status)
     }
 
-    if (isPendingStatus(order.value?.status)) {
+    if (isPendingStatus(order.value?.status) || shouldRefreshShopDelivery()) {
       scheduleStatusRefresh(refreshOrder)
     }
   }, STATUS_REFRESH_INTERVAL_MS)
@@ -375,7 +505,8 @@ onMounted(async () => {
     return null
   }
 
-  if (isPendingStatus(order.value?.status)) {
+  await loadShopOrder(order.value)
+  if (isPendingStatus(order.value?.status) || shouldRefreshShopDelivery()) {
     scheduleStatusRefresh(refreshOrder)
   } else if (order.value) {
     clearRecoverySnapshotForTerminalStatus(order.value.status)

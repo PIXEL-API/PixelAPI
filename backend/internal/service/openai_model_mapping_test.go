@@ -20,6 +20,15 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:      "gpt-4o-mini",
 		},
 		{
+			name: "does not fall back to group default for invalid gpt model",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			requestedModel:     "gpt6",
+			defaultMappedModel: "gpt-5.4",
+			expectedModel:      "gpt6",
+		},
+		{
 			name: "preserves explicit gpt-5.4 instead of group default",
 			account: &Account{
 				Credentials: map[string]any{},
