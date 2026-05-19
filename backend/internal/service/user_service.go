@@ -32,7 +32,7 @@ var (
 	ErrUserNotFound             = infraerrors.NotFound("USER_NOT_FOUND", "user not found")
 	ErrPasswordIncorrect        = infraerrors.BadRequest("PASSWORD_INCORRECT", "current password is incorrect")
 	ErrInsufficientPerms        = infraerrors.Forbidden("INSUFFICIENT_PERMISSIONS", "insufficient permissions")
-	ErrUserConcurrencyRange     = infraerrors.BadRequest("USER_CONCURRENCY_INVALID", fmt.Sprintf("user concurrency must be between %d and %d", UserMinConcurrency, UserMaxConcurrency))
+	ErrUserConcurrencyRange     = infraerrors.BadRequest("USER_CONCURRENCY_INVALID", fmt.Sprintf("user concurrency must be at least %d", UserMinConcurrency))
 	ErrNotifyCodeUserRateLimit  = infraerrors.TooManyRequests("NOTIFY_CODE_USER_RATE_LIMIT", "too many verification codes requested, please try again later")
 	ErrAvatarInvalid            = infraerrors.BadRequest("AVATAR_INVALID", "avatar must be a valid image data URL or http(s) URL")
 	ErrAvatarTooLarge           = infraerrors.BadRequest("AVATAR_TOO_LARGE", "avatar image must be 100KB or smaller")
@@ -46,7 +46,7 @@ var (
 )
 
 func validatePersonalUserConcurrency(concurrency int) error {
-	if concurrency < UserMinConcurrency || concurrency > UserMaxConcurrency {
+	if concurrency < UserMinConcurrency {
 		return ErrUserConcurrencyRange
 	}
 	return nil
@@ -54,7 +54,7 @@ func validatePersonalUserConcurrency(concurrency int) error {
 
 func defaultPersonalUserConcurrency(concurrency int) int {
 	if concurrency <= 0 {
-		return UserMaxConcurrency
+		return UserDefaultConcurrency
 	}
 	return concurrency
 }

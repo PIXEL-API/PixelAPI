@@ -31,6 +31,31 @@ func NewUsageHandler(usageService *service.UsageService, apiKeyService *service.
 	}
 }
 
+// PublicTodayStats handles public homepage usage counters.
+// GET /api/v1/public/usage/today
+func (h *UsageHandler) PublicTodayStats(c *gin.Context) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		response.InternalError(c, "Failed to load timezone")
+		return
+	}
+
+	now := time.Now().In(loc)
+	startTime := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+
+	stats, err := h.usageService.GetGlobalStats(c.Request.Context(), startTime, now)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"today_requests": stats.TotalRequests,
+		"today_tokens":   stats.TotalTokens,
+		"timezone":       "Asia/Shanghai",
+	})
+}
+
 // List handles listing usage records with pagination
 // GET /api/v1/usage
 func (h *UsageHandler) List(c *gin.Context) {

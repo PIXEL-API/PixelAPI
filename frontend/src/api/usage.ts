@@ -39,6 +39,12 @@ export interface UserDashboardStats {
   tpm: number // 近5分钟平均每分钟Token数
 }
 
+export interface PublicTodayUsageStats {
+  today_requests: number
+  today_tokens: number
+  timezone: string
+}
+
 export interface TrendParams {
   start_date?: string
   end_date?: string
@@ -259,6 +265,14 @@ export async function getDashboardStats(): Promise<UserDashboardStats> {
 }
 
 /**
+ * Get public site-wide usage counters for the homepage.
+ */
+export async function getPublicTodayStats(): Promise<PublicTodayUsageStats> {
+  const { data } = await apiClient.get<PublicTodayUsageStats>('/public/usage/today')
+  return data
+}
+
+/**
  * Get user usage trend data
  * @param params - Query parameters for filtering
  * @returns Usage trend data for current user
@@ -328,6 +342,7 @@ export const usageAPI = {
   getByDateRange,
   getById,
   // Dashboard
+  getPublicTodayStats,
   getDashboardStats,
   getDashboardTrend,
   getDashboardModels,

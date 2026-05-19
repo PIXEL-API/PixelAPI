@@ -15,6 +15,14 @@ func RegisterUserRoutes(
 	jwtAuth middleware.JWTAuthMiddleware,
 	settingService *service.SettingService,
 ) {
+	public := v1.Group("/public")
+	{
+		usage := public.Group("/usage")
+		{
+			usage.GET("/today", h.Usage.PublicTodayStats)
+		}
+	}
+
 	shopPublic := v1.Group("/shop")
 	{
 		shopPublic.GET("/categories", h.Shop.ListCategories)

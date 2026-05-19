@@ -603,7 +603,19 @@ func (s *PaymentService) buildWeChatOAuthRequiredResponse(ctx context.Context, r
 		return nil, err
 	}
 
-	authorizeURL, err := buildWeChatPaymentOAuthStartURL(req, "snsapi_base")
+	contextToken, err := s.paymentResume().CreateWeChatPaymentOAuthContextToken(WeChatPaymentOAuthContextClaims{
+		UserID:      req.UserID,
+		PaymentType: req.PaymentType,
+		Amount:      strconv.FormatFloat(req.Amount, 'f', -1, 64),
+		OrderType:   req.OrderType,
+		PlanID:      req.PlanID,
+		RedirectTo:  paymentRedirectPathFromURL(req.SrcURL),
+		Scope:       "snsapi_base",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create wechat payment oauth context token: %w", err)
+	}
+	authorizeURL, err := buildWeChatPaymentOAuthStartURL(contextToken)
 	if err != nil {
 		return nil, err
 	}
@@ -744,28 +756,13 @@ func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest,
 	}
 }
 
-func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (string, error) {
+func buildWeChatPaymentOAuthStartURL(contextToken string) (string, error) {
 	u, err := url.Parse("/api/v1/auth/oauth/wechat/payment/start")
 	if err != nil {
 		return "", fmt.Errorf("build wechat payment oauth start url: %w", err)
 	}
 	q := u.Query()
-	q.Set("payment_type", strings.TrimSpace(req.PaymentType))
-	if req.Amount > 0 {
-		q.Set("amount", strconv.FormatFloat(req.Amount, 'f', -1, 64))
-	}
-	if orderType := strings.TrimSpace(req.OrderType); orderType != "" {
-		q.Set("order_type", orderType)
-	}
-	if req.PlanID > 0 {
-		q.Set("plan_id", strconv.FormatInt(req.PlanID, 10))
-	}
-	if scope = strings.TrimSpace(scope); scope != "" {
-		q.Set("scope", scope)
-	}
-	if redirectTo := paymentRedirectPathFromURL(req.SrcURL); redirectTo != "" {
-		q.Set("redirect", redirectTo)
-	}
+	q.Set("context_token", strings.TrimSpace(contextToken))
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
@@ -885,11 +882,11 @@ func (s *PaymentService) AdminListOrders(ctx context.Context, userID int64, p Or
 	if p.PaymentType != "" {
 		q = q.Where(paymentorder.PaymentTypeEQ(p.PaymentType))
 	}
-	if p.Keyword != "" {
+	if keyword := strings.TrimSpace(p.Keyword); keyword != "" {
 		q = q.Where(paymentorder.Or(
-			paymentorder.OutTradeNoContainsFold(p.Keyword),
-			paymentorder.UserEmailContainsFold(p.Keyword),
-			paymentorder.UserNameContainsFold(p.Keyword),
+			paymentorder.OutTradeNoContainsFold(keyword),
+			paymentorder.UserEmailContainsFold(keyword),
+			paymentorder.UserNameContainsFold(keyword),
 		))
 	}
 	total, err := q.Clone().Count(ctx)

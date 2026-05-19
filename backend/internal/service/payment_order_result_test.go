@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,7 @@ func TestMaybeBuildWeChatOAuthRequiredResponse(t *testing.T) {
 	})
 
 	resp, err := svc.maybeBuildWeChatOAuthRequiredResponse(context.Background(), CreateOrderRequest{
+		UserID:          123,
 		Amount:          12.5,
 		PaymentType:     payment.TypeWxpay,
 		IsWeChatBrowser: true,
@@ -132,8 +134,26 @@ func TestMaybeBuildWeChatOAuthRequiredResponse(t *testing.T) {
 	if resp.OAuth.RedirectURL != "/auth/wechat/payment/callback" {
 		t.Fatalf("redirect_url = %q, want %q", resp.OAuth.RedirectURL, "/auth/wechat/payment/callback")
 	}
-	if resp.OAuth.AuthorizeURL != "/api/v1/auth/oauth/wechat/payment/start?amount=12.5&order_type=balance&payment_type=wxpay&redirect=%2Fpurchase%3Ffrom%3Dwechat&scope=snsapi_base" {
-		t.Fatalf("authorize_url = %q", resp.OAuth.AuthorizeURL)
+	parsedAuthorizeURL, err := url.Parse(resp.OAuth.AuthorizeURL)
+	if err != nil {
+		t.Fatalf("parse authorize_url: %v", err)
+	}
+	if parsedAuthorizeURL.Path != "/api/v1/auth/oauth/wechat/payment/start" {
+		t.Fatalf("authorize_url path = %q", parsedAuthorizeURL.Path)
+	}
+	contextToken := parsedAuthorizeURL.Query().Get("context_token")
+	if contextToken == "" {
+		t.Fatalf("authorize_url missing context_token: %q", resp.OAuth.AuthorizeURL)
+	}
+	claims, err := svc.paymentResume().ParseWeChatPaymentOAuthContextToken(contextToken)
+	if err != nil {
+		t.Fatalf("parse context token: %v", err)
+	}
+	if claims.UserID != 123 {
+		t.Fatalf("context user id = %d, want 123", claims.UserID)
+	}
+	if claims.Amount != "12.5" || claims.OrderType != payment.OrderTypeBalance || claims.PaymentType != payment.TypeWxpay || claims.RedirectTo != "/purchase?from=wechat" {
+		t.Fatalf("unexpected context claims: %+v", claims)
 	}
 }
 
@@ -143,6 +163,7 @@ func TestMaybeBuildWeChatOAuthRequiredResponseRequiresMPConfigInWeChat(t *testin
 	svc := newWeChatPaymentOAuthTestService(nil)
 
 	resp, err := svc.maybeBuildWeChatOAuthRequiredResponse(context.Background(), CreateOrderRequest{
+		UserID:          123,
 		Amount:          12.5,
 		PaymentType:     payment.TypeWxpay,
 		IsWeChatBrowser: true,
@@ -182,6 +203,7 @@ func TestMaybeBuildWeChatOAuthRequiredResponseRequiresResumeSigningKey(t *testin
 	}
 
 	resp, err := svc.maybeBuildWeChatOAuthRequiredResponse(context.Background(), CreateOrderRequest{
+		UserID:          123,
 		Amount:          12.5,
 		PaymentType:     payment.TypeWxpay,
 		IsWeChatBrowser: true,
@@ -219,6 +241,7 @@ func TestMaybeBuildWeChatOAuthRequiredResponseFallsBackToConfiguredLegacySigning
 	}
 
 	resp, err := svc.maybeBuildWeChatOAuthRequiredResponse(context.Background(), CreateOrderRequest{
+		UserID:          123,
 		Amount:          12.5,
 		PaymentType:     payment.TypeWxpay,
 		IsWeChatBrowser: true,

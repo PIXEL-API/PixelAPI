@@ -68,7 +68,7 @@
       <div v-if="selectedOrder" class="space-y-4">
         <div class="grid grid-cols-2 gap-4">
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderId') }}</p><p class="font-mono text-sm font-medium text-gray-900 dark:text-white">#{{ selectedOrder.id }}</p></div>
-          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ selectedOrder.out_trade_no }}</p></div>
+          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentOrderNo') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ selectedOrder.out_trade_no }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.status') }}</p><OrderStatusBadge :status="selectedOrder.status" /></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ selectedOrder.order_type === 'balance' ? '$' : '¥' }}{{ selectedOrder.amount.toFixed(2) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">¥{{ selectedOrder.pay_amount.toFixed(2) }}</p></div>
@@ -104,7 +104,7 @@
         <div v-if="selectedShopOrder" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <div class="mb-3 grid gap-3 rounded-lg bg-gray-50 p-3 text-sm dark:bg-dark-800 sm:grid-cols-2">
             <div>
-              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.storeDelivery') }}</p>
+              <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.shopOrderNo') }}</p>
               <p class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ selectedShopOrder.order_no }}</p>
             </div>
             <div>

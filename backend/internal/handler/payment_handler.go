@@ -244,7 +244,7 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
-		if err := applyWeChatPaymentResumeClaims(&req, claims); err != nil {
+		if err := applyWeChatPaymentResumeClaims(&req, claims, subject.UserID); err != nil {
 			response.ErrorFrom(c, err)
 			return
 		}
@@ -276,9 +276,12 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 	response.Success(c, result)
 }
 
-func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeChatPaymentResumeClaims) error {
+func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeChatPaymentResumeClaims, userID int64) error {
 	if req == nil || claims == nil {
 		return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume context is missing")
+	}
+	if claims.UserID > 0 && claims.UserID != userID {
+		return infraerrors.Forbidden("WECHAT_PAYMENT_USER_MISMATCH", "wechat payment resume token does not belong to the current user")
 	}
 	openid := strings.TrimSpace(claims.OpenID)
 	if openid == "" {

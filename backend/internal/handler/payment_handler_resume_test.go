@@ -34,12 +34,13 @@ func TestApplyWeChatPaymentResumeClaims(t *testing.T) {
 	}
 
 	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{
+		UserID:      42,
 		OpenID:      "openid-123",
 		PaymentType: payment.TypeWxpay,
 		Amount:      "12.50",
 		OrderType:   payment.OrderTypeSubscription,
 		PlanID:      7,
-	})
+	}, 42)
 	if err != nil {
 		t.Fatalf("applyWeChatPaymentResumeClaims returned error: %v", err)
 	}
@@ -69,9 +70,28 @@ func TestApplyWeChatPaymentResumeClaimsRejectsPaymentTypeMismatch(t *testing.T) 
 		PaymentType: payment.TypeWxpay,
 		Amount:      "12.50",
 		OrderType:   payment.OrderTypeBalance,
-	})
+	}, 42)
 	if err == nil {
 		t.Fatal("applyWeChatPaymentResumeClaims should reject mismatched payment types")
+	}
+}
+
+func TestApplyWeChatPaymentResumeClaimsRejectsUserMismatch(t *testing.T) {
+	t.Parallel()
+
+	req := CreateOrderRequest{
+		PaymentType: payment.TypeWxpay,
+	}
+
+	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{
+		UserID:      7,
+		OpenID:      "openid-123",
+		PaymentType: payment.TypeWxpay,
+		Amount:      "12.50",
+		OrderType:   payment.OrderTypeBalance,
+	}, 8)
+	if err == nil {
+		t.Fatal("applyWeChatPaymentResumeClaims should reject user mismatch")
 	}
 }
 

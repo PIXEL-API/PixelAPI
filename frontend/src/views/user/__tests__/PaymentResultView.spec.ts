@@ -43,7 +43,7 @@ vi.mock('@/api/payment', () => ({
 }))
 
 import PaymentResultView from '../PaymentResultView.vue'
-import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
+import { PAYMENT_RECOVERY_STORAGE_KEY, writePaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
 
 const orderFactory = (status: string) => ({
   id: 42,
@@ -309,6 +309,50 @@ describe('PaymentResultView', () => {
     expect(pollOrderStatus).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('payment.result.failed')
     expect(wrapper.text()).not.toContain('sub2_20260420abcd1234')
+  })
+
+  it('restores the route-matched order when same-amount snapshots overlap', async () => {
+    routeState.query = {
+      out_trade_no: 'sub2_first_20',
+    }
+    writePaymentRecoverySnapshot(window.localStorage, {
+      ...recoverySnapshotFactory('resume-first'),
+      orderId: 101,
+      amount: 20,
+      payAmount: 20,
+      outTradeNo: 'sub2_first_20',
+      payUrl: 'https://pay.example.com/session/101',
+    })
+    writePaymentRecoverySnapshot(window.localStorage, {
+      ...recoverySnapshotFactory('resume-second'),
+      orderId: 202,
+      amount: 20,
+      payAmount: 20,
+      outTradeNo: 'sub2_second_20',
+      payUrl: 'https://pay.example.com/session/202',
+    })
+    pollOrderStatus.mockResolvedValue({
+      ...orderFactory('PAID'),
+      id: 101,
+      out_trade_no: 'sub2_first_20',
+      amount: 20,
+      pay_amount: 20,
+    })
+
+    const wrapper = mount(PaymentResultView, {
+      global: {
+        stubs: {
+          OrderStatusBadge: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(pollOrderStatus).toHaveBeenCalledWith(101)
+    expect(verifyOrderPublic).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('sub2_first_20')
+    expect(wrapper.text()).not.toContain('sub2_second_20')
   })
 
   it('uses public out_trade_no verification when no signed resume context is available', async () => {

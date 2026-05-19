@@ -39,7 +39,6 @@
           v-model.number="form.concurrency"
           type="number"
           min="1"
-          max="5"
           class="input"
           @input="normalizeConcurrencyInput"
         />
@@ -89,7 +88,7 @@ const submitting = ref(false); const passwordCopied = ref(false)
 const form = reactive({ email: '', password: '', username: '', notes: '', concurrency: 1, rpm_limit: 0, customAttributes: {} as UserAttributeValuesMap })
 
 const normalizeConcurrencyInput = () => {
-  form.concurrency = Math.min(5, Math.max(1, form.concurrency || 1))
+  form.concurrency = Math.max(1, form.concurrency || 1)
 }
 
 watch(() => props.user, (u) => {
@@ -116,7 +115,7 @@ const handleUpdateUser = async () => {
     return
   }
   normalizeConcurrencyInput()
-  if (form.concurrency < 1 || form.concurrency > 5) {
+  if (form.concurrency < 1) {
     appStore.showError(t('admin.users.concurrencyRange'))
     return
   }

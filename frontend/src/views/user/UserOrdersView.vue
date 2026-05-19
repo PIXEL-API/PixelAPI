@@ -67,7 +67,7 @@
           <div class="rounded-lg bg-gray-50 p-4 text-sm dark:bg-dark-800">
             <div class="grid gap-3 sm:grid-cols-2">
               <div>
-                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.shopOrderNo') }}</div>
                 <div class="mt-1 break-all font-mono text-gray-900 dark:text-white">{{ storeOrderDetail.order_no }}</div>
               </div>
               <div>

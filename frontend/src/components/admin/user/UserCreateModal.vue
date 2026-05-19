@@ -36,7 +36,6 @@
             v-model.number="form.concurrency"
             type="number"
             min="1"
-            max="5"
             class="input"
             @input="normalizeConcurrencyInput"
           />
@@ -80,7 +79,7 @@ const emit = defineEmits(['close', 'success']); const { t } = useI18n()
 const form = reactive({ email: '', password: '', username: '', notes: '', balance: 0, concurrency: 1, rpm_limit: 0 })
 
 const normalizeConcurrencyInput = () => {
-  form.concurrency = Math.min(5, Math.max(1, form.concurrency || 1))
+  form.concurrency = Math.max(1, form.concurrency || 1)
 }
 
 const { loading, submit } = useForm({

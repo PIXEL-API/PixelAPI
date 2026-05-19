@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { CreateOrderResult, MethodLimit } from '@/types/payment'
 import {
   buildCreateOrderPayload,
+  clearPaymentRecoverySnapshot,
   decidePaymentLaunch,
   getVisibleMethods,
   readPaymentRecoverySnapshot,
+  readPaymentRecoverySnapshotFromStorage,
   type PaymentRecoverySnapshot,
+  writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
 
 function methodLimit(overrides: Partial<MethodLimit> = {}): MethodLimit {
@@ -316,5 +319,68 @@ describe('readPaymentRecoverySnapshot', () => {
 
     expect(restored?.orderId).toBe(44)
     expect(restored?.outTradeNo).toBe('')
+  })
+})
+
+describe('payment recovery storage', () => {
+  function snapshot(overrides: Partial<PaymentRecoverySnapshot> = {}): PaymentRecoverySnapshot {
+    return {
+      orderId: 101,
+      amount: 20,
+      qrCode: '',
+      expiresAt: '2099-01-01T00:10:00.000Z',
+      paymentType: 'alipay',
+      payUrl: 'https://pay.example.com/session/101',
+      outTradeNo: 'sub2_101',
+      clientSecret: '',
+      intentId: '',
+      currency: '',
+      countryCode: '',
+      paymentEnv: '',
+      payAmount: 20,
+      orderType: 'balance',
+      paymentMode: 'popup',
+      resumeToken: 'resume-101',
+      createdAt: Date.UTC(2099, 0, 1, 0, 0, 0),
+      ...overrides,
+    }
+  }
+
+  it('restores the matching order when same-amount payment snapshots overlap', () => {
+    const storage = window.localStorage
+    storage.clear()
+    const first = snapshot()
+    const second = snapshot({
+      orderId: 202,
+      outTradeNo: 'sub2_202',
+      resumeToken: 'resume-202',
+      payUrl: 'https://pay.example.com/session/202',
+    })
+
+    writePaymentRecoverySnapshot(storage, first)
+    writePaymentRecoverySnapshot(storage, second)
+
+    expect(readPaymentRecoverySnapshotFromStorage(storage, { resumeToken: 'resume-101' })?.orderId).toBe(101)
+    expect(readPaymentRecoverySnapshotFromStorage(storage, { outTradeNo: 'sub2_101' })?.orderId).toBe(101)
+    expect(readPaymentRecoverySnapshotFromStorage(storage, { orderId: 202 })?.outTradeNo).toBe('sub2_202')
+  })
+
+  it('clears only the matching recovery snapshot and keeps other pending orders', () => {
+    const storage = window.localStorage
+    storage.clear()
+    const first = snapshot()
+    const second = snapshot({
+      orderId: 202,
+      outTradeNo: 'sub2_202',
+      resumeToken: 'resume-202',
+      payUrl: 'https://pay.example.com/session/202',
+    })
+
+    writePaymentRecoverySnapshot(storage, first)
+    writePaymentRecoverySnapshot(storage, second)
+    clearPaymentRecoverySnapshot(storage, undefined, { resumeToken: 'resume-101' })
+
+    expect(readPaymentRecoverySnapshotFromStorage(storage, { resumeToken: 'resume-101' })).toBeNull()
+    expect(readPaymentRecoverySnapshotFromStorage(storage, { resumeToken: 'resume-202' })?.orderId).toBe(202)
   })
 })

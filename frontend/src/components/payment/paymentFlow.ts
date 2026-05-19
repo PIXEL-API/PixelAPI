@@ -8,6 +8,7 @@ import type {
 } from '@/types/payment'
 
 export const PAYMENT_RECOVERY_STORAGE_KEY = 'payment.recovery.current'
+export const PAYMENT_RECOVERY_STORAGE_KEY_PREFIX = 'payment.recovery'
 
 const VISIBLE_METHOD_ALIASES = {
   alipay: 'alipay',
@@ -84,7 +85,15 @@ type CreateOrderFlowResult = CreateOrderResult & {
   resume_token?: string
 }
 
+type StorageReader = Pick<Storage, 'getItem'>
 type StorageWriter = Pick<Storage, 'removeItem' | 'setItem'>
+
+export interface PaymentRecoveryLookup {
+  orderId?: number
+  outTradeNo?: string
+  resumeToken?: string
+  now?: number
+}
 
 export function normalizeVisibleMethod(method: string): VisiblePaymentMethod | '' {
   const normalized = VISIBLE_METHOD_ALIASES[method.trim() as keyof typeof VISIBLE_METHOD_ALIASES]
@@ -231,19 +240,45 @@ export function writePaymentRecoverySnapshot(
   snapshot: PaymentRecoverySnapshot,
   key = PAYMENT_RECOVERY_STORAGE_KEY,
 ): void {
-  storage.setItem(key, JSON.stringify(snapshot))
+  const value = JSON.stringify(snapshot)
+  storage.setItem(key, value)
+
+  if (key !== PAYMENT_RECOVERY_STORAGE_KEY) {
+    return
+  }
+  for (const snapshotKey of paymentRecoveryStorageKeys(snapshot)) {
+    storage.setItem(snapshotKey, value)
+  }
 }
 
 export function clearPaymentRecoverySnapshot(
-  storage: Pick<Storage, 'removeItem'>,
+  storage: Pick<Storage, 'getItem' | 'removeItem'>,
   key = PAYMENT_RECOVERY_STORAGE_KEY,
+  lookup: PaymentRecoveryLookup = {},
 ): void {
+  if (key === PAYMENT_RECOVERY_STORAGE_KEY) {
+    const matched = readPaymentRecoverySnapshotFromStorage(storage, lookup, key)
+    const keysToRemove = new Set([
+      ...paymentRecoveryStorageKeys(lookup),
+      ...paymentRecoveryStorageKeys(matched || {}),
+    ])
+    for (const snapshotKey of keysToRemove) {
+      storage.removeItem(snapshotKey)
+    }
+    const rawLegacySnapshot = storage.getItem(key)
+    const legacySnapshot = readPaymentRecoverySnapshot(rawLegacySnapshot, lookup)
+      || (lookup.resumeToken ? readPaymentRecoverySnapshot(rawLegacySnapshot, { resumeToken: lookup.resumeToken }) : null)
+    if (legacySnapshot || Object.keys(lookup).length === 0) {
+      storage.removeItem(key)
+    }
+    return
+  }
   storage.removeItem(key)
 }
 
 export function readPaymentRecoverySnapshot(
   raw: string | null | undefined,
-  options: { now?: number; resumeToken?: string } = {},
+  options: PaymentRecoveryLookup = {},
 ): PaymentRecoverySnapshot | null {
   if (!raw) return null
 
@@ -278,6 +313,12 @@ export function readPaymentRecoverySnapshot(
     if (options.resumeToken && parsed.resumeToken !== options.resumeToken) {
       return null
     }
+    if (options.orderId && parsed.orderId !== options.orderId) {
+      return null
+    }
+    if (options.outTradeNo && (parsed.outTradeNo || '') !== options.outTradeNo) {
+      return null
+    }
 
     return {
       orderId: parsed.orderId,
@@ -301,4 +342,37 @@ export function readPaymentRecoverySnapshot(
   } catch {
     return null
   }
+}
+
+export function readPaymentRecoverySnapshotFromStorage(
+  storage: StorageReader,
+  lookup: PaymentRecoveryLookup = {},
+  key = PAYMENT_RECOVERY_STORAGE_KEY,
+): PaymentRecoverySnapshot | null {
+  if (key !== PAYMENT_RECOVERY_STORAGE_KEY) {
+    return readPaymentRecoverySnapshot(storage.getItem(key), lookup)
+  }
+
+  for (const snapshotKey of paymentRecoveryStorageKeys(lookup)) {
+    const restored = readPaymentRecoverySnapshot(storage.getItem(snapshotKey), lookup)
+    if (restored) {
+      return restored
+    }
+  }
+
+  return readPaymentRecoverySnapshot(storage.getItem(key), lookup)
+}
+
+export function paymentRecoveryStorageKeys(lookup: PaymentRecoveryLookup): string[] {
+  const keys: string[] = []
+  if (lookup.resumeToken) {
+    keys.push(`${PAYMENT_RECOVERY_STORAGE_KEY_PREFIX}.resume.${encodeURIComponent(lookup.resumeToken)}`)
+  }
+  if (lookup.outTradeNo) {
+    keys.push(`${PAYMENT_RECOVERY_STORAGE_KEY_PREFIX}.out.${encodeURIComponent(lookup.outTradeNo)}`)
+  }
+  if (lookup.orderId && lookup.orderId > 0) {
+    keys.push(`${PAYMENT_RECOVERY_STORAGE_KEY_PREFIX}.order.${lookup.orderId}`)
+  }
+  return keys
 }

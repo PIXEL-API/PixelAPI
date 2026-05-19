@@ -269,7 +269,7 @@ import {
   decidePaymentLaunch,
   getVisibleMethods,
   normalizeVisibleMethod,
-  readPaymentRecoverySnapshot,
+  readPaymentRecoverySnapshotFromStorage,
   type PaymentRecoverySnapshot,
   writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
@@ -393,7 +393,7 @@ function persistRecoverySnapshot(snapshot: PaymentRecoverySnapshot) {
 
 function removeRecoverySnapshot() {
   if (typeof window === 'undefined') return
-  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, paymentState.value)
 }
 
 function resetPayment() {
@@ -419,38 +419,14 @@ async function redirectToPaymentResult(state: PaymentRecoverySnapshot): Promise<
   })
 }
 
-function buildWechatOAuthAuthorizeUrl(
-  authorizeUrl: string,
-  context: { paymentType: string; orderType: OrderType; planId?: number; orderAmount: number },
-): string {
+function buildWechatOAuthAuthorizeUrl(authorizeUrl: string): string {
   const normalizedUrl = authorizeUrl.trim()
   if (!normalizedUrl || typeof window === 'undefined') {
     return normalizedUrl
   }
 
   try {
-    const targetUrl = new URL(normalizedUrl, window.location.origin)
-    const redirectPath = targetUrl.searchParams.get('redirect') || '/purchase'
-    const redirectUrl = new URL(redirectPath, window.location.origin)
-    const paymentType = normalizeVisibleMethod(context.paymentType) || context.paymentType.trim() || 'wxpay'
-
-    redirectUrl.searchParams.set('payment_type', paymentType)
-    redirectUrl.searchParams.set('order_type', context.orderType)
-
-    if (context.planId) {
-      redirectUrl.searchParams.set('plan_id', String(context.planId))
-    } else {
-      redirectUrl.searchParams.delete('plan_id')
-    }
-
-    if (context.orderAmount > 0) {
-      redirectUrl.searchParams.set('amount', String(context.orderAmount))
-    } else {
-      redirectUrl.searchParams.delete('amount')
-    }
-
-    targetUrl.searchParams.set('redirect', `${redirectUrl.pathname}${redirectUrl.search}`)
-    return targetUrl.toString()
+    return new URL(normalizedUrl, window.location.origin).toString()
   } catch {
     return normalizedUrl
   }
@@ -762,12 +738,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     })
 
     if (decision.kind === 'wechat_oauth' && decision.oauth?.authorize_url) {
-      window.location.href = buildWechatOAuthAuthorizeUrl(decision.oauth.authorize_url, {
-        paymentType: visibleMethod,
-        orderType,
-        planId,
-        orderAmount,
-      })
+      window.location.href = buildWechatOAuthAuthorizeUrl(decision.oauth.authorize_url)
       return
     }
 
@@ -1045,9 +1016,16 @@ onMounted(async () => {
         : typeof route.query.wechat_resume_token === 'string'
           ? route.query.wechat_resume_token
           : undefined
-      const restored = readPaymentRecoverySnapshot(
-        window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY),
-        { resumeToken: routeResumeToken },
+      const routeOrderId = Number(typeof route.query.order_id === 'string' ? route.query.order_id : '') || 0
+      const routeOutTradeNo = typeof route.query.out_trade_no === 'string' ? route.query.out_trade_no : ''
+      const restored = readPaymentRecoverySnapshotFromStorage(
+        window.localStorage,
+        {
+          orderId: routeOrderId,
+          outTradeNo: routeOutTradeNo,
+          resumeToken: routeResumeToken,
+        },
+        PAYMENT_RECOVERY_STORAGE_KEY,
       )
       if (restored) {
         paymentState.value = restored

@@ -174,7 +174,7 @@ function oauthOrderFixture() {
     payment_type: 'wxpay',
     result_type: 'oauth_required' as const,
     oauth: {
-      authorize_url: '/api/v1/auth/oauth/wechat/payment/start?payment_type=wxpay&redirect=%2Fpurchase%3Ffrom%3Dwechat',
+      authorize_url: '/api/v1/auth/oauth/wechat/payment/start?context_token=signed-context-token',
       appid: 'wx123',
       scope: 'snsapi_base',
       redirect_url: '/auth/wechat/payment/callback',
@@ -359,9 +359,9 @@ describe('PaymentView WeChat JSAPI flow', () => {
       wechat_resume_token: 'resume-subscription-7',
     }))
     expect(locationState.href).toContain('/api/v1/auth/oauth/wechat/payment/start?')
-    expect(new URL(locationState.href, 'http://localhost').searchParams.get('redirect')).toBe(
-      '/purchase?from=wechat&payment_type=wxpay&order_type=subscription&plan_id=7',
-    )
+    const oauthStartURL = new URL(locationState.href, 'http://localhost')
+    expect(oauthStartURL.searchParams.get('context_token')).toBe('signed-context-token')
+    expect(oauthStartURL.searchParams.has('redirect')).toBe(false)
 
     Object.defineProperty(window, 'location', {
       configurable: true,

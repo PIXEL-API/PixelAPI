@@ -21,7 +21,7 @@ func TestAdminService_CreateUser_Success(t *testing.T) {
 		Username:      "tester",
 		Notes:         "note",
 		Balance:       12.5,
-		Concurrency:   UserMaxConcurrency,
+		Concurrency:   10000,
 		AllowedGroups: []int64{3, 5},
 	}
 
@@ -42,18 +42,19 @@ func TestAdminService_CreateUser_Success(t *testing.T) {
 	require.Equal(t, user, repo.created[0])
 }
 
-func TestAdminService_CreateUser_RejectsPersonalConcurrencyAboveMax(t *testing.T) {
+func TestAdminService_CreateUser_AllowsHighPersonalConcurrency(t *testing.T) {
 	repo := &userRepoStub{nextID: 10}
 	svc := &adminServiceImpl{userRepo: repo}
 
-	_, err := svc.CreateUser(context.Background(), &CreateUserInput{
+	user, err := svc.CreateUser(context.Background(), &CreateUserInput{
 		Email:       "user@test.com",
 		Password:    "strong-pass",
-		Concurrency: UserMaxConcurrency + 1,
+		Concurrency: 10000,
 	})
 
-	require.ErrorIs(t, err, ErrUserConcurrencyRange)
-	require.Empty(t, repo.created)
+	require.NoError(t, err)
+	require.Equal(t, 10000, user.Concurrency)
+	require.Len(t, repo.created, 1)
 }
 
 func TestAdminService_CreateUser_EmailExists(t *testing.T) {

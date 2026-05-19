@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -87,7 +88,10 @@ func (h *ShopHandler) CreateOrder(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
-		applyShopWeChatResumeClaims(&req, claims)
+		if err := applyShopWeChatResumeClaims(&req, claims, subject.UserID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	mobile := isMobile(c)
@@ -176,9 +180,12 @@ func (h *ShopHandler) DownloadOrderFilesZip(c *gin.Context) {
 	}
 }
 
-func applyShopWeChatResumeClaims(req *createShopOrderRequest, claims *service.WeChatPaymentResumeClaims) {
+func applyShopWeChatResumeClaims(req *createShopOrderRequest, claims *service.WeChatPaymentResumeClaims, userID int64) error {
 	if req == nil || claims == nil {
-		return
+		return nil
+	}
+	if claims.UserID > 0 && claims.UserID != userID {
+		return infraerrors.Forbidden("WECHAT_PAYMENT_USER_MISMATCH", "wechat payment resume token does not belong to the current user")
 	}
 	if paymentType := service.NormalizeVisibleMethod(claims.PaymentType); paymentType != "" {
 		req.PaymentMethod = paymentType
@@ -188,6 +195,7 @@ func applyShopWeChatResumeClaims(req *createShopOrderRequest, claims *service.We
 	if openid := strings.TrimSpace(claims.OpenID); openid != "" {
 		req.OpenID = openid
 	}
+	return nil
 }
 
 func parsePathID(c *gin.Context, name string) (int64, bool) {

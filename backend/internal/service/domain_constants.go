@@ -19,8 +19,8 @@ const (
 )
 
 const (
-	UserMinConcurrency = 1
-	UserMaxConcurrency = 5
+	UserMinConcurrency     = 1
+	UserDefaultConcurrency = 5
 )
 
 // Affiliate rebate settings

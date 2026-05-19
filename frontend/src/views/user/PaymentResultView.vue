@@ -40,7 +40,7 @@
               <span class="font-medium text-gray-900 dark:text-white">#{{ order.id }}</span>
             </div>
             <div v-if="order.out_trade_no" class="flex justify-between">
-              <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.orderNo') }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentOrderNo') }}</span>
               <span class="font-medium text-gray-900 dark:text-white">{{ order.out_trade_no }}</span>
             </div>
             <div class="flex justify-between">
@@ -156,7 +156,7 @@ import DeliveredFilesList from '@/components/store/DeliveredFilesList.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   clearPaymentRecoverySnapshot,
-  readPaymentRecoverySnapshot,
+  readPaymentRecoverySnapshotFromStorage,
 } from '@/components/payment/paymentFlow'
 import { usePaymentStore } from '@/stores/payment'
 import { paymentAPI } from '@/api/payment'
@@ -327,22 +327,20 @@ function restoreRecoverySnapshot(context: {
     return null
   }
 
-  const rawSnapshot = window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)
-  if (!rawSnapshot) {
-    return null
-  }
-
   if (context.resumeToken) {
-    return readPaymentRecoverySnapshot(rawSnapshot, {
+    return readPaymentRecoverySnapshotFromStorage(window.localStorage, {
       resumeToken: context.resumeToken,
-    })
+    }, PAYMENT_RECOVERY_STORAGE_KEY)
   }
 
   if (!context.routeOrderId && !context.routeOutTradeNo) {
     return null
   }
 
-  const restored = readPaymentRecoverySnapshot(rawSnapshot)
+  const restored = readPaymentRecoverySnapshotFromStorage(window.localStorage, {
+    orderId: context.routeOrderId,
+    outTradeNo: context.routeOutTradeNo,
+  }, PAYMENT_RECOVERY_STORAGE_KEY)
   if (!restored) {
     return null
   }
@@ -385,7 +383,12 @@ function clearStatusRefreshTimer(): void {
 
 function clearRecoverySnapshot(): void {
   if (typeof window === 'undefined') return
-  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+  const routeOrderId = Number(readRouteQueryString('order_id')) || 0
+  clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY, {
+    resumeToken: readRouteQueryString('resume_token'),
+    orderId: order.value?.id || routeOrderId,
+    outTradeNo: order.value?.out_trade_no || returnInfo.value?.outTradeNo || readRouteQueryString('out_trade_no'),
+  })
 }
 
 function clearRecoverySnapshotForTerminalStatus(status: string | null | undefined): void {

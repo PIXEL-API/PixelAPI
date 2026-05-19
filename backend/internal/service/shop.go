@@ -1427,11 +1427,54 @@ func (s *ShopService) AdminListCardKeys(ctx context.Context, params ShopListCard
 	for _, item := range items {
 		out = append(out, mapShopCardKey(item))
 	}
+	if err := s.decorateCardKeyDTOsWithPaymentOrderNo(ctx, out); err != nil {
+		return nil, 0, err
+	}
 	out, err = s.decorateCardKeyDTOsWithFileMeta(ctx, out)
 	if err != nil {
 		return nil, 0, err
 	}
 	return out, total, nil
+}
+
+func (s *ShopService) decorateCardKeyDTOsWithPaymentOrderNo(ctx context.Context, items []ShopCardKeyDTO) error {
+	shopOrderIDs := make([]int64, 0, len(items))
+	seen := make(map[int64]struct{}, len(items))
+	for _, item := range items {
+		if item.OrderID == nil || *item.OrderID <= 0 {
+			continue
+		}
+		if _, ok := seen[*item.OrderID]; ok {
+			continue
+		}
+		seen[*item.OrderID] = struct{}{}
+		shopOrderIDs = append(shopOrderIDs, *item.OrderID)
+	}
+	if len(shopOrderIDs) == 0 {
+		return nil
+	}
+	paymentOrders, err := s.entClient.PaymentOrder.Query().
+		Where(paymentorder.ShopOrderIDIn(shopOrderIDs...)).
+		All(ctx)
+	if err != nil {
+		return fmt.Errorf("query payment order numbers for shop card keys: %w", err)
+	}
+	outTradeNoByShopOrderID := make(map[int64]string, len(paymentOrders))
+	for _, order := range paymentOrders {
+		if order.ShopOrderID == nil || strings.TrimSpace(order.OutTradeNo) == "" {
+			continue
+		}
+		outTradeNoByShopOrderID[*order.ShopOrderID] = order.OutTradeNo
+	}
+	for i := range items {
+		if items[i].OrderID == nil {
+			continue
+		}
+		if outTradeNo, ok := outTradeNoByShopOrderID[*items[i].OrderID]; ok {
+			items[i].OrderNo = &outTradeNo
+		}
+	}
+	return nil
 }
 
 func (s *ShopService) AdminCreateCardKey(ctx context.Context, req ShopCreateCardKeyRequest) (*ShopCardKeyDTO, error) {
