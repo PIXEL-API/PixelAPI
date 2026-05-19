@@ -11,9 +11,21 @@
         </p>
       </div>
 
+      <div v-if="!settingsLoaded" class="space-y-5" aria-busy="true">
+        <div class="space-y-2">
+          <div class="h-4 w-16 rounded bg-gray-200/80 dark:bg-dark-700/80"></div>
+          <div class="h-11 rounded-lg bg-gray-100/90 dark:bg-dark-800/80"></div>
+        </div>
+        <div class="space-y-2">
+          <div class="h-4 w-20 rounded bg-gray-200/80 dark:bg-dark-700/80"></div>
+          <div class="h-11 rounded-lg bg-gray-100/90 dark:bg-dark-800/80"></div>
+        </div>
+        <div class="h-11 rounded-lg bg-gray-200/80 dark:bg-dark-700/80"></div>
+      </div>
+
       <!-- Registration Disabled Message -->
       <div
-        v-if="!registrationEnabled && settingsLoaded"
+        v-else-if="!registrationEnabled"
         class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/50 dark:bg-amber-900/20"
       >
         <div class="flex items-start gap-3">
@@ -311,7 +323,6 @@ import Icon from '@/components/icons/Icon.vue'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
-  getPublicSettings,
   isWeChatWebOAuthEnabled,
   validatePromoCode,
   validateInvitationCode
@@ -326,7 +337,7 @@ import {
   loadAffiliateReferralCode,
   resolveAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
-import type { LoginAgreementDocument } from '@/types'
+import type { LoginAgreementDocument, PublicSettings } from '@/types'
 
 const { t, locale } = useI18n()
 const LOGIN_AGREEMENT_STORAGE_KEY = 'sub2api_login_agreement_consent'
@@ -447,30 +458,41 @@ function syncAffiliateReferralCode(): string {
   return code
 }
 
+function applyPublicSettings(settings: PublicSettings): void {
+  registrationEnabled.value = settings.registration_enabled
+  emailVerifyEnabled.value = settings.email_verify_enabled
+  promoCodeEnabled.value = settings.promo_code_enabled
+  invitationCodeEnabled.value = settings.invitation_code_enabled
+  turnstileEnabled.value = settings.turnstile_enabled
+  turnstileSiteKey.value = settings.turnstile_site_key || ''
+  siteName.value = settings.site_name || 'Sub2API'
+  linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled
+  wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
+  oidcOAuthEnabled.value = settings.oidc_oauth_enabled
+  oidcOAuthProviderName.value = settings.oidc_oauth_provider_name || 'OIDC'
+  githubOAuthEnabled.value = Boolean(settings.github_oauth_enabled)
+  googleOAuthEnabled.value = Boolean(settings.google_oauth_enabled)
+  registrationEmailSuffixWhitelist.value = normalizeRegistrationEmailSuffixWhitelist(
+    settings.registration_email_suffix_whitelist || []
+  )
+  applyLoginAgreementSettings(settings)
+}
+
+if (appStore.cachedPublicSettings) {
+  applyPublicSettings(appStore.cachedPublicSettings)
+  settingsLoaded.value = true
+}
+
 // ==================== Lifecycle ====================
 
 onMounted(async () => {
   syncAffiliateReferralCode()
 
   try {
-    const settings = await getPublicSettings()
-    registrationEnabled.value = settings.registration_enabled
-    emailVerifyEnabled.value = settings.email_verify_enabled
-    promoCodeEnabled.value = settings.promo_code_enabled
-    invitationCodeEnabled.value = settings.invitation_code_enabled
-    turnstileEnabled.value = settings.turnstile_enabled
-    turnstileSiteKey.value = settings.turnstile_site_key || ''
-    siteName.value = settings.site_name || 'Sub2API'
-    linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled
-    wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
-    oidcOAuthEnabled.value = settings.oidc_oauth_enabled
-    oidcOAuthProviderName.value = settings.oidc_oauth_provider_name || 'OIDC'
-    githubOAuthEnabled.value = Boolean(settings.github_oauth_enabled)
-    googleOAuthEnabled.value = Boolean(settings.google_oauth_enabled)
-    registrationEmailSuffixWhitelist.value = normalizeRegistrationEmailSuffixWhitelist(
-      settings.registration_email_suffix_whitelist || []
-    )
-    applyLoginAgreementSettings(settings)
+    const settings = await appStore.fetchPublicSettings()
+    if (settings) {
+      applyPublicSettings(settings)
+    }
 
     // Read promo code from URL parameter only if promo code is enabled
     if (promoCodeEnabled.value) {
