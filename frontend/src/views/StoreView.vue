@@ -86,12 +86,18 @@
                   </h2>
                 </div>
                 <span class="shrink-0 rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-dark-300">
-                  {{ t('store.stock', { count: product.stock }) }}
+                  {{ product.stock_unlimited ? t('store.drawProductBadge') : t('store.stock', { count: product.stock }) }}
                 </span>
               </div>
               <p class="mt-3 line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-gray-500 dark:text-dark-400">
                 {{ product.description || t('store.noDescription') }}
               </p>
+              <div v-if="product.product_type === 'balance_draw'" class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800">
+                <div class="flex justify-between gap-3">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawProgress') }}</span>
+                  <span class="font-semibold text-gray-900 dark:text-white">{{ drawProgressText(product) }}</span>
+                </div>
+              </div>
               <div class="mt-4 flex items-end justify-between gap-3">
                 <div>
                   <span v-if="product.original_price" class="text-sm text-gray-400 line-through dark:text-dark-500">
@@ -102,10 +108,10 @@
                 <button
                   type="button"
                   class="btn btn-primary min-h-[44px] px-4"
-                  :disabled="product.stock <= 0"
+                  :disabled="!isProductPurchasable(product)"
                   @click="startCheckout(product)"
                 >
-                  {{ product.stock > 0 ? t('store.buyNow') : t('store.soldOut') }}
+                  {{ isProductPurchasable(product) ? t('store.buyNow') : t('store.soldOut') }}
                 </button>
               </div>
             </div>
@@ -144,6 +150,18 @@
                   <span class="text-gray-500 dark:text-dark-400">{{ t('store.totalAmount') }}</span>
                   <span class="text-lg font-bold text-primary-600 dark:text-primary-400">¥{{ checkoutAmount.toFixed(2) }}</span>
                 </div>
+                <div v-if="isCheckoutDrawProduct" class="mt-2 flex justify-between gap-3">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawRewardRange') }}</span>
+                  <span class="text-right font-medium text-gray-900 dark:text-white">
+                    {{ drawRewardRangeText }}
+                  </span>
+                </div>
+                <div v-if="isCheckoutDrawProduct" class="mt-2 flex justify-between gap-3">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawProgress') }}</span>
+                  <span class="text-right font-medium text-gray-900 dark:text-white">
+                    {{ drawProgressText(checkoutProduct) }}
+                  </span>
+                </div>
                 <div v-if="authStore.isAuthenticated" class="mt-2 flex justify-between">
                   <span class="text-gray-500 dark:text-dark-400">{{ t('payment.currentBalance') }}</span>
                   <span class="font-medium text-gray-900 dark:text-white">${{ currentBalance.toFixed(2) }}</span>
@@ -169,7 +187,7 @@
                     type="button"
                     class="store-pay-option"
                     :class="{ 'store-pay-option-active': payMethod === 'payment' }"
-                    :disabled="methodOptions.length === 0"
+                    :disabled="methodOptions.length === 0 || isCheckoutDrawProduct"
                     @click="payMethod = 'payment'"
                   >
                     <span class="font-semibold">{{ t('store.gatewayPay') }}</span>
@@ -226,9 +244,15 @@
                   <span class="text-gray-500 dark:text-dark-400">{{ t('store.quantity') }}</span>
                   <span class="font-medium text-gray-900 dark:text-white">{{ completedOrder.quantity }}</span>
                 </div>
+                <div v-if="completedOrder.draw_reward_amount !== null && completedOrder.draw_reward_amount !== undefined" class="mt-2 flex justify-between gap-3">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawReward') }}</span>
+                  <span class="font-medium text-emerald-600 dark:text-emerald-300">
+                    ${{ completedOrder.draw_reward_amount.toFixed(2) }}
+                  </span>
+                </div>
               </div>
 
-              <div>
+              <div v-if="completedOrder.draw_reward_amount === null || completedOrder.draw_reward_amount === undefined">
                 <div class="mb-2 flex items-center justify-between gap-3">
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</label>
                   <button
@@ -318,12 +342,13 @@ const activeCategories = computed(() => categories.value.filter(category => cate
 const filteredProducts = computed(() => products.value.filter((product) =>
   product.enabled && (selectedCategoryId.value === 0 || product.category_id === selectedCategoryId.value),
 ))
-const totalStock = computed(() => products.value.reduce((sum, product) => sum + Math.max(0, product.stock), 0))
+const totalStock = computed(() => products.value.reduce((sum, product) => sum + (product.stock_unlimited ? 0 : Math.max(0, product.stock)), 0))
 const currentBalance = computed(() => Number(authStore.user?.balance || 0))
 const checkoutMinQuantity = computed(() => Math.max(1, checkoutProduct.value?.min_purchase || 1))
 const checkoutMaxQuantity = computed(() => {
   const product = checkoutProduct.value
   if (!product) return 1
+  if (product.product_type === 'balance_draw') return 1
   const maxPurchase = product.max_purchase > 0 ? product.max_purchase : product.stock
   return Math.max(checkoutMinQuantity.value, Math.min(product.stock, maxPurchase))
 })
@@ -333,6 +358,12 @@ const checkoutAmount = computed(() => {
   return Math.round(product.price * Math.max(checkoutMinQuantity.value, quantity.value || checkoutMinQuantity.value) * 100) / 100
 })
 const visibleMethods = computed(() => getVisibleMethods(checkout.value?.methods || {}))
+const isCheckoutDrawProduct = computed(() => checkoutProduct.value?.product_type === 'balance_draw')
+const drawRewardRangeText = computed(() => {
+  const config = checkoutProduct.value?.draw_config
+  if (!config) return ''
+  return `$${config.min_amount.toFixed(2)} - $${config.max_amount.toFixed(2)}`
+})
 const enabledMethods = computed(() => Object.keys(visibleMethods.value).sort((a, b) => {
   const ai = METHOD_ORDER.indexOf(a as typeof METHOD_ORDER[number])
   const bi = METHOD_ORDER.indexOf(b as typeof METHOD_ORDER[number])
@@ -348,6 +379,7 @@ const balancePayHint = computed(() => canPayByBalance.value ? t('store.balanceEn
 const canSubmitCheckout = computed(() => {
   if (!checkoutProduct.value || quantity.value < checkoutMinQuantity.value || quantity.value > checkoutMaxQuantity.value) return false
   if (payMethod.value === 'balance') return canPayByBalance.value
+  if (isCheckoutDrawProduct.value) return false
   return !!selectedMethod.value && amountFitsMethod(checkoutAmount.value, selectedMethod.value)
 })
 
@@ -386,6 +418,18 @@ function amountFitsMethod(amount: number, method: string): boolean {
   return true
 }
 
+function isProductPurchasable(product: StoreProduct): boolean {
+  return product.product_type === 'balance_draw' || product.stock > 0
+}
+
+function drawProgressText(product: StoreProduct | null): string {
+  if (!product?.draw_config) return '0/0'
+  const progress = product.draw_progress
+  const drawn = Math.max(0, progress?.drawn_count ?? 0)
+  const total = Math.max(0, progress?.guarantee_count ?? product.draw_config.guarantee_count)
+  return `${drawn}/${total}`
+}
+
 function createCheckoutIdempotencyKey(): string {
   if (!window.crypto?.randomUUID) {
     throw new Error('crypto.randomUUID is required to create store orders')
@@ -409,7 +453,7 @@ async function startCheckout(product: StoreProduct) {
   }
   checkoutProduct.value = product
   quantity.value = Math.max(1, product.min_purchase || 1)
-  payMethod.value = canPayByBalance.value ? 'balance' : 'payment'
+  payMethod.value = product.product_type === 'balance_draw' || canPayByBalance.value ? 'balance' : 'payment'
   if (!selectedMethod.value && enabledMethods.value.length > 0) {
     selectedMethod.value = enabledMethods.value[0]
   }
@@ -452,7 +496,7 @@ async function submitCheckout() {
     const storeOrder = orderResponse.data
     if (payMethod.value === 'balance') {
       if (authStore.user) {
-        authStore.user.balance = Math.max(0, currentBalance.value - storeOrder.total_amount)
+        authStore.user.balance = Math.max(0, currentBalance.value - storeOrder.total_amount + Number(storeOrder.draw_reward_amount || 0))
       }
       appStore.showSuccess(t('store.purchaseSuccess'))
       checkoutProduct.value = null
@@ -550,6 +594,11 @@ async function loadStore() {
   products.value = productsResp.data.items || []
   if (authStore.isAuthenticated) {
     await ensureCheckoutInfo()
+    const { data } = await storeAPI.getDrawProgress()
+    products.value = products.value.map(product => ({
+      ...product,
+      draw_progress: data?.[product.id] || product.draw_progress || null,
+    }))
   }
   if (!selectedMethod.value && enabledMethods.value.length > 0) {
     selectedMethod.value = enabledMethods.value[0]

@@ -12,6 +12,7 @@ import (
 
 	entsql "entgo.io/ent/dialect/sql"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -131,6 +132,81 @@ func TestAdminCannotUpdateOrDeleteLockedCardKey(t *testing.T) {
 	err = svc.AdminDeleteCardKey(ctx, card.ID)
 	require.Error(t, err)
 	require.Equal(t, "SHOP_CARD_KEY_ALREADY_ASSIGNED", errorCodeForTest(err))
+}
+
+func TestShopBalanceDrawCompletesGuaranteedRewardCycle(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	user := createShopTestUser(t, ctx, client, "draw-cycle@example.com")
+	user, err := client.User.UpdateOneID(user.ID).SetBalance(60).Save(ctx)
+	require.NoError(t, err)
+	product := createShopTestBalanceDrawProduct(t, ctx, client, "Balance draw product")
+
+	var totalReward float64
+	for i := 0; i < 20; i++ {
+		order, err := svc.CreateOrder(ctx, ShopCreateOrderRequest{
+			UserID:        user.ID,
+			ProductID:     product.ID,
+			Quantity:      1,
+			PaymentMethod: ShopPaymentMethodBalance,
+		})
+		require.NoError(t, err)
+		require.Equal(t, ShopOrderStatusCompleted, order.Status)
+		require.NotNil(t, order.DrawRewardAmount)
+		require.NotNil(t, order.DrawCycleID)
+		require.NotNil(t, order.DrawCycleIndex)
+		require.GreaterOrEqual(t, *order.DrawRewardAmount, 1.0)
+		require.LessOrEqual(t, *order.DrawRewardAmount, 5.0)
+		require.Equal(t, i+1, *order.DrawCycleIndex)
+		ledger, err := client.ShopBalanceLedger.Query().
+			Where(shopbalanceledger.ShopOrderIDEQ(order.ID)).
+			Only(ctx)
+		require.NoError(t, err)
+		require.Equal(t, ShopBalanceLedgerEntryNet, ledger.EntryType)
+		require.Equal(t, 3.0, normalizeShopAmount(ledger.DebitAmount))
+		require.Equal(t, normalizeShopAmount(*order.DrawRewardAmount), normalizeShopAmount(ledger.CreditAmount))
+		require.Equal(t, *order.DrawCycleID, *ledger.DrawCycleID)
+		require.Equal(t, *order.DrawCycleIndex, *ledger.DrawCycleIndex)
+		require.Equal(t, normalizeShopAmount(ledger.BalanceBefore-ledger.DebitAmount+ledger.CreditAmount), normalizeShopAmount(ledger.BalanceAfter))
+		totalReward = normalizeShopAmount(totalReward + *order.DrawRewardAmount)
+	}
+
+	require.Equal(t, 60.0, totalReward)
+	user, err = client.User.Get(ctx, user.ID)
+	require.NoError(t, err)
+	require.Equal(t, 60.0, normalizeShopAmount(user.Balance))
+	cycle, err := client.ShopDrawCycle.Query().Only(ctx)
+	require.NoError(t, err)
+	require.True(t, cycle.Completed)
+	require.Equal(t, 20, cycle.DrawnCount)
+	require.Equal(t, 60.0, normalizeShopAmount(cycle.DrawnAmount))
+	require.Empty(t, cycle.RemainingAmounts)
+	ledgerCount, err := client.ShopBalanceLedger.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 20, ledgerCount)
+}
+
+func TestShopBalanceDrawBlocksEconomicsUpdateWhenCycleActive(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	user := createShopTestUser(t, ctx, client, "draw-lock@example.com")
+	_, err := client.User.UpdateOneID(user.ID).SetBalance(60).Save(ctx)
+	require.NoError(t, err)
+	product := createShopTestBalanceDrawProduct(t, ctx, client, "Locked draw product")
+
+	_, err = svc.CreateOrder(ctx, ShopCreateOrderRequest{
+		UserID:        user.ID,
+		ProductID:     product.ID,
+		Quantity:      1,
+		PaymentMethod: ShopPaymentMethodBalance,
+	})
+	require.NoError(t, err)
+	newPrice := 4.0
+	_, err = svc.AdminUpdateProduct(ctx, product.ID, ShopUpdateProductRequest{Price: &newPrice})
+	require.Error(t, err)
+	require.Equal(t, "SHOP_DRAW_CYCLE_ACTIVE", errorCodeForTest(err))
 }
 
 func TestShopPlatformFulfillmentReallocatesAvailableCardAfterReservationReleased(t *testing.T) {
@@ -304,6 +380,27 @@ func createShopTestProduct(t *testing.T, ctx context.Context, client *dbent.Clie
 		SetMinPurchase(1).
 		SetMaxPurchase(10).
 		SetAutoDelivery(true).
+		Save(ctx)
+	require.NoError(t, err)
+	return product
+}
+
+func createShopTestBalanceDrawProduct(t *testing.T, ctx context.Context, client *dbent.Client, name string) *dbent.ShopProduct {
+	t.Helper()
+	product, err := client.ShopProduct.Create().
+		SetName(name).
+		SetPrice(3).
+		SetEnabled(true).
+		SetMinPurchase(1).
+		SetMaxPurchase(1).
+		SetAutoDelivery(true).
+		SetProductType(ShopProductTypeBalanceDraw).
+		SetBalanceOnly(true).
+		SetDrawEnabled(true).
+		SetDrawMinAmount(1).
+		SetDrawMaxAmount(5).
+		SetDrawGuaranteeCount(20).
+		SetDrawReturnRate(1).
 		Save(ctx)
 	require.NoError(t, err)
 	return product

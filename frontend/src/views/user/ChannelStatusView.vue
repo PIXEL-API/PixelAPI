@@ -69,13 +69,18 @@ import {
 import type { UserAccountQuotaPoolDashboard } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AccountQuotaDashboardPanel from '@/components/account/AccountQuotaDashboard.vue'
+import {
+  accountQuotaGroupHealthRank,
+  resolveAccountQuotaGroupHealth,
+  type AccountQuotaGroupHealth,
+} from '@/utils/accountQuotaHealth'
 import MonitorHero, {
   type MonitorWindow,
   type OverallStatus,
 } from '@/components/user/monitor/MonitorHero.vue'
 import MonitorCardGrid from '@/components/user/monitor/MonitorCardGrid.vue'
 import MonitorDetailDialog from '@/components/user/MonitorDetailDialog.vue'
-import { DEFAULT_INTERVAL_SECONDS, STATUS_OPERATIONAL } from '@/constants/channelMonitor'
+import { DEFAULT_INTERVAL_SECONDS } from '@/constants/channelMonitor'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 
 const { t } = useI18n()
@@ -106,20 +111,17 @@ const countdown = autoRefresh.countdown
 
 // ── Computed ──
 const overallStatus = computed<OverallStatus>(() => {
-  if (quotaPoolDashboard.value?.platform?.group_summaries?.some(summary => {
-    if (summary.group_status && summary.group_status !== 'active') return true
-    if (summary.account_count > 0 && summary.schedulable_account_count === 0) return true
-    if (summary.schedulable_account_count < summary.active_account_count) return true
-    return summary.usage_windows?.some(window => window.average_utilization >= 80) ?? false
-  })) {
-    return 'degraded'
+  let quotaStatus: AccountQuotaGroupHealth = 'normal'
+  for (const summary of quotaPoolDashboard.value?.platform?.group_summaries ?? []) {
+    const status = resolveAccountQuotaGroupHealth(summary)
+    if (accountQuotaGroupHealthRank(status) > accountQuotaGroupHealthRank(quotaStatus)) {
+      quotaStatus = status
+    }
   }
-  if (items.value.length === 0) return 'operational'
   for (const it of items.value) {
-    if (it.primary_status === 'failed' || it.primary_status === 'error') return 'degraded'
-    if (it.primary_status !== STATUS_OPERATIONAL) return 'degraded'
+    if (it.primary_status === 'failed' || it.primary_status === 'error') return 'unavailable'
   }
-  return 'operational'
+  return quotaStatus === 'normal' ? 'operational' : quotaStatus
 })
 
 const detailTitle = computed(() => {

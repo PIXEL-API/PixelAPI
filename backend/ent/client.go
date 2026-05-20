@@ -41,8 +41,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
 	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
@@ -115,10 +117,14 @@ type Client struct {
 	SecuritySecret *SecuritySecretClient
 	// Setting is the client for interacting with the Setting builders.
 	Setting *SettingClient
+	// ShopBalanceLedger is the client for interacting with the ShopBalanceLedger builders.
+	ShopBalanceLedger *ShopBalanceLedgerClient
 	// ShopCardKey is the client for interacting with the ShopCardKey builders.
 	ShopCardKey *ShopCardKeyClient
 	// ShopCategory is the client for interacting with the ShopCategory builders.
 	ShopCategory *ShopCategoryClient
+	// ShopDrawCycle is the client for interacting with the ShopDrawCycle builders.
+	ShopDrawCycle *ShopDrawCycleClient
 	// ShopOrder is the client for interacting with the ShopOrder builders.
 	ShopOrder *ShopOrderClient
 	// ShopProduct is the client for interacting with the ShopProduct builders.
@@ -178,8 +184,10 @@ func (c *Client) init() {
 	c.RedeemCode = NewRedeemCodeClient(c.config)
 	c.SecuritySecret = NewSecuritySecretClient(c.config)
 	c.Setting = NewSettingClient(c.config)
+	c.ShopBalanceLedger = NewShopBalanceLedgerClient(c.config)
 	c.ShopCardKey = NewShopCardKeyClient(c.config)
 	c.ShopCategory = NewShopCategoryClient(c.config)
+	c.ShopDrawCycle = NewShopDrawCycleClient(c.config)
 	c.ShopOrder = NewShopOrderClient(c.config)
 	c.ShopProduct = NewShopProductClient(c.config)
 	c.SubscriptionPlan = NewSubscriptionPlanClient(c.config)
@@ -309,8 +317,10 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		RedeemCode:                    NewRedeemCodeClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
+		ShopBalanceLedger:             NewShopBalanceLedgerClient(cfg),
 		ShopCardKey:                   NewShopCardKeyClient(cfg),
 		ShopCategory:                  NewShopCategoryClient(cfg),
+		ShopDrawCycle:                 NewShopDrawCycleClient(cfg),
 		ShopOrder:                     NewShopOrderClient(cfg),
 		ShopProduct:                   NewShopProductClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
@@ -367,8 +377,10 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		RedeemCode:                    NewRedeemCodeClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
+		ShopBalanceLedger:             NewShopBalanceLedgerClient(cfg),
 		ShopCardKey:                   NewShopCardKeyClient(cfg),
 		ShopCategory:                  NewShopCategoryClient(cfg),
+		ShopDrawCycle:                 NewShopDrawCycleClient(cfg),
 		ShopOrder:                     NewShopOrderClient(cfg),
 		ShopProduct:                   NewShopProductClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
@@ -416,10 +428,10 @@ func (c *Client) Use(hooks ...Hook) {
 		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
 		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.ShopCardKey, c.ShopCategory, c.ShopOrder, c.ShopProduct, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserSubscription,
+		c.ShopBalanceLedger, c.ShopCardKey, c.ShopCategory, c.ShopDrawCycle,
+		c.ShopOrder, c.ShopProduct, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserSubscription,
 	} {
 		n.Use(hooks...)
 	}
@@ -436,10 +448,10 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
 		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.ShopCardKey, c.ShopCategory, c.ShopOrder, c.ShopProduct, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserSubscription,
+		c.ShopBalanceLedger, c.ShopCardKey, c.ShopCategory, c.ShopDrawCycle,
+		c.ShopOrder, c.ShopProduct, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -500,10 +512,14 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.SecuritySecret.mutate(ctx, m)
 	case *SettingMutation:
 		return c.Setting.mutate(ctx, m)
+	case *ShopBalanceLedgerMutation:
+		return c.ShopBalanceLedger.mutate(ctx, m)
 	case *ShopCardKeyMutation:
 		return c.ShopCardKey.mutate(ctx, m)
 	case *ShopCategoryMutation:
 		return c.ShopCategory.mutate(ctx, m)
+	case *ShopDrawCycleMutation:
+		return c.ShopDrawCycle.mutate(ctx, m)
 	case *ShopOrderMutation:
 		return c.ShopOrder.mutate(ctx, m)
 	case *ShopProductMutation:
@@ -4684,6 +4700,187 @@ func (c *SettingClient) mutate(ctx context.Context, m *SettingMutation) (Value, 
 	}
 }
 
+// ShopBalanceLedgerClient is a client for the ShopBalanceLedger schema.
+type ShopBalanceLedgerClient struct {
+	config
+}
+
+// NewShopBalanceLedgerClient returns a client for the ShopBalanceLedger from the given config.
+func NewShopBalanceLedgerClient(c config) *ShopBalanceLedgerClient {
+	return &ShopBalanceLedgerClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `shopbalanceledger.Hooks(f(g(h())))`.
+func (c *ShopBalanceLedgerClient) Use(hooks ...Hook) {
+	c.hooks.ShopBalanceLedger = append(c.hooks.ShopBalanceLedger, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `shopbalanceledger.Intercept(f(g(h())))`.
+func (c *ShopBalanceLedgerClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ShopBalanceLedger = append(c.inters.ShopBalanceLedger, interceptors...)
+}
+
+// Create returns a builder for creating a ShopBalanceLedger entity.
+func (c *ShopBalanceLedgerClient) Create() *ShopBalanceLedgerCreate {
+	mutation := newShopBalanceLedgerMutation(c.config, OpCreate)
+	return &ShopBalanceLedgerCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ShopBalanceLedger entities.
+func (c *ShopBalanceLedgerClient) CreateBulk(builders ...*ShopBalanceLedgerCreate) *ShopBalanceLedgerCreateBulk {
+	return &ShopBalanceLedgerCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ShopBalanceLedgerClient) MapCreateBulk(slice any, setFunc func(*ShopBalanceLedgerCreate, int)) *ShopBalanceLedgerCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ShopBalanceLedgerCreateBulk{err: fmt.Errorf("calling to ShopBalanceLedgerClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ShopBalanceLedgerCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ShopBalanceLedgerCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ShopBalanceLedger.
+func (c *ShopBalanceLedgerClient) Update() *ShopBalanceLedgerUpdate {
+	mutation := newShopBalanceLedgerMutation(c.config, OpUpdate)
+	return &ShopBalanceLedgerUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ShopBalanceLedgerClient) UpdateOne(_m *ShopBalanceLedger) *ShopBalanceLedgerUpdateOne {
+	mutation := newShopBalanceLedgerMutation(c.config, OpUpdateOne, withShopBalanceLedger(_m))
+	return &ShopBalanceLedgerUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ShopBalanceLedgerClient) UpdateOneID(id int64) *ShopBalanceLedgerUpdateOne {
+	mutation := newShopBalanceLedgerMutation(c.config, OpUpdateOne, withShopBalanceLedgerID(id))
+	return &ShopBalanceLedgerUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ShopBalanceLedger.
+func (c *ShopBalanceLedgerClient) Delete() *ShopBalanceLedgerDelete {
+	mutation := newShopBalanceLedgerMutation(c.config, OpDelete)
+	return &ShopBalanceLedgerDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ShopBalanceLedgerClient) DeleteOne(_m *ShopBalanceLedger) *ShopBalanceLedgerDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ShopBalanceLedgerClient) DeleteOneID(id int64) *ShopBalanceLedgerDeleteOne {
+	builder := c.Delete().Where(shopbalanceledger.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ShopBalanceLedgerDeleteOne{builder}
+}
+
+// Query returns a query builder for ShopBalanceLedger.
+func (c *ShopBalanceLedgerClient) Query() *ShopBalanceLedgerQuery {
+	return &ShopBalanceLedgerQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeShopBalanceLedger},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ShopBalanceLedger entity by its id.
+func (c *ShopBalanceLedgerClient) Get(ctx context.Context, id int64) (*ShopBalanceLedger, error) {
+	return c.Query().Where(shopbalanceledger.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ShopBalanceLedgerClient) GetX(ctx context.Context, id int64) *ShopBalanceLedger {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryUser queries the user edge of a ShopBalanceLedger.
+func (c *ShopBalanceLedgerClient) QueryUser(_m *ShopBalanceLedger) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopbalanceledger.Table, shopbalanceledger.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, shopbalanceledger.UserTable, shopbalanceledger.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryShopOrder queries the shop_order edge of a ShopBalanceLedger.
+func (c *ShopBalanceLedgerClient) QueryShopOrder(_m *ShopBalanceLedger) *ShopOrderQuery {
+	query := (&ShopOrderClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopbalanceledger.Table, shopbalanceledger.FieldID, id),
+			sqlgraph.To(shoporder.Table, shoporder.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, shopbalanceledger.ShopOrderTable, shopbalanceledger.ShopOrderColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryDrawCycle queries the draw_cycle edge of a ShopBalanceLedger.
+func (c *ShopBalanceLedgerClient) QueryDrawCycle(_m *ShopBalanceLedger) *ShopDrawCycleQuery {
+	query := (&ShopDrawCycleClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopbalanceledger.Table, shopbalanceledger.FieldID, id),
+			sqlgraph.To(shopdrawcycle.Table, shopdrawcycle.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, shopbalanceledger.DrawCycleTable, shopbalanceledger.DrawCycleColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ShopBalanceLedgerClient) Hooks() []Hook {
+	return c.hooks.ShopBalanceLedger
+}
+
+// Interceptors returns the client interceptors.
+func (c *ShopBalanceLedgerClient) Interceptors() []Interceptor {
+	return c.inters.ShopBalanceLedger
+}
+
+func (c *ShopBalanceLedgerClient) mutate(ctx context.Context, m *ShopBalanceLedgerMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ShopBalanceLedgerCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ShopBalanceLedgerUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ShopBalanceLedgerUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ShopBalanceLedgerDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ShopBalanceLedger mutation op: %q", m.Op())
+	}
+}
+
 // ShopCardKeyClient is a client for the ShopCardKey schema.
 type ShopCardKeyClient struct {
 	config
@@ -4998,6 +5195,203 @@ func (c *ShopCategoryClient) mutate(ctx context.Context, m *ShopCategoryMutation
 	}
 }
 
+// ShopDrawCycleClient is a client for the ShopDrawCycle schema.
+type ShopDrawCycleClient struct {
+	config
+}
+
+// NewShopDrawCycleClient returns a client for the ShopDrawCycle from the given config.
+func NewShopDrawCycleClient(c config) *ShopDrawCycleClient {
+	return &ShopDrawCycleClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `shopdrawcycle.Hooks(f(g(h())))`.
+func (c *ShopDrawCycleClient) Use(hooks ...Hook) {
+	c.hooks.ShopDrawCycle = append(c.hooks.ShopDrawCycle, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `shopdrawcycle.Intercept(f(g(h())))`.
+func (c *ShopDrawCycleClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ShopDrawCycle = append(c.inters.ShopDrawCycle, interceptors...)
+}
+
+// Create returns a builder for creating a ShopDrawCycle entity.
+func (c *ShopDrawCycleClient) Create() *ShopDrawCycleCreate {
+	mutation := newShopDrawCycleMutation(c.config, OpCreate)
+	return &ShopDrawCycleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ShopDrawCycle entities.
+func (c *ShopDrawCycleClient) CreateBulk(builders ...*ShopDrawCycleCreate) *ShopDrawCycleCreateBulk {
+	return &ShopDrawCycleCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ShopDrawCycleClient) MapCreateBulk(slice any, setFunc func(*ShopDrawCycleCreate, int)) *ShopDrawCycleCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ShopDrawCycleCreateBulk{err: fmt.Errorf("calling to ShopDrawCycleClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ShopDrawCycleCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ShopDrawCycleCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ShopDrawCycle.
+func (c *ShopDrawCycleClient) Update() *ShopDrawCycleUpdate {
+	mutation := newShopDrawCycleMutation(c.config, OpUpdate)
+	return &ShopDrawCycleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ShopDrawCycleClient) UpdateOne(_m *ShopDrawCycle) *ShopDrawCycleUpdateOne {
+	mutation := newShopDrawCycleMutation(c.config, OpUpdateOne, withShopDrawCycle(_m))
+	return &ShopDrawCycleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ShopDrawCycleClient) UpdateOneID(id int64) *ShopDrawCycleUpdateOne {
+	mutation := newShopDrawCycleMutation(c.config, OpUpdateOne, withShopDrawCycleID(id))
+	return &ShopDrawCycleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ShopDrawCycle.
+func (c *ShopDrawCycleClient) Delete() *ShopDrawCycleDelete {
+	mutation := newShopDrawCycleMutation(c.config, OpDelete)
+	return &ShopDrawCycleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ShopDrawCycleClient) DeleteOne(_m *ShopDrawCycle) *ShopDrawCycleDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ShopDrawCycleClient) DeleteOneID(id int64) *ShopDrawCycleDeleteOne {
+	builder := c.Delete().Where(shopdrawcycle.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ShopDrawCycleDeleteOne{builder}
+}
+
+// Query returns a query builder for ShopDrawCycle.
+func (c *ShopDrawCycleClient) Query() *ShopDrawCycleQuery {
+	return &ShopDrawCycleQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeShopDrawCycle},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ShopDrawCycle entity by its id.
+func (c *ShopDrawCycleClient) Get(ctx context.Context, id int64) (*ShopDrawCycle, error) {
+	return c.Query().Where(shopdrawcycle.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ShopDrawCycleClient) GetX(ctx context.Context, id int64) *ShopDrawCycle {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryUser queries the user edge of a ShopDrawCycle.
+func (c *ShopDrawCycleClient) QueryUser(_m *ShopDrawCycle) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopdrawcycle.Table, shopdrawcycle.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, shopdrawcycle.UserTable, shopdrawcycle.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryProduct queries the product edge of a ShopDrawCycle.
+func (c *ShopDrawCycleClient) QueryProduct(_m *ShopDrawCycle) *ShopProductQuery {
+	query := (&ShopProductClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopdrawcycle.Table, shopdrawcycle.FieldID, id),
+			sqlgraph.To(shopproduct.Table, shopproduct.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, shopdrawcycle.ProductTable, shopdrawcycle.ProductColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryOrders queries the orders edge of a ShopDrawCycle.
+func (c *ShopDrawCycleClient) QueryOrders(_m *ShopDrawCycle) *ShopOrderQuery {
+	query := (&ShopOrderClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopdrawcycle.Table, shopdrawcycle.FieldID, id),
+			sqlgraph.To(shoporder.Table, shoporder.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, shopdrawcycle.OrdersTable, shopdrawcycle.OrdersColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryBalanceLedger queries the balance_ledger edge of a ShopDrawCycle.
+func (c *ShopDrawCycleClient) QueryBalanceLedger(_m *ShopDrawCycle) *ShopBalanceLedgerQuery {
+	query := (&ShopBalanceLedgerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopdrawcycle.Table, shopdrawcycle.FieldID, id),
+			sqlgraph.To(shopbalanceledger.Table, shopbalanceledger.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, shopdrawcycle.BalanceLedgerTable, shopdrawcycle.BalanceLedgerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ShopDrawCycleClient) Hooks() []Hook {
+	return c.hooks.ShopDrawCycle
+}
+
+// Interceptors returns the client interceptors.
+func (c *ShopDrawCycleClient) Interceptors() []Interceptor {
+	return c.inters.ShopDrawCycle
+}
+
+func (c *ShopDrawCycleClient) mutate(ctx context.Context, m *ShopDrawCycleMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ShopDrawCycleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ShopDrawCycleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ShopDrawCycleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ShopDrawCycleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ShopDrawCycle mutation op: %q", m.Op())
+	}
+}
+
 // ShopOrderClient is a client for the ShopOrder schema.
 type ShopOrderClient struct {
 	config
@@ -5131,6 +5525,38 @@ func (c *ShopOrderClient) QueryProduct(_m *ShopOrder) *ShopProductQuery {
 			sqlgraph.From(shoporder.Table, shoporder.FieldID, id),
 			sqlgraph.To(shopproduct.Table, shopproduct.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, shoporder.ProductTable, shoporder.ProductColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryDrawCycle queries the draw_cycle edge of a ShopOrder.
+func (c *ShopOrderClient) QueryDrawCycle(_m *ShopOrder) *ShopDrawCycleQuery {
+	query := (&ShopDrawCycleClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shoporder.Table, shoporder.FieldID, id),
+			sqlgraph.To(shopdrawcycle.Table, shopdrawcycle.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, shoporder.DrawCycleTable, shoporder.DrawCycleColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryBalanceLedger queries the balance_ledger edge of a ShopOrder.
+func (c *ShopOrderClient) QueryBalanceLedger(_m *ShopOrder) *ShopBalanceLedgerQuery {
+	query := (&ShopBalanceLedgerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shoporder.Table, shoporder.FieldID, id),
+			sqlgraph.To(shopbalanceledger.Table, shopbalanceledger.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, shoporder.BalanceLedgerTable, shoporder.BalanceLedgerColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -5328,6 +5754,22 @@ func (c *ShopProductClient) QueryOrders(_m *ShopProduct) *ShopOrderQuery {
 			sqlgraph.From(shopproduct.Table, shopproduct.FieldID, id),
 			sqlgraph.To(shoporder.Table, shoporder.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, shopproduct.OrdersTable, shopproduct.OrdersColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryDrawCycles queries the draw_cycles edge of a ShopProduct.
+func (c *ShopProductClient) QueryDrawCycles(_m *ShopProduct) *ShopDrawCycleQuery {
+	query := (&ShopDrawCycleClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopproduct.Table, shopproduct.FieldID, id),
+			sqlgraph.To(shopdrawcycle.Table, shopdrawcycle.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, shopproduct.DrawCyclesTable, shopproduct.DrawCyclesColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -6256,6 +6698,38 @@ func (c *UserClient) QueryShopOrders(_m *User) *ShopOrderQuery {
 	return query
 }
 
+// QueryShopDrawCycles queries the shop_draw_cycles edge of a User.
+func (c *UserClient) QueryShopDrawCycles(_m *User) *ShopDrawCycleQuery {
+	query := (&ShopDrawCycleClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(shopdrawcycle.Table, shopdrawcycle.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ShopDrawCyclesTable, user.ShopDrawCyclesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryShopBalanceLedger queries the shop_balance_ledger edge of a User.
+func (c *UserClient) QueryShopBalanceLedger(_m *User) *ShopBalanceLedgerQuery {
+	query := (&ShopBalanceLedgerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(shopbalanceledger.Table, shopbalanceledger.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ShopBalanceLedgerTable, user.ShopBalanceLedgerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryOwnedAccounts queries the owned_accounts edge of a User.
 func (c *UserClient) QueryOwnedAccounts(_m *User) *AccountQuery {
 	query := (&AccountClient{config: c.config}).Query()
@@ -6986,10 +7460,11 @@ type (
 		ChannelMonitorHistory, ChannelMonitorRequestTemplate, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, ShopCardKey,
-		ShopCategory, ShopOrder, ShopProduct, SubscriptionPlan, TLSFingerprintProfile,
-		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
-		UserAttributeValue, UserSubscription []ent.Hook
+		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, ShopBalanceLedger,
+		ShopCardKey, ShopCategory, ShopDrawCycle, ShopOrder, ShopProduct,
+		SubscriptionPlan, TLSFingerprintProfile, UsageCleanupTask, UsageLog, User,
+		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, APIKeyGroupRoute, Account, AccountGroup, Announcement, AnnouncementRead,
@@ -6997,10 +7472,11 @@ type (
 		ChannelMonitorHistory, ChannelMonitorRequestTemplate, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, ShopCardKey,
-		ShopCategory, ShopOrder, ShopProduct, SubscriptionPlan, TLSFingerprintProfile,
-		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
-		UserAttributeValue, UserSubscription []ent.Interceptor
+		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, ShopBalanceLedger,
+		ShopCardKey, ShopCategory, ShopDrawCycle, ShopOrder, ShopProduct,
+		SubscriptionPlan, TLSFingerprintProfile, UsageCleanupTask, UsageLog, User,
+		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserSubscription []ent.Interceptor
 	}
 )
 

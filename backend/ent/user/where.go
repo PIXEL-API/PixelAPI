@@ -1593,6 +1593,52 @@ func HasShopOrdersWith(preds ...predicate.ShopOrder) predicate.User {
 	})
 }
 
+// HasShopDrawCycles applies the HasEdge predicate on the "shop_draw_cycles" edge.
+func HasShopDrawCycles() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ShopDrawCyclesTable, ShopDrawCyclesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasShopDrawCyclesWith applies the HasEdge predicate on the "shop_draw_cycles" edge with a given conditions (other predicates).
+func HasShopDrawCyclesWith(preds ...predicate.ShopDrawCycle) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newShopDrawCyclesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasShopBalanceLedger applies the HasEdge predicate on the "shop_balance_ledger" edge.
+func HasShopBalanceLedger() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ShopBalanceLedgerTable, ShopBalanceLedgerColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasShopBalanceLedgerWith applies the HasEdge predicate on the "shop_balance_ledger" edge with a given conditions (other predicates).
+func HasShopBalanceLedgerWith(preds ...predicate.ShopBalanceLedger) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newShopBalanceLedgerStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasOwnedAccounts applies the HasEdge predicate on the "owned_accounts" edge.
 func HasOwnedAccounts() predicate.User {
 	return predicate.User(func(s *sql.Selector) {

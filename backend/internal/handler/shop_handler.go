@@ -60,6 +60,19 @@ func (h *ShopHandler) GetProduct(c *gin.Context) {
 	response.Success(c, item)
 }
 
+func (h *ShopHandler) ListDrawProgress(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	items, err := h.shopService.ListDrawProgress(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, items)
+}
+
 type createShopOrderRequest struct {
 	ProductID         int64  `json:"product_id" binding:"required"`
 	Quantity          int    `json:"quantity" binding:"required"`

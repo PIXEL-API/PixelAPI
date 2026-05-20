@@ -89,7 +89,14 @@
               </div>
             </div>
 
-            <div v-if="shopOrder.delivered_cards.length > 0">
+            <div v-if="shopOrder.draw_reward_amount !== null && shopOrder.draw_reward_amount !== undefined" class="rounded-lg bg-emerald-50 p-4 text-sm dark:bg-emerald-950/30">
+              <div class="flex justify-between gap-3">
+                <span class="text-emerald-700 dark:text-emerald-300">{{ t('store.drawReward') }}</span>
+                <span class="font-semibold text-emerald-800 dark:text-emerald-200">${{ shopOrder.draw_reward_amount.toFixed(2) }}</span>
+              </div>
+            </div>
+
+            <div v-if="shopOrder.delivered_cards.length > 0 && (shopOrder.draw_reward_amount === null || shopOrder.draw_reward_amount === undefined)">
               <div class="mb-2 flex items-center justify-between gap-3">
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</span>
                 <button
@@ -115,7 +122,7 @@
               :order-id="shopOrder.id"
               :files="shopOrder.delivered_files"
             />
-            <p v-if="shopOrder.delivered_cards.length === 0 && shopOrder.delivered_files.length === 0" class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-900 dark:text-dark-400">
+            <p v-if="shopOrder.delivered_cards.length === 0 && shopOrder.delivered_files.length === 0 && (shopOrder.draw_reward_amount === null || shopOrder.draw_reward_amount === undefined)" class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-900 dark:text-dark-400">
               {{ t('store.deliveryPending') }}
             </p>
           </div>

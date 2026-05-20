@@ -207,3 +207,17 @@ func TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(t *testing.T) {
 		}
 	})
 }
+
+func TestUsageWindowElapsedHours(t *testing.T) {
+	t.Parallel()
+
+	if got := usageWindowElapsedHours("5h", 2*60*60); got != 3 {
+		t.Fatalf("usageWindowElapsedHours(5h, 2h remaining) = %v, want 3", got)
+	}
+	if got := usageWindowElapsedHours("5h", 5*60*60); got != 0 {
+		t.Fatalf("usageWindowElapsedHours(5h, full remaining) = %v, want 0", got)
+	}
+	if got := usageWindowElapsedHours("unknown", 0); got != 0 {
+		t.Fatalf("usageWindowElapsedHours(unknown) = %v, want 0", got)
+	}
+}

@@ -20,6 +20,9 @@ function normalizeProduct<T extends StoreProduct>(product: T): T {
     ...product,
     image_url: product.cover_url,
     purchase_limit: product.max_purchase,
+    product_type: product.product_type || 'card_key',
+    balance_only: product.balance_only === true,
+    stock_unlimited: product.stock_unlimited === true,
     status: product.enabled ? 'active' : 'inactive',
   }
 }
@@ -56,6 +59,10 @@ export const storeAPI = {
       response.data.items = (response.data.items || []).map(normalizeProduct)
       return response
     })
+  },
+
+  getDrawProgress() {
+    return apiClient.get<Record<number, StoreProduct['draw_progress']>>('/shop/draw-progress')
   },
 
   createOrder(data: CreateStoreOrderRequest, idempotencyKey?: string) {

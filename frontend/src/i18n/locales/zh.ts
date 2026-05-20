@@ -398,6 +398,7 @@ export default {
     availableStock: '可售库存',
     empty: '暂无可售商品',
     stock: '库存 {count}',
+    drawProductBadge: '余额抽卡',
     noDescription: '暂无商品描述',
     buyNow: '购买',
     soldOut: '已售罄',
@@ -405,6 +406,8 @@ export default {
     quantity: '购买数量',
     unitPrice: '单价',
     totalAmount: '合计',
+    drawRewardRange: '随机返还区间',
+    drawProgress: '本周期进度',
     payMethod: '支付方式',
     balancePay: '余额支付',
     balanceEnough: '余额充足',
@@ -415,6 +418,7 @@ export default {
     purchaseSuccess: '购买成功',
     deliveryReady: '订单 {orderNo} 已完成，卡密已发放',
     product: '商品',
+    drawReward: '抽卡返还',
     deliveredCards: '已发放卡密',
     deliveredFiles: '已发放文件',
     downloadFile: '下载文件',
@@ -1131,7 +1135,8 @@ export default {
     },
     overall: {
       operational: 'OPERATIONAL',
-      degraded: 'DEGRADED',
+      degraded: '服务降级',
+      constrained: '资源紧张',
       unavailable: 'UNAVAILABLE'
     },
     columns: {
@@ -1218,7 +1223,21 @@ export default {
       realtimeBalanceHint: '邀请收益按 usage 结算后直接进入账户余额',
       frozenQuota: '冻结中',
       frozenQuotaHint: '旧充值返利冻结额度，仅用于历史兼容',
+      todayQuota: '今日邀请收益',
+      yesterdayQuota: '昨日邀请收益',
+      last7Quota: '近 7 天邀请收益',
+      periodQuota: '时间段邀请收益',
       totalQuota: '历史邀请收益'
+    },
+    period: {
+      start: '开始日期',
+      end: '结束日期',
+      invalid: '请选择有效的时间范围',
+      presets: {
+        today: '今日',
+        yesterday: '昨日',
+        last7: '近 7 天'
+      }
     },
     transfer: {
       title: '旧返利额度转余额',
@@ -1232,10 +1251,25 @@ export default {
       title: '已邀请用户',
       empty: '暂无邀请记录',
       columns: {
+        user: '用户',
         email: '邮箱',
         username: '用户名',
+        bindSource: '绑定方式',
+        status: '状态',
+        periodConsumption: '时间段消费',
+        periodRebate: '时间段收益',
+        historyConsumption: '历史消费',
         rebate: '邀请收益',
         joinedAt: '绑定时间'
+      },
+      bindSources: {
+        registration: '注册绑定',
+        admin: '管理员绑定',
+        legacy: '历史绑定'
+      },
+      status: {
+        active: '有效',
+        disabled: '已禁用'
       }
     },
     tips: {
@@ -1563,7 +1597,18 @@ export default {
       price: '价格',
       originalPrice: '原价',
       stockLabel: '库存',
+      unlimitedStock: '不限库存',
       purchaseLimit: '购买限制',
+      productType: '商品类型',
+      productTypes: {
+        cardKey: '卡密商品',
+        balanceDraw: '余额抽卡',
+      },
+      drawMinAmount: '最小返还',
+      drawMaxAmount: '最大返还',
+      drawGuaranteeCount: '保底次数',
+      drawReturnRate: '周期返还率',
+      drawConfigHint: '当前周期目标返还 {amount} 额度，系统会按用户和商品生成保底随机池。',
       imageUrl: '图片 URL',
       cardContent: '卡密内容',
       cardTypeLabel: '类型',
@@ -3098,6 +3143,9 @@ export default {
         exceptionAccounts: '异常账号',
         accountMeta: '共 {total}，活跃 {active}，可调度 {schedulable}',
         issueMeta: '限流 {limited}，错误 {error}，禁用 {disabled}',
+        accountStatus: '账号状态',
+        totalShort: '总 {count}',
+        schedulableCount: '可调度 {count}',
         rateLimitedCount: '限流 {count}',
         errorCount: '错误 {count}',
         disabledCount: '禁用 {count}',
@@ -3114,12 +3162,14 @@ export default {
         groupBreakdown: '分组容量判定',
         groupBreakdownHint: '共享容量池按分组独立判定，避免全局汇总掩盖单个分组不可调度。',
         groupNormalCount: '正常 {count}',
-        groupDegradedCount: '降级 {count}',
+        groupDegradedCount: '服务降级 {count}',
+        groupConstrainedCount: '资源紧张 {count}',
         groupUnavailableCount: '不可用 {count}',
         ungrouped: '未绑定分组',
         groupHealth: {
           normal: '正常',
-          degraded: '降级',
+          degraded: '服务降级',
+          constrained: '资源紧张',
           unavailable: '不可用'
         },
         empty: '当前没有配置账号配额，也没有可汇总的 OpenAI OAuth 快照。',
@@ -5587,6 +5637,31 @@ export default {
             resetValidity: '重置有效期：从本次补绑时间重新计算邀请收益有效期',
             submit: '保存邀请关系',
             selfError: '用户不能邀请自己',
+          },
+          extendRewards: {
+            title: '邀请关系延期',
+            description: '为当前仍在有效期内、且非永久有效的邀请收益关系按原到期时间延长天数。',
+            scope: '延期范围',
+            scopeInviter: '指定邀请人',
+            scopeSite: '全站有效关系',
+            extendDays: '延期天数',
+            extendDaysHint: '按原到期时间增加天数，仅支持 1-3650 天。',
+            inviter: '邀请人',
+            inviterPlaceholder: '搜索邀请人邮箱或用户名',
+            allInvitees: '为该邀请人的全部有效被邀请关系延期',
+            invitees: '指定被邀请用户',
+            inviteePlaceholder: '搜索被邀请用户邮箱或用户名',
+            inviteeHint: '只会处理真实绑定在该邀请人名下、当前仍有效且非永久的关系。',
+            ruleHint: '已过期关系和永久有效关系不会被延期。',
+            submitSite: '为全站有效关系延期',
+            submitInviterAll: '为该邀请人的全部有效关系延期',
+            submitInviterSelected: '为选中邀请关系延期',
+            confirmTitle: '确认延期邀请关系',
+            confirmSite: '确认将全站当前有效且非永久的邀请关系延长 {days} 天？',
+            confirmInviterAll: '确认将邀请人 {email} 名下全部当前有效且非永久的邀请关系延长 {days} 天？',
+            confirmInviterSelected: '确认将邀请人 {email} 名下选中的 {count} 个邀请关系延长 {days} 天？',
+            success: '已延期 {count} 条邀请关系',
+            selfError: '被邀请用户不能与邀请人相同',
           },
           customUsers: {
             title: '专属邀请码配置',

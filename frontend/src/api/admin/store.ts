@@ -23,6 +23,9 @@ function productToView(product: StoreProduct): StoreProduct {
     ...product,
     image_url: product.cover_url,
     purchase_limit: product.max_purchase,
+    product_type: product.product_type || 'card_key',
+    balance_only: product.balance_only === true,
+    stock_unlimited: product.stock_unlimited === true,
     status: product.enabled ? 'active' : 'inactive',
   }
 }
@@ -87,6 +90,9 @@ function productPayload(data: UpsertStoreProductRequest) {
     min_purchase: data.min_purchase ?? 1,
     max_purchase: maxPurchase > 0 ? maxPurchase : 1,
     auto_delivery: data.auto_delivery ?? true,
+    product_type: data.product_type || 'card_key',
+    balance_only: data.balance_only === true,
+    draw_config: data.draw_config ?? null,
   }
   return payload
 }

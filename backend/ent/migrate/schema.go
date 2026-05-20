@@ -1285,6 +1285,64 @@ var (
 		Columns:    SettingsColumns,
 		PrimaryKey: []*schema.Column{SettingsColumns[0]},
 	}
+	// ShopBalanceLedgerColumns holds the columns for the "shop_balance_ledger" table.
+	ShopBalanceLedgerColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "entry_type", Type: field.TypeString, Size: 30},
+		{Name: "debit_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "credit_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "balance_before", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "balance_after", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "draw_cycle_index", Type: field.TypeInt, Nullable: true},
+		{Name: "draw_cycle_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "shop_order_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+	}
+	// ShopBalanceLedgerTable holds the schema information for the "shop_balance_ledger" table.
+	ShopBalanceLedgerTable = &schema.Table{
+		Name:       "shop_balance_ledger",
+		Columns:    ShopBalanceLedgerColumns,
+		PrimaryKey: []*schema.Column{ShopBalanceLedgerColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shop_balance_ledger_shop_draw_cycles_balance_ledger",
+				Columns:    []*schema.Column{ShopBalanceLedgerColumns[9]},
+				RefColumns: []*schema.Column{ShopDrawCyclesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "shop_balance_ledger_shop_orders_balance_ledger",
+				Columns:    []*schema.Column{ShopBalanceLedgerColumns[10]},
+				RefColumns: []*schema.Column{ShopOrdersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "shop_balance_ledger_users_shop_balance_ledger",
+				Columns:    []*schema.Column{ShopBalanceLedgerColumns[11]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopbalanceledger_user_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShopBalanceLedgerColumns[11], ShopBalanceLedgerColumns[1]},
+			},
+			{
+				Name:    "shopbalanceledger_shop_order_id_entry_type",
+				Unique:  true,
+				Columns: []*schema.Column{ShopBalanceLedgerColumns[10], ShopBalanceLedgerColumns[3]},
+			},
+			{
+				Name:    "shopbalanceledger_draw_cycle_id",
+				Unique:  false,
+				Columns: []*schema.Column{ShopBalanceLedgerColumns[9]},
+			},
+		},
+	}
 	// ShopCardKeysColumns holds the columns for the "shop_card_keys" table.
 	ShopCardKeysColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1369,6 +1427,53 @@ var (
 			},
 		},
 	}
+	// ShopDrawCyclesColumns holds the columns for the "shop_draw_cycles" table.
+	ShopDrawCyclesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "cycle_no", Type: field.TypeInt},
+		{Name: "guarantee_count", Type: field.TypeInt},
+		{Name: "target_amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "remaining_amounts", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "drawn_count", Type: field.TypeInt, Default: 0},
+		{Name: "drawn_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "completed", Type: field.TypeBool, Default: false},
+		{Name: "product_id", Type: field.TypeInt64},
+		{Name: "user_id", Type: field.TypeInt64},
+	}
+	// ShopDrawCyclesTable holds the schema information for the "shop_draw_cycles" table.
+	ShopDrawCyclesTable = &schema.Table{
+		Name:       "shop_draw_cycles",
+		Columns:    ShopDrawCyclesColumns,
+		PrimaryKey: []*schema.Column{ShopDrawCyclesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shop_draw_cycles_shop_products_draw_cycles",
+				Columns:    []*schema.Column{ShopDrawCyclesColumns[10]},
+				RefColumns: []*schema.Column{ShopProductsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "shop_draw_cycles_users_shop_draw_cycles",
+				Columns:    []*schema.Column{ShopDrawCyclesColumns[11]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shopdrawcycle_user_id_product_id_completed",
+				Unique:  false,
+				Columns: []*schema.Column{ShopDrawCyclesColumns[11], ShopDrawCyclesColumns[10], ShopDrawCyclesColumns[9]},
+			},
+			{
+				Name:    "shopdrawcycle_user_id_product_id_cycle_no",
+				Unique:  true,
+				Columns: []*schema.Column{ShopDrawCyclesColumns[11], ShopDrawCyclesColumns[10], ShopDrawCyclesColumns[3]},
+			},
+		},
+	}
 	// ShopOrdersColumns holds the columns for the "shop_orders" table.
 	ShopOrdersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1389,6 +1494,9 @@ var (
 		{Name: "completed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "cancelled_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "failed_reason", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "draw_reward_amount", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "draw_cycle_index", Type: field.TypeInt, Nullable: true},
+		{Name: "draw_cycle_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "product_id", Type: field.TypeInt64},
 		{Name: "user_id", Type: field.TypeInt64},
 	}
@@ -1399,14 +1507,20 @@ var (
 		PrimaryKey: []*schema.Column{ShopOrdersColumns[0]},
 		ForeignKeys: []*schema.ForeignKey{
 			{
+				Symbol:     "shop_orders_shop_draw_cycles_orders",
+				Columns:    []*schema.Column{ShopOrdersColumns[20]},
+				RefColumns: []*schema.Column{ShopDrawCyclesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
 				Symbol:     "shop_orders_shop_products_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[18]},
+				Columns:    []*schema.Column{ShopOrdersColumns[21]},
 				RefColumns: []*schema.Column{ShopProductsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "shop_orders_users_shop_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[19]},
+				Columns:    []*schema.Column{ShopOrdersColumns[22]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -1415,17 +1529,22 @@ var (
 			{
 				Name:    "shoporder_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[19]},
+				Columns: []*schema.Column{ShopOrdersColumns[22]},
 			},
 			{
 				Name:    "shoporder_product_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[18]},
+				Columns: []*schema.Column{ShopOrdersColumns[21]},
 			},
 			{
 				Name:    "shoporder_payment_order_id",
 				Unique:  true,
 				Columns: []*schema.Column{ShopOrdersColumns[11]},
+			},
+			{
+				Name:    "shoporder_draw_cycle_id",
+				Unique:  false,
+				Columns: []*schema.Column{ShopOrdersColumns[20]},
 			},
 			{
 				Name:    "shoporder_status",
@@ -1454,6 +1573,13 @@ var (
 		{Name: "min_purchase", Type: field.TypeInt, Default: 1},
 		{Name: "max_purchase", Type: field.TypeInt, Default: 1},
 		{Name: "auto_delivery", Type: field.TypeBool, Default: true},
+		{Name: "product_type", Type: field.TypeString, Size: 30, Default: "card_key"},
+		{Name: "balance_only", Type: field.TypeBool, Default: false},
+		{Name: "draw_enabled", Type: field.TypeBool, Default: false},
+		{Name: "draw_min_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "draw_max_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "draw_guarantee_count", Type: field.TypeInt, Default: 0},
+		{Name: "draw_return_rate", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
 		{Name: "category_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// ShopProductsTable holds the schema information for the "shop_products" table.
@@ -1464,7 +1590,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "shop_products_shop_categories_products",
-				Columns:    []*schema.Column{ShopProductsColumns[13]},
+				Columns:    []*schema.Column{ShopProductsColumns[20]},
 				RefColumns: []*schema.Column{ShopCategoriesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -1473,7 +1599,7 @@ var (
 			{
 				Name:    "shopproduct_category_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopProductsColumns[13]},
+				Columns: []*schema.Column{ShopProductsColumns[20]},
 			},
 			{
 				Name:    "shopproduct_enabled",
@@ -2007,8 +2133,10 @@ var (
 		RedeemCodesTable,
 		SecuritySecretsTable,
 		SettingsTable,
+		ShopBalanceLedgerTable,
 		ShopCardKeysTable,
 		ShopCategoriesTable,
+		ShopDrawCyclesTable,
 		ShopOrdersTable,
 		ShopProductsTable,
 		SubscriptionPlansTable,
@@ -2125,6 +2253,12 @@ func init() {
 	SettingsTable.Annotation = &entsql.Annotation{
 		Table: "settings",
 	}
+	ShopBalanceLedgerTable.ForeignKeys[0].RefTable = ShopDrawCyclesTable
+	ShopBalanceLedgerTable.ForeignKeys[1].RefTable = ShopOrdersTable
+	ShopBalanceLedgerTable.ForeignKeys[2].RefTable = UsersTable
+	ShopBalanceLedgerTable.Annotation = &entsql.Annotation{
+		Table: "shop_balance_ledger",
+	}
 	ShopCardKeysTable.ForeignKeys[0].RefTable = ShopOrdersTable
 	ShopCardKeysTable.ForeignKeys[1].RefTable = ShopProductsTable
 	ShopCardKeysTable.Annotation = &entsql.Annotation{
@@ -2136,8 +2270,14 @@ func init() {
 	ShopCategoriesTable.Annotation = &entsql.Annotation{
 		Table: "shop_categories",
 	}
-	ShopOrdersTable.ForeignKeys[0].RefTable = ShopProductsTable
-	ShopOrdersTable.ForeignKeys[1].RefTable = UsersTable
+	ShopDrawCyclesTable.ForeignKeys[0].RefTable = ShopProductsTable
+	ShopDrawCyclesTable.ForeignKeys[1].RefTable = UsersTable
+	ShopDrawCyclesTable.Annotation = &entsql.Annotation{
+		Table: "shop_draw_cycles",
+	}
+	ShopOrdersTable.ForeignKeys[0].RefTable = ShopDrawCyclesTable
+	ShopOrdersTable.ForeignKeys[1].RefTable = ShopProductsTable
+	ShopOrdersTable.ForeignKeys[2].RefTable = UsersTable
 	ShopOrdersTable.Annotation = &entsql.Annotation{
 		Table: "shop_orders",
 	}

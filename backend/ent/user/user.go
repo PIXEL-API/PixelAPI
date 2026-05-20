@@ -83,6 +83,10 @@ const (
 	EdgePaymentOrders = "payment_orders"
 	// EdgeShopOrders holds the string denoting the shop_orders edge name in mutations.
 	EdgeShopOrders = "shop_orders"
+	// EdgeShopDrawCycles holds the string denoting the shop_draw_cycles edge name in mutations.
+	EdgeShopDrawCycles = "shop_draw_cycles"
+	// EdgeShopBalanceLedger holds the string denoting the shop_balance_ledger edge name in mutations.
+	EdgeShopBalanceLedger = "shop_balance_ledger"
 	// EdgeOwnedAccounts holds the string denoting the owned_accounts edge name in mutations.
 	EdgeOwnedAccounts = "owned_accounts"
 	// EdgeAuthIdentities holds the string denoting the auth_identities edge name in mutations.
@@ -168,6 +172,20 @@ const (
 	ShopOrdersInverseTable = "shop_orders"
 	// ShopOrdersColumn is the table column denoting the shop_orders relation/edge.
 	ShopOrdersColumn = "user_id"
+	// ShopDrawCyclesTable is the table that holds the shop_draw_cycles relation/edge.
+	ShopDrawCyclesTable = "shop_draw_cycles"
+	// ShopDrawCyclesInverseTable is the table name for the ShopDrawCycle entity.
+	// It exists in this package in order to avoid circular dependency with the "shopdrawcycle" package.
+	ShopDrawCyclesInverseTable = "shop_draw_cycles"
+	// ShopDrawCyclesColumn is the table column denoting the shop_draw_cycles relation/edge.
+	ShopDrawCyclesColumn = "user_id"
+	// ShopBalanceLedgerTable is the table that holds the shop_balance_ledger relation/edge.
+	ShopBalanceLedgerTable = "shop_balance_ledger"
+	// ShopBalanceLedgerInverseTable is the table name for the ShopBalanceLedger entity.
+	// It exists in this package in order to avoid circular dependency with the "shopbalanceledger" package.
+	ShopBalanceLedgerInverseTable = "shop_balance_ledger"
+	// ShopBalanceLedgerColumn is the table column denoting the shop_balance_ledger relation/edge.
+	ShopBalanceLedgerColumn = "user_id"
 	// OwnedAccountsTable is the table that holds the owned_accounts relation/edge.
 	OwnedAccountsTable = "accounts"
 	// OwnedAccountsInverseTable is the table name for the Account entity.
@@ -573,6 +591,34 @@ func ByShopOrders(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByShopDrawCyclesCount orders the results by shop_draw_cycles count.
+func ByShopDrawCyclesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newShopDrawCyclesStep(), opts...)
+	}
+}
+
+// ByShopDrawCycles orders the results by shop_draw_cycles terms.
+func ByShopDrawCycles(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newShopDrawCyclesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByShopBalanceLedgerCount orders the results by shop_balance_ledger count.
+func ByShopBalanceLedgerCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newShopBalanceLedgerStep(), opts...)
+	}
+}
+
+// ByShopBalanceLedger orders the results by shop_balance_ledger terms.
+func ByShopBalanceLedger(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newShopBalanceLedgerStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByOwnedAccountsCount orders the results by owned_accounts count.
 func ByOwnedAccountsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -703,6 +749,20 @@ func newShopOrdersStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ShopOrdersInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, ShopOrdersTable, ShopOrdersColumn),
+	)
+}
+func newShopDrawCyclesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ShopDrawCyclesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ShopDrawCyclesTable, ShopDrawCyclesColumn),
+	)
+}
+func newShopBalanceLedgerStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ShopBalanceLedgerInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ShopBalanceLedgerTable, ShopBalanceLedgerColumn),
 	)
 }
 func newOwnedAccountsStep() *sqlgraph.Step {

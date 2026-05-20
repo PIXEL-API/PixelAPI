@@ -52,10 +52,20 @@ const (
 	FieldCancelledAt = "cancelled_at"
 	// FieldFailedReason holds the string denoting the failed_reason field in the database.
 	FieldFailedReason = "failed_reason"
+	// FieldDrawRewardAmount holds the string denoting the draw_reward_amount field in the database.
+	FieldDrawRewardAmount = "draw_reward_amount"
+	// FieldDrawCycleID holds the string denoting the draw_cycle_id field in the database.
+	FieldDrawCycleID = "draw_cycle_id"
+	// FieldDrawCycleIndex holds the string denoting the draw_cycle_index field in the database.
+	FieldDrawCycleIndex = "draw_cycle_index"
 	// EdgeUser holds the string denoting the user edge name in mutations.
 	EdgeUser = "user"
 	// EdgeProduct holds the string denoting the product edge name in mutations.
 	EdgeProduct = "product"
+	// EdgeDrawCycle holds the string denoting the draw_cycle edge name in mutations.
+	EdgeDrawCycle = "draw_cycle"
+	// EdgeBalanceLedger holds the string denoting the balance_ledger edge name in mutations.
+	EdgeBalanceLedger = "balance_ledger"
 	// EdgeCardKeys holds the string denoting the card_keys edge name in mutations.
 	EdgeCardKeys = "card_keys"
 	// Table holds the table name of the shoporder in the database.
@@ -74,6 +84,20 @@ const (
 	ProductInverseTable = "shop_products"
 	// ProductColumn is the table column denoting the product relation/edge.
 	ProductColumn = "product_id"
+	// DrawCycleTable is the table that holds the draw_cycle relation/edge.
+	DrawCycleTable = "shop_orders"
+	// DrawCycleInverseTable is the table name for the ShopDrawCycle entity.
+	// It exists in this package in order to avoid circular dependency with the "shopdrawcycle" package.
+	DrawCycleInverseTable = "shop_draw_cycles"
+	// DrawCycleColumn is the table column denoting the draw_cycle relation/edge.
+	DrawCycleColumn = "draw_cycle_id"
+	// BalanceLedgerTable is the table that holds the balance_ledger relation/edge.
+	BalanceLedgerTable = "shop_balance_ledger"
+	// BalanceLedgerInverseTable is the table name for the ShopBalanceLedger entity.
+	// It exists in this package in order to avoid circular dependency with the "shopbalanceledger" package.
+	BalanceLedgerInverseTable = "shop_balance_ledger"
+	// BalanceLedgerColumn is the table column denoting the balance_ledger relation/edge.
+	BalanceLedgerColumn = "shop_order_id"
 	// CardKeysTable is the table that holds the card_keys relation/edge.
 	CardKeysTable = "shop_card_keys"
 	// CardKeysInverseTable is the table name for the ShopCardKey entity.
@@ -105,6 +129,9 @@ var Columns = []string{
 	FieldCompletedAt,
 	FieldCancelledAt,
 	FieldFailedReason,
+	FieldDrawRewardAmount,
+	FieldDrawCycleID,
+	FieldDrawCycleIndex,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -234,6 +261,21 @@ func ByFailedReason(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldFailedReason, opts...).ToFunc()
 }
 
+// ByDrawRewardAmount orders the results by the draw_reward_amount field.
+func ByDrawRewardAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawRewardAmount, opts...).ToFunc()
+}
+
+// ByDrawCycleID orders the results by the draw_cycle_id field.
+func ByDrawCycleID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawCycleID, opts...).ToFunc()
+}
+
+// ByDrawCycleIndex orders the results by the draw_cycle_index field.
+func ByDrawCycleIndex(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawCycleIndex, opts...).ToFunc()
+}
+
 // ByUserField orders the results by user field.
 func ByUserField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -245,6 +287,27 @@ func ByUserField(field string, opts ...sql.OrderTermOption) OrderOption {
 func ByProductField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
 		sqlgraph.OrderByNeighborTerms(s, newProductStep(), sql.OrderByField(field, opts...))
+	}
+}
+
+// ByDrawCycleField orders the results by draw_cycle field.
+func ByDrawCycleField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDrawCycleStep(), sql.OrderByField(field, opts...))
+	}
+}
+
+// ByBalanceLedgerCount orders the results by balance_ledger count.
+func ByBalanceLedgerCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newBalanceLedgerStep(), opts...)
+	}
+}
+
+// ByBalanceLedger orders the results by balance_ledger terms.
+func ByBalanceLedger(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newBalanceLedgerStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
 
@@ -273,6 +336,20 @@ func newProductStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ProductInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, ProductTable, ProductColumn),
+	)
+}
+func newDrawCycleStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DrawCycleInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, true, DrawCycleTable, DrawCycleColumn),
+	)
+}
+func newBalanceLedgerStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(BalanceLedgerInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, BalanceLedgerTable, BalanceLedgerColumn),
 	)
 }
 func newCardKeysStep() *sqlgraph.Step {

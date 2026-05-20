@@ -80,6 +80,16 @@ func (ShopOrder) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
+		field.Float("draw_reward_amount").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
+		field.Int64("draw_cycle_id").
+			Optional().
+			Nillable(),
+		field.Int("draw_cycle_index").
+			Optional().
+			Nillable(),
 	}
 }
 
@@ -95,6 +105,11 @@ func (ShopOrder) Edges() []ent.Edge {
 			Field("product_id").
 			Unique().
 			Required(),
+		edge.From("draw_cycle", ShopDrawCycle.Type).
+			Ref("orders").
+			Field("draw_cycle_id").
+			Unique(),
+		edge.To("balance_ledger", ShopBalanceLedger.Type),
 		edge.To("card_keys", ShopCardKey.Type),
 	}
 }
@@ -104,6 +119,7 @@ func (ShopOrder) Indexes() []ent.Index {
 		index.Fields("user_id"),
 		index.Fields("product_id"),
 		index.Fields("payment_order_id").Unique(),
+		index.Fields("draw_cycle_id"),
 		index.Fields("status"),
 		index.Fields("created_at"),
 	}

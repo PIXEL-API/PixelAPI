@@ -69,6 +69,9 @@
           <span class="rounded-md bg-amber-50 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
             {{ t('admin.accounts.quotaDashboard.groupDegradedCount', { count: groupHealthCounts.degraded }) }}
           </span>
+          <span class="rounded-md bg-orange-50 px-2 py-0.5 font-medium text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+            {{ t('admin.accounts.quotaDashboard.groupConstrainedCount', { count: groupHealthCounts.constrained }) }}
+          </span>
           <span class="rounded-md bg-red-50 px-2 py-0.5 font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">
             {{ t('admin.accounts.quotaDashboard.groupUnavailableCount', { count: groupHealthCounts.unavailable }) }}
           </span>
@@ -96,17 +99,6 @@
                     schedulable: summary.schedulable_account_count
                   }) }}
                 </div>
-                <div v-if="hasAvailabilityIssues(summary)" class="mt-1 flex flex-wrap gap-1 text-[11px]">
-                  <span v-if="summary.rate_limited_account_count > 0" class="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                    {{ t('admin.accounts.quotaDashboard.rateLimitedCount', { count: summary.rate_limited_account_count }) }}
-                  </span>
-                  <span v-if="summary.error_account_count > 0" class="rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
-                    {{ t('admin.accounts.quotaDashboard.errorCount', { count: summary.error_account_count }) }}
-                  </span>
-                  <span v-if="summary.disabled_account_count > 0" class="rounded bg-gray-200 px-1.5 py-0.5 font-medium text-gray-700 dark:bg-dark-600 dark:text-gray-200">
-                    {{ t('admin.accounts.quotaDashboard.disabledCount', { count: summary.disabled_account_count }) }}
-                  </span>
-                </div>
               </div>
             </div>
             <span
@@ -115,6 +107,32 @@
             >
               {{ groupHealthLabel(groupHealth(summary)) }}
             </span>
+          </div>
+
+          <div class="mt-3">
+            <div class="mb-1.5 flex items-center justify-between gap-2 text-[11px] font-semibold text-gray-700 dark:text-gray-200">
+              <span>{{ t('admin.accounts.quotaDashboard.accountStatus') }}</span>
+              <span>{{ t('admin.accounts.quotaDashboard.totalShort', { count: summary.account_count }) }}</span>
+            </div>
+            <div class="flex h-2.5 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
+              <div
+                v-for="segment in accountStatusSegments(summary)"
+                :key="segment.key"
+                class="h-full min-w-[2px]"
+                :class="segment.class"
+                :style="{ width: `${segment.percent}%` }"
+              />
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300 sm:grid-cols-4">
+              <span
+                v-for="segment in accountStatusSegments(summary)"
+                :key="`${segment.key}:legend`"
+                class="inline-flex min-w-0 items-center gap-1.5"
+              >
+                <span class="h-2.5 w-2.5 shrink-0 rounded" :class="segment.class"></span>
+                <span class="truncate">{{ segment.label }}</span>
+              </span>
+            </div>
           </div>
 
           <div
@@ -258,6 +276,11 @@ import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { formatDateTime } from '@/utils/format'
 import { platformLabel } from '@/utils/platformColors'
+import {
+  accountQuotaGroupHealthRank,
+  resolveAccountQuotaGroupHealth,
+  type AccountQuotaGroupHealth
+} from '@/utils/accountQuotaHealth'
 
 const props = defineProps<{
   dashboard: AccountQuotaDashboard | null
@@ -317,7 +340,15 @@ const visibleSummaries = computed(() => {
   })
 })
 
-type GroupHealth = 'normal' | 'degraded' | 'unavailable'
+type GroupHealth = AccountQuotaGroupHealth
+
+interface AccountStatusSegment {
+  key: string
+  label: string
+  count: number
+  percent: number
+  class: string
+}
 
 const visibleGroupSummaries = computed(() => {
   return (props.dashboard?.group_summaries ?? []).filter((summary) => {
@@ -348,7 +379,7 @@ const groupHealthCounts = computed(() => {
       acc[groupHealth(summary)]++
       return acc
     },
-    { normal: 0, degraded: 0, unavailable: 0 }
+    { normal: 0, degraded: 0, constrained: 0, unavailable: 0 }
   )
 })
 
@@ -408,19 +439,49 @@ function hasAvailabilityIssues(summary: AccountQuotaSummary | AccountQuotaGroupS
   )
 }
 
+function accountStatusSegments(summary: AccountQuotaGroupSummary): AccountStatusSegment[] {
+  const total = Math.max(summary.account_count, 0)
+  const raw = [
+    {
+      key: 'schedulable',
+      label: t('admin.accounts.quotaDashboard.schedulableCount', { count: summary.schedulable_account_count }),
+      count: summary.schedulable_account_count,
+      class: 'bg-teal-400'
+    },
+    {
+      key: 'rateLimited',
+      label: t('admin.accounts.quotaDashboard.rateLimitedCount', { count: summary.rate_limited_account_count }),
+      count: summary.rate_limited_account_count,
+      class: 'bg-amber-500'
+    },
+    {
+      key: 'error',
+      label: t('admin.accounts.quotaDashboard.errorCount', { count: summary.error_account_count }),
+      count: summary.error_account_count,
+      class: 'bg-red-500'
+    },
+    {
+      key: 'disabled',
+      label: t('admin.accounts.quotaDashboard.disabledCount', { count: summary.disabled_account_count }),
+      count: summary.disabled_account_count,
+      class: 'bg-slate-400'
+    }
+  ]
+
+  return raw
+    .filter(segment => segment.count > 0)
+    .map(segment => ({
+      ...segment,
+      percent: total > 0 ? Math.max((segment.count / total) * 100, 0) : 0
+    }))
+}
+
 function groupHealth(summary: AccountQuotaGroupSummary): GroupHealth {
-  if (summary.group_status && summary.group_status !== 'active') return 'unavailable'
-  if (summary.account_count > 0 && summary.schedulable_account_count === 0) return 'unavailable'
-  if (summary.schedulable_account_count < summary.active_account_count) return 'degraded'
-  const highWindowUsage = summary.usage_windows?.some(window => window.average_utilization >= 80) ?? false
-  if (highWindowUsage) return 'degraded'
-  return 'normal'
+  return resolveAccountQuotaGroupHealth(summary)
 }
 
 function groupHealthRank(status: GroupHealth): number {
-  if (status === 'unavailable') return 3
-  if (status === 'degraded') return 2
-  return 1
+  return accountQuotaGroupHealthRank(status)
 }
 
 function groupHealthLabel(status: GroupHealth): string {
@@ -429,12 +490,14 @@ function groupHealthLabel(status: GroupHealth): string {
 
 function groupCardClass(status: GroupHealth): string {
   if (status === 'unavailable') return 'border-red-200 bg-red-50/70 dark:border-red-900/40 dark:bg-red-900/10'
+  if (status === 'constrained') return 'border-orange-200 bg-orange-50/70 dark:border-orange-900/40 dark:bg-orange-900/10'
   if (status === 'degraded') return 'border-amber-200 bg-amber-50/70 dark:border-amber-900/40 dark:bg-amber-900/10'
   return 'border-gray-200 bg-gray-50/70 dark:border-dark-700 dark:bg-dark-700/40'
 }
 
 function groupHealthBadgeClass(status: GroupHealth): string {
   if (status === 'unavailable') return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+  if (status === 'constrained') return 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
   if (status === 'degraded') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
   return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
 }

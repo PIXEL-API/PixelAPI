@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
 	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 )
@@ -23,14 +24,15 @@ import (
 // ShopProductQuery is the builder for querying ShopProduct entities.
 type ShopProductQuery struct {
 	config
-	ctx          *QueryContext
-	order        []shopproduct.OrderOption
-	inters       []Interceptor
-	predicates   []predicate.ShopProduct
-	withCategory *ShopCategoryQuery
-	withCardKeys *ShopCardKeyQuery
-	withOrders   *ShopOrderQuery
-	modifiers    []func(*sql.Selector)
+	ctx            *QueryContext
+	order          []shopproduct.OrderOption
+	inters         []Interceptor
+	predicates     []predicate.ShopProduct
+	withCategory   *ShopCategoryQuery
+	withCardKeys   *ShopCardKeyQuery
+	withOrders     *ShopOrderQuery
+	withDrawCycles *ShopDrawCycleQuery
+	modifiers      []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -126,6 +128,28 @@ func (_q *ShopProductQuery) QueryOrders() *ShopOrderQuery {
 			sqlgraph.From(shopproduct.Table, shopproduct.FieldID, selector),
 			sqlgraph.To(shoporder.Table, shoporder.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, shopproduct.OrdersTable, shopproduct.OrdersColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryDrawCycles chains the current query on the "draw_cycles" edge.
+func (_q *ShopProductQuery) QueryDrawCycles() *ShopDrawCycleQuery {
+	query := (&ShopDrawCycleClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(shopproduct.Table, shopproduct.FieldID, selector),
+			sqlgraph.To(shopdrawcycle.Table, shopdrawcycle.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, shopproduct.DrawCyclesTable, shopproduct.DrawCyclesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -320,14 +344,15 @@ func (_q *ShopProductQuery) Clone() *ShopProductQuery {
 		return nil
 	}
 	return &ShopProductQuery{
-		config:       _q.config,
-		ctx:          _q.ctx.Clone(),
-		order:        append([]shopproduct.OrderOption{}, _q.order...),
-		inters:       append([]Interceptor{}, _q.inters...),
-		predicates:   append([]predicate.ShopProduct{}, _q.predicates...),
-		withCategory: _q.withCategory.Clone(),
-		withCardKeys: _q.withCardKeys.Clone(),
-		withOrders:   _q.withOrders.Clone(),
+		config:         _q.config,
+		ctx:            _q.ctx.Clone(),
+		order:          append([]shopproduct.OrderOption{}, _q.order...),
+		inters:         append([]Interceptor{}, _q.inters...),
+		predicates:     append([]predicate.ShopProduct{}, _q.predicates...),
+		withCategory:   _q.withCategory.Clone(),
+		withCardKeys:   _q.withCardKeys.Clone(),
+		withOrders:     _q.withOrders.Clone(),
+		withDrawCycles: _q.withDrawCycles.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -364,6 +389,17 @@ func (_q *ShopProductQuery) WithOrders(opts ...func(*ShopOrderQuery)) *ShopProdu
 		opt(query)
 	}
 	_q.withOrders = query
+	return _q
+}
+
+// WithDrawCycles tells the query-builder to eager-load the nodes that are connected to
+// the "draw_cycles" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *ShopProductQuery) WithDrawCycles(opts ...func(*ShopDrawCycleQuery)) *ShopProductQuery {
+	query := (&ShopDrawCycleClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withDrawCycles = query
 	return _q
 }
 
@@ -445,10 +481,11 @@ func (_q *ShopProductQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 	var (
 		nodes       = []*ShopProduct{}
 		_spec       = _q.querySpec()
-		loadedTypes = [3]bool{
+		loadedTypes = [4]bool{
 			_q.withCategory != nil,
 			_q.withCardKeys != nil,
 			_q.withOrders != nil,
+			_q.withDrawCycles != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -489,6 +526,13 @@ func (_q *ShopProductQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 		if err := _q.loadOrders(ctx, query, nodes,
 			func(n *ShopProduct) { n.Edges.Orders = []*ShopOrder{} },
 			func(n *ShopProduct, e *ShopOrder) { n.Edges.Orders = append(n.Edges.Orders, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withDrawCycles; query != nil {
+		if err := _q.loadDrawCycles(ctx, query, nodes,
+			func(n *ShopProduct) { n.Edges.DrawCycles = []*ShopDrawCycle{} },
+			func(n *ShopProduct, e *ShopDrawCycle) { n.Edges.DrawCycles = append(n.Edges.DrawCycles, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -572,6 +616,36 @@ func (_q *ShopProductQuery) loadOrders(ctx context.Context, query *ShopOrderQuer
 	}
 	query.Where(predicate.ShopOrder(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(shopproduct.OrdersColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ProductID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "product_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *ShopProductQuery) loadDrawCycles(ctx context.Context, query *ShopDrawCycleQuery, nodes []*ShopProduct, init func(*ShopProduct), assign func(*ShopProduct, *ShopDrawCycle)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*ShopProduct)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(shopdrawcycle.FieldProductID)
+	}
+	query.Where(predicate.ShopDrawCycle(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(shopproduct.DrawCyclesColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

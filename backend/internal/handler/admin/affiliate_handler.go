@@ -60,6 +60,14 @@ type BindAffiliateInviterRequest struct {
 	ResetValidity bool  `json:"reset_validity"`
 }
 
+type ExtendAffiliateInviteRewardsRequest struct {
+	Scope          string  `json:"scope" binding:"required"`
+	InviterUserID  int64   `json:"inviter_user_id"`
+	AllInvitees    bool    `json:"all_invitees"`
+	InviteeUserIDs []int64 `json:"invitee_user_ids"`
+	ExtendDays     int     `json:"extend_days" binding:"required"`
+}
+
 func (h *AffiliateHandler) UpdateUserSettings(c *gin.Context) {
 	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
 	if err != nil || userID <= 0 {
@@ -116,6 +124,29 @@ func (h *AffiliateHandler) BindInviter(c *gin.Context) {
 		return
 	}
 	response.Success(c, summary)
+}
+
+// ExtendInviteRewards extends active non-permanent invite reward windows.
+// POST /api/v1/admin/affiliates/invite-rewards/extend
+func (h *AffiliateHandler) ExtendInviteRewards(c *gin.Context) {
+	var req ExtendAffiliateInviteRewardsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	result, err := h.affiliateService.AdminExtendInviteRewards(c.Request.Context(), service.AffiliateInviteRewardExtensionRequest{
+		Scope:          req.Scope,
+		InviterUserID:  req.InviterUserID,
+		AllInvitees:    req.AllInvitees,
+		InviteeUserIDs: req.InviteeUserIDs,
+		ExtendDays:     req.ExtendDays,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 // ClearUserSettings removes ALL of a user's custom affiliate settings — clears

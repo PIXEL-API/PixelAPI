@@ -35,6 +35,7 @@ func RegisterUserRoutes(
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
 	shop := authenticated.Group("/shop")
 	{
+		shop.GET("/draw-progress", h.Shop.ListDrawProgress)
 		shop.POST("/orders", h.Shop.CreateOrder)
 		shop.GET("/orders/:id", h.Shop.GetOrder)
 		shop.GET("/orders/:id/files/download.zip", h.Shop.DownloadOrderFilesZip)

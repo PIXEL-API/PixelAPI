@@ -44,6 +44,20 @@ type ShopProduct struct {
 	MaxPurchase int `json:"max_purchase,omitempty"`
 	// AutoDelivery holds the value of the "auto_delivery" field.
 	AutoDelivery bool `json:"auto_delivery,omitempty"`
+	// ProductType holds the value of the "product_type" field.
+	ProductType string `json:"product_type,omitempty"`
+	// BalanceOnly holds the value of the "balance_only" field.
+	BalanceOnly bool `json:"balance_only,omitempty"`
+	// DrawEnabled holds the value of the "draw_enabled" field.
+	DrawEnabled bool `json:"draw_enabled,omitempty"`
+	// DrawMinAmount holds the value of the "draw_min_amount" field.
+	DrawMinAmount float64 `json:"draw_min_amount,omitempty"`
+	// DrawMaxAmount holds the value of the "draw_max_amount" field.
+	DrawMaxAmount float64 `json:"draw_max_amount,omitempty"`
+	// DrawGuaranteeCount holds the value of the "draw_guarantee_count" field.
+	DrawGuaranteeCount int `json:"draw_guarantee_count,omitempty"`
+	// DrawReturnRate holds the value of the "draw_return_rate" field.
+	DrawReturnRate float64 `json:"draw_return_rate,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the ShopProductQuery when eager-loading is set.
 	Edges        ShopProductEdges `json:"edges"`
@@ -58,9 +72,11 @@ type ShopProductEdges struct {
 	CardKeys []*ShopCardKey `json:"card_keys,omitempty"`
 	// Orders holds the value of the orders edge.
 	Orders []*ShopOrder `json:"orders,omitempty"`
+	// DrawCycles holds the value of the draw_cycles edge.
+	DrawCycles []*ShopDrawCycle `json:"draw_cycles,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [3]bool
+	loadedTypes [4]bool
 }
 
 // CategoryOrErr returns the Category value or an error if the edge
@@ -92,18 +108,27 @@ func (e ShopProductEdges) OrdersOrErr() ([]*ShopOrder, error) {
 	return nil, &NotLoadedError{edge: "orders"}
 }
 
+// DrawCyclesOrErr returns the DrawCycles value or an error if the edge
+// was not loaded in eager-loading.
+func (e ShopProductEdges) DrawCyclesOrErr() ([]*ShopDrawCycle, error) {
+	if e.loadedTypes[3] {
+		return e.DrawCycles, nil
+	}
+	return nil, &NotLoadedError{edge: "draw_cycles"}
+}
+
 // scanValues returns the types for scanning values from sql.Rows.
 func (*ShopProduct) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case shopproduct.FieldEnabled, shopproduct.FieldAutoDelivery:
+		case shopproduct.FieldEnabled, shopproduct.FieldAutoDelivery, shopproduct.FieldBalanceOnly, shopproduct.FieldDrawEnabled:
 			values[i] = new(sql.NullBool)
-		case shopproduct.FieldPrice, shopproduct.FieldOriginalPrice:
+		case shopproduct.FieldPrice, shopproduct.FieldOriginalPrice, shopproduct.FieldDrawMinAmount, shopproduct.FieldDrawMaxAmount, shopproduct.FieldDrawReturnRate:
 			values[i] = new(sql.NullFloat64)
-		case shopproduct.FieldID, shopproduct.FieldCategoryID, shopproduct.FieldSortOrder, shopproduct.FieldMinPurchase, shopproduct.FieldMaxPurchase:
+		case shopproduct.FieldID, shopproduct.FieldCategoryID, shopproduct.FieldSortOrder, shopproduct.FieldMinPurchase, shopproduct.FieldMaxPurchase, shopproduct.FieldDrawGuaranteeCount:
 			values[i] = new(sql.NullInt64)
-		case shopproduct.FieldName, shopproduct.FieldCoverURL, shopproduct.FieldDescription:
+		case shopproduct.FieldName, shopproduct.FieldCoverURL, shopproduct.FieldDescription, shopproduct.FieldProductType:
 			values[i] = new(sql.NullString)
 		case shopproduct.FieldCreatedAt, shopproduct.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -210,6 +235,48 @@ func (_m *ShopProduct) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.AutoDelivery = value.Bool
 			}
+		case shopproduct.FieldProductType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field product_type", values[i])
+			} else if value.Valid {
+				_m.ProductType = value.String
+			}
+		case shopproduct.FieldBalanceOnly:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field balance_only", values[i])
+			} else if value.Valid {
+				_m.BalanceOnly = value.Bool
+			}
+		case shopproduct.FieldDrawEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_enabled", values[i])
+			} else if value.Valid {
+				_m.DrawEnabled = value.Bool
+			}
+		case shopproduct.FieldDrawMinAmount:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_min_amount", values[i])
+			} else if value.Valid {
+				_m.DrawMinAmount = value.Float64
+			}
+		case shopproduct.FieldDrawMaxAmount:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_max_amount", values[i])
+			} else if value.Valid {
+				_m.DrawMaxAmount = value.Float64
+			}
+		case shopproduct.FieldDrawGuaranteeCount:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_guarantee_count", values[i])
+			} else if value.Valid {
+				_m.DrawGuaranteeCount = int(value.Int64)
+			}
+		case shopproduct.FieldDrawReturnRate:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_return_rate", values[i])
+			} else if value.Valid {
+				_m.DrawReturnRate = value.Float64
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -236,6 +303,11 @@ func (_m *ShopProduct) QueryCardKeys() *ShopCardKeyQuery {
 // QueryOrders queries the "orders" edge of the ShopProduct entity.
 func (_m *ShopProduct) QueryOrders() *ShopOrderQuery {
 	return NewShopProductClient(_m.config).QueryOrders(_m)
+}
+
+// QueryDrawCycles queries the "draw_cycles" edge of the ShopProduct entity.
+func (_m *ShopProduct) QueryDrawCycles() *ShopDrawCycleQuery {
+	return NewShopProductClient(_m.config).QueryDrawCycles(_m)
 }
 
 // Update returns a builder for updating this ShopProduct.
@@ -307,6 +379,27 @@ func (_m *ShopProduct) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("auto_delivery=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AutoDelivery))
+	builder.WriteString(", ")
+	builder.WriteString("product_type=")
+	builder.WriteString(_m.ProductType)
+	builder.WriteString(", ")
+	builder.WriteString("balance_only=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BalanceOnly))
+	builder.WriteString(", ")
+	builder.WriteString("draw_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.DrawEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("draw_min_amount=")
+	builder.WriteString(fmt.Sprintf("%v", _m.DrawMinAmount))
+	builder.WriteString(", ")
+	builder.WriteString("draw_max_amount=")
+	builder.WriteString(fmt.Sprintf("%v", _m.DrawMaxAmount))
+	builder.WriteString(", ")
+	builder.WriteString("draw_guarantee_count=")
+	builder.WriteString(fmt.Sprintf("%v", _m.DrawGuaranteeCount))
+	builder.WriteString(", ")
+	builder.WriteString("draw_return_rate=")
+	builder.WriteString(fmt.Sprintf("%v", _m.DrawReturnRate))
 	builder.WriteByte(')')
 	return builder.String()
 }

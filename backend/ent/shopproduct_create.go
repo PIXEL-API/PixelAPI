@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
 	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 )
@@ -199,6 +200,104 @@ func (_c *ShopProductCreate) SetNillableAutoDelivery(v *bool) *ShopProductCreate
 	return _c
 }
 
+// SetProductType sets the "product_type" field.
+func (_c *ShopProductCreate) SetProductType(v string) *ShopProductCreate {
+	_c.mutation.SetProductType(v)
+	return _c
+}
+
+// SetNillableProductType sets the "product_type" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableProductType(v *string) *ShopProductCreate {
+	if v != nil {
+		_c.SetProductType(*v)
+	}
+	return _c
+}
+
+// SetBalanceOnly sets the "balance_only" field.
+func (_c *ShopProductCreate) SetBalanceOnly(v bool) *ShopProductCreate {
+	_c.mutation.SetBalanceOnly(v)
+	return _c
+}
+
+// SetNillableBalanceOnly sets the "balance_only" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableBalanceOnly(v *bool) *ShopProductCreate {
+	if v != nil {
+		_c.SetBalanceOnly(*v)
+	}
+	return _c
+}
+
+// SetDrawEnabled sets the "draw_enabled" field.
+func (_c *ShopProductCreate) SetDrawEnabled(v bool) *ShopProductCreate {
+	_c.mutation.SetDrawEnabled(v)
+	return _c
+}
+
+// SetNillableDrawEnabled sets the "draw_enabled" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableDrawEnabled(v *bool) *ShopProductCreate {
+	if v != nil {
+		_c.SetDrawEnabled(*v)
+	}
+	return _c
+}
+
+// SetDrawMinAmount sets the "draw_min_amount" field.
+func (_c *ShopProductCreate) SetDrawMinAmount(v float64) *ShopProductCreate {
+	_c.mutation.SetDrawMinAmount(v)
+	return _c
+}
+
+// SetNillableDrawMinAmount sets the "draw_min_amount" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableDrawMinAmount(v *float64) *ShopProductCreate {
+	if v != nil {
+		_c.SetDrawMinAmount(*v)
+	}
+	return _c
+}
+
+// SetDrawMaxAmount sets the "draw_max_amount" field.
+func (_c *ShopProductCreate) SetDrawMaxAmount(v float64) *ShopProductCreate {
+	_c.mutation.SetDrawMaxAmount(v)
+	return _c
+}
+
+// SetNillableDrawMaxAmount sets the "draw_max_amount" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableDrawMaxAmount(v *float64) *ShopProductCreate {
+	if v != nil {
+		_c.SetDrawMaxAmount(*v)
+	}
+	return _c
+}
+
+// SetDrawGuaranteeCount sets the "draw_guarantee_count" field.
+func (_c *ShopProductCreate) SetDrawGuaranteeCount(v int) *ShopProductCreate {
+	_c.mutation.SetDrawGuaranteeCount(v)
+	return _c
+}
+
+// SetNillableDrawGuaranteeCount sets the "draw_guarantee_count" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableDrawGuaranteeCount(v *int) *ShopProductCreate {
+	if v != nil {
+		_c.SetDrawGuaranteeCount(*v)
+	}
+	return _c
+}
+
+// SetDrawReturnRate sets the "draw_return_rate" field.
+func (_c *ShopProductCreate) SetDrawReturnRate(v float64) *ShopProductCreate {
+	_c.mutation.SetDrawReturnRate(v)
+	return _c
+}
+
+// SetNillableDrawReturnRate sets the "draw_return_rate" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableDrawReturnRate(v *float64) *ShopProductCreate {
+	if v != nil {
+		_c.SetDrawReturnRate(*v)
+	}
+	return _c
+}
+
 // SetCategory sets the "category" edge to the ShopCategory entity.
 func (_c *ShopProductCreate) SetCategory(v *ShopCategory) *ShopProductCreate {
 	return _c.SetCategoryID(v.ID)
@@ -232,6 +331,21 @@ func (_c *ShopProductCreate) AddOrders(v ...*ShopOrder) *ShopProductCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddOrderIDs(ids...)
+}
+
+// AddDrawCycleIDs adds the "draw_cycles" edge to the ShopDrawCycle entity by IDs.
+func (_c *ShopProductCreate) AddDrawCycleIDs(ids ...int64) *ShopProductCreate {
+	_c.mutation.AddDrawCycleIDs(ids...)
+	return _c
+}
+
+// AddDrawCycles adds the "draw_cycles" edges to the ShopDrawCycle entity.
+func (_c *ShopProductCreate) AddDrawCycles(v ...*ShopDrawCycle) *ShopProductCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddDrawCycleIDs(ids...)
 }
 
 // Mutation returns the ShopProductMutation object of the builder.
@@ -301,6 +415,34 @@ func (_c *ShopProductCreate) defaults() {
 		v := shopproduct.DefaultAutoDelivery
 		_c.mutation.SetAutoDelivery(v)
 	}
+	if _, ok := _c.mutation.ProductType(); !ok {
+		v := shopproduct.DefaultProductType
+		_c.mutation.SetProductType(v)
+	}
+	if _, ok := _c.mutation.BalanceOnly(); !ok {
+		v := shopproduct.DefaultBalanceOnly
+		_c.mutation.SetBalanceOnly(v)
+	}
+	if _, ok := _c.mutation.DrawEnabled(); !ok {
+		v := shopproduct.DefaultDrawEnabled
+		_c.mutation.SetDrawEnabled(v)
+	}
+	if _, ok := _c.mutation.DrawMinAmount(); !ok {
+		v := shopproduct.DefaultDrawMinAmount
+		_c.mutation.SetDrawMinAmount(v)
+	}
+	if _, ok := _c.mutation.DrawMaxAmount(); !ok {
+		v := shopproduct.DefaultDrawMaxAmount
+		_c.mutation.SetDrawMaxAmount(v)
+	}
+	if _, ok := _c.mutation.DrawGuaranteeCount(); !ok {
+		v := shopproduct.DefaultDrawGuaranteeCount
+		_c.mutation.SetDrawGuaranteeCount(v)
+	}
+	if _, ok := _c.mutation.DrawReturnRate(); !ok {
+		v := shopproduct.DefaultDrawReturnRate
+		_c.mutation.SetDrawReturnRate(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -336,6 +478,32 @@ func (_c *ShopProductCreate) check() error {
 	}
 	if _, ok := _c.mutation.AutoDelivery(); !ok {
 		return &ValidationError{Name: "auto_delivery", err: errors.New(`ent: missing required field "ShopProduct.auto_delivery"`)}
+	}
+	if _, ok := _c.mutation.ProductType(); !ok {
+		return &ValidationError{Name: "product_type", err: errors.New(`ent: missing required field "ShopProduct.product_type"`)}
+	}
+	if v, ok := _c.mutation.ProductType(); ok {
+		if err := shopproduct.ProductTypeValidator(v); err != nil {
+			return &ValidationError{Name: "product_type", err: fmt.Errorf(`ent: validator failed for field "ShopProduct.product_type": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.BalanceOnly(); !ok {
+		return &ValidationError{Name: "balance_only", err: errors.New(`ent: missing required field "ShopProduct.balance_only"`)}
+	}
+	if _, ok := _c.mutation.DrawEnabled(); !ok {
+		return &ValidationError{Name: "draw_enabled", err: errors.New(`ent: missing required field "ShopProduct.draw_enabled"`)}
+	}
+	if _, ok := _c.mutation.DrawMinAmount(); !ok {
+		return &ValidationError{Name: "draw_min_amount", err: errors.New(`ent: missing required field "ShopProduct.draw_min_amount"`)}
+	}
+	if _, ok := _c.mutation.DrawMaxAmount(); !ok {
+		return &ValidationError{Name: "draw_max_amount", err: errors.New(`ent: missing required field "ShopProduct.draw_max_amount"`)}
+	}
+	if _, ok := _c.mutation.DrawGuaranteeCount(); !ok {
+		return &ValidationError{Name: "draw_guarantee_count", err: errors.New(`ent: missing required field "ShopProduct.draw_guarantee_count"`)}
+	}
+	if _, ok := _c.mutation.DrawReturnRate(); !ok {
+		return &ValidationError{Name: "draw_return_rate", err: errors.New(`ent: missing required field "ShopProduct.draw_return_rate"`)}
 	}
 	return nil
 }
@@ -412,6 +580,34 @@ func (_c *ShopProductCreate) createSpec() (*ShopProduct, *sqlgraph.CreateSpec) {
 		_spec.SetField(shopproduct.FieldAutoDelivery, field.TypeBool, value)
 		_node.AutoDelivery = value
 	}
+	if value, ok := _c.mutation.ProductType(); ok {
+		_spec.SetField(shopproduct.FieldProductType, field.TypeString, value)
+		_node.ProductType = value
+	}
+	if value, ok := _c.mutation.BalanceOnly(); ok {
+		_spec.SetField(shopproduct.FieldBalanceOnly, field.TypeBool, value)
+		_node.BalanceOnly = value
+	}
+	if value, ok := _c.mutation.DrawEnabled(); ok {
+		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
+		_node.DrawEnabled = value
+	}
+	if value, ok := _c.mutation.DrawMinAmount(); ok {
+		_spec.SetField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)
+		_node.DrawMinAmount = value
+	}
+	if value, ok := _c.mutation.DrawMaxAmount(); ok {
+		_spec.SetField(shopproduct.FieldDrawMaxAmount, field.TypeFloat64, value)
+		_node.DrawMaxAmount = value
+	}
+	if value, ok := _c.mutation.DrawGuaranteeCount(); ok {
+		_spec.SetField(shopproduct.FieldDrawGuaranteeCount, field.TypeInt, value)
+		_node.DrawGuaranteeCount = value
+	}
+	if value, ok := _c.mutation.DrawReturnRate(); ok {
+		_spec.SetField(shopproduct.FieldDrawReturnRate, field.TypeFloat64, value)
+		_node.DrawReturnRate = value
+	}
 	if nodes := _c.mutation.CategoryIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2O,
@@ -454,6 +650,22 @@ func (_c *ShopProductCreate) createSpec() (*ShopProduct, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.DrawCyclesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shopproduct.DrawCyclesTable,
+			Columns: []string{shopproduct.DrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -708,6 +920,114 @@ func (u *ShopProductUpsert) SetAutoDelivery(v bool) *ShopProductUpsert {
 // UpdateAutoDelivery sets the "auto_delivery" field to the value that was provided on create.
 func (u *ShopProductUpsert) UpdateAutoDelivery() *ShopProductUpsert {
 	u.SetExcluded(shopproduct.FieldAutoDelivery)
+	return u
+}
+
+// SetProductType sets the "product_type" field.
+func (u *ShopProductUpsert) SetProductType(v string) *ShopProductUpsert {
+	u.Set(shopproduct.FieldProductType, v)
+	return u
+}
+
+// UpdateProductType sets the "product_type" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateProductType() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldProductType)
+	return u
+}
+
+// SetBalanceOnly sets the "balance_only" field.
+func (u *ShopProductUpsert) SetBalanceOnly(v bool) *ShopProductUpsert {
+	u.Set(shopproduct.FieldBalanceOnly, v)
+	return u
+}
+
+// UpdateBalanceOnly sets the "balance_only" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateBalanceOnly() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldBalanceOnly)
+	return u
+}
+
+// SetDrawEnabled sets the "draw_enabled" field.
+func (u *ShopProductUpsert) SetDrawEnabled(v bool) *ShopProductUpsert {
+	u.Set(shopproduct.FieldDrawEnabled, v)
+	return u
+}
+
+// UpdateDrawEnabled sets the "draw_enabled" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateDrawEnabled() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldDrawEnabled)
+	return u
+}
+
+// SetDrawMinAmount sets the "draw_min_amount" field.
+func (u *ShopProductUpsert) SetDrawMinAmount(v float64) *ShopProductUpsert {
+	u.Set(shopproduct.FieldDrawMinAmount, v)
+	return u
+}
+
+// UpdateDrawMinAmount sets the "draw_min_amount" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateDrawMinAmount() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldDrawMinAmount)
+	return u
+}
+
+// AddDrawMinAmount adds v to the "draw_min_amount" field.
+func (u *ShopProductUpsert) AddDrawMinAmount(v float64) *ShopProductUpsert {
+	u.Add(shopproduct.FieldDrawMinAmount, v)
+	return u
+}
+
+// SetDrawMaxAmount sets the "draw_max_amount" field.
+func (u *ShopProductUpsert) SetDrawMaxAmount(v float64) *ShopProductUpsert {
+	u.Set(shopproduct.FieldDrawMaxAmount, v)
+	return u
+}
+
+// UpdateDrawMaxAmount sets the "draw_max_amount" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateDrawMaxAmount() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldDrawMaxAmount)
+	return u
+}
+
+// AddDrawMaxAmount adds v to the "draw_max_amount" field.
+func (u *ShopProductUpsert) AddDrawMaxAmount(v float64) *ShopProductUpsert {
+	u.Add(shopproduct.FieldDrawMaxAmount, v)
+	return u
+}
+
+// SetDrawGuaranteeCount sets the "draw_guarantee_count" field.
+func (u *ShopProductUpsert) SetDrawGuaranteeCount(v int) *ShopProductUpsert {
+	u.Set(shopproduct.FieldDrawGuaranteeCount, v)
+	return u
+}
+
+// UpdateDrawGuaranteeCount sets the "draw_guarantee_count" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateDrawGuaranteeCount() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldDrawGuaranteeCount)
+	return u
+}
+
+// AddDrawGuaranteeCount adds v to the "draw_guarantee_count" field.
+func (u *ShopProductUpsert) AddDrawGuaranteeCount(v int) *ShopProductUpsert {
+	u.Add(shopproduct.FieldDrawGuaranteeCount, v)
+	return u
+}
+
+// SetDrawReturnRate sets the "draw_return_rate" field.
+func (u *ShopProductUpsert) SetDrawReturnRate(v float64) *ShopProductUpsert {
+	u.Set(shopproduct.FieldDrawReturnRate, v)
+	return u
+}
+
+// UpdateDrawReturnRate sets the "draw_return_rate" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateDrawReturnRate() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldDrawReturnRate)
+	return u
+}
+
+// AddDrawReturnRate adds v to the "draw_return_rate" field.
+func (u *ShopProductUpsert) AddDrawReturnRate(v float64) *ShopProductUpsert {
+	u.Add(shopproduct.FieldDrawReturnRate, v)
 	return u
 }
 
@@ -984,6 +1304,132 @@ func (u *ShopProductUpsertOne) SetAutoDelivery(v bool) *ShopProductUpsertOne {
 func (u *ShopProductUpsertOne) UpdateAutoDelivery() *ShopProductUpsertOne {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateAutoDelivery()
+	})
+}
+
+// SetProductType sets the "product_type" field.
+func (u *ShopProductUpsertOne) SetProductType(v string) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetProductType(v)
+	})
+}
+
+// UpdateProductType sets the "product_type" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateProductType() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateProductType()
+	})
+}
+
+// SetBalanceOnly sets the "balance_only" field.
+func (u *ShopProductUpsertOne) SetBalanceOnly(v bool) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetBalanceOnly(v)
+	})
+}
+
+// UpdateBalanceOnly sets the "balance_only" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateBalanceOnly() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateBalanceOnly()
+	})
+}
+
+// SetDrawEnabled sets the "draw_enabled" field.
+func (u *ShopProductUpsertOne) SetDrawEnabled(v bool) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawEnabled(v)
+	})
+}
+
+// UpdateDrawEnabled sets the "draw_enabled" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateDrawEnabled() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawEnabled()
+	})
+}
+
+// SetDrawMinAmount sets the "draw_min_amount" field.
+func (u *ShopProductUpsertOne) SetDrawMinAmount(v float64) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawMinAmount(v)
+	})
+}
+
+// AddDrawMinAmount adds v to the "draw_min_amount" field.
+func (u *ShopProductUpsertOne) AddDrawMinAmount(v float64) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawMinAmount(v)
+	})
+}
+
+// UpdateDrawMinAmount sets the "draw_min_amount" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateDrawMinAmount() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawMinAmount()
+	})
+}
+
+// SetDrawMaxAmount sets the "draw_max_amount" field.
+func (u *ShopProductUpsertOne) SetDrawMaxAmount(v float64) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawMaxAmount(v)
+	})
+}
+
+// AddDrawMaxAmount adds v to the "draw_max_amount" field.
+func (u *ShopProductUpsertOne) AddDrawMaxAmount(v float64) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawMaxAmount(v)
+	})
+}
+
+// UpdateDrawMaxAmount sets the "draw_max_amount" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateDrawMaxAmount() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawMaxAmount()
+	})
+}
+
+// SetDrawGuaranteeCount sets the "draw_guarantee_count" field.
+func (u *ShopProductUpsertOne) SetDrawGuaranteeCount(v int) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawGuaranteeCount(v)
+	})
+}
+
+// AddDrawGuaranteeCount adds v to the "draw_guarantee_count" field.
+func (u *ShopProductUpsertOne) AddDrawGuaranteeCount(v int) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawGuaranteeCount(v)
+	})
+}
+
+// UpdateDrawGuaranteeCount sets the "draw_guarantee_count" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateDrawGuaranteeCount() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawGuaranteeCount()
+	})
+}
+
+// SetDrawReturnRate sets the "draw_return_rate" field.
+func (u *ShopProductUpsertOne) SetDrawReturnRate(v float64) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawReturnRate(v)
+	})
+}
+
+// AddDrawReturnRate adds v to the "draw_return_rate" field.
+func (u *ShopProductUpsertOne) AddDrawReturnRate(v float64) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawReturnRate(v)
+	})
+}
+
+// UpdateDrawReturnRate sets the "draw_return_rate" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateDrawReturnRate() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawReturnRate()
 	})
 }
 
@@ -1426,6 +1872,132 @@ func (u *ShopProductUpsertBulk) SetAutoDelivery(v bool) *ShopProductUpsertBulk {
 func (u *ShopProductUpsertBulk) UpdateAutoDelivery() *ShopProductUpsertBulk {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateAutoDelivery()
+	})
+}
+
+// SetProductType sets the "product_type" field.
+func (u *ShopProductUpsertBulk) SetProductType(v string) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetProductType(v)
+	})
+}
+
+// UpdateProductType sets the "product_type" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateProductType() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateProductType()
+	})
+}
+
+// SetBalanceOnly sets the "balance_only" field.
+func (u *ShopProductUpsertBulk) SetBalanceOnly(v bool) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetBalanceOnly(v)
+	})
+}
+
+// UpdateBalanceOnly sets the "balance_only" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateBalanceOnly() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateBalanceOnly()
+	})
+}
+
+// SetDrawEnabled sets the "draw_enabled" field.
+func (u *ShopProductUpsertBulk) SetDrawEnabled(v bool) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawEnabled(v)
+	})
+}
+
+// UpdateDrawEnabled sets the "draw_enabled" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateDrawEnabled() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawEnabled()
+	})
+}
+
+// SetDrawMinAmount sets the "draw_min_amount" field.
+func (u *ShopProductUpsertBulk) SetDrawMinAmount(v float64) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawMinAmount(v)
+	})
+}
+
+// AddDrawMinAmount adds v to the "draw_min_amount" field.
+func (u *ShopProductUpsertBulk) AddDrawMinAmount(v float64) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawMinAmount(v)
+	})
+}
+
+// UpdateDrawMinAmount sets the "draw_min_amount" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateDrawMinAmount() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawMinAmount()
+	})
+}
+
+// SetDrawMaxAmount sets the "draw_max_amount" field.
+func (u *ShopProductUpsertBulk) SetDrawMaxAmount(v float64) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawMaxAmount(v)
+	})
+}
+
+// AddDrawMaxAmount adds v to the "draw_max_amount" field.
+func (u *ShopProductUpsertBulk) AddDrawMaxAmount(v float64) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawMaxAmount(v)
+	})
+}
+
+// UpdateDrawMaxAmount sets the "draw_max_amount" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateDrawMaxAmount() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawMaxAmount()
+	})
+}
+
+// SetDrawGuaranteeCount sets the "draw_guarantee_count" field.
+func (u *ShopProductUpsertBulk) SetDrawGuaranteeCount(v int) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawGuaranteeCount(v)
+	})
+}
+
+// AddDrawGuaranteeCount adds v to the "draw_guarantee_count" field.
+func (u *ShopProductUpsertBulk) AddDrawGuaranteeCount(v int) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawGuaranteeCount(v)
+	})
+}
+
+// UpdateDrawGuaranteeCount sets the "draw_guarantee_count" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateDrawGuaranteeCount() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawGuaranteeCount()
+	})
+}
+
+// SetDrawReturnRate sets the "draw_return_rate" field.
+func (u *ShopProductUpsertBulk) SetDrawReturnRate(v float64) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetDrawReturnRate(v)
+	})
+}
+
+// AddDrawReturnRate adds v to the "draw_return_rate" field.
+func (u *ShopProductUpsertBulk) AddDrawReturnRate(v float64) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddDrawReturnRate(v)
+	})
+}
+
+// UpdateDrawReturnRate sets the "draw_return_rate" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateDrawReturnRate() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateDrawReturnRate()
 	})
 }
 

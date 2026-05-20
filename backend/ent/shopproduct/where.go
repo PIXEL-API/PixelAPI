@@ -120,6 +120,41 @@ func AutoDelivery(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldAutoDelivery, v))
 }
 
+// ProductType applies equality check predicate on the "product_type" field. It's identical to ProductTypeEQ.
+func ProductType(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldProductType, v))
+}
+
+// BalanceOnly applies equality check predicate on the "balance_only" field. It's identical to BalanceOnlyEQ.
+func BalanceOnly(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldBalanceOnly, v))
+}
+
+// DrawEnabled applies equality check predicate on the "draw_enabled" field. It's identical to DrawEnabledEQ.
+func DrawEnabled(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawEnabled, v))
+}
+
+// DrawMinAmount applies equality check predicate on the "draw_min_amount" field. It's identical to DrawMinAmountEQ.
+func DrawMinAmount(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawMinAmount, v))
+}
+
+// DrawMaxAmount applies equality check predicate on the "draw_max_amount" field. It's identical to DrawMaxAmountEQ.
+func DrawMaxAmount(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawMaxAmount, v))
+}
+
+// DrawGuaranteeCount applies equality check predicate on the "draw_guarantee_count" field. It's identical to DrawGuaranteeCountEQ.
+func DrawGuaranteeCount(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawGuaranteeCount, v))
+}
+
+// DrawReturnRate applies equality check predicate on the "draw_return_rate" field. It's identical to DrawReturnRateEQ.
+func DrawReturnRate(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawReturnRate, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldCreatedAt, v))
@@ -675,6 +710,251 @@ func AutoDeliveryNEQ(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldNEQ(FieldAutoDelivery, v))
 }
 
+// ProductTypeEQ applies the EQ predicate on the "product_type" field.
+func ProductTypeEQ(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldProductType, v))
+}
+
+// ProductTypeNEQ applies the NEQ predicate on the "product_type" field.
+func ProductTypeNEQ(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldProductType, v))
+}
+
+// ProductTypeIn applies the In predicate on the "product_type" field.
+func ProductTypeIn(vs ...string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIn(FieldProductType, vs...))
+}
+
+// ProductTypeNotIn applies the NotIn predicate on the "product_type" field.
+func ProductTypeNotIn(vs ...string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotIn(FieldProductType, vs...))
+}
+
+// ProductTypeGT applies the GT predicate on the "product_type" field.
+func ProductTypeGT(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGT(FieldProductType, v))
+}
+
+// ProductTypeGTE applies the GTE predicate on the "product_type" field.
+func ProductTypeGTE(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGTE(FieldProductType, v))
+}
+
+// ProductTypeLT applies the LT predicate on the "product_type" field.
+func ProductTypeLT(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLT(FieldProductType, v))
+}
+
+// ProductTypeLTE applies the LTE predicate on the "product_type" field.
+func ProductTypeLTE(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLTE(FieldProductType, v))
+}
+
+// ProductTypeContains applies the Contains predicate on the "product_type" field.
+func ProductTypeContains(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldContains(FieldProductType, v))
+}
+
+// ProductTypeHasPrefix applies the HasPrefix predicate on the "product_type" field.
+func ProductTypeHasPrefix(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldHasPrefix(FieldProductType, v))
+}
+
+// ProductTypeHasSuffix applies the HasSuffix predicate on the "product_type" field.
+func ProductTypeHasSuffix(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldHasSuffix(FieldProductType, v))
+}
+
+// ProductTypeEqualFold applies the EqualFold predicate on the "product_type" field.
+func ProductTypeEqualFold(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEqualFold(FieldProductType, v))
+}
+
+// ProductTypeContainsFold applies the ContainsFold predicate on the "product_type" field.
+func ProductTypeContainsFold(v string) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldContainsFold(FieldProductType, v))
+}
+
+// BalanceOnlyEQ applies the EQ predicate on the "balance_only" field.
+func BalanceOnlyEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldBalanceOnly, v))
+}
+
+// BalanceOnlyNEQ applies the NEQ predicate on the "balance_only" field.
+func BalanceOnlyNEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldBalanceOnly, v))
+}
+
+// DrawEnabledEQ applies the EQ predicate on the "draw_enabled" field.
+func DrawEnabledEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawEnabled, v))
+}
+
+// DrawEnabledNEQ applies the NEQ predicate on the "draw_enabled" field.
+func DrawEnabledNEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldDrawEnabled, v))
+}
+
+// DrawMinAmountEQ applies the EQ predicate on the "draw_min_amount" field.
+func DrawMinAmountEQ(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawMinAmount, v))
+}
+
+// DrawMinAmountNEQ applies the NEQ predicate on the "draw_min_amount" field.
+func DrawMinAmountNEQ(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldDrawMinAmount, v))
+}
+
+// DrawMinAmountIn applies the In predicate on the "draw_min_amount" field.
+func DrawMinAmountIn(vs ...float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIn(FieldDrawMinAmount, vs...))
+}
+
+// DrawMinAmountNotIn applies the NotIn predicate on the "draw_min_amount" field.
+func DrawMinAmountNotIn(vs ...float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotIn(FieldDrawMinAmount, vs...))
+}
+
+// DrawMinAmountGT applies the GT predicate on the "draw_min_amount" field.
+func DrawMinAmountGT(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGT(FieldDrawMinAmount, v))
+}
+
+// DrawMinAmountGTE applies the GTE predicate on the "draw_min_amount" field.
+func DrawMinAmountGTE(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGTE(FieldDrawMinAmount, v))
+}
+
+// DrawMinAmountLT applies the LT predicate on the "draw_min_amount" field.
+func DrawMinAmountLT(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLT(FieldDrawMinAmount, v))
+}
+
+// DrawMinAmountLTE applies the LTE predicate on the "draw_min_amount" field.
+func DrawMinAmountLTE(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLTE(FieldDrawMinAmount, v))
+}
+
+// DrawMaxAmountEQ applies the EQ predicate on the "draw_max_amount" field.
+func DrawMaxAmountEQ(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawMaxAmount, v))
+}
+
+// DrawMaxAmountNEQ applies the NEQ predicate on the "draw_max_amount" field.
+func DrawMaxAmountNEQ(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldDrawMaxAmount, v))
+}
+
+// DrawMaxAmountIn applies the In predicate on the "draw_max_amount" field.
+func DrawMaxAmountIn(vs ...float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIn(FieldDrawMaxAmount, vs...))
+}
+
+// DrawMaxAmountNotIn applies the NotIn predicate on the "draw_max_amount" field.
+func DrawMaxAmountNotIn(vs ...float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotIn(FieldDrawMaxAmount, vs...))
+}
+
+// DrawMaxAmountGT applies the GT predicate on the "draw_max_amount" field.
+func DrawMaxAmountGT(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGT(FieldDrawMaxAmount, v))
+}
+
+// DrawMaxAmountGTE applies the GTE predicate on the "draw_max_amount" field.
+func DrawMaxAmountGTE(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGTE(FieldDrawMaxAmount, v))
+}
+
+// DrawMaxAmountLT applies the LT predicate on the "draw_max_amount" field.
+func DrawMaxAmountLT(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLT(FieldDrawMaxAmount, v))
+}
+
+// DrawMaxAmountLTE applies the LTE predicate on the "draw_max_amount" field.
+func DrawMaxAmountLTE(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLTE(FieldDrawMaxAmount, v))
+}
+
+// DrawGuaranteeCountEQ applies the EQ predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountEQ(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawGuaranteeCount, v))
+}
+
+// DrawGuaranteeCountNEQ applies the NEQ predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountNEQ(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldDrawGuaranteeCount, v))
+}
+
+// DrawGuaranteeCountIn applies the In predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountIn(vs ...int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIn(FieldDrawGuaranteeCount, vs...))
+}
+
+// DrawGuaranteeCountNotIn applies the NotIn predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountNotIn(vs ...int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotIn(FieldDrawGuaranteeCount, vs...))
+}
+
+// DrawGuaranteeCountGT applies the GT predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountGT(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGT(FieldDrawGuaranteeCount, v))
+}
+
+// DrawGuaranteeCountGTE applies the GTE predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountGTE(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGTE(FieldDrawGuaranteeCount, v))
+}
+
+// DrawGuaranteeCountLT applies the LT predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountLT(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLT(FieldDrawGuaranteeCount, v))
+}
+
+// DrawGuaranteeCountLTE applies the LTE predicate on the "draw_guarantee_count" field.
+func DrawGuaranteeCountLTE(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLTE(FieldDrawGuaranteeCount, v))
+}
+
+// DrawReturnRateEQ applies the EQ predicate on the "draw_return_rate" field.
+func DrawReturnRateEQ(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldDrawReturnRate, v))
+}
+
+// DrawReturnRateNEQ applies the NEQ predicate on the "draw_return_rate" field.
+func DrawReturnRateNEQ(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldDrawReturnRate, v))
+}
+
+// DrawReturnRateIn applies the In predicate on the "draw_return_rate" field.
+func DrawReturnRateIn(vs ...float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIn(FieldDrawReturnRate, vs...))
+}
+
+// DrawReturnRateNotIn applies the NotIn predicate on the "draw_return_rate" field.
+func DrawReturnRateNotIn(vs ...float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotIn(FieldDrawReturnRate, vs...))
+}
+
+// DrawReturnRateGT applies the GT predicate on the "draw_return_rate" field.
+func DrawReturnRateGT(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGT(FieldDrawReturnRate, v))
+}
+
+// DrawReturnRateGTE applies the GTE predicate on the "draw_return_rate" field.
+func DrawReturnRateGTE(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGTE(FieldDrawReturnRate, v))
+}
+
+// DrawReturnRateLT applies the LT predicate on the "draw_return_rate" field.
+func DrawReturnRateLT(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLT(FieldDrawReturnRate, v))
+}
+
+// DrawReturnRateLTE applies the LTE predicate on the "draw_return_rate" field.
+func DrawReturnRateLTE(v float64) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLTE(FieldDrawReturnRate, v))
+}
+
 // HasCategory applies the HasEdge predicate on the "category" edge.
 func HasCategory() predicate.ShopProduct {
 	return predicate.ShopProduct(func(s *sql.Selector) {
@@ -736,6 +1016,29 @@ func HasOrders() predicate.ShopProduct {
 func HasOrdersWith(preds ...predicate.ShopOrder) predicate.ShopProduct {
 	return predicate.ShopProduct(func(s *sql.Selector) {
 		step := newOrdersStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasDrawCycles applies the HasEdge predicate on the "draw_cycles" edge.
+func HasDrawCycles() predicate.ShopProduct {
+	return predicate.ShopProduct(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, DrawCyclesTable, DrawCyclesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasDrawCyclesWith applies the HasEdge predicate on the "draw_cycles" edge with a given conditions (other predicates).
+func HasDrawCyclesWith(preds ...predicate.ShopDrawCycle) predicate.ShopProduct {
+	return predicate.ShopProduct(func(s *sql.Selector) {
+		step := newDrawCyclesStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

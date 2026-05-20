@@ -4954,6 +4954,158 @@
                 </div>
               </div>
 
+              <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                <div class="mb-4">
+                  <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                    {{ t('admin.settings.features.affiliate.extendRewards.title') }}
+                  </h3>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.features.affiliate.extendRewards.description') }}
+                  </p>
+                </div>
+
+                <div class="grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <label class="input-label">{{ t('admin.settings.features.affiliate.extendRewards.scope') }}</label>
+                    <select v-model="affiliateExtendState.scope" class="input">
+                      <option value="inviter">{{ t('admin.settings.features.affiliate.extendRewards.scopeInviter') }}</option>
+                      <option value="site">{{ t('admin.settings.features.affiliate.extendRewards.scopeSite') }}</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label class="input-label">{{ t('admin.settings.features.affiliate.extendRewards.extendDays') }}</label>
+                    <input
+                      v-model.number="affiliateExtendState.extendDays"
+                      type="number"
+                      step="1"
+                      min="1"
+                      max="3650"
+                      class="input"
+                    />
+                    <p class="mt-1 text-xs text-gray-400">
+                      {{ t('admin.settings.features.affiliate.extendRewards.extendDaysHint') }}
+                    </p>
+                  </div>
+                </div>
+
+                <div v-if="affiliateExtendState.scope === 'inviter'" class="mt-4 space-y-4">
+                  <div>
+                    <label class="input-label">{{ t('admin.settings.features.affiliate.extendRewards.inviter') }}</label>
+                    <div
+                      v-if="affiliateExtendState.inviter"
+                      class="flex items-center justify-between rounded-md border border-primary-200 bg-primary-50 px-3 py-2 dark:border-primary-700/50 dark:bg-primary-900/20"
+                    >
+                      <div class="truncate text-sm">
+                        <span class="font-medium text-gray-900 dark:text-white">{{ affiliateExtendState.inviter.email }}</span>
+                        <span class="ml-1 text-xs text-gray-500">#{{ affiliateExtendState.inviter.id }}</span>
+                      </div>
+                      <button
+                        type="button"
+                        class="text-lg leading-none text-gray-400 hover:text-red-600"
+                        :title="t('admin.settings.features.affiliate.bindInviter.clearSelection')"
+                        @click="clearAffiliateExtendUser('inviter')"
+                      >
+                        x
+                      </button>
+                    </div>
+                    <template v-else>
+                      <input
+                        v-model="affiliateExtendState.inviterQuery"
+                        type="text"
+                        class="input"
+                        :placeholder="t('admin.settings.features.affiliate.extendRewards.inviterPlaceholder')"
+                        @input="onAffiliateExtendSearchInput('inviter')"
+                      />
+                      <div
+                        v-if="affiliateExtendState.inviterResults.length > 0"
+                        class="mt-1 max-h-40 overflow-y-auto rounded border border-gray-200 dark:border-dark-700"
+                      >
+                        <button
+                          v-for="u in affiliateExtendState.inviterResults"
+                          :key="u.id"
+                          type="button"
+                          class="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-100 dark:hover:bg-dark-800"
+                          @click="selectAffiliateExtendUser('inviter', u)"
+                        >
+                          {{ u.email }} <span class="text-xs text-gray-500">({{ u.username }})</span>
+                        </button>
+                      </div>
+                    </template>
+                  </div>
+
+                  <div class="rounded-md bg-gray-50 p-3 dark:bg-dark-800/70">
+                    <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200">
+                      <input
+                        v-model="affiliateExtendState.allInvitees"
+                        type="checkbox"
+                        class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span>{{ t('admin.settings.features.affiliate.extendRewards.allInvitees') }}</span>
+                    </label>
+                  </div>
+
+                  <div v-if="!affiliateExtendState.allInvitees">
+                    <label class="input-label">{{ t('admin.settings.features.affiliate.extendRewards.invitees') }}</label>
+                    <div v-if="affiliateExtendState.invitees.length > 0" class="mb-2 flex flex-wrap gap-2">
+                      <span
+                        v-for="u in affiliateExtendState.invitees"
+                        :key="u.id"
+                        class="inline-flex max-w-full items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2 py-1 text-xs text-primary-700 dark:border-primary-700/50 dark:bg-primary-900/20 dark:text-primary-300"
+                      >
+                        <span class="truncate">{{ u.email }}</span>
+                        <button
+                          type="button"
+                          class="text-primary-500 hover:text-red-600"
+                          :title="t('admin.settings.features.affiliate.bindInviter.clearSelection')"
+                          @click="removeAffiliateExtendInvitee(u.id)"
+                        >
+                          x
+                        </button>
+                      </span>
+                    </div>
+                    <input
+                      v-model="affiliateExtendState.inviteeQuery"
+                      type="text"
+                      class="input"
+                      :placeholder="t('admin.settings.features.affiliate.extendRewards.inviteePlaceholder')"
+                      @input="onAffiliateExtendSearchInput('invitee')"
+                    />
+                    <div
+                      v-if="affiliateExtendState.inviteeResults.length > 0"
+                      class="mt-1 max-h-40 overflow-y-auto rounded border border-gray-200 dark:border-dark-700"
+                    >
+                      <button
+                        v-for="u in affiliateExtendState.inviteeResults"
+                        :key="u.id"
+                        type="button"
+                        class="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-100 dark:hover:bg-dark-800"
+                        @click="selectAffiliateExtendUser('invitee', u)"
+                      >
+                        {{ u.email }} <span class="text-xs text-gray-500">({{ u.username }})</span>
+                      </button>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-400">
+                      {{ t('admin.settings.features.affiliate.extendRewards.inviteeHint') }}
+                    </p>
+                  </div>
+                </div>
+
+                <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p class="text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.features.affiliate.extendRewards.ruleHint') }}
+                  </p>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="affiliateExtendState.saving || !affiliateExtendCanSubmit"
+                    @click="askExtendAffiliateRewards"
+                  >
+                    {{ affiliateExtendState.saving ? t('common.saving') : affiliateExtendSubmitText }}
+                  </button>
+                </div>
+              </div>
+
               <!-- 专属用户管理 -->
               <div class="border-t border-gray-100 pt-6 dark:border-dark-700">
                 <div class="mb-3 flex items-center justify-between">
@@ -8878,6 +9030,24 @@ interface AffiliateBindState {
   inviterSearchTimer: number | null;
 }
 
+type AffiliateExtendScope = "site" | "inviter";
+type AffiliateExtendTarget = "invitee" | "inviter";
+
+interface AffiliateExtendState {
+  saving: boolean;
+  scope: AffiliateExtendScope;
+  extendDays: number;
+  inviter: AffiliateSimpleUser | null;
+  inviterQuery: string;
+  inviterResults: AffiliateSimpleUser[];
+  inviterSearchTimer: number | null;
+  allInvitees: boolean;
+  invitees: AffiliateSimpleUser[];
+  inviteeQuery: string;
+  inviteeResults: AffiliateSimpleUser[];
+  inviteeSearchTimer: number | null;
+}
+
 const affiliateBindState = reactive<AffiliateBindState>({
   saving: false,
   inviteeQuery: "",
@@ -8891,6 +9061,21 @@ const affiliateBindState = reactive<AffiliateBindState>({
   inviterSearchTimer: null,
 });
 
+const affiliateExtendState = reactive<AffiliateExtendState>({
+  saving: false,
+  scope: "inviter",
+  extendDays: 30,
+  inviter: null,
+  inviterQuery: "",
+  inviterResults: [],
+  inviterSearchTimer: null,
+  allInvitees: true,
+  invitees: [],
+  inviteeQuery: "",
+  inviteeResults: [],
+  inviteeSearchTimer: null,
+});
+
 // affiliateConfirmDialog drives the project-standard <ConfirmDialog>. We can't
 // `await` the user's response from the dialog component, so the confirm action
 // runs from the @confirm callback once the user clicks the dialog's confirm
@@ -8901,12 +9086,14 @@ const affiliateConfirmDialog = reactive<{
   message: string;
   confirmText: string;
   pending: (() => Promise<unknown>) | null;
+  reloadAfterSuccess: boolean;
 }>({
   show: false,
   title: "",
   message: "",
   confirmText: "",
   pending: null,
+  reloadAfterSuccess: false,
 });
 
 function openAffiliateConfirm(
@@ -8914,23 +9101,29 @@ function openAffiliateConfirm(
   message: string,
   confirmText: string,
   fn: () => Promise<unknown>,
+  reloadAfterSuccess = false,
 ) {
   affiliateConfirmDialog.title = title;
   affiliateConfirmDialog.message = message;
   affiliateConfirmDialog.confirmText = confirmText;
   affiliateConfirmDialog.pending = fn;
+  affiliateConfirmDialog.reloadAfterSuccess = reloadAfterSuccess;
   affiliateConfirmDialog.show = true;
 }
 
 async function handleAffiliateConfirm() {
   const fn = affiliateConfirmDialog.pending;
+  const reloadAfterSuccess = affiliateConfirmDialog.reloadAfterSuccess;
   affiliateConfirmDialog.show = false;
   affiliateConfirmDialog.pending = null;
+  affiliateConfirmDialog.reloadAfterSuccess = false;
   if (!fn) return;
   try {
-    await fn();
-    appStore.showSuccess(t("common.saved"));
-    await loadAffiliateUsers();
+    const message = await fn();
+    appStore.showSuccess(typeof message === "string" && message ? message : t("common.saved"));
+    if (reloadAfterSuccess) {
+      await loadAffiliateUsers();
+    }
   } catch (err) {
     appStore.showError(extractApiErrorMessage(err, t("common.error")));
   }
@@ -8939,6 +9132,7 @@ async function handleAffiliateConfirm() {
 function cancelAffiliateConfirm() {
   affiliateConfirmDialog.show = false;
   affiliateConfirmDialog.pending = null;
+  affiliateConfirmDialog.reloadAfterSuccess = false;
 }
 
 // debounceTimer wires a single timer slot to a callback with a delay,
@@ -9044,6 +9238,24 @@ const affiliateBindCanSubmit = computed(() => {
   );
 });
 
+const affiliateExtendCanSubmit = computed(() => {
+  const days = Math.floor(Number(affiliateExtendState.extendDays) || 0);
+  if (days < 1 || days > 3650) return false;
+  if (affiliateExtendState.scope === "site") return true;
+  if (!affiliateExtendState.inviter) return false;
+  return affiliateExtendState.allInvitees || affiliateExtendState.invitees.length > 0;
+});
+
+const affiliateExtendSubmitText = computed(() => {
+  if (affiliateExtendState.scope === "site") {
+    return t("admin.settings.features.affiliate.extendRewards.submitSite");
+  }
+  if (affiliateExtendState.allInvitees) {
+    return t("admin.settings.features.affiliate.extendRewards.submitInviterAll");
+  }
+  return t("admin.settings.features.affiliate.extendRewards.submitInviterSelected");
+});
+
 async function submitAffiliateModal() {
   if (!affiliateModalCanSubmit.value) {
     // Should be unreachable because the button is disabled, but keep a guard.
@@ -9087,6 +9299,7 @@ function askResetAffiliateUser(entry: AffiliateAdminEntry) {
     }),
     t("common.delete"),
     () => affiliatesAPI.clearUserSettings(entry.user_id),
+    true,
   );
 }
 
@@ -9147,6 +9360,142 @@ function clearAffiliateBindUser(target: AffiliateBindTarget) {
     affiliateBindState.invitee = null;
   } else {
     affiliateBindState.inviter = null;
+  }
+}
+
+function affiliateExtendTimerSlot(target: AffiliateExtendTarget): { searchTimer: number | null } {
+  return {
+    get searchTimer() {
+      return target === "invitee" ? affiliateExtendState.inviteeSearchTimer : affiliateExtendState.inviterSearchTimer;
+    },
+    set searchTimer(value: number | null) {
+      if (target === "invitee") {
+        affiliateExtendState.inviteeSearchTimer = value;
+      } else {
+        affiliateExtendState.inviterSearchTimer = value;
+      }
+    },
+  };
+}
+
+function onAffiliateExtendSearchInput(target: AffiliateExtendTarget) {
+  const query = target === "invitee" ? affiliateExtendState.inviteeQuery.trim() : affiliateExtendState.inviterQuery.trim();
+  if (!query) {
+    if (target === "invitee") {
+      affiliateExtendState.inviteeResults = [];
+    } else {
+      affiliateExtendState.inviterResults = [];
+    }
+    return;
+  }
+
+  debounceTimer(affiliateExtendTimerSlot(target), 300, async () => {
+    try {
+      const results = await affiliatesAPI.lookupUsers(query);
+      if (target === "invitee") {
+        const selected = new Set(affiliateExtendState.invitees.map((u) => u.id));
+        affiliateExtendState.inviteeResults = results.filter((u) => !selected.has(u.id));
+      } else {
+        affiliateExtendState.inviterResults = results;
+      }
+    } catch (err) {
+      appStore.showError(extractApiErrorMessage(err, t("common.error")));
+    }
+  });
+}
+
+function selectAffiliateExtendUser(target: AffiliateExtendTarget, user: AffiliateSimpleUser) {
+  if (target === "inviter") {
+    affiliateExtendState.inviter = user;
+    affiliateExtendState.inviterQuery = "";
+    affiliateExtendState.inviterResults = [];
+    affiliateExtendState.invitees = affiliateExtendState.invitees.filter((item) => item.id !== user.id);
+    return;
+  }
+
+  if (affiliateExtendState.inviter && affiliateExtendState.inviter.id === user.id) {
+    appStore.showError(t("admin.settings.features.affiliate.extendRewards.selfError"));
+    return;
+  }
+  if (!affiliateExtendState.invitees.some((item) => item.id === user.id)) {
+    affiliateExtendState.invitees.push(user);
+  }
+  affiliateExtendState.inviteeQuery = "";
+  affiliateExtendState.inviteeResults = [];
+}
+
+function clearAffiliateExtendUser(target: AffiliateExtendTarget) {
+  if (target === "inviter") {
+    affiliateExtendState.inviter = null;
+  }
+}
+
+function removeAffiliateExtendInvitee(userID: number) {
+  affiliateExtendState.invitees = affiliateExtendState.invitees.filter((u) => u.id !== userID);
+}
+
+function resetAffiliateExtendSelection() {
+  affiliateExtendState.inviterQuery = "";
+  affiliateExtendState.inviterResults = [];
+  affiliateExtendState.inviteeQuery = "";
+  affiliateExtendState.inviteeResults = [];
+  affiliateExtendState.invitees = [];
+}
+
+function buildAffiliateExtendPayload(): Parameters<typeof affiliatesAPI.extendInviteRewards>[0] {
+  const extendDays = Math.floor(Number(affiliateExtendState.extendDays) || 0);
+  if (affiliateExtendState.scope === "site") {
+    return {
+      scope: "site",
+      extend_days: extendDays,
+    };
+  }
+
+  return {
+    scope: "inviter",
+    inviter_user_id: affiliateExtendState.inviter!.id,
+    all_invitees: affiliateExtendState.allInvitees,
+    invitee_user_ids: affiliateExtendState.allInvitees ? [] : affiliateExtendState.invitees.map((u) => u.id),
+    extend_days: extendDays,
+  };
+}
+
+function askExtendAffiliateRewards() {
+  if (!affiliateExtendCanSubmit.value) return;
+  const days = Math.floor(Number(affiliateExtendState.extendDays) || 0);
+  let message = "";
+  if (affiliateExtendState.scope === "site") {
+    message = t("admin.settings.features.affiliate.extendRewards.confirmSite", { days });
+  } else if (affiliateExtendState.allInvitees) {
+    message = t("admin.settings.features.affiliate.extendRewards.confirmInviterAll", {
+      days,
+      email: affiliateExtendState.inviter?.email ?? "",
+    });
+  } else {
+    message = t("admin.settings.features.affiliate.extendRewards.confirmInviterSelected", {
+      days,
+      email: affiliateExtendState.inviter?.email ?? "",
+      count: affiliateExtendState.invitees.length,
+    });
+  }
+
+  openAffiliateConfirm(
+    t("admin.settings.features.affiliate.extendRewards.confirmTitle"),
+    message,
+    t("common.confirm"),
+    submitAffiliateExtendRewards,
+  );
+}
+
+async function submitAffiliateExtendRewards() {
+  if (!affiliateExtendCanSubmit.value) return;
+  affiliateExtendState.saving = true;
+  try {
+    const result = await affiliatesAPI.extendInviteRewards(buildAffiliateExtendPayload());
+    resetAffiliateExtendSelection();
+    return t("admin.settings.features.affiliate.extendRewards.success", { count: result.affected });
+  } finally {
+    affiliateExtendState.saving = false;
   }
 }
 

@@ -725,6 +725,8 @@ func registerChannelMonitorRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	affiliates := admin.Group("/affiliates")
 	{
+		affiliates.POST("/invite-rewards/extend", h.Admin.Affiliate.ExtendInviteRewards)
+
 		users := affiliates.Group("/users")
 		{
 			users.GET("", h.Admin.Affiliate.ListUsers)

@@ -171,6 +171,11 @@ export interface AffiliateInvitee {
   email: string
   username: string
   created_at?: string
+  invite_bind_source?: 'registration' | 'admin' | string
+  status: string
+  period_consumption: number
+  period_rebate: number
+  history_consumption: number
   total_rebate: number
 }
 
@@ -184,6 +189,9 @@ export interface UserAffiliateDetail {
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
+  period_start_at?: string | null
+  period_end_at?: string | null
+  period_rebate: number
   /** 当前用户作为邀请人时实际生效的返利比例（专属覆盖全局）。0-100。 */
   effective_rebate_rate_percent: number
   invitees: AffiliateInvitee[]
@@ -962,6 +970,7 @@ export interface AccountUsageWindowSummary {
   known_account_count: number
   average_utilization: number
   remaining_capacity_percent: number
+  estimated_support_hours?: number | null
   min_remaining_seconds?: number | null
   next_reset_at?: string | null
 }

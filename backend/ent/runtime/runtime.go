@@ -32,8 +32,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/schema"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
 	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
@@ -1518,6 +1520,33 @@ func init() {
 	setting.DefaultUpdatedAt = settingDescUpdatedAt.Default.(func() time.Time)
 	// setting.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	setting.UpdateDefaultUpdatedAt = settingDescUpdatedAt.UpdateDefault.(func() time.Time)
+	shopbalanceledgerMixin := schema.ShopBalanceLedger{}.Mixin()
+	shopbalanceledgerMixinFields0 := shopbalanceledgerMixin[0].Fields()
+	_ = shopbalanceledgerMixinFields0
+	shopbalanceledgerFields := schema.ShopBalanceLedger{}.Fields()
+	_ = shopbalanceledgerFields
+	// shopbalanceledgerDescCreatedAt is the schema descriptor for created_at field.
+	shopbalanceledgerDescCreatedAt := shopbalanceledgerMixinFields0[0].Descriptor()
+	// shopbalanceledger.DefaultCreatedAt holds the default value on creation for the created_at field.
+	shopbalanceledger.DefaultCreatedAt = shopbalanceledgerDescCreatedAt.Default.(func() time.Time)
+	// shopbalanceledgerDescUpdatedAt is the schema descriptor for updated_at field.
+	shopbalanceledgerDescUpdatedAt := shopbalanceledgerMixinFields0[1].Descriptor()
+	// shopbalanceledger.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	shopbalanceledger.DefaultUpdatedAt = shopbalanceledgerDescUpdatedAt.Default.(func() time.Time)
+	// shopbalanceledger.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	shopbalanceledger.UpdateDefaultUpdatedAt = shopbalanceledgerDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// shopbalanceledgerDescEntryType is the schema descriptor for entry_type field.
+	shopbalanceledgerDescEntryType := shopbalanceledgerFields[2].Descriptor()
+	// shopbalanceledger.EntryTypeValidator is a validator for the "entry_type" field. It is called by the builders before save.
+	shopbalanceledger.EntryTypeValidator = shopbalanceledgerDescEntryType.Validators[0].(func(string) error)
+	// shopbalanceledgerDescDebitAmount is the schema descriptor for debit_amount field.
+	shopbalanceledgerDescDebitAmount := shopbalanceledgerFields[3].Descriptor()
+	// shopbalanceledger.DefaultDebitAmount holds the default value on creation for the debit_amount field.
+	shopbalanceledger.DefaultDebitAmount = shopbalanceledgerDescDebitAmount.Default.(float64)
+	// shopbalanceledgerDescCreditAmount is the schema descriptor for credit_amount field.
+	shopbalanceledgerDescCreditAmount := shopbalanceledgerFields[4].Descriptor()
+	// shopbalanceledger.DefaultCreditAmount holds the default value on creation for the credit_amount field.
+	shopbalanceledger.DefaultCreditAmount = shopbalanceledgerDescCreditAmount.Default.(float64)
 	shopcardkeyMixin := schema.ShopCardKey{}.Mixin()
 	shopcardkeyMixinFields0 := shopcardkeyMixin[0].Fields()
 	_ = shopcardkeyMixinFields0
@@ -1588,6 +1617,33 @@ func init() {
 	shopcategoryDescEnabled := shopcategoryFields[3].Descriptor()
 	// shopcategory.DefaultEnabled holds the default value on creation for the enabled field.
 	shopcategory.DefaultEnabled = shopcategoryDescEnabled.Default.(bool)
+	shopdrawcycleMixin := schema.ShopDrawCycle{}.Mixin()
+	shopdrawcycleMixinFields0 := shopdrawcycleMixin[0].Fields()
+	_ = shopdrawcycleMixinFields0
+	shopdrawcycleFields := schema.ShopDrawCycle{}.Fields()
+	_ = shopdrawcycleFields
+	// shopdrawcycleDescCreatedAt is the schema descriptor for created_at field.
+	shopdrawcycleDescCreatedAt := shopdrawcycleMixinFields0[0].Descriptor()
+	// shopdrawcycle.DefaultCreatedAt holds the default value on creation for the created_at field.
+	shopdrawcycle.DefaultCreatedAt = shopdrawcycleDescCreatedAt.Default.(func() time.Time)
+	// shopdrawcycleDescUpdatedAt is the schema descriptor for updated_at field.
+	shopdrawcycleDescUpdatedAt := shopdrawcycleMixinFields0[1].Descriptor()
+	// shopdrawcycle.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	shopdrawcycle.DefaultUpdatedAt = shopdrawcycleDescUpdatedAt.Default.(func() time.Time)
+	// shopdrawcycle.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	shopdrawcycle.UpdateDefaultUpdatedAt = shopdrawcycleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// shopdrawcycleDescDrawnCount is the schema descriptor for drawn_count field.
+	shopdrawcycleDescDrawnCount := shopdrawcycleFields[6].Descriptor()
+	// shopdrawcycle.DefaultDrawnCount holds the default value on creation for the drawn_count field.
+	shopdrawcycle.DefaultDrawnCount = shopdrawcycleDescDrawnCount.Default.(int)
+	// shopdrawcycleDescDrawnAmount is the schema descriptor for drawn_amount field.
+	shopdrawcycleDescDrawnAmount := shopdrawcycleFields[7].Descriptor()
+	// shopdrawcycle.DefaultDrawnAmount holds the default value on creation for the drawn_amount field.
+	shopdrawcycle.DefaultDrawnAmount = shopdrawcycleDescDrawnAmount.Default.(float64)
+	// shopdrawcycleDescCompleted is the schema descriptor for completed field.
+	shopdrawcycleDescCompleted := shopdrawcycleFields[8].Descriptor()
+	// shopdrawcycle.DefaultCompleted holds the default value on creation for the completed field.
+	shopdrawcycle.DefaultCompleted = shopdrawcycleDescCompleted.Default.(bool)
 	shoporderMixin := schema.ShopOrder{}.Mixin()
 	shoporderMixinFields0 := shoporderMixin[0].Fields()
 	_ = shoporderMixinFields0
@@ -1706,6 +1762,36 @@ func init() {
 	shopproductDescAutoDelivery := shopproductFields[10].Descriptor()
 	// shopproduct.DefaultAutoDelivery holds the default value on creation for the auto_delivery field.
 	shopproduct.DefaultAutoDelivery = shopproductDescAutoDelivery.Default.(bool)
+	// shopproductDescProductType is the schema descriptor for product_type field.
+	shopproductDescProductType := shopproductFields[11].Descriptor()
+	// shopproduct.DefaultProductType holds the default value on creation for the product_type field.
+	shopproduct.DefaultProductType = shopproductDescProductType.Default.(string)
+	// shopproduct.ProductTypeValidator is a validator for the "product_type" field. It is called by the builders before save.
+	shopproduct.ProductTypeValidator = shopproductDescProductType.Validators[0].(func(string) error)
+	// shopproductDescBalanceOnly is the schema descriptor for balance_only field.
+	shopproductDescBalanceOnly := shopproductFields[12].Descriptor()
+	// shopproduct.DefaultBalanceOnly holds the default value on creation for the balance_only field.
+	shopproduct.DefaultBalanceOnly = shopproductDescBalanceOnly.Default.(bool)
+	// shopproductDescDrawEnabled is the schema descriptor for draw_enabled field.
+	shopproductDescDrawEnabled := shopproductFields[13].Descriptor()
+	// shopproduct.DefaultDrawEnabled holds the default value on creation for the draw_enabled field.
+	shopproduct.DefaultDrawEnabled = shopproductDescDrawEnabled.Default.(bool)
+	// shopproductDescDrawMinAmount is the schema descriptor for draw_min_amount field.
+	shopproductDescDrawMinAmount := shopproductFields[14].Descriptor()
+	// shopproduct.DefaultDrawMinAmount holds the default value on creation for the draw_min_amount field.
+	shopproduct.DefaultDrawMinAmount = shopproductDescDrawMinAmount.Default.(float64)
+	// shopproductDescDrawMaxAmount is the schema descriptor for draw_max_amount field.
+	shopproductDescDrawMaxAmount := shopproductFields[15].Descriptor()
+	// shopproduct.DefaultDrawMaxAmount holds the default value on creation for the draw_max_amount field.
+	shopproduct.DefaultDrawMaxAmount = shopproductDescDrawMaxAmount.Default.(float64)
+	// shopproductDescDrawGuaranteeCount is the schema descriptor for draw_guarantee_count field.
+	shopproductDescDrawGuaranteeCount := shopproductFields[16].Descriptor()
+	// shopproduct.DefaultDrawGuaranteeCount holds the default value on creation for the draw_guarantee_count field.
+	shopproduct.DefaultDrawGuaranteeCount = shopproductDescDrawGuaranteeCount.Default.(int)
+	// shopproductDescDrawReturnRate is the schema descriptor for draw_return_rate field.
+	shopproductDescDrawReturnRate := shopproductFields[17].Descriptor()
+	// shopproduct.DefaultDrawReturnRate holds the default value on creation for the draw_return_rate field.
+	shopproduct.DefaultDrawReturnRate = shopproductDescDrawReturnRate.Default.(float64)
 	subscriptionplanFields := schema.SubscriptionPlan{}.Fields()
 	_ = subscriptionplanFields
 	// subscriptionplanDescName is the schema descriptor for name field.

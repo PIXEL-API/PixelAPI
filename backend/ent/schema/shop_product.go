@@ -62,6 +62,24 @@ func (ShopProduct) Fields() []ent.Field {
 			Default(1),
 		field.Bool("auto_delivery").
 			Default(true),
+		field.String("product_type").
+			MaxLen(30).
+			Default("card_key"),
+		field.Bool("balance_only").
+			Default(false),
+		field.Bool("draw_enabled").
+			Default(false),
+		field.Float("draw_min_amount").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			Default(0),
+		field.Float("draw_max_amount").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			Default(0),
+		field.Int("draw_guarantee_count").
+			Default(0),
+		field.Float("draw_return_rate").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
+			Default(1),
 	}
 }
 
@@ -73,6 +91,7 @@ func (ShopProduct) Edges() []ent.Edge {
 			Unique(),
 		edge.To("card_keys", ShopCardKey.Type),
 		edge.To("orders", ShopOrder.Type),
+		edge.To("draw_cycles", ShopDrawCycle.Type),
 	}
 }
 

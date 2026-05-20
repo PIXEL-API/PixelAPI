@@ -40,12 +40,28 @@ const (
 	FieldMaxPurchase = "max_purchase"
 	// FieldAutoDelivery holds the string denoting the auto_delivery field in the database.
 	FieldAutoDelivery = "auto_delivery"
+	// FieldProductType holds the string denoting the product_type field in the database.
+	FieldProductType = "product_type"
+	// FieldBalanceOnly holds the string denoting the balance_only field in the database.
+	FieldBalanceOnly = "balance_only"
+	// FieldDrawEnabled holds the string denoting the draw_enabled field in the database.
+	FieldDrawEnabled = "draw_enabled"
+	// FieldDrawMinAmount holds the string denoting the draw_min_amount field in the database.
+	FieldDrawMinAmount = "draw_min_amount"
+	// FieldDrawMaxAmount holds the string denoting the draw_max_amount field in the database.
+	FieldDrawMaxAmount = "draw_max_amount"
+	// FieldDrawGuaranteeCount holds the string denoting the draw_guarantee_count field in the database.
+	FieldDrawGuaranteeCount = "draw_guarantee_count"
+	// FieldDrawReturnRate holds the string denoting the draw_return_rate field in the database.
+	FieldDrawReturnRate = "draw_return_rate"
 	// EdgeCategory holds the string denoting the category edge name in mutations.
 	EdgeCategory = "category"
 	// EdgeCardKeys holds the string denoting the card_keys edge name in mutations.
 	EdgeCardKeys = "card_keys"
 	// EdgeOrders holds the string denoting the orders edge name in mutations.
 	EdgeOrders = "orders"
+	// EdgeDrawCycles holds the string denoting the draw_cycles edge name in mutations.
+	EdgeDrawCycles = "draw_cycles"
 	// Table holds the table name of the shopproduct in the database.
 	Table = "shop_products"
 	// CategoryTable is the table that holds the category relation/edge.
@@ -69,6 +85,13 @@ const (
 	OrdersInverseTable = "shop_orders"
 	// OrdersColumn is the table column denoting the orders relation/edge.
 	OrdersColumn = "product_id"
+	// DrawCyclesTable is the table that holds the draw_cycles relation/edge.
+	DrawCyclesTable = "shop_draw_cycles"
+	// DrawCyclesInverseTable is the table name for the ShopDrawCycle entity.
+	// It exists in this package in order to avoid circular dependency with the "shopdrawcycle" package.
+	DrawCyclesInverseTable = "shop_draw_cycles"
+	// DrawCyclesColumn is the table column denoting the draw_cycles relation/edge.
+	DrawCyclesColumn = "product_id"
 )
 
 // Columns holds all SQL columns for shopproduct fields.
@@ -87,6 +110,13 @@ var Columns = []string{
 	FieldMinPurchase,
 	FieldMaxPurchase,
 	FieldAutoDelivery,
+	FieldProductType,
+	FieldBalanceOnly,
+	FieldDrawEnabled,
+	FieldDrawMinAmount,
+	FieldDrawMaxAmount,
+	FieldDrawGuaranteeCount,
+	FieldDrawReturnRate,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -120,6 +150,22 @@ var (
 	DefaultMaxPurchase int
 	// DefaultAutoDelivery holds the default value on creation for the "auto_delivery" field.
 	DefaultAutoDelivery bool
+	// DefaultProductType holds the default value on creation for the "product_type" field.
+	DefaultProductType string
+	// ProductTypeValidator is a validator for the "product_type" field. It is called by the builders before save.
+	ProductTypeValidator func(string) error
+	// DefaultBalanceOnly holds the default value on creation for the "balance_only" field.
+	DefaultBalanceOnly bool
+	// DefaultDrawEnabled holds the default value on creation for the "draw_enabled" field.
+	DefaultDrawEnabled bool
+	// DefaultDrawMinAmount holds the default value on creation for the "draw_min_amount" field.
+	DefaultDrawMinAmount float64
+	// DefaultDrawMaxAmount holds the default value on creation for the "draw_max_amount" field.
+	DefaultDrawMaxAmount float64
+	// DefaultDrawGuaranteeCount holds the default value on creation for the "draw_guarantee_count" field.
+	DefaultDrawGuaranteeCount int
+	// DefaultDrawReturnRate holds the default value on creation for the "draw_return_rate" field.
+	DefaultDrawReturnRate float64
 )
 
 // OrderOption defines the ordering options for the ShopProduct queries.
@@ -195,6 +241,41 @@ func ByAutoDelivery(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAutoDelivery, opts...).ToFunc()
 }
 
+// ByProductType orders the results by the product_type field.
+func ByProductType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProductType, opts...).ToFunc()
+}
+
+// ByBalanceOnly orders the results by the balance_only field.
+func ByBalanceOnly(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBalanceOnly, opts...).ToFunc()
+}
+
+// ByDrawEnabled orders the results by the draw_enabled field.
+func ByDrawEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawEnabled, opts...).ToFunc()
+}
+
+// ByDrawMinAmount orders the results by the draw_min_amount field.
+func ByDrawMinAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawMinAmount, opts...).ToFunc()
+}
+
+// ByDrawMaxAmount orders the results by the draw_max_amount field.
+func ByDrawMaxAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawMaxAmount, opts...).ToFunc()
+}
+
+// ByDrawGuaranteeCount orders the results by the draw_guarantee_count field.
+func ByDrawGuaranteeCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawGuaranteeCount, opts...).ToFunc()
+}
+
+// ByDrawReturnRate orders the results by the draw_return_rate field.
+func ByDrawReturnRate(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDrawReturnRate, opts...).ToFunc()
+}
+
 // ByCategoryField orders the results by category field.
 func ByCategoryField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -229,6 +310,20 @@ func ByOrders(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newOrdersStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByDrawCyclesCount orders the results by draw_cycles count.
+func ByDrawCyclesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newDrawCyclesStep(), opts...)
+	}
+}
+
+// ByDrawCycles orders the results by draw_cycles terms.
+func ByDrawCycles(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDrawCyclesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newCategoryStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -248,5 +343,12 @@ func newOrdersStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(OrdersInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, OrdersTable, OrdersColumn),
+	)
+}
+func newDrawCyclesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DrawCyclesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, DrawCyclesTable, DrawCyclesColumn),
 	)
 }

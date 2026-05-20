@@ -112,7 +112,14 @@
               <p class="mt-1 text-gray-900 dark:text-white">{{ selectedShopOrder.product_name }} x {{ selectedShopOrder.quantity }}</p>
             </div>
           </div>
-          <div v-if="selectedShopOrder.delivered_cards.length > 0" class="mb-4">
+          <div v-if="selectedShopOrder.draw_reward_amount !== null && selectedShopOrder.draw_reward_amount !== undefined" class="mb-4 rounded-lg bg-emerald-50 p-4 text-sm dark:bg-emerald-950/30">
+            <div class="flex justify-between gap-3">
+              <span class="text-emerald-700 dark:text-emerald-300">{{ t('store.drawReward') }}</span>
+              <span class="font-semibold text-emerald-800 dark:text-emerald-200">${{ selectedShopOrder.draw_reward_amount.toFixed(2) }}</span>
+            </div>
+          </div>
+
+          <div v-if="selectedShopOrder.delivered_cards.length > 0 && (selectedShopOrder.draw_reward_amount === null || selectedShopOrder.draw_reward_amount === undefined)" class="mb-4">
             <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
               <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</label>
               <button type="button" class="btn btn-secondary btn-sm min-h-[2.25rem]" @click="copySelectedShopCards">
@@ -137,7 +144,7 @@
             :download-file="downloadAdminStoreFile"
             :download-all-files="downloadAdminStoreFilesZip"
           />
-          <p v-if="selectedShopOrder.delivered_cards.length === 0 && selectedShopOrder.delivered_files.length === 0" class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-800 dark:text-dark-400">
+          <p v-if="selectedShopOrder.delivered_cards.length === 0 && selectedShopOrder.delivered_files.length === 0 && (selectedShopOrder.draw_reward_amount === null || selectedShopOrder.draw_reward_amount === undefined)" class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-800 dark:text-dark-400">
             {{ t('store.deliveryPending') }}
           </p>
         </div>

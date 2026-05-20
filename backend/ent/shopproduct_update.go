@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
 	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 )
@@ -250,6 +251,132 @@ func (_u *ShopProductUpdate) SetNillableAutoDelivery(v *bool) *ShopProductUpdate
 	return _u
 }
 
+// SetProductType sets the "product_type" field.
+func (_u *ShopProductUpdate) SetProductType(v string) *ShopProductUpdate {
+	_u.mutation.SetProductType(v)
+	return _u
+}
+
+// SetNillableProductType sets the "product_type" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableProductType(v *string) *ShopProductUpdate {
+	if v != nil {
+		_u.SetProductType(*v)
+	}
+	return _u
+}
+
+// SetBalanceOnly sets the "balance_only" field.
+func (_u *ShopProductUpdate) SetBalanceOnly(v bool) *ShopProductUpdate {
+	_u.mutation.SetBalanceOnly(v)
+	return _u
+}
+
+// SetNillableBalanceOnly sets the "balance_only" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableBalanceOnly(v *bool) *ShopProductUpdate {
+	if v != nil {
+		_u.SetBalanceOnly(*v)
+	}
+	return _u
+}
+
+// SetDrawEnabled sets the "draw_enabled" field.
+func (_u *ShopProductUpdate) SetDrawEnabled(v bool) *ShopProductUpdate {
+	_u.mutation.SetDrawEnabled(v)
+	return _u
+}
+
+// SetNillableDrawEnabled sets the "draw_enabled" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableDrawEnabled(v *bool) *ShopProductUpdate {
+	if v != nil {
+		_u.SetDrawEnabled(*v)
+	}
+	return _u
+}
+
+// SetDrawMinAmount sets the "draw_min_amount" field.
+func (_u *ShopProductUpdate) SetDrawMinAmount(v float64) *ShopProductUpdate {
+	_u.mutation.ResetDrawMinAmount()
+	_u.mutation.SetDrawMinAmount(v)
+	return _u
+}
+
+// SetNillableDrawMinAmount sets the "draw_min_amount" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableDrawMinAmount(v *float64) *ShopProductUpdate {
+	if v != nil {
+		_u.SetDrawMinAmount(*v)
+	}
+	return _u
+}
+
+// AddDrawMinAmount adds value to the "draw_min_amount" field.
+func (_u *ShopProductUpdate) AddDrawMinAmount(v float64) *ShopProductUpdate {
+	_u.mutation.AddDrawMinAmount(v)
+	return _u
+}
+
+// SetDrawMaxAmount sets the "draw_max_amount" field.
+func (_u *ShopProductUpdate) SetDrawMaxAmount(v float64) *ShopProductUpdate {
+	_u.mutation.ResetDrawMaxAmount()
+	_u.mutation.SetDrawMaxAmount(v)
+	return _u
+}
+
+// SetNillableDrawMaxAmount sets the "draw_max_amount" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableDrawMaxAmount(v *float64) *ShopProductUpdate {
+	if v != nil {
+		_u.SetDrawMaxAmount(*v)
+	}
+	return _u
+}
+
+// AddDrawMaxAmount adds value to the "draw_max_amount" field.
+func (_u *ShopProductUpdate) AddDrawMaxAmount(v float64) *ShopProductUpdate {
+	_u.mutation.AddDrawMaxAmount(v)
+	return _u
+}
+
+// SetDrawGuaranteeCount sets the "draw_guarantee_count" field.
+func (_u *ShopProductUpdate) SetDrawGuaranteeCount(v int) *ShopProductUpdate {
+	_u.mutation.ResetDrawGuaranteeCount()
+	_u.mutation.SetDrawGuaranteeCount(v)
+	return _u
+}
+
+// SetNillableDrawGuaranteeCount sets the "draw_guarantee_count" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableDrawGuaranteeCount(v *int) *ShopProductUpdate {
+	if v != nil {
+		_u.SetDrawGuaranteeCount(*v)
+	}
+	return _u
+}
+
+// AddDrawGuaranteeCount adds value to the "draw_guarantee_count" field.
+func (_u *ShopProductUpdate) AddDrawGuaranteeCount(v int) *ShopProductUpdate {
+	_u.mutation.AddDrawGuaranteeCount(v)
+	return _u
+}
+
+// SetDrawReturnRate sets the "draw_return_rate" field.
+func (_u *ShopProductUpdate) SetDrawReturnRate(v float64) *ShopProductUpdate {
+	_u.mutation.ResetDrawReturnRate()
+	_u.mutation.SetDrawReturnRate(v)
+	return _u
+}
+
+// SetNillableDrawReturnRate sets the "draw_return_rate" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableDrawReturnRate(v *float64) *ShopProductUpdate {
+	if v != nil {
+		_u.SetDrawReturnRate(*v)
+	}
+	return _u
+}
+
+// AddDrawReturnRate adds value to the "draw_return_rate" field.
+func (_u *ShopProductUpdate) AddDrawReturnRate(v float64) *ShopProductUpdate {
+	_u.mutation.AddDrawReturnRate(v)
+	return _u
+}
+
 // SetCategory sets the "category" edge to the ShopCategory entity.
 func (_u *ShopProductUpdate) SetCategory(v *ShopCategory) *ShopProductUpdate {
 	return _u.SetCategoryID(v.ID)
@@ -283,6 +410,21 @@ func (_u *ShopProductUpdate) AddOrders(v ...*ShopOrder) *ShopProductUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.AddOrderIDs(ids...)
+}
+
+// AddDrawCycleIDs adds the "draw_cycles" edge to the ShopDrawCycle entity by IDs.
+func (_u *ShopProductUpdate) AddDrawCycleIDs(ids ...int64) *ShopProductUpdate {
+	_u.mutation.AddDrawCycleIDs(ids...)
+	return _u
+}
+
+// AddDrawCycles adds the "draw_cycles" edges to the ShopDrawCycle entity.
+func (_u *ShopProductUpdate) AddDrawCycles(v ...*ShopDrawCycle) *ShopProductUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDrawCycleIDs(ids...)
 }
 
 // Mutation returns the ShopProductMutation object of the builder.
@@ -338,6 +480,27 @@ func (_u *ShopProductUpdate) RemoveOrders(v ...*ShopOrder) *ShopProductUpdate {
 	return _u.RemoveOrderIDs(ids...)
 }
 
+// ClearDrawCycles clears all "draw_cycles" edges to the ShopDrawCycle entity.
+func (_u *ShopProductUpdate) ClearDrawCycles() *ShopProductUpdate {
+	_u.mutation.ClearDrawCycles()
+	return _u
+}
+
+// RemoveDrawCycleIDs removes the "draw_cycles" edge to ShopDrawCycle entities by IDs.
+func (_u *ShopProductUpdate) RemoveDrawCycleIDs(ids ...int64) *ShopProductUpdate {
+	_u.mutation.RemoveDrawCycleIDs(ids...)
+	return _u
+}
+
+// RemoveDrawCycles removes "draw_cycles" edges to ShopDrawCycle entities.
+func (_u *ShopProductUpdate) RemoveDrawCycles(v ...*ShopDrawCycle) *ShopProductUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDrawCycleIDs(ids...)
+}
+
 // Save executes the query and returns the number of nodes affected by the update operation.
 func (_u *ShopProductUpdate) Save(ctx context.Context) (int, error) {
 	_u.defaults()
@@ -379,6 +542,11 @@ func (_u *ShopProductUpdate) check() error {
 	if v, ok := _u.mutation.Name(); ok {
 		if err := shopproduct.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "ShopProduct.name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ProductType(); ok {
+		if err := shopproduct.ProductTypeValidator(v); err != nil {
+			return &ValidationError{Name: "product_type", err: fmt.Errorf(`ent: validator failed for field "ShopProduct.product_type": %w`, err)}
 		}
 	}
 	return nil
@@ -452,6 +620,39 @@ func (_u *ShopProductUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.AutoDelivery(); ok {
 		_spec.SetField(shopproduct.FieldAutoDelivery, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ProductType(); ok {
+		_spec.SetField(shopproduct.FieldProductType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BalanceOnly(); ok {
+		_spec.SetField(shopproduct.FieldBalanceOnly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.DrawEnabled(); ok {
+		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.DrawMinAmount(); ok {
+		_spec.SetField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawMinAmount(); ok {
+		_spec.AddField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.DrawMaxAmount(); ok {
+		_spec.SetField(shopproduct.FieldDrawMaxAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawMaxAmount(); ok {
+		_spec.AddField(shopproduct.FieldDrawMaxAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.DrawGuaranteeCount(); ok {
+		_spec.SetField(shopproduct.FieldDrawGuaranteeCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedDrawGuaranteeCount(); ok {
+		_spec.AddField(shopproduct.FieldDrawGuaranteeCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.DrawReturnRate(); ok {
+		_spec.SetField(shopproduct.FieldDrawReturnRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawReturnRate(); ok {
+		_spec.AddField(shopproduct.FieldDrawReturnRate, field.TypeFloat64, value)
 	}
 	if _u.mutation.CategoryCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -565,6 +766,51 @@ func (_u *ShopProductUpdate) sqlSave(ctx context.Context) (_node int, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DrawCyclesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shopproduct.DrawCyclesTable,
+			Columns: []string{shopproduct.DrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDrawCyclesIDs(); len(nodes) > 0 && !_u.mutation.DrawCyclesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shopproduct.DrawCyclesTable,
+			Columns: []string{shopproduct.DrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DrawCyclesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shopproduct.DrawCyclesTable,
+			Columns: []string{shopproduct.DrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -811,6 +1057,132 @@ func (_u *ShopProductUpdateOne) SetNillableAutoDelivery(v *bool) *ShopProductUpd
 	return _u
 }
 
+// SetProductType sets the "product_type" field.
+func (_u *ShopProductUpdateOne) SetProductType(v string) *ShopProductUpdateOne {
+	_u.mutation.SetProductType(v)
+	return _u
+}
+
+// SetNillableProductType sets the "product_type" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableProductType(v *string) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetProductType(*v)
+	}
+	return _u
+}
+
+// SetBalanceOnly sets the "balance_only" field.
+func (_u *ShopProductUpdateOne) SetBalanceOnly(v bool) *ShopProductUpdateOne {
+	_u.mutation.SetBalanceOnly(v)
+	return _u
+}
+
+// SetNillableBalanceOnly sets the "balance_only" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableBalanceOnly(v *bool) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetBalanceOnly(*v)
+	}
+	return _u
+}
+
+// SetDrawEnabled sets the "draw_enabled" field.
+func (_u *ShopProductUpdateOne) SetDrawEnabled(v bool) *ShopProductUpdateOne {
+	_u.mutation.SetDrawEnabled(v)
+	return _u
+}
+
+// SetNillableDrawEnabled sets the "draw_enabled" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableDrawEnabled(v *bool) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetDrawEnabled(*v)
+	}
+	return _u
+}
+
+// SetDrawMinAmount sets the "draw_min_amount" field.
+func (_u *ShopProductUpdateOne) SetDrawMinAmount(v float64) *ShopProductUpdateOne {
+	_u.mutation.ResetDrawMinAmount()
+	_u.mutation.SetDrawMinAmount(v)
+	return _u
+}
+
+// SetNillableDrawMinAmount sets the "draw_min_amount" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableDrawMinAmount(v *float64) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetDrawMinAmount(*v)
+	}
+	return _u
+}
+
+// AddDrawMinAmount adds value to the "draw_min_amount" field.
+func (_u *ShopProductUpdateOne) AddDrawMinAmount(v float64) *ShopProductUpdateOne {
+	_u.mutation.AddDrawMinAmount(v)
+	return _u
+}
+
+// SetDrawMaxAmount sets the "draw_max_amount" field.
+func (_u *ShopProductUpdateOne) SetDrawMaxAmount(v float64) *ShopProductUpdateOne {
+	_u.mutation.ResetDrawMaxAmount()
+	_u.mutation.SetDrawMaxAmount(v)
+	return _u
+}
+
+// SetNillableDrawMaxAmount sets the "draw_max_amount" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableDrawMaxAmount(v *float64) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetDrawMaxAmount(*v)
+	}
+	return _u
+}
+
+// AddDrawMaxAmount adds value to the "draw_max_amount" field.
+func (_u *ShopProductUpdateOne) AddDrawMaxAmount(v float64) *ShopProductUpdateOne {
+	_u.mutation.AddDrawMaxAmount(v)
+	return _u
+}
+
+// SetDrawGuaranteeCount sets the "draw_guarantee_count" field.
+func (_u *ShopProductUpdateOne) SetDrawGuaranteeCount(v int) *ShopProductUpdateOne {
+	_u.mutation.ResetDrawGuaranteeCount()
+	_u.mutation.SetDrawGuaranteeCount(v)
+	return _u
+}
+
+// SetNillableDrawGuaranteeCount sets the "draw_guarantee_count" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableDrawGuaranteeCount(v *int) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetDrawGuaranteeCount(*v)
+	}
+	return _u
+}
+
+// AddDrawGuaranteeCount adds value to the "draw_guarantee_count" field.
+func (_u *ShopProductUpdateOne) AddDrawGuaranteeCount(v int) *ShopProductUpdateOne {
+	_u.mutation.AddDrawGuaranteeCount(v)
+	return _u
+}
+
+// SetDrawReturnRate sets the "draw_return_rate" field.
+func (_u *ShopProductUpdateOne) SetDrawReturnRate(v float64) *ShopProductUpdateOne {
+	_u.mutation.ResetDrawReturnRate()
+	_u.mutation.SetDrawReturnRate(v)
+	return _u
+}
+
+// SetNillableDrawReturnRate sets the "draw_return_rate" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableDrawReturnRate(v *float64) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetDrawReturnRate(*v)
+	}
+	return _u
+}
+
+// AddDrawReturnRate adds value to the "draw_return_rate" field.
+func (_u *ShopProductUpdateOne) AddDrawReturnRate(v float64) *ShopProductUpdateOne {
+	_u.mutation.AddDrawReturnRate(v)
+	return _u
+}
+
 // SetCategory sets the "category" edge to the ShopCategory entity.
 func (_u *ShopProductUpdateOne) SetCategory(v *ShopCategory) *ShopProductUpdateOne {
 	return _u.SetCategoryID(v.ID)
@@ -844,6 +1216,21 @@ func (_u *ShopProductUpdateOne) AddOrders(v ...*ShopOrder) *ShopProductUpdateOne
 		ids[i] = v[i].ID
 	}
 	return _u.AddOrderIDs(ids...)
+}
+
+// AddDrawCycleIDs adds the "draw_cycles" edge to the ShopDrawCycle entity by IDs.
+func (_u *ShopProductUpdateOne) AddDrawCycleIDs(ids ...int64) *ShopProductUpdateOne {
+	_u.mutation.AddDrawCycleIDs(ids...)
+	return _u
+}
+
+// AddDrawCycles adds the "draw_cycles" edges to the ShopDrawCycle entity.
+func (_u *ShopProductUpdateOne) AddDrawCycles(v ...*ShopDrawCycle) *ShopProductUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDrawCycleIDs(ids...)
 }
 
 // Mutation returns the ShopProductMutation object of the builder.
@@ -897,6 +1284,27 @@ func (_u *ShopProductUpdateOne) RemoveOrders(v ...*ShopOrder) *ShopProductUpdate
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveOrderIDs(ids...)
+}
+
+// ClearDrawCycles clears all "draw_cycles" edges to the ShopDrawCycle entity.
+func (_u *ShopProductUpdateOne) ClearDrawCycles() *ShopProductUpdateOne {
+	_u.mutation.ClearDrawCycles()
+	return _u
+}
+
+// RemoveDrawCycleIDs removes the "draw_cycles" edge to ShopDrawCycle entities by IDs.
+func (_u *ShopProductUpdateOne) RemoveDrawCycleIDs(ids ...int64) *ShopProductUpdateOne {
+	_u.mutation.RemoveDrawCycleIDs(ids...)
+	return _u
+}
+
+// RemoveDrawCycles removes "draw_cycles" edges to ShopDrawCycle entities.
+func (_u *ShopProductUpdateOne) RemoveDrawCycles(v ...*ShopDrawCycle) *ShopProductUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDrawCycleIDs(ids...)
 }
 
 // Where appends a list predicates to the ShopProductUpdate builder.
@@ -953,6 +1361,11 @@ func (_u *ShopProductUpdateOne) check() error {
 	if v, ok := _u.mutation.Name(); ok {
 		if err := shopproduct.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "ShopProduct.name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ProductType(); ok {
+		if err := shopproduct.ProductTypeValidator(v); err != nil {
+			return &ValidationError{Name: "product_type", err: fmt.Errorf(`ent: validator failed for field "ShopProduct.product_type": %w`, err)}
 		}
 	}
 	return nil
@@ -1043,6 +1456,39 @@ func (_u *ShopProductUpdateOne) sqlSave(ctx context.Context) (_node *ShopProduct
 	}
 	if value, ok := _u.mutation.AutoDelivery(); ok {
 		_spec.SetField(shopproduct.FieldAutoDelivery, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ProductType(); ok {
+		_spec.SetField(shopproduct.FieldProductType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BalanceOnly(); ok {
+		_spec.SetField(shopproduct.FieldBalanceOnly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.DrawEnabled(); ok {
+		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.DrawMinAmount(); ok {
+		_spec.SetField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawMinAmount(); ok {
+		_spec.AddField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.DrawMaxAmount(); ok {
+		_spec.SetField(shopproduct.FieldDrawMaxAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawMaxAmount(); ok {
+		_spec.AddField(shopproduct.FieldDrawMaxAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.DrawGuaranteeCount(); ok {
+		_spec.SetField(shopproduct.FieldDrawGuaranteeCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedDrawGuaranteeCount(); ok {
+		_spec.AddField(shopproduct.FieldDrawGuaranteeCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.DrawReturnRate(); ok {
+		_spec.SetField(shopproduct.FieldDrawReturnRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawReturnRate(); ok {
+		_spec.AddField(shopproduct.FieldDrawReturnRate, field.TypeFloat64, value)
 	}
 	if _u.mutation.CategoryCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1156,6 +1602,51 @@ func (_u *ShopProductUpdateOne) sqlSave(ctx context.Context) (_node *ShopProduct
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DrawCyclesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shopproduct.DrawCyclesTable,
+			Columns: []string{shopproduct.DrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDrawCyclesIDs(); len(nodes) > 0 && !_u.mutation.DrawCyclesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shopproduct.DrawCyclesTable,
+			Columns: []string{shopproduct.DrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DrawCyclesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shopproduct.DrawCyclesTable,
+			Columns: []string{shopproduct.DrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

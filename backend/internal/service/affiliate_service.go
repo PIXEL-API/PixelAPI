@@ -64,6 +64,7 @@ type AffiliateSummary struct {
 	AffRebateRatePercent  *float64   `json:"aff_rebate_rate_percent,omitempty"`
 	InviterID             *int64     `json:"inviter_id,omitempty"`
 	InviterBoundAt        *time.Time `json:"inviter_bound_at,omitempty"`
+	InviteBindSource      string     `json:"invite_bind_source,omitempty"`
 	InviteRewardExpiresAt *time.Time `json:"invite_reward_expires_at,omitempty"`
 	AffCount              int        `json:"aff_count"`
 	AffQuota              float64    `json:"aff_quota"`
@@ -74,11 +75,21 @@ type AffiliateSummary struct {
 }
 
 type AffiliateInvitee struct {
-	UserID      int64      `json:"user_id"`
-	Email       string     `json:"email"`
-	Username    string     `json:"username"`
-	CreatedAt   *time.Time `json:"created_at,omitempty"`
-	TotalRebate float64    `json:"total_rebate"`
+	UserID             int64      `json:"user_id"`
+	Email              string     `json:"email"`
+	Username           string     `json:"username"`
+	CreatedAt          *time.Time `json:"created_at,omitempty"`
+	InviteBindSource   string     `json:"invite_bind_source,omitempty"`
+	Status             string     `json:"status"`
+	PeriodConsumption  float64    `json:"period_consumption"`
+	PeriodRebate       float64    `json:"period_rebate"`
+	HistoryConsumption float64    `json:"history_consumption"`
+	TotalRebate        float64    `json:"total_rebate"`
+}
+
+type AffiliateDetailQuery struct {
+	PeriodStart *time.Time
+	PeriodEnd   *time.Time
 }
 
 type AffiliateDetail struct {
@@ -86,11 +97,15 @@ type AffiliateDetail struct {
 	AffCode               string     `json:"aff_code"`
 	InviterID             *int64     `json:"inviter_id,omitempty"`
 	InviterBoundAt        *time.Time `json:"inviter_bound_at,omitempty"`
+	InviteBindSource      string     `json:"invite_bind_source,omitempty"`
 	InviteRewardExpiresAt *time.Time `json:"invite_reward_expires_at,omitempty"`
 	AffCount              int        `json:"aff_count"`
 	AffQuota              float64    `json:"aff_quota"`
 	AffFrozenQuota        float64    `json:"aff_frozen_quota"`
 	AffHistoryQuota       float64    `json:"aff_history_quota"`
+	PeriodStart           *time.Time `json:"period_start_at,omitempty"`
+	PeriodEnd             *time.Time `json:"period_end_at,omitempty"`
+	PeriodRebate          float64    `json:"period_rebate"`
 	// EffectiveRebateRatePercent 是当前用户作为邀请人时实际生效的返利比例：
 	// 优先用户自己的专属比例（aff_rebate_rate_percent），否则回退到全局比例。
 	// 用于在用户的 /affiliate 页面直观展示「分享后能拿到多少」。
@@ -103,12 +118,13 @@ type AffiliateRepository interface {
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
 	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
 	AdminBindInviter(ctx context.Context, userID, inviterID int64, resetValidity bool) (*AffiliateSummary, error)
+	AdminExtendInviteRewards(ctx context.Context, req AffiliateInviteRewardExtensionRequest) (*AffiliateInviteRewardExtensionResult, error)
 	GetCurrentInviteSharePercent(ctx context.Context) (float64, error)
 	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int) (bool, error)
 	GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error)
 	ThawFrozenQuota(ctx context.Context, userID int64) (float64, error)
 	TransferQuotaToBalance(ctx context.Context, userID int64) (float64, float64, error)
-	ListInvitees(ctx context.Context, inviterID int64, limit int) ([]AffiliateInvitee, error)
+	ListInvitees(ctx context.Context, inviterID int64, query AffiliateDetailQuery, limit int) ([]AffiliateInvitee, float64, error)
 
 	// 管理端：用户级专属配置
 	UpdateUserAffCode(ctx context.Context, userID int64, newCode string) error
@@ -134,6 +150,23 @@ type AffiliateAdminEntry struct {
 	AffCodeCustom        bool     `json:"aff_code_custom"`
 	AffRebateRatePercent *float64 `json:"aff_rebate_rate_percent,omitempty"`
 	AffCount             int      `json:"aff_count"`
+}
+
+const (
+	AffiliateInviteRewardExtensionScopeSite    = "site"
+	AffiliateInviteRewardExtensionScopeInviter = "inviter"
+)
+
+type AffiliateInviteRewardExtensionRequest struct {
+	Scope          string  `json:"scope"`
+	InviterUserID  int64   `json:"inviter_user_id,omitempty"`
+	AllInvitees    bool    `json:"all_invitees,omitempty"`
+	InviteeUserIDs []int64 `json:"invitee_user_ids,omitempty"`
+	ExtendDays     int     `json:"extend_days"`
+}
+
+type AffiliateInviteRewardExtensionResult struct {
+	Affected int64 `json:"affected"`
 }
 
 type AffiliateService struct {
@@ -170,7 +203,7 @@ func (s *AffiliateService) EnsureUserAffiliate(ctx context.Context, userID int64
 	return s.repo.EnsureUserAffiliate(ctx, userID)
 }
 
-func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64) (*AffiliateDetail, error) {
+func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64, query AffiliateDetailQuery) (*AffiliateDetail, error) {
 	// Lazy thaw: move any matured frozen quota to available before reading.
 	if s != nil && s.repo != nil {
 		// best-effort: thaw failure is non-fatal
@@ -181,7 +214,7 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 	if err != nil {
 		return nil, err
 	}
-	invitees, err := s.listInvitees(ctx, userID)
+	invitees, periodRebate, err := s.listInvitees(ctx, userID, query)
 	if err != nil {
 		return nil, err
 	}
@@ -190,11 +223,15 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 		AffCode:                    summary.AffCode,
 		InviterID:                  summary.InviterID,
 		InviterBoundAt:             summary.InviterBoundAt,
+		InviteBindSource:           summary.InviteBindSource,
 		InviteRewardExpiresAt:      summary.InviteRewardExpiresAt,
 		AffCount:                   summary.AffCount,
 		AffQuota:                   summary.AffQuota,
 		AffFrozenQuota:             summary.AffFrozenQuota,
 		AffHistoryQuota:            summary.AffHistoryQuota,
+		PeriodStart:                query.PeriodStart,
+		PeriodEnd:                  query.PeriodEnd,
+		PeriodRebate:               periodRebate,
 		EffectiveRebateRatePercent: s.currentInviteSharePercent(ctx),
 		Invitees:                   invitees,
 	}, nil
@@ -365,18 +402,18 @@ func (s *AffiliateService) TransferAffiliateQuota(ctx context.Context, userID in
 	return transferred, balance, nil
 }
 
-func (s *AffiliateService) listInvitees(ctx context.Context, inviterID int64) ([]AffiliateInvitee, error) {
+func (s *AffiliateService) listInvitees(ctx context.Context, inviterID int64, query AffiliateDetailQuery) ([]AffiliateInvitee, float64, error) {
 	if s == nil || s.repo == nil {
-		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+		return nil, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
 	}
-	invitees, err := s.repo.ListInvitees(ctx, inviterID, affiliateInviteesLimit)
+	invitees, periodRebate, err := s.repo.ListInvitees(ctx, inviterID, query, affiliateInviteesLimit)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for i := range invitees {
 		invitees[i].Email = maskEmail(invitees[i].Email)
 	}
-	return invitees, nil
+	return invitees, periodRebate, nil
 }
 
 func roundTo(v float64, scale int) float64 {
@@ -513,10 +550,66 @@ func (s *AffiliateService) AdminBindInviter(ctx context.Context, userID, inviter
 	return s.repo.AdminBindInviter(ctx, userID, inviterID, resetValidity)
 }
 
+func (s *AffiliateService) AdminExtendInviteRewards(ctx context.Context, req AffiliateInviteRewardExtensionRequest) (*AffiliateInviteRewardExtensionResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if req.ExtendDays <= 0 || req.ExtendDays > AffiliateRebateDurationDaysMax {
+		return nil, infraerrors.BadRequest("INVALID_EXTEND_DAYS", "extend days must be between 1 and 3650")
+	}
+
+	switch req.Scope {
+	case AffiliateInviteRewardExtensionScopeSite:
+		req.InviterUserID = 0
+		req.AllInvitees = true
+		req.InviteeUserIDs = nil
+	case AffiliateInviteRewardExtensionScopeInviter:
+		if req.InviterUserID <= 0 {
+			return nil, infraerrors.BadRequest("INVALID_INVITER", "invalid inviter")
+		}
+		if !req.AllInvitees {
+			req.InviteeUserIDs = normalizePositiveInt64s(req.InviteeUserIDs)
+			if len(req.InviteeUserIDs) == 0 {
+				return nil, infraerrors.BadRequest("INVALID_INVITEES", "invitee_user_ids cannot be empty")
+			}
+			for _, inviteeID := range req.InviteeUserIDs {
+				if inviteeID == req.InviterUserID {
+					return nil, infraerrors.BadRequest("INVALID_INVITEES", "inviter cannot be included as invitee")
+				}
+			}
+		} else {
+			req.InviteeUserIDs = nil
+		}
+	default:
+		return nil, infraerrors.BadRequest("INVALID_SCOPE", "invalid extension scope")
+	}
+
+	return s.repo.AdminExtendInviteRewards(ctx, req)
+}
+
 // AdminListCustomUsers 列出有专属配置的用户。
 func (s *AffiliateService) AdminListCustomUsers(ctx context.Context, filter AffiliateAdminFilter) ([]AffiliateAdminEntry, int64, error) {
 	if s == nil || s.repo == nil {
 		return nil, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
 	}
 	return s.repo.ListUsersWithCustomSettings(ctx, filter)
+}
+
+func normalizePositiveInt64s(values []int64) []int64 {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{}, len(values))
+	out := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

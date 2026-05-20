@@ -8,6 +8,20 @@ export type StoreOrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled' | 
 export type StorePayMethod = 'balance' | 'payment'
 export type StoreCategoryStatus = 'active' | 'inactive'
 export type StoreProductStatus = 'active' | 'inactive'
+export type StoreProductType = 'card_key' | 'balance_draw'
+
+export interface StoreDrawConfig {
+  enabled: boolean
+  min_amount: number
+  max_amount: number
+  guarantee_count: number
+  return_rate: number
+}
+
+export interface StoreDrawProgress {
+  drawn_count: number
+  guarantee_count: number
+}
 
 export interface StoreCategory {
   id: number
@@ -40,6 +54,11 @@ export interface StoreProduct {
   max_purchase: number
   purchase_limit?: number | null
   auto_delivery: boolean
+  product_type: StoreProductType
+  balance_only: boolean
+  draw_config?: StoreDrawConfig | null
+  draw_progress?: StoreDrawProgress | null
+  stock_unlimited?: boolean
   created_at?: string
   updated_at?: string
 }
@@ -87,6 +106,9 @@ export interface StoreOrder {
   status: StoreOrderStatus
   delivered_cards: string[]
   delivered_files: StoreDeliveredFile[]
+  draw_reward_amount?: number | null
+  draw_cycle_id?: number | null
+  draw_cycle_index?: number | null
   paid_at?: string | null
   completed_at?: string | null
   cancelled_at?: string | null
@@ -144,6 +166,9 @@ export interface UpsertStoreProductRequest {
   max_purchase?: number
   purchase_limit?: number | null
   auto_delivery?: boolean
+  product_type?: StoreProductType
+  balance_only?: boolean
+  draw_config?: StoreDrawConfig | null
 }
 
 export interface ImportStoreCardsRequest {

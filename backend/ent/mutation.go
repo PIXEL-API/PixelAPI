@@ -39,8 +39,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
 	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
@@ -90,8 +92,10 @@ const (
 	TypeRedeemCode                    = "RedeemCode"
 	TypeSecuritySecret                = "SecuritySecret"
 	TypeSetting                       = "Setting"
+	TypeShopBalanceLedger             = "ShopBalanceLedger"
 	TypeShopCardKey                   = "ShopCardKey"
 	TypeShopCategory                  = "ShopCategory"
+	TypeShopDrawCycle                 = "ShopDrawCycle"
 	TypeShopOrder                     = "ShopOrder"
 	TypeShopProduct                   = "ShopProduct"
 	TypeSubscriptionPlan              = "SubscriptionPlan"
@@ -32388,6 +32392,1228 @@ func (m *SettingMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown Setting edge %s", name)
 }
 
+// ShopBalanceLedgerMutation represents an operation that mutates the ShopBalanceLedger nodes in the graph.
+type ShopBalanceLedgerMutation struct {
+	config
+	op                  Op
+	typ                 string
+	id                  *int64
+	created_at          *time.Time
+	updated_at          *time.Time
+	entry_type          *string
+	debit_amount        *float64
+	adddebit_amount     *float64
+	credit_amount       *float64
+	addcredit_amount    *float64
+	balance_before      *float64
+	addbalance_before   *float64
+	balance_after       *float64
+	addbalance_after    *float64
+	draw_cycle_index    *int
+	adddraw_cycle_index *int
+	clearedFields       map[string]struct{}
+	user                *int64
+	cleareduser         bool
+	shop_order          *int64
+	clearedshop_order   bool
+	draw_cycle          *int64
+	cleareddraw_cycle   bool
+	done                bool
+	oldValue            func(context.Context) (*ShopBalanceLedger, error)
+	predicates          []predicate.ShopBalanceLedger
+}
+
+var _ ent.Mutation = (*ShopBalanceLedgerMutation)(nil)
+
+// shopbalanceledgerOption allows management of the mutation configuration using functional options.
+type shopbalanceledgerOption func(*ShopBalanceLedgerMutation)
+
+// newShopBalanceLedgerMutation creates new mutation for the ShopBalanceLedger entity.
+func newShopBalanceLedgerMutation(c config, op Op, opts ...shopbalanceledgerOption) *ShopBalanceLedgerMutation {
+	m := &ShopBalanceLedgerMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeShopBalanceLedger,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withShopBalanceLedgerID sets the ID field of the mutation.
+func withShopBalanceLedgerID(id int64) shopbalanceledgerOption {
+	return func(m *ShopBalanceLedgerMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ShopBalanceLedger
+		)
+		m.oldValue = func(ctx context.Context) (*ShopBalanceLedger, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ShopBalanceLedger.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withShopBalanceLedger sets the old ShopBalanceLedger of the mutation.
+func withShopBalanceLedger(node *ShopBalanceLedger) shopbalanceledgerOption {
+	return func(m *ShopBalanceLedgerMutation) {
+		m.oldValue = func(context.Context) (*ShopBalanceLedger, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ShopBalanceLedgerMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ShopBalanceLedgerMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ShopBalanceLedgerMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ShopBalanceLedgerMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ShopBalanceLedger.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *ShopBalanceLedgerMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *ShopBalanceLedgerMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *ShopBalanceLedgerMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *ShopBalanceLedgerMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *ShopBalanceLedgerMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *ShopBalanceLedgerMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetUserID sets the "user_id" field.
+func (m *ShopBalanceLedgerMutation) SetUserID(i int64) {
+	m.user = &i
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *ShopBalanceLedgerMutation) UserID() (r int64, exists bool) {
+	v := m.user
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldUserID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *ShopBalanceLedgerMutation) ResetUserID() {
+	m.user = nil
+}
+
+// SetShopOrderID sets the "shop_order_id" field.
+func (m *ShopBalanceLedgerMutation) SetShopOrderID(i int64) {
+	m.shop_order = &i
+}
+
+// ShopOrderID returns the value of the "shop_order_id" field in the mutation.
+func (m *ShopBalanceLedgerMutation) ShopOrderID() (r int64, exists bool) {
+	v := m.shop_order
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShopOrderID returns the old "shop_order_id" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldShopOrderID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShopOrderID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShopOrderID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShopOrderID: %w", err)
+	}
+	return oldValue.ShopOrderID, nil
+}
+
+// ResetShopOrderID resets all changes to the "shop_order_id" field.
+func (m *ShopBalanceLedgerMutation) ResetShopOrderID() {
+	m.shop_order = nil
+}
+
+// SetEntryType sets the "entry_type" field.
+func (m *ShopBalanceLedgerMutation) SetEntryType(s string) {
+	m.entry_type = &s
+}
+
+// EntryType returns the value of the "entry_type" field in the mutation.
+func (m *ShopBalanceLedgerMutation) EntryType() (r string, exists bool) {
+	v := m.entry_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEntryType returns the old "entry_type" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldEntryType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEntryType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEntryType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEntryType: %w", err)
+	}
+	return oldValue.EntryType, nil
+}
+
+// ResetEntryType resets all changes to the "entry_type" field.
+func (m *ShopBalanceLedgerMutation) ResetEntryType() {
+	m.entry_type = nil
+}
+
+// SetDebitAmount sets the "debit_amount" field.
+func (m *ShopBalanceLedgerMutation) SetDebitAmount(f float64) {
+	m.debit_amount = &f
+	m.adddebit_amount = nil
+}
+
+// DebitAmount returns the value of the "debit_amount" field in the mutation.
+func (m *ShopBalanceLedgerMutation) DebitAmount() (r float64, exists bool) {
+	v := m.debit_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDebitAmount returns the old "debit_amount" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldDebitAmount(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDebitAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDebitAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDebitAmount: %w", err)
+	}
+	return oldValue.DebitAmount, nil
+}
+
+// AddDebitAmount adds f to the "debit_amount" field.
+func (m *ShopBalanceLedgerMutation) AddDebitAmount(f float64) {
+	if m.adddebit_amount != nil {
+		*m.adddebit_amount += f
+	} else {
+		m.adddebit_amount = &f
+	}
+}
+
+// AddedDebitAmount returns the value that was added to the "debit_amount" field in this mutation.
+func (m *ShopBalanceLedgerMutation) AddedDebitAmount() (r float64, exists bool) {
+	v := m.adddebit_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDebitAmount resets all changes to the "debit_amount" field.
+func (m *ShopBalanceLedgerMutation) ResetDebitAmount() {
+	m.debit_amount = nil
+	m.adddebit_amount = nil
+}
+
+// SetCreditAmount sets the "credit_amount" field.
+func (m *ShopBalanceLedgerMutation) SetCreditAmount(f float64) {
+	m.credit_amount = &f
+	m.addcredit_amount = nil
+}
+
+// CreditAmount returns the value of the "credit_amount" field in the mutation.
+func (m *ShopBalanceLedgerMutation) CreditAmount() (r float64, exists bool) {
+	v := m.credit_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreditAmount returns the old "credit_amount" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldCreditAmount(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreditAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreditAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreditAmount: %w", err)
+	}
+	return oldValue.CreditAmount, nil
+}
+
+// AddCreditAmount adds f to the "credit_amount" field.
+func (m *ShopBalanceLedgerMutation) AddCreditAmount(f float64) {
+	if m.addcredit_amount != nil {
+		*m.addcredit_amount += f
+	} else {
+		m.addcredit_amount = &f
+	}
+}
+
+// AddedCreditAmount returns the value that was added to the "credit_amount" field in this mutation.
+func (m *ShopBalanceLedgerMutation) AddedCreditAmount() (r float64, exists bool) {
+	v := m.addcredit_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCreditAmount resets all changes to the "credit_amount" field.
+func (m *ShopBalanceLedgerMutation) ResetCreditAmount() {
+	m.credit_amount = nil
+	m.addcredit_amount = nil
+}
+
+// SetBalanceBefore sets the "balance_before" field.
+func (m *ShopBalanceLedgerMutation) SetBalanceBefore(f float64) {
+	m.balance_before = &f
+	m.addbalance_before = nil
+}
+
+// BalanceBefore returns the value of the "balance_before" field in the mutation.
+func (m *ShopBalanceLedgerMutation) BalanceBefore() (r float64, exists bool) {
+	v := m.balance_before
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBalanceBefore returns the old "balance_before" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldBalanceBefore(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBalanceBefore is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBalanceBefore requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBalanceBefore: %w", err)
+	}
+	return oldValue.BalanceBefore, nil
+}
+
+// AddBalanceBefore adds f to the "balance_before" field.
+func (m *ShopBalanceLedgerMutation) AddBalanceBefore(f float64) {
+	if m.addbalance_before != nil {
+		*m.addbalance_before += f
+	} else {
+		m.addbalance_before = &f
+	}
+}
+
+// AddedBalanceBefore returns the value that was added to the "balance_before" field in this mutation.
+func (m *ShopBalanceLedgerMutation) AddedBalanceBefore() (r float64, exists bool) {
+	v := m.addbalance_before
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBalanceBefore resets all changes to the "balance_before" field.
+func (m *ShopBalanceLedgerMutation) ResetBalanceBefore() {
+	m.balance_before = nil
+	m.addbalance_before = nil
+}
+
+// SetBalanceAfter sets the "balance_after" field.
+func (m *ShopBalanceLedgerMutation) SetBalanceAfter(f float64) {
+	m.balance_after = &f
+	m.addbalance_after = nil
+}
+
+// BalanceAfter returns the value of the "balance_after" field in the mutation.
+func (m *ShopBalanceLedgerMutation) BalanceAfter() (r float64, exists bool) {
+	v := m.balance_after
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBalanceAfter returns the old "balance_after" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldBalanceAfter(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBalanceAfter is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBalanceAfter requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBalanceAfter: %w", err)
+	}
+	return oldValue.BalanceAfter, nil
+}
+
+// AddBalanceAfter adds f to the "balance_after" field.
+func (m *ShopBalanceLedgerMutation) AddBalanceAfter(f float64) {
+	if m.addbalance_after != nil {
+		*m.addbalance_after += f
+	} else {
+		m.addbalance_after = &f
+	}
+}
+
+// AddedBalanceAfter returns the value that was added to the "balance_after" field in this mutation.
+func (m *ShopBalanceLedgerMutation) AddedBalanceAfter() (r float64, exists bool) {
+	v := m.addbalance_after
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBalanceAfter resets all changes to the "balance_after" field.
+func (m *ShopBalanceLedgerMutation) ResetBalanceAfter() {
+	m.balance_after = nil
+	m.addbalance_after = nil
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (m *ShopBalanceLedgerMutation) SetDrawCycleID(i int64) {
+	m.draw_cycle = &i
+}
+
+// DrawCycleID returns the value of the "draw_cycle_id" field in the mutation.
+func (m *ShopBalanceLedgerMutation) DrawCycleID() (r int64, exists bool) {
+	v := m.draw_cycle
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawCycleID returns the old "draw_cycle_id" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldDrawCycleID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawCycleID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawCycleID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawCycleID: %w", err)
+	}
+	return oldValue.DrawCycleID, nil
+}
+
+// ClearDrawCycleID clears the value of the "draw_cycle_id" field.
+func (m *ShopBalanceLedgerMutation) ClearDrawCycleID() {
+	m.draw_cycle = nil
+	m.clearedFields[shopbalanceledger.FieldDrawCycleID] = struct{}{}
+}
+
+// DrawCycleIDCleared returns if the "draw_cycle_id" field was cleared in this mutation.
+func (m *ShopBalanceLedgerMutation) DrawCycleIDCleared() bool {
+	_, ok := m.clearedFields[shopbalanceledger.FieldDrawCycleID]
+	return ok
+}
+
+// ResetDrawCycleID resets all changes to the "draw_cycle_id" field.
+func (m *ShopBalanceLedgerMutation) ResetDrawCycleID() {
+	m.draw_cycle = nil
+	delete(m.clearedFields, shopbalanceledger.FieldDrawCycleID)
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (m *ShopBalanceLedgerMutation) SetDrawCycleIndex(i int) {
+	m.draw_cycle_index = &i
+	m.adddraw_cycle_index = nil
+}
+
+// DrawCycleIndex returns the value of the "draw_cycle_index" field in the mutation.
+func (m *ShopBalanceLedgerMutation) DrawCycleIndex() (r int, exists bool) {
+	v := m.draw_cycle_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawCycleIndex returns the old "draw_cycle_index" field's value of the ShopBalanceLedger entity.
+// If the ShopBalanceLedger object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopBalanceLedgerMutation) OldDrawCycleIndex(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawCycleIndex is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawCycleIndex requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawCycleIndex: %w", err)
+	}
+	return oldValue.DrawCycleIndex, nil
+}
+
+// AddDrawCycleIndex adds i to the "draw_cycle_index" field.
+func (m *ShopBalanceLedgerMutation) AddDrawCycleIndex(i int) {
+	if m.adddraw_cycle_index != nil {
+		*m.adddraw_cycle_index += i
+	} else {
+		m.adddraw_cycle_index = &i
+	}
+}
+
+// AddedDrawCycleIndex returns the value that was added to the "draw_cycle_index" field in this mutation.
+func (m *ShopBalanceLedgerMutation) AddedDrawCycleIndex() (r int, exists bool) {
+	v := m.adddraw_cycle_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearDrawCycleIndex clears the value of the "draw_cycle_index" field.
+func (m *ShopBalanceLedgerMutation) ClearDrawCycleIndex() {
+	m.draw_cycle_index = nil
+	m.adddraw_cycle_index = nil
+	m.clearedFields[shopbalanceledger.FieldDrawCycleIndex] = struct{}{}
+}
+
+// DrawCycleIndexCleared returns if the "draw_cycle_index" field was cleared in this mutation.
+func (m *ShopBalanceLedgerMutation) DrawCycleIndexCleared() bool {
+	_, ok := m.clearedFields[shopbalanceledger.FieldDrawCycleIndex]
+	return ok
+}
+
+// ResetDrawCycleIndex resets all changes to the "draw_cycle_index" field.
+func (m *ShopBalanceLedgerMutation) ResetDrawCycleIndex() {
+	m.draw_cycle_index = nil
+	m.adddraw_cycle_index = nil
+	delete(m.clearedFields, shopbalanceledger.FieldDrawCycleIndex)
+}
+
+// ClearUser clears the "user" edge to the User entity.
+func (m *ShopBalanceLedgerMutation) ClearUser() {
+	m.cleareduser = true
+	m.clearedFields[shopbalanceledger.FieldUserID] = struct{}{}
+}
+
+// UserCleared reports if the "user" edge to the User entity was cleared.
+func (m *ShopBalanceLedgerMutation) UserCleared() bool {
+	return m.cleareduser
+}
+
+// UserIDs returns the "user" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// UserID instead. It exists only for internal usage by the builders.
+func (m *ShopBalanceLedgerMutation) UserIDs() (ids []int64) {
+	if id := m.user; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetUser resets all changes to the "user" edge.
+func (m *ShopBalanceLedgerMutation) ResetUser() {
+	m.user = nil
+	m.cleareduser = false
+}
+
+// ClearShopOrder clears the "shop_order" edge to the ShopOrder entity.
+func (m *ShopBalanceLedgerMutation) ClearShopOrder() {
+	m.clearedshop_order = true
+	m.clearedFields[shopbalanceledger.FieldShopOrderID] = struct{}{}
+}
+
+// ShopOrderCleared reports if the "shop_order" edge to the ShopOrder entity was cleared.
+func (m *ShopBalanceLedgerMutation) ShopOrderCleared() bool {
+	return m.clearedshop_order
+}
+
+// ShopOrderIDs returns the "shop_order" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ShopOrderID instead. It exists only for internal usage by the builders.
+func (m *ShopBalanceLedgerMutation) ShopOrderIDs() (ids []int64) {
+	if id := m.shop_order; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetShopOrder resets all changes to the "shop_order" edge.
+func (m *ShopBalanceLedgerMutation) ResetShopOrder() {
+	m.shop_order = nil
+	m.clearedshop_order = false
+}
+
+// ClearDrawCycle clears the "draw_cycle" edge to the ShopDrawCycle entity.
+func (m *ShopBalanceLedgerMutation) ClearDrawCycle() {
+	m.cleareddraw_cycle = true
+	m.clearedFields[shopbalanceledger.FieldDrawCycleID] = struct{}{}
+}
+
+// DrawCycleCleared reports if the "draw_cycle" edge to the ShopDrawCycle entity was cleared.
+func (m *ShopBalanceLedgerMutation) DrawCycleCleared() bool {
+	return m.DrawCycleIDCleared() || m.cleareddraw_cycle
+}
+
+// DrawCycleIDs returns the "draw_cycle" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// DrawCycleID instead. It exists only for internal usage by the builders.
+func (m *ShopBalanceLedgerMutation) DrawCycleIDs() (ids []int64) {
+	if id := m.draw_cycle; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetDrawCycle resets all changes to the "draw_cycle" edge.
+func (m *ShopBalanceLedgerMutation) ResetDrawCycle() {
+	m.draw_cycle = nil
+	m.cleareddraw_cycle = false
+}
+
+// Where appends a list predicates to the ShopBalanceLedgerMutation builder.
+func (m *ShopBalanceLedgerMutation) Where(ps ...predicate.ShopBalanceLedger) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ShopBalanceLedgerMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ShopBalanceLedgerMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ShopBalanceLedger, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ShopBalanceLedgerMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ShopBalanceLedgerMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ShopBalanceLedger).
+func (m *ShopBalanceLedgerMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ShopBalanceLedgerMutation) Fields() []string {
+	fields := make([]string, 0, 11)
+	if m.created_at != nil {
+		fields = append(fields, shopbalanceledger.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, shopbalanceledger.FieldUpdatedAt)
+	}
+	if m.user != nil {
+		fields = append(fields, shopbalanceledger.FieldUserID)
+	}
+	if m.shop_order != nil {
+		fields = append(fields, shopbalanceledger.FieldShopOrderID)
+	}
+	if m.entry_type != nil {
+		fields = append(fields, shopbalanceledger.FieldEntryType)
+	}
+	if m.debit_amount != nil {
+		fields = append(fields, shopbalanceledger.FieldDebitAmount)
+	}
+	if m.credit_amount != nil {
+		fields = append(fields, shopbalanceledger.FieldCreditAmount)
+	}
+	if m.balance_before != nil {
+		fields = append(fields, shopbalanceledger.FieldBalanceBefore)
+	}
+	if m.balance_after != nil {
+		fields = append(fields, shopbalanceledger.FieldBalanceAfter)
+	}
+	if m.draw_cycle != nil {
+		fields = append(fields, shopbalanceledger.FieldDrawCycleID)
+	}
+	if m.draw_cycle_index != nil {
+		fields = append(fields, shopbalanceledger.FieldDrawCycleIndex)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ShopBalanceLedgerMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case shopbalanceledger.FieldCreatedAt:
+		return m.CreatedAt()
+	case shopbalanceledger.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case shopbalanceledger.FieldUserID:
+		return m.UserID()
+	case shopbalanceledger.FieldShopOrderID:
+		return m.ShopOrderID()
+	case shopbalanceledger.FieldEntryType:
+		return m.EntryType()
+	case shopbalanceledger.FieldDebitAmount:
+		return m.DebitAmount()
+	case shopbalanceledger.FieldCreditAmount:
+		return m.CreditAmount()
+	case shopbalanceledger.FieldBalanceBefore:
+		return m.BalanceBefore()
+	case shopbalanceledger.FieldBalanceAfter:
+		return m.BalanceAfter()
+	case shopbalanceledger.FieldDrawCycleID:
+		return m.DrawCycleID()
+	case shopbalanceledger.FieldDrawCycleIndex:
+		return m.DrawCycleIndex()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ShopBalanceLedgerMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case shopbalanceledger.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case shopbalanceledger.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case shopbalanceledger.FieldUserID:
+		return m.OldUserID(ctx)
+	case shopbalanceledger.FieldShopOrderID:
+		return m.OldShopOrderID(ctx)
+	case shopbalanceledger.FieldEntryType:
+		return m.OldEntryType(ctx)
+	case shopbalanceledger.FieldDebitAmount:
+		return m.OldDebitAmount(ctx)
+	case shopbalanceledger.FieldCreditAmount:
+		return m.OldCreditAmount(ctx)
+	case shopbalanceledger.FieldBalanceBefore:
+		return m.OldBalanceBefore(ctx)
+	case shopbalanceledger.FieldBalanceAfter:
+		return m.OldBalanceAfter(ctx)
+	case shopbalanceledger.FieldDrawCycleID:
+		return m.OldDrawCycleID(ctx)
+	case shopbalanceledger.FieldDrawCycleIndex:
+		return m.OldDrawCycleIndex(ctx)
+	}
+	return nil, fmt.Errorf("unknown ShopBalanceLedger field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ShopBalanceLedgerMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case shopbalanceledger.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case shopbalanceledger.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case shopbalanceledger.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case shopbalanceledger.FieldShopOrderID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShopOrderID(v)
+		return nil
+	case shopbalanceledger.FieldEntryType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEntryType(v)
+		return nil
+	case shopbalanceledger.FieldDebitAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDebitAmount(v)
+		return nil
+	case shopbalanceledger.FieldCreditAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreditAmount(v)
+		return nil
+	case shopbalanceledger.FieldBalanceBefore:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBalanceBefore(v)
+		return nil
+	case shopbalanceledger.FieldBalanceAfter:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBalanceAfter(v)
+		return nil
+	case shopbalanceledger.FieldDrawCycleID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawCycleID(v)
+		return nil
+	case shopbalanceledger.FieldDrawCycleIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawCycleIndex(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ShopBalanceLedger field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ShopBalanceLedgerMutation) AddedFields() []string {
+	var fields []string
+	if m.adddebit_amount != nil {
+		fields = append(fields, shopbalanceledger.FieldDebitAmount)
+	}
+	if m.addcredit_amount != nil {
+		fields = append(fields, shopbalanceledger.FieldCreditAmount)
+	}
+	if m.addbalance_before != nil {
+		fields = append(fields, shopbalanceledger.FieldBalanceBefore)
+	}
+	if m.addbalance_after != nil {
+		fields = append(fields, shopbalanceledger.FieldBalanceAfter)
+	}
+	if m.adddraw_cycle_index != nil {
+		fields = append(fields, shopbalanceledger.FieldDrawCycleIndex)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ShopBalanceLedgerMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case shopbalanceledger.FieldDebitAmount:
+		return m.AddedDebitAmount()
+	case shopbalanceledger.FieldCreditAmount:
+		return m.AddedCreditAmount()
+	case shopbalanceledger.FieldBalanceBefore:
+		return m.AddedBalanceBefore()
+	case shopbalanceledger.FieldBalanceAfter:
+		return m.AddedBalanceAfter()
+	case shopbalanceledger.FieldDrawCycleIndex:
+		return m.AddedDrawCycleIndex()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ShopBalanceLedgerMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case shopbalanceledger.FieldDebitAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDebitAmount(v)
+		return nil
+	case shopbalanceledger.FieldCreditAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCreditAmount(v)
+		return nil
+	case shopbalanceledger.FieldBalanceBefore:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBalanceBefore(v)
+		return nil
+	case shopbalanceledger.FieldBalanceAfter:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBalanceAfter(v)
+		return nil
+	case shopbalanceledger.FieldDrawCycleIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawCycleIndex(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ShopBalanceLedger numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ShopBalanceLedgerMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(shopbalanceledger.FieldDrawCycleID) {
+		fields = append(fields, shopbalanceledger.FieldDrawCycleID)
+	}
+	if m.FieldCleared(shopbalanceledger.FieldDrawCycleIndex) {
+		fields = append(fields, shopbalanceledger.FieldDrawCycleIndex)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ShopBalanceLedgerMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ShopBalanceLedgerMutation) ClearField(name string) error {
+	switch name {
+	case shopbalanceledger.FieldDrawCycleID:
+		m.ClearDrawCycleID()
+		return nil
+	case shopbalanceledger.FieldDrawCycleIndex:
+		m.ClearDrawCycleIndex()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopBalanceLedger nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ShopBalanceLedgerMutation) ResetField(name string) error {
+	switch name {
+	case shopbalanceledger.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case shopbalanceledger.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case shopbalanceledger.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case shopbalanceledger.FieldShopOrderID:
+		m.ResetShopOrderID()
+		return nil
+	case shopbalanceledger.FieldEntryType:
+		m.ResetEntryType()
+		return nil
+	case shopbalanceledger.FieldDebitAmount:
+		m.ResetDebitAmount()
+		return nil
+	case shopbalanceledger.FieldCreditAmount:
+		m.ResetCreditAmount()
+		return nil
+	case shopbalanceledger.FieldBalanceBefore:
+		m.ResetBalanceBefore()
+		return nil
+	case shopbalanceledger.FieldBalanceAfter:
+		m.ResetBalanceAfter()
+		return nil
+	case shopbalanceledger.FieldDrawCycleID:
+		m.ResetDrawCycleID()
+		return nil
+	case shopbalanceledger.FieldDrawCycleIndex:
+		m.ResetDrawCycleIndex()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopBalanceLedger field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ShopBalanceLedgerMutation) AddedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.user != nil {
+		edges = append(edges, shopbalanceledger.EdgeUser)
+	}
+	if m.shop_order != nil {
+		edges = append(edges, shopbalanceledger.EdgeShopOrder)
+	}
+	if m.draw_cycle != nil {
+		edges = append(edges, shopbalanceledger.EdgeDrawCycle)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ShopBalanceLedgerMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case shopbalanceledger.EdgeUser:
+		if id := m.user; id != nil {
+			return []ent.Value{*id}
+		}
+	case shopbalanceledger.EdgeShopOrder:
+		if id := m.shop_order; id != nil {
+			return []ent.Value{*id}
+		}
+	case shopbalanceledger.EdgeDrawCycle:
+		if id := m.draw_cycle; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ShopBalanceLedgerMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 3)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ShopBalanceLedgerMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ShopBalanceLedgerMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.cleareduser {
+		edges = append(edges, shopbalanceledger.EdgeUser)
+	}
+	if m.clearedshop_order {
+		edges = append(edges, shopbalanceledger.EdgeShopOrder)
+	}
+	if m.cleareddraw_cycle {
+		edges = append(edges, shopbalanceledger.EdgeDrawCycle)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ShopBalanceLedgerMutation) EdgeCleared(name string) bool {
+	switch name {
+	case shopbalanceledger.EdgeUser:
+		return m.cleareduser
+	case shopbalanceledger.EdgeShopOrder:
+		return m.clearedshop_order
+	case shopbalanceledger.EdgeDrawCycle:
+		return m.cleareddraw_cycle
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ShopBalanceLedgerMutation) ClearEdge(name string) error {
+	switch name {
+	case shopbalanceledger.EdgeUser:
+		m.ClearUser()
+		return nil
+	case shopbalanceledger.EdgeShopOrder:
+		m.ClearShopOrder()
+		return nil
+	case shopbalanceledger.EdgeDrawCycle:
+		m.ClearDrawCycle()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopBalanceLedger unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ShopBalanceLedgerMutation) ResetEdge(name string) error {
+	switch name {
+	case shopbalanceledger.EdgeUser:
+		m.ResetUser()
+		return nil
+	case shopbalanceledger.EdgeShopOrder:
+		m.ResetShopOrder()
+		return nil
+	case shopbalanceledger.EdgeDrawCycle:
+		m.ResetDrawCycle()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopBalanceLedger edge %s", name)
+}
+
 // ShopCardKeyMutation represents an operation that mutates the ShopCardKey nodes in the graph.
 type ShopCardKeyMutation struct {
 	config
@@ -34148,6 +35374,1347 @@ func (m *ShopCategoryMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown ShopCategory edge %s", name)
 }
 
+// ShopDrawCycleMutation represents an operation that mutates the ShopDrawCycle nodes in the graph.
+type ShopDrawCycleMutation struct {
+	config
+	op                      Op
+	typ                     string
+	id                      *int64
+	created_at              *time.Time
+	updated_at              *time.Time
+	cycle_no                *int
+	addcycle_no             *int
+	guarantee_count         *int
+	addguarantee_count      *int
+	target_amount           *float64
+	addtarget_amount        *float64
+	remaining_amounts       *[]float64
+	appendremaining_amounts []float64
+	drawn_count             *int
+	adddrawn_count          *int
+	drawn_amount            *float64
+	adddrawn_amount         *float64
+	completed               *bool
+	clearedFields           map[string]struct{}
+	user                    *int64
+	cleareduser             bool
+	product                 *int64
+	clearedproduct          bool
+	orders                  map[int64]struct{}
+	removedorders           map[int64]struct{}
+	clearedorders           bool
+	balance_ledger          map[int64]struct{}
+	removedbalance_ledger   map[int64]struct{}
+	clearedbalance_ledger   bool
+	done                    bool
+	oldValue                func(context.Context) (*ShopDrawCycle, error)
+	predicates              []predicate.ShopDrawCycle
+}
+
+var _ ent.Mutation = (*ShopDrawCycleMutation)(nil)
+
+// shopdrawcycleOption allows management of the mutation configuration using functional options.
+type shopdrawcycleOption func(*ShopDrawCycleMutation)
+
+// newShopDrawCycleMutation creates new mutation for the ShopDrawCycle entity.
+func newShopDrawCycleMutation(c config, op Op, opts ...shopdrawcycleOption) *ShopDrawCycleMutation {
+	m := &ShopDrawCycleMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeShopDrawCycle,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withShopDrawCycleID sets the ID field of the mutation.
+func withShopDrawCycleID(id int64) shopdrawcycleOption {
+	return func(m *ShopDrawCycleMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ShopDrawCycle
+		)
+		m.oldValue = func(ctx context.Context) (*ShopDrawCycle, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ShopDrawCycle.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withShopDrawCycle sets the old ShopDrawCycle of the mutation.
+func withShopDrawCycle(node *ShopDrawCycle) shopdrawcycleOption {
+	return func(m *ShopDrawCycleMutation) {
+		m.oldValue = func(context.Context) (*ShopDrawCycle, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ShopDrawCycleMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ShopDrawCycleMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ShopDrawCycleMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ShopDrawCycleMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ShopDrawCycle.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *ShopDrawCycleMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *ShopDrawCycleMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *ShopDrawCycleMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *ShopDrawCycleMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *ShopDrawCycleMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *ShopDrawCycleMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetUserID sets the "user_id" field.
+func (m *ShopDrawCycleMutation) SetUserID(i int64) {
+	m.user = &i
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *ShopDrawCycleMutation) UserID() (r int64, exists bool) {
+	v := m.user
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldUserID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *ShopDrawCycleMutation) ResetUserID() {
+	m.user = nil
+}
+
+// SetProductID sets the "product_id" field.
+func (m *ShopDrawCycleMutation) SetProductID(i int64) {
+	m.product = &i
+}
+
+// ProductID returns the value of the "product_id" field in the mutation.
+func (m *ShopDrawCycleMutation) ProductID() (r int64, exists bool) {
+	v := m.product
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProductID returns the old "product_id" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldProductID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProductID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProductID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProductID: %w", err)
+	}
+	return oldValue.ProductID, nil
+}
+
+// ResetProductID resets all changes to the "product_id" field.
+func (m *ShopDrawCycleMutation) ResetProductID() {
+	m.product = nil
+}
+
+// SetCycleNo sets the "cycle_no" field.
+func (m *ShopDrawCycleMutation) SetCycleNo(i int) {
+	m.cycle_no = &i
+	m.addcycle_no = nil
+}
+
+// CycleNo returns the value of the "cycle_no" field in the mutation.
+func (m *ShopDrawCycleMutation) CycleNo() (r int, exists bool) {
+	v := m.cycle_no
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCycleNo returns the old "cycle_no" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldCycleNo(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCycleNo is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCycleNo requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCycleNo: %w", err)
+	}
+	return oldValue.CycleNo, nil
+}
+
+// AddCycleNo adds i to the "cycle_no" field.
+func (m *ShopDrawCycleMutation) AddCycleNo(i int) {
+	if m.addcycle_no != nil {
+		*m.addcycle_no += i
+	} else {
+		m.addcycle_no = &i
+	}
+}
+
+// AddedCycleNo returns the value that was added to the "cycle_no" field in this mutation.
+func (m *ShopDrawCycleMutation) AddedCycleNo() (r int, exists bool) {
+	v := m.addcycle_no
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCycleNo resets all changes to the "cycle_no" field.
+func (m *ShopDrawCycleMutation) ResetCycleNo() {
+	m.cycle_no = nil
+	m.addcycle_no = nil
+}
+
+// SetGuaranteeCount sets the "guarantee_count" field.
+func (m *ShopDrawCycleMutation) SetGuaranteeCount(i int) {
+	m.guarantee_count = &i
+	m.addguarantee_count = nil
+}
+
+// GuaranteeCount returns the value of the "guarantee_count" field in the mutation.
+func (m *ShopDrawCycleMutation) GuaranteeCount() (r int, exists bool) {
+	v := m.guarantee_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGuaranteeCount returns the old "guarantee_count" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldGuaranteeCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGuaranteeCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGuaranteeCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGuaranteeCount: %w", err)
+	}
+	return oldValue.GuaranteeCount, nil
+}
+
+// AddGuaranteeCount adds i to the "guarantee_count" field.
+func (m *ShopDrawCycleMutation) AddGuaranteeCount(i int) {
+	if m.addguarantee_count != nil {
+		*m.addguarantee_count += i
+	} else {
+		m.addguarantee_count = &i
+	}
+}
+
+// AddedGuaranteeCount returns the value that was added to the "guarantee_count" field in this mutation.
+func (m *ShopDrawCycleMutation) AddedGuaranteeCount() (r int, exists bool) {
+	v := m.addguarantee_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetGuaranteeCount resets all changes to the "guarantee_count" field.
+func (m *ShopDrawCycleMutation) ResetGuaranteeCount() {
+	m.guarantee_count = nil
+	m.addguarantee_count = nil
+}
+
+// SetTargetAmount sets the "target_amount" field.
+func (m *ShopDrawCycleMutation) SetTargetAmount(f float64) {
+	m.target_amount = &f
+	m.addtarget_amount = nil
+}
+
+// TargetAmount returns the value of the "target_amount" field in the mutation.
+func (m *ShopDrawCycleMutation) TargetAmount() (r float64, exists bool) {
+	v := m.target_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTargetAmount returns the old "target_amount" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldTargetAmount(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTargetAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTargetAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTargetAmount: %w", err)
+	}
+	return oldValue.TargetAmount, nil
+}
+
+// AddTargetAmount adds f to the "target_amount" field.
+func (m *ShopDrawCycleMutation) AddTargetAmount(f float64) {
+	if m.addtarget_amount != nil {
+		*m.addtarget_amount += f
+	} else {
+		m.addtarget_amount = &f
+	}
+}
+
+// AddedTargetAmount returns the value that was added to the "target_amount" field in this mutation.
+func (m *ShopDrawCycleMutation) AddedTargetAmount() (r float64, exists bool) {
+	v := m.addtarget_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTargetAmount resets all changes to the "target_amount" field.
+func (m *ShopDrawCycleMutation) ResetTargetAmount() {
+	m.target_amount = nil
+	m.addtarget_amount = nil
+}
+
+// SetRemainingAmounts sets the "remaining_amounts" field.
+func (m *ShopDrawCycleMutation) SetRemainingAmounts(f []float64) {
+	m.remaining_amounts = &f
+	m.appendremaining_amounts = nil
+}
+
+// RemainingAmounts returns the value of the "remaining_amounts" field in the mutation.
+func (m *ShopDrawCycleMutation) RemainingAmounts() (r []float64, exists bool) {
+	v := m.remaining_amounts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRemainingAmounts returns the old "remaining_amounts" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldRemainingAmounts(ctx context.Context) (v []float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRemainingAmounts is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRemainingAmounts requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRemainingAmounts: %w", err)
+	}
+	return oldValue.RemainingAmounts, nil
+}
+
+// AppendRemainingAmounts adds f to the "remaining_amounts" field.
+func (m *ShopDrawCycleMutation) AppendRemainingAmounts(f []float64) {
+	m.appendremaining_amounts = append(m.appendremaining_amounts, f...)
+}
+
+// AppendedRemainingAmounts returns the list of values that were appended to the "remaining_amounts" field in this mutation.
+func (m *ShopDrawCycleMutation) AppendedRemainingAmounts() ([]float64, bool) {
+	if len(m.appendremaining_amounts) == 0 {
+		return nil, false
+	}
+	return m.appendremaining_amounts, true
+}
+
+// ClearRemainingAmounts clears the value of the "remaining_amounts" field.
+func (m *ShopDrawCycleMutation) ClearRemainingAmounts() {
+	m.remaining_amounts = nil
+	m.appendremaining_amounts = nil
+	m.clearedFields[shopdrawcycle.FieldRemainingAmounts] = struct{}{}
+}
+
+// RemainingAmountsCleared returns if the "remaining_amounts" field was cleared in this mutation.
+func (m *ShopDrawCycleMutation) RemainingAmountsCleared() bool {
+	_, ok := m.clearedFields[shopdrawcycle.FieldRemainingAmounts]
+	return ok
+}
+
+// ResetRemainingAmounts resets all changes to the "remaining_amounts" field.
+func (m *ShopDrawCycleMutation) ResetRemainingAmounts() {
+	m.remaining_amounts = nil
+	m.appendremaining_amounts = nil
+	delete(m.clearedFields, shopdrawcycle.FieldRemainingAmounts)
+}
+
+// SetDrawnCount sets the "drawn_count" field.
+func (m *ShopDrawCycleMutation) SetDrawnCount(i int) {
+	m.drawn_count = &i
+	m.adddrawn_count = nil
+}
+
+// DrawnCount returns the value of the "drawn_count" field in the mutation.
+func (m *ShopDrawCycleMutation) DrawnCount() (r int, exists bool) {
+	v := m.drawn_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawnCount returns the old "drawn_count" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldDrawnCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawnCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawnCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawnCount: %w", err)
+	}
+	return oldValue.DrawnCount, nil
+}
+
+// AddDrawnCount adds i to the "drawn_count" field.
+func (m *ShopDrawCycleMutation) AddDrawnCount(i int) {
+	if m.adddrawn_count != nil {
+		*m.adddrawn_count += i
+	} else {
+		m.adddrawn_count = &i
+	}
+}
+
+// AddedDrawnCount returns the value that was added to the "drawn_count" field in this mutation.
+func (m *ShopDrawCycleMutation) AddedDrawnCount() (r int, exists bool) {
+	v := m.adddrawn_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDrawnCount resets all changes to the "drawn_count" field.
+func (m *ShopDrawCycleMutation) ResetDrawnCount() {
+	m.drawn_count = nil
+	m.adddrawn_count = nil
+}
+
+// SetDrawnAmount sets the "drawn_amount" field.
+func (m *ShopDrawCycleMutation) SetDrawnAmount(f float64) {
+	m.drawn_amount = &f
+	m.adddrawn_amount = nil
+}
+
+// DrawnAmount returns the value of the "drawn_amount" field in the mutation.
+func (m *ShopDrawCycleMutation) DrawnAmount() (r float64, exists bool) {
+	v := m.drawn_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawnAmount returns the old "drawn_amount" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldDrawnAmount(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawnAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawnAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawnAmount: %w", err)
+	}
+	return oldValue.DrawnAmount, nil
+}
+
+// AddDrawnAmount adds f to the "drawn_amount" field.
+func (m *ShopDrawCycleMutation) AddDrawnAmount(f float64) {
+	if m.adddrawn_amount != nil {
+		*m.adddrawn_amount += f
+	} else {
+		m.adddrawn_amount = &f
+	}
+}
+
+// AddedDrawnAmount returns the value that was added to the "drawn_amount" field in this mutation.
+func (m *ShopDrawCycleMutation) AddedDrawnAmount() (r float64, exists bool) {
+	v := m.adddrawn_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDrawnAmount resets all changes to the "drawn_amount" field.
+func (m *ShopDrawCycleMutation) ResetDrawnAmount() {
+	m.drawn_amount = nil
+	m.adddrawn_amount = nil
+}
+
+// SetCompleted sets the "completed" field.
+func (m *ShopDrawCycleMutation) SetCompleted(b bool) {
+	m.completed = &b
+}
+
+// Completed returns the value of the "completed" field in the mutation.
+func (m *ShopDrawCycleMutation) Completed() (r bool, exists bool) {
+	v := m.completed
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCompleted returns the old "completed" field's value of the ShopDrawCycle entity.
+// If the ShopDrawCycle object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopDrawCycleMutation) OldCompleted(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCompleted is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCompleted requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCompleted: %w", err)
+	}
+	return oldValue.Completed, nil
+}
+
+// ResetCompleted resets all changes to the "completed" field.
+func (m *ShopDrawCycleMutation) ResetCompleted() {
+	m.completed = nil
+}
+
+// ClearUser clears the "user" edge to the User entity.
+func (m *ShopDrawCycleMutation) ClearUser() {
+	m.cleareduser = true
+	m.clearedFields[shopdrawcycle.FieldUserID] = struct{}{}
+}
+
+// UserCleared reports if the "user" edge to the User entity was cleared.
+func (m *ShopDrawCycleMutation) UserCleared() bool {
+	return m.cleareduser
+}
+
+// UserIDs returns the "user" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// UserID instead. It exists only for internal usage by the builders.
+func (m *ShopDrawCycleMutation) UserIDs() (ids []int64) {
+	if id := m.user; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetUser resets all changes to the "user" edge.
+func (m *ShopDrawCycleMutation) ResetUser() {
+	m.user = nil
+	m.cleareduser = false
+}
+
+// ClearProduct clears the "product" edge to the ShopProduct entity.
+func (m *ShopDrawCycleMutation) ClearProduct() {
+	m.clearedproduct = true
+	m.clearedFields[shopdrawcycle.FieldProductID] = struct{}{}
+}
+
+// ProductCleared reports if the "product" edge to the ShopProduct entity was cleared.
+func (m *ShopDrawCycleMutation) ProductCleared() bool {
+	return m.clearedproduct
+}
+
+// ProductIDs returns the "product" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ProductID instead. It exists only for internal usage by the builders.
+func (m *ShopDrawCycleMutation) ProductIDs() (ids []int64) {
+	if id := m.product; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetProduct resets all changes to the "product" edge.
+func (m *ShopDrawCycleMutation) ResetProduct() {
+	m.product = nil
+	m.clearedproduct = false
+}
+
+// AddOrderIDs adds the "orders" edge to the ShopOrder entity by ids.
+func (m *ShopDrawCycleMutation) AddOrderIDs(ids ...int64) {
+	if m.orders == nil {
+		m.orders = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.orders[ids[i]] = struct{}{}
+	}
+}
+
+// ClearOrders clears the "orders" edge to the ShopOrder entity.
+func (m *ShopDrawCycleMutation) ClearOrders() {
+	m.clearedorders = true
+}
+
+// OrdersCleared reports if the "orders" edge to the ShopOrder entity was cleared.
+func (m *ShopDrawCycleMutation) OrdersCleared() bool {
+	return m.clearedorders
+}
+
+// RemoveOrderIDs removes the "orders" edge to the ShopOrder entity by IDs.
+func (m *ShopDrawCycleMutation) RemoveOrderIDs(ids ...int64) {
+	if m.removedorders == nil {
+		m.removedorders = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.orders, ids[i])
+		m.removedorders[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedOrders returns the removed IDs of the "orders" edge to the ShopOrder entity.
+func (m *ShopDrawCycleMutation) RemovedOrdersIDs() (ids []int64) {
+	for id := range m.removedorders {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// OrdersIDs returns the "orders" edge IDs in the mutation.
+func (m *ShopDrawCycleMutation) OrdersIDs() (ids []int64) {
+	for id := range m.orders {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetOrders resets all changes to the "orders" edge.
+func (m *ShopDrawCycleMutation) ResetOrders() {
+	m.orders = nil
+	m.clearedorders = false
+	m.removedorders = nil
+}
+
+// AddBalanceLedgerIDs adds the "balance_ledger" edge to the ShopBalanceLedger entity by ids.
+func (m *ShopDrawCycleMutation) AddBalanceLedgerIDs(ids ...int64) {
+	if m.balance_ledger == nil {
+		m.balance_ledger = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.balance_ledger[ids[i]] = struct{}{}
+	}
+}
+
+// ClearBalanceLedger clears the "balance_ledger" edge to the ShopBalanceLedger entity.
+func (m *ShopDrawCycleMutation) ClearBalanceLedger() {
+	m.clearedbalance_ledger = true
+}
+
+// BalanceLedgerCleared reports if the "balance_ledger" edge to the ShopBalanceLedger entity was cleared.
+func (m *ShopDrawCycleMutation) BalanceLedgerCleared() bool {
+	return m.clearedbalance_ledger
+}
+
+// RemoveBalanceLedgerIDs removes the "balance_ledger" edge to the ShopBalanceLedger entity by IDs.
+func (m *ShopDrawCycleMutation) RemoveBalanceLedgerIDs(ids ...int64) {
+	if m.removedbalance_ledger == nil {
+		m.removedbalance_ledger = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.balance_ledger, ids[i])
+		m.removedbalance_ledger[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedBalanceLedger returns the removed IDs of the "balance_ledger" edge to the ShopBalanceLedger entity.
+func (m *ShopDrawCycleMutation) RemovedBalanceLedgerIDs() (ids []int64) {
+	for id := range m.removedbalance_ledger {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// BalanceLedgerIDs returns the "balance_ledger" edge IDs in the mutation.
+func (m *ShopDrawCycleMutation) BalanceLedgerIDs() (ids []int64) {
+	for id := range m.balance_ledger {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetBalanceLedger resets all changes to the "balance_ledger" edge.
+func (m *ShopDrawCycleMutation) ResetBalanceLedger() {
+	m.balance_ledger = nil
+	m.clearedbalance_ledger = false
+	m.removedbalance_ledger = nil
+}
+
+// Where appends a list predicates to the ShopDrawCycleMutation builder.
+func (m *ShopDrawCycleMutation) Where(ps ...predicate.ShopDrawCycle) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ShopDrawCycleMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ShopDrawCycleMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ShopDrawCycle, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ShopDrawCycleMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ShopDrawCycleMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ShopDrawCycle).
+func (m *ShopDrawCycleMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ShopDrawCycleMutation) Fields() []string {
+	fields := make([]string, 0, 11)
+	if m.created_at != nil {
+		fields = append(fields, shopdrawcycle.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, shopdrawcycle.FieldUpdatedAt)
+	}
+	if m.user != nil {
+		fields = append(fields, shopdrawcycle.FieldUserID)
+	}
+	if m.product != nil {
+		fields = append(fields, shopdrawcycle.FieldProductID)
+	}
+	if m.cycle_no != nil {
+		fields = append(fields, shopdrawcycle.FieldCycleNo)
+	}
+	if m.guarantee_count != nil {
+		fields = append(fields, shopdrawcycle.FieldGuaranteeCount)
+	}
+	if m.target_amount != nil {
+		fields = append(fields, shopdrawcycle.FieldTargetAmount)
+	}
+	if m.remaining_amounts != nil {
+		fields = append(fields, shopdrawcycle.FieldRemainingAmounts)
+	}
+	if m.drawn_count != nil {
+		fields = append(fields, shopdrawcycle.FieldDrawnCount)
+	}
+	if m.drawn_amount != nil {
+		fields = append(fields, shopdrawcycle.FieldDrawnAmount)
+	}
+	if m.completed != nil {
+		fields = append(fields, shopdrawcycle.FieldCompleted)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ShopDrawCycleMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case shopdrawcycle.FieldCreatedAt:
+		return m.CreatedAt()
+	case shopdrawcycle.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case shopdrawcycle.FieldUserID:
+		return m.UserID()
+	case shopdrawcycle.FieldProductID:
+		return m.ProductID()
+	case shopdrawcycle.FieldCycleNo:
+		return m.CycleNo()
+	case shopdrawcycle.FieldGuaranteeCount:
+		return m.GuaranteeCount()
+	case shopdrawcycle.FieldTargetAmount:
+		return m.TargetAmount()
+	case shopdrawcycle.FieldRemainingAmounts:
+		return m.RemainingAmounts()
+	case shopdrawcycle.FieldDrawnCount:
+		return m.DrawnCount()
+	case shopdrawcycle.FieldDrawnAmount:
+		return m.DrawnAmount()
+	case shopdrawcycle.FieldCompleted:
+		return m.Completed()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ShopDrawCycleMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case shopdrawcycle.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case shopdrawcycle.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case shopdrawcycle.FieldUserID:
+		return m.OldUserID(ctx)
+	case shopdrawcycle.FieldProductID:
+		return m.OldProductID(ctx)
+	case shopdrawcycle.FieldCycleNo:
+		return m.OldCycleNo(ctx)
+	case shopdrawcycle.FieldGuaranteeCount:
+		return m.OldGuaranteeCount(ctx)
+	case shopdrawcycle.FieldTargetAmount:
+		return m.OldTargetAmount(ctx)
+	case shopdrawcycle.FieldRemainingAmounts:
+		return m.OldRemainingAmounts(ctx)
+	case shopdrawcycle.FieldDrawnCount:
+		return m.OldDrawnCount(ctx)
+	case shopdrawcycle.FieldDrawnAmount:
+		return m.OldDrawnAmount(ctx)
+	case shopdrawcycle.FieldCompleted:
+		return m.OldCompleted(ctx)
+	}
+	return nil, fmt.Errorf("unknown ShopDrawCycle field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ShopDrawCycleMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case shopdrawcycle.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case shopdrawcycle.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case shopdrawcycle.FieldUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case shopdrawcycle.FieldProductID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProductID(v)
+		return nil
+	case shopdrawcycle.FieldCycleNo:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCycleNo(v)
+		return nil
+	case shopdrawcycle.FieldGuaranteeCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGuaranteeCount(v)
+		return nil
+	case shopdrawcycle.FieldTargetAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTargetAmount(v)
+		return nil
+	case shopdrawcycle.FieldRemainingAmounts:
+		v, ok := value.([]float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRemainingAmounts(v)
+		return nil
+	case shopdrawcycle.FieldDrawnCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawnCount(v)
+		return nil
+	case shopdrawcycle.FieldDrawnAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawnAmount(v)
+		return nil
+	case shopdrawcycle.FieldCompleted:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCompleted(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ShopDrawCycle field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ShopDrawCycleMutation) AddedFields() []string {
+	var fields []string
+	if m.addcycle_no != nil {
+		fields = append(fields, shopdrawcycle.FieldCycleNo)
+	}
+	if m.addguarantee_count != nil {
+		fields = append(fields, shopdrawcycle.FieldGuaranteeCount)
+	}
+	if m.addtarget_amount != nil {
+		fields = append(fields, shopdrawcycle.FieldTargetAmount)
+	}
+	if m.adddrawn_count != nil {
+		fields = append(fields, shopdrawcycle.FieldDrawnCount)
+	}
+	if m.adddrawn_amount != nil {
+		fields = append(fields, shopdrawcycle.FieldDrawnAmount)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ShopDrawCycleMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case shopdrawcycle.FieldCycleNo:
+		return m.AddedCycleNo()
+	case shopdrawcycle.FieldGuaranteeCount:
+		return m.AddedGuaranteeCount()
+	case shopdrawcycle.FieldTargetAmount:
+		return m.AddedTargetAmount()
+	case shopdrawcycle.FieldDrawnCount:
+		return m.AddedDrawnCount()
+	case shopdrawcycle.FieldDrawnAmount:
+		return m.AddedDrawnAmount()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ShopDrawCycleMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case shopdrawcycle.FieldCycleNo:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCycleNo(v)
+		return nil
+	case shopdrawcycle.FieldGuaranteeCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddGuaranteeCount(v)
+		return nil
+	case shopdrawcycle.FieldTargetAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTargetAmount(v)
+		return nil
+	case shopdrawcycle.FieldDrawnCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawnCount(v)
+		return nil
+	case shopdrawcycle.FieldDrawnAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawnAmount(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ShopDrawCycle numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ShopDrawCycleMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(shopdrawcycle.FieldRemainingAmounts) {
+		fields = append(fields, shopdrawcycle.FieldRemainingAmounts)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ShopDrawCycleMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ShopDrawCycleMutation) ClearField(name string) error {
+	switch name {
+	case shopdrawcycle.FieldRemainingAmounts:
+		m.ClearRemainingAmounts()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopDrawCycle nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ShopDrawCycleMutation) ResetField(name string) error {
+	switch name {
+	case shopdrawcycle.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case shopdrawcycle.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case shopdrawcycle.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case shopdrawcycle.FieldProductID:
+		m.ResetProductID()
+		return nil
+	case shopdrawcycle.FieldCycleNo:
+		m.ResetCycleNo()
+		return nil
+	case shopdrawcycle.FieldGuaranteeCount:
+		m.ResetGuaranteeCount()
+		return nil
+	case shopdrawcycle.FieldTargetAmount:
+		m.ResetTargetAmount()
+		return nil
+	case shopdrawcycle.FieldRemainingAmounts:
+		m.ResetRemainingAmounts()
+		return nil
+	case shopdrawcycle.FieldDrawnCount:
+		m.ResetDrawnCount()
+		return nil
+	case shopdrawcycle.FieldDrawnAmount:
+		m.ResetDrawnAmount()
+		return nil
+	case shopdrawcycle.FieldCompleted:
+		m.ResetCompleted()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopDrawCycle field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ShopDrawCycleMutation) AddedEdges() []string {
+	edges := make([]string, 0, 4)
+	if m.user != nil {
+		edges = append(edges, shopdrawcycle.EdgeUser)
+	}
+	if m.product != nil {
+		edges = append(edges, shopdrawcycle.EdgeProduct)
+	}
+	if m.orders != nil {
+		edges = append(edges, shopdrawcycle.EdgeOrders)
+	}
+	if m.balance_ledger != nil {
+		edges = append(edges, shopdrawcycle.EdgeBalanceLedger)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ShopDrawCycleMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case shopdrawcycle.EdgeUser:
+		if id := m.user; id != nil {
+			return []ent.Value{*id}
+		}
+	case shopdrawcycle.EdgeProduct:
+		if id := m.product; id != nil {
+			return []ent.Value{*id}
+		}
+	case shopdrawcycle.EdgeOrders:
+		ids := make([]ent.Value, 0, len(m.orders))
+		for id := range m.orders {
+			ids = append(ids, id)
+		}
+		return ids
+	case shopdrawcycle.EdgeBalanceLedger:
+		ids := make([]ent.Value, 0, len(m.balance_ledger))
+		for id := range m.balance_ledger {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ShopDrawCycleMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 4)
+	if m.removedorders != nil {
+		edges = append(edges, shopdrawcycle.EdgeOrders)
+	}
+	if m.removedbalance_ledger != nil {
+		edges = append(edges, shopdrawcycle.EdgeBalanceLedger)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ShopDrawCycleMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case shopdrawcycle.EdgeOrders:
+		ids := make([]ent.Value, 0, len(m.removedorders))
+		for id := range m.removedorders {
+			ids = append(ids, id)
+		}
+		return ids
+	case shopdrawcycle.EdgeBalanceLedger:
+		ids := make([]ent.Value, 0, len(m.removedbalance_ledger))
+		for id := range m.removedbalance_ledger {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ShopDrawCycleMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 4)
+	if m.cleareduser {
+		edges = append(edges, shopdrawcycle.EdgeUser)
+	}
+	if m.clearedproduct {
+		edges = append(edges, shopdrawcycle.EdgeProduct)
+	}
+	if m.clearedorders {
+		edges = append(edges, shopdrawcycle.EdgeOrders)
+	}
+	if m.clearedbalance_ledger {
+		edges = append(edges, shopdrawcycle.EdgeBalanceLedger)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ShopDrawCycleMutation) EdgeCleared(name string) bool {
+	switch name {
+	case shopdrawcycle.EdgeUser:
+		return m.cleareduser
+	case shopdrawcycle.EdgeProduct:
+		return m.clearedproduct
+	case shopdrawcycle.EdgeOrders:
+		return m.clearedorders
+	case shopdrawcycle.EdgeBalanceLedger:
+		return m.clearedbalance_ledger
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ShopDrawCycleMutation) ClearEdge(name string) error {
+	switch name {
+	case shopdrawcycle.EdgeUser:
+		m.ClearUser()
+		return nil
+	case shopdrawcycle.EdgeProduct:
+		m.ClearProduct()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopDrawCycle unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ShopDrawCycleMutation) ResetEdge(name string) error {
+	switch name {
+	case shopdrawcycle.EdgeUser:
+		m.ResetUser()
+		return nil
+	case shopdrawcycle.EdgeProduct:
+		m.ResetProduct()
+		return nil
+	case shopdrawcycle.EdgeOrders:
+		m.ResetOrders()
+		return nil
+	case shopdrawcycle.EdgeBalanceLedger:
+		m.ResetBalanceLedger()
+		return nil
+	}
+	return fmt.Errorf("unknown ShopDrawCycle edge %s", name)
+}
+
 // ShopOrderMutation represents an operation that mutates the ShopOrder nodes in the graph.
 type ShopOrderMutation struct {
 	config
@@ -34176,11 +36743,20 @@ type ShopOrderMutation struct {
 	completed_at          *time.Time
 	cancelled_at          *time.Time
 	failed_reason         *string
+	draw_reward_amount    *float64
+	adddraw_reward_amount *float64
+	draw_cycle_index      *int
+	adddraw_cycle_index   *int
 	clearedFields         map[string]struct{}
 	user                  *int64
 	cleareduser           bool
 	product               *int64
 	clearedproduct        bool
+	draw_cycle            *int64
+	cleareddraw_cycle     bool
+	balance_ledger        map[int64]struct{}
+	removedbalance_ledger map[int64]struct{}
+	clearedbalance_ledger bool
 	card_keys             map[int64]struct{}
 	removedcard_keys      map[int64]struct{}
 	clearedcard_keys      bool
@@ -35172,6 +37748,195 @@ func (m *ShopOrderMutation) ResetFailedReason() {
 	delete(m.clearedFields, shoporder.FieldFailedReason)
 }
 
+// SetDrawRewardAmount sets the "draw_reward_amount" field.
+func (m *ShopOrderMutation) SetDrawRewardAmount(f float64) {
+	m.draw_reward_amount = &f
+	m.adddraw_reward_amount = nil
+}
+
+// DrawRewardAmount returns the value of the "draw_reward_amount" field in the mutation.
+func (m *ShopOrderMutation) DrawRewardAmount() (r float64, exists bool) {
+	v := m.draw_reward_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawRewardAmount returns the old "draw_reward_amount" field's value of the ShopOrder entity.
+// If the ShopOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopOrderMutation) OldDrawRewardAmount(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawRewardAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawRewardAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawRewardAmount: %w", err)
+	}
+	return oldValue.DrawRewardAmount, nil
+}
+
+// AddDrawRewardAmount adds f to the "draw_reward_amount" field.
+func (m *ShopOrderMutation) AddDrawRewardAmount(f float64) {
+	if m.adddraw_reward_amount != nil {
+		*m.adddraw_reward_amount += f
+	} else {
+		m.adddraw_reward_amount = &f
+	}
+}
+
+// AddedDrawRewardAmount returns the value that was added to the "draw_reward_amount" field in this mutation.
+func (m *ShopOrderMutation) AddedDrawRewardAmount() (r float64, exists bool) {
+	v := m.adddraw_reward_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearDrawRewardAmount clears the value of the "draw_reward_amount" field.
+func (m *ShopOrderMutation) ClearDrawRewardAmount() {
+	m.draw_reward_amount = nil
+	m.adddraw_reward_amount = nil
+	m.clearedFields[shoporder.FieldDrawRewardAmount] = struct{}{}
+}
+
+// DrawRewardAmountCleared returns if the "draw_reward_amount" field was cleared in this mutation.
+func (m *ShopOrderMutation) DrawRewardAmountCleared() bool {
+	_, ok := m.clearedFields[shoporder.FieldDrawRewardAmount]
+	return ok
+}
+
+// ResetDrawRewardAmount resets all changes to the "draw_reward_amount" field.
+func (m *ShopOrderMutation) ResetDrawRewardAmount() {
+	m.draw_reward_amount = nil
+	m.adddraw_reward_amount = nil
+	delete(m.clearedFields, shoporder.FieldDrawRewardAmount)
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (m *ShopOrderMutation) SetDrawCycleID(i int64) {
+	m.draw_cycle = &i
+}
+
+// DrawCycleID returns the value of the "draw_cycle_id" field in the mutation.
+func (m *ShopOrderMutation) DrawCycleID() (r int64, exists bool) {
+	v := m.draw_cycle
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawCycleID returns the old "draw_cycle_id" field's value of the ShopOrder entity.
+// If the ShopOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopOrderMutation) OldDrawCycleID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawCycleID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawCycleID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawCycleID: %w", err)
+	}
+	return oldValue.DrawCycleID, nil
+}
+
+// ClearDrawCycleID clears the value of the "draw_cycle_id" field.
+func (m *ShopOrderMutation) ClearDrawCycleID() {
+	m.draw_cycle = nil
+	m.clearedFields[shoporder.FieldDrawCycleID] = struct{}{}
+}
+
+// DrawCycleIDCleared returns if the "draw_cycle_id" field was cleared in this mutation.
+func (m *ShopOrderMutation) DrawCycleIDCleared() bool {
+	_, ok := m.clearedFields[shoporder.FieldDrawCycleID]
+	return ok
+}
+
+// ResetDrawCycleID resets all changes to the "draw_cycle_id" field.
+func (m *ShopOrderMutation) ResetDrawCycleID() {
+	m.draw_cycle = nil
+	delete(m.clearedFields, shoporder.FieldDrawCycleID)
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (m *ShopOrderMutation) SetDrawCycleIndex(i int) {
+	m.draw_cycle_index = &i
+	m.adddraw_cycle_index = nil
+}
+
+// DrawCycleIndex returns the value of the "draw_cycle_index" field in the mutation.
+func (m *ShopOrderMutation) DrawCycleIndex() (r int, exists bool) {
+	v := m.draw_cycle_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawCycleIndex returns the old "draw_cycle_index" field's value of the ShopOrder entity.
+// If the ShopOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopOrderMutation) OldDrawCycleIndex(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawCycleIndex is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawCycleIndex requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawCycleIndex: %w", err)
+	}
+	return oldValue.DrawCycleIndex, nil
+}
+
+// AddDrawCycleIndex adds i to the "draw_cycle_index" field.
+func (m *ShopOrderMutation) AddDrawCycleIndex(i int) {
+	if m.adddraw_cycle_index != nil {
+		*m.adddraw_cycle_index += i
+	} else {
+		m.adddraw_cycle_index = &i
+	}
+}
+
+// AddedDrawCycleIndex returns the value that was added to the "draw_cycle_index" field in this mutation.
+func (m *ShopOrderMutation) AddedDrawCycleIndex() (r int, exists bool) {
+	v := m.adddraw_cycle_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearDrawCycleIndex clears the value of the "draw_cycle_index" field.
+func (m *ShopOrderMutation) ClearDrawCycleIndex() {
+	m.draw_cycle_index = nil
+	m.adddraw_cycle_index = nil
+	m.clearedFields[shoporder.FieldDrawCycleIndex] = struct{}{}
+}
+
+// DrawCycleIndexCleared returns if the "draw_cycle_index" field was cleared in this mutation.
+func (m *ShopOrderMutation) DrawCycleIndexCleared() bool {
+	_, ok := m.clearedFields[shoporder.FieldDrawCycleIndex]
+	return ok
+}
+
+// ResetDrawCycleIndex resets all changes to the "draw_cycle_index" field.
+func (m *ShopOrderMutation) ResetDrawCycleIndex() {
+	m.draw_cycle_index = nil
+	m.adddraw_cycle_index = nil
+	delete(m.clearedFields, shoporder.FieldDrawCycleIndex)
+}
+
 // ClearUser clears the "user" edge to the User entity.
 func (m *ShopOrderMutation) ClearUser() {
 	m.cleareduser = true
@@ -35224,6 +37989,87 @@ func (m *ShopOrderMutation) ProductIDs() (ids []int64) {
 func (m *ShopOrderMutation) ResetProduct() {
 	m.product = nil
 	m.clearedproduct = false
+}
+
+// ClearDrawCycle clears the "draw_cycle" edge to the ShopDrawCycle entity.
+func (m *ShopOrderMutation) ClearDrawCycle() {
+	m.cleareddraw_cycle = true
+	m.clearedFields[shoporder.FieldDrawCycleID] = struct{}{}
+}
+
+// DrawCycleCleared reports if the "draw_cycle" edge to the ShopDrawCycle entity was cleared.
+func (m *ShopOrderMutation) DrawCycleCleared() bool {
+	return m.DrawCycleIDCleared() || m.cleareddraw_cycle
+}
+
+// DrawCycleIDs returns the "draw_cycle" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// DrawCycleID instead. It exists only for internal usage by the builders.
+func (m *ShopOrderMutation) DrawCycleIDs() (ids []int64) {
+	if id := m.draw_cycle; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetDrawCycle resets all changes to the "draw_cycle" edge.
+func (m *ShopOrderMutation) ResetDrawCycle() {
+	m.draw_cycle = nil
+	m.cleareddraw_cycle = false
+}
+
+// AddBalanceLedgerIDs adds the "balance_ledger" edge to the ShopBalanceLedger entity by ids.
+func (m *ShopOrderMutation) AddBalanceLedgerIDs(ids ...int64) {
+	if m.balance_ledger == nil {
+		m.balance_ledger = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.balance_ledger[ids[i]] = struct{}{}
+	}
+}
+
+// ClearBalanceLedger clears the "balance_ledger" edge to the ShopBalanceLedger entity.
+func (m *ShopOrderMutation) ClearBalanceLedger() {
+	m.clearedbalance_ledger = true
+}
+
+// BalanceLedgerCleared reports if the "balance_ledger" edge to the ShopBalanceLedger entity was cleared.
+func (m *ShopOrderMutation) BalanceLedgerCleared() bool {
+	return m.clearedbalance_ledger
+}
+
+// RemoveBalanceLedgerIDs removes the "balance_ledger" edge to the ShopBalanceLedger entity by IDs.
+func (m *ShopOrderMutation) RemoveBalanceLedgerIDs(ids ...int64) {
+	if m.removedbalance_ledger == nil {
+		m.removedbalance_ledger = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.balance_ledger, ids[i])
+		m.removedbalance_ledger[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedBalanceLedger returns the removed IDs of the "balance_ledger" edge to the ShopBalanceLedger entity.
+func (m *ShopOrderMutation) RemovedBalanceLedgerIDs() (ids []int64) {
+	for id := range m.removedbalance_ledger {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// BalanceLedgerIDs returns the "balance_ledger" edge IDs in the mutation.
+func (m *ShopOrderMutation) BalanceLedgerIDs() (ids []int64) {
+	for id := range m.balance_ledger {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetBalanceLedger resets all changes to the "balance_ledger" edge.
+func (m *ShopOrderMutation) ResetBalanceLedger() {
+	m.balance_ledger = nil
+	m.clearedbalance_ledger = false
+	m.removedbalance_ledger = nil
 }
 
 // AddCardKeyIDs adds the "card_keys" edge to the ShopCardKey entity by ids.
@@ -35314,7 +38160,7 @@ func (m *ShopOrderMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopOrderMutation) Fields() []string {
-	fields := make([]string, 0, 19)
+	fields := make([]string, 0, 22)
 	if m.created_at != nil {
 		fields = append(fields, shoporder.FieldCreatedAt)
 	}
@@ -35372,6 +38218,15 @@ func (m *ShopOrderMutation) Fields() []string {
 	if m.failed_reason != nil {
 		fields = append(fields, shoporder.FieldFailedReason)
 	}
+	if m.draw_reward_amount != nil {
+		fields = append(fields, shoporder.FieldDrawRewardAmount)
+	}
+	if m.draw_cycle != nil {
+		fields = append(fields, shoporder.FieldDrawCycleID)
+	}
+	if m.draw_cycle_index != nil {
+		fields = append(fields, shoporder.FieldDrawCycleIndex)
+	}
 	return fields
 }
 
@@ -35418,6 +38273,12 @@ func (m *ShopOrderMutation) Field(name string) (ent.Value, bool) {
 		return m.CancelledAt()
 	case shoporder.FieldFailedReason:
 		return m.FailedReason()
+	case shoporder.FieldDrawRewardAmount:
+		return m.DrawRewardAmount()
+	case shoporder.FieldDrawCycleID:
+		return m.DrawCycleID()
+	case shoporder.FieldDrawCycleIndex:
+		return m.DrawCycleIndex()
 	}
 	return nil, false
 }
@@ -35465,6 +38326,12 @@ func (m *ShopOrderMutation) OldField(ctx context.Context, name string) (ent.Valu
 		return m.OldCancelledAt(ctx)
 	case shoporder.FieldFailedReason:
 		return m.OldFailedReason(ctx)
+	case shoporder.FieldDrawRewardAmount:
+		return m.OldDrawRewardAmount(ctx)
+	case shoporder.FieldDrawCycleID:
+		return m.OldDrawCycleID(ctx)
+	case shoporder.FieldDrawCycleIndex:
+		return m.OldDrawCycleIndex(ctx)
 	}
 	return nil, fmt.Errorf("unknown ShopOrder field %s", name)
 }
@@ -35607,6 +38474,27 @@ func (m *ShopOrderMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetFailedReason(v)
 		return nil
+	case shoporder.FieldDrawRewardAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawRewardAmount(v)
+		return nil
+	case shoporder.FieldDrawCycleID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawCycleID(v)
+		return nil
+	case shoporder.FieldDrawCycleIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawCycleIndex(v)
+		return nil
 	}
 	return fmt.Errorf("unknown ShopOrder field %s", name)
 }
@@ -35627,6 +38515,12 @@ func (m *ShopOrderMutation) AddedFields() []string {
 	if m.addpayment_order_id != nil {
 		fields = append(fields, shoporder.FieldPaymentOrderID)
 	}
+	if m.adddraw_reward_amount != nil {
+		fields = append(fields, shoporder.FieldDrawRewardAmount)
+	}
+	if m.adddraw_cycle_index != nil {
+		fields = append(fields, shoporder.FieldDrawCycleIndex)
+	}
 	return fields
 }
 
@@ -35643,6 +38537,10 @@ func (m *ShopOrderMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedTotalAmount()
 	case shoporder.FieldPaymentOrderID:
 		return m.AddedPaymentOrderID()
+	case shoporder.FieldDrawRewardAmount:
+		return m.AddedDrawRewardAmount()
+	case shoporder.FieldDrawCycleIndex:
+		return m.AddedDrawCycleIndex()
 	}
 	return nil, false
 }
@@ -35680,6 +38578,20 @@ func (m *ShopOrderMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddPaymentOrderID(v)
 		return nil
+	case shoporder.FieldDrawRewardAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawRewardAmount(v)
+		return nil
+	case shoporder.FieldDrawCycleIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawCycleIndex(v)
+		return nil
 	}
 	return fmt.Errorf("unknown ShopOrder numeric field %s", name)
 }
@@ -35711,6 +38623,15 @@ func (m *ShopOrderMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(shoporder.FieldFailedReason) {
 		fields = append(fields, shoporder.FieldFailedReason)
+	}
+	if m.FieldCleared(shoporder.FieldDrawRewardAmount) {
+		fields = append(fields, shoporder.FieldDrawRewardAmount)
+	}
+	if m.FieldCleared(shoporder.FieldDrawCycleID) {
+		fields = append(fields, shoporder.FieldDrawCycleID)
+	}
+	if m.FieldCleared(shoporder.FieldDrawCycleIndex) {
+		fields = append(fields, shoporder.FieldDrawCycleIndex)
 	}
 	return fields
 }
@@ -35749,6 +38670,15 @@ func (m *ShopOrderMutation) ClearField(name string) error {
 		return nil
 	case shoporder.FieldFailedReason:
 		m.ClearFailedReason()
+		return nil
+	case shoporder.FieldDrawRewardAmount:
+		m.ClearDrawRewardAmount()
+		return nil
+	case shoporder.FieldDrawCycleID:
+		m.ClearDrawCycleID()
+		return nil
+	case shoporder.FieldDrawCycleIndex:
+		m.ClearDrawCycleIndex()
 		return nil
 	}
 	return fmt.Errorf("unknown ShopOrder nullable field %s", name)
@@ -35815,18 +38745,33 @@ func (m *ShopOrderMutation) ResetField(name string) error {
 	case shoporder.FieldFailedReason:
 		m.ResetFailedReason()
 		return nil
+	case shoporder.FieldDrawRewardAmount:
+		m.ResetDrawRewardAmount()
+		return nil
+	case shoporder.FieldDrawCycleID:
+		m.ResetDrawCycleID()
+		return nil
+	case shoporder.FieldDrawCycleIndex:
+		m.ResetDrawCycleIndex()
+		return nil
 	}
 	return fmt.Errorf("unknown ShopOrder field %s", name)
 }
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ShopOrderMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 5)
 	if m.user != nil {
 		edges = append(edges, shoporder.EdgeUser)
 	}
 	if m.product != nil {
 		edges = append(edges, shoporder.EdgeProduct)
+	}
+	if m.draw_cycle != nil {
+		edges = append(edges, shoporder.EdgeDrawCycle)
+	}
+	if m.balance_ledger != nil {
+		edges = append(edges, shoporder.EdgeBalanceLedger)
 	}
 	if m.card_keys != nil {
 		edges = append(edges, shoporder.EdgeCardKeys)
@@ -35846,6 +38791,16 @@ func (m *ShopOrderMutation) AddedIDs(name string) []ent.Value {
 		if id := m.product; id != nil {
 			return []ent.Value{*id}
 		}
+	case shoporder.EdgeDrawCycle:
+		if id := m.draw_cycle; id != nil {
+			return []ent.Value{*id}
+		}
+	case shoporder.EdgeBalanceLedger:
+		ids := make([]ent.Value, 0, len(m.balance_ledger))
+		for id := range m.balance_ledger {
+			ids = append(ids, id)
+		}
+		return ids
 	case shoporder.EdgeCardKeys:
 		ids := make([]ent.Value, 0, len(m.card_keys))
 		for id := range m.card_keys {
@@ -35858,7 +38813,10 @@ func (m *ShopOrderMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ShopOrderMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 5)
+	if m.removedbalance_ledger != nil {
+		edges = append(edges, shoporder.EdgeBalanceLedger)
+	}
 	if m.removedcard_keys != nil {
 		edges = append(edges, shoporder.EdgeCardKeys)
 	}
@@ -35869,6 +38827,12 @@ func (m *ShopOrderMutation) RemovedEdges() []string {
 // the given name in this mutation.
 func (m *ShopOrderMutation) RemovedIDs(name string) []ent.Value {
 	switch name {
+	case shoporder.EdgeBalanceLedger:
+		ids := make([]ent.Value, 0, len(m.removedbalance_ledger))
+		for id := range m.removedbalance_ledger {
+			ids = append(ids, id)
+		}
+		return ids
 	case shoporder.EdgeCardKeys:
 		ids := make([]ent.Value, 0, len(m.removedcard_keys))
 		for id := range m.removedcard_keys {
@@ -35881,12 +38845,18 @@ func (m *ShopOrderMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ShopOrderMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 5)
 	if m.cleareduser {
 		edges = append(edges, shoporder.EdgeUser)
 	}
 	if m.clearedproduct {
 		edges = append(edges, shoporder.EdgeProduct)
+	}
+	if m.cleareddraw_cycle {
+		edges = append(edges, shoporder.EdgeDrawCycle)
+	}
+	if m.clearedbalance_ledger {
+		edges = append(edges, shoporder.EdgeBalanceLedger)
 	}
 	if m.clearedcard_keys {
 		edges = append(edges, shoporder.EdgeCardKeys)
@@ -35902,6 +38872,10 @@ func (m *ShopOrderMutation) EdgeCleared(name string) bool {
 		return m.cleareduser
 	case shoporder.EdgeProduct:
 		return m.clearedproduct
+	case shoporder.EdgeDrawCycle:
+		return m.cleareddraw_cycle
+	case shoporder.EdgeBalanceLedger:
+		return m.clearedbalance_ledger
 	case shoporder.EdgeCardKeys:
 		return m.clearedcard_keys
 	}
@@ -35918,6 +38892,9 @@ func (m *ShopOrderMutation) ClearEdge(name string) error {
 	case shoporder.EdgeProduct:
 		m.ClearProduct()
 		return nil
+	case shoporder.EdgeDrawCycle:
+		m.ClearDrawCycle()
+		return nil
 	}
 	return fmt.Errorf("unknown ShopOrder unique edge %s", name)
 }
@@ -35932,6 +38909,12 @@ func (m *ShopOrderMutation) ResetEdge(name string) error {
 	case shoporder.EdgeProduct:
 		m.ResetProduct()
 		return nil
+	case shoporder.EdgeDrawCycle:
+		m.ResetDrawCycle()
+		return nil
+	case shoporder.EdgeBalanceLedger:
+		m.ResetBalanceLedger()
+		return nil
 	case shoporder.EdgeCardKeys:
 		m.ResetCardKeys()
 		return nil
@@ -35942,38 +38925,52 @@ func (m *ShopOrderMutation) ResetEdge(name string) error {
 // ShopProductMutation represents an operation that mutates the ShopProduct nodes in the graph.
 type ShopProductMutation struct {
 	config
-	op                Op
-	typ               string
-	id                *int64
-	created_at        *time.Time
-	updated_at        *time.Time
-	name              *string
-	cover_url         *string
-	description       *string
-	price             *float64
-	addprice          *float64
-	original_price    *float64
-	addoriginal_price *float64
-	enabled           *bool
-	sort_order        *int
-	addsort_order     *int
-	min_purchase      *int
-	addmin_purchase   *int
-	max_purchase      *int
-	addmax_purchase   *int
-	auto_delivery     *bool
-	clearedFields     map[string]struct{}
-	category          *int64
-	clearedcategory   bool
-	card_keys         map[int64]struct{}
-	removedcard_keys  map[int64]struct{}
-	clearedcard_keys  bool
-	orders            map[int64]struct{}
-	removedorders     map[int64]struct{}
-	clearedorders     bool
-	done              bool
-	oldValue          func(context.Context) (*ShopProduct, error)
-	predicates        []predicate.ShopProduct
+	op                      Op
+	typ                     string
+	id                      *int64
+	created_at              *time.Time
+	updated_at              *time.Time
+	name                    *string
+	cover_url               *string
+	description             *string
+	price                   *float64
+	addprice                *float64
+	original_price          *float64
+	addoriginal_price       *float64
+	enabled                 *bool
+	sort_order              *int
+	addsort_order           *int
+	min_purchase            *int
+	addmin_purchase         *int
+	max_purchase            *int
+	addmax_purchase         *int
+	auto_delivery           *bool
+	product_type            *string
+	balance_only            *bool
+	draw_enabled            *bool
+	draw_min_amount         *float64
+	adddraw_min_amount      *float64
+	draw_max_amount         *float64
+	adddraw_max_amount      *float64
+	draw_guarantee_count    *int
+	adddraw_guarantee_count *int
+	draw_return_rate        *float64
+	adddraw_return_rate     *float64
+	clearedFields           map[string]struct{}
+	category                *int64
+	clearedcategory         bool
+	card_keys               map[int64]struct{}
+	removedcard_keys        map[int64]struct{}
+	clearedcard_keys        bool
+	orders                  map[int64]struct{}
+	removedorders           map[int64]struct{}
+	clearedorders           bool
+	draw_cycles             map[int64]struct{}
+	removeddraw_cycles      map[int64]struct{}
+	cleareddraw_cycles      bool
+	done                    bool
+	oldValue                func(context.Context) (*ShopProduct, error)
+	predicates              []predicate.ShopProduct
 }
 
 var _ ent.Mutation = (*ShopProductMutation)(nil)
@@ -36695,6 +39692,338 @@ func (m *ShopProductMutation) ResetAutoDelivery() {
 	m.auto_delivery = nil
 }
 
+// SetProductType sets the "product_type" field.
+func (m *ShopProductMutation) SetProductType(s string) {
+	m.product_type = &s
+}
+
+// ProductType returns the value of the "product_type" field in the mutation.
+func (m *ShopProductMutation) ProductType() (r string, exists bool) {
+	v := m.product_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProductType returns the old "product_type" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldProductType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProductType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProductType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProductType: %w", err)
+	}
+	return oldValue.ProductType, nil
+}
+
+// ResetProductType resets all changes to the "product_type" field.
+func (m *ShopProductMutation) ResetProductType() {
+	m.product_type = nil
+}
+
+// SetBalanceOnly sets the "balance_only" field.
+func (m *ShopProductMutation) SetBalanceOnly(b bool) {
+	m.balance_only = &b
+}
+
+// BalanceOnly returns the value of the "balance_only" field in the mutation.
+func (m *ShopProductMutation) BalanceOnly() (r bool, exists bool) {
+	v := m.balance_only
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBalanceOnly returns the old "balance_only" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldBalanceOnly(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBalanceOnly is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBalanceOnly requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBalanceOnly: %w", err)
+	}
+	return oldValue.BalanceOnly, nil
+}
+
+// ResetBalanceOnly resets all changes to the "balance_only" field.
+func (m *ShopProductMutation) ResetBalanceOnly() {
+	m.balance_only = nil
+}
+
+// SetDrawEnabled sets the "draw_enabled" field.
+func (m *ShopProductMutation) SetDrawEnabled(b bool) {
+	m.draw_enabled = &b
+}
+
+// DrawEnabled returns the value of the "draw_enabled" field in the mutation.
+func (m *ShopProductMutation) DrawEnabled() (r bool, exists bool) {
+	v := m.draw_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawEnabled returns the old "draw_enabled" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldDrawEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawEnabled: %w", err)
+	}
+	return oldValue.DrawEnabled, nil
+}
+
+// ResetDrawEnabled resets all changes to the "draw_enabled" field.
+func (m *ShopProductMutation) ResetDrawEnabled() {
+	m.draw_enabled = nil
+}
+
+// SetDrawMinAmount sets the "draw_min_amount" field.
+func (m *ShopProductMutation) SetDrawMinAmount(f float64) {
+	m.draw_min_amount = &f
+	m.adddraw_min_amount = nil
+}
+
+// DrawMinAmount returns the value of the "draw_min_amount" field in the mutation.
+func (m *ShopProductMutation) DrawMinAmount() (r float64, exists bool) {
+	v := m.draw_min_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawMinAmount returns the old "draw_min_amount" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldDrawMinAmount(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawMinAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawMinAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawMinAmount: %w", err)
+	}
+	return oldValue.DrawMinAmount, nil
+}
+
+// AddDrawMinAmount adds f to the "draw_min_amount" field.
+func (m *ShopProductMutation) AddDrawMinAmount(f float64) {
+	if m.adddraw_min_amount != nil {
+		*m.adddraw_min_amount += f
+	} else {
+		m.adddraw_min_amount = &f
+	}
+}
+
+// AddedDrawMinAmount returns the value that was added to the "draw_min_amount" field in this mutation.
+func (m *ShopProductMutation) AddedDrawMinAmount() (r float64, exists bool) {
+	v := m.adddraw_min_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDrawMinAmount resets all changes to the "draw_min_amount" field.
+func (m *ShopProductMutation) ResetDrawMinAmount() {
+	m.draw_min_amount = nil
+	m.adddraw_min_amount = nil
+}
+
+// SetDrawMaxAmount sets the "draw_max_amount" field.
+func (m *ShopProductMutation) SetDrawMaxAmount(f float64) {
+	m.draw_max_amount = &f
+	m.adddraw_max_amount = nil
+}
+
+// DrawMaxAmount returns the value of the "draw_max_amount" field in the mutation.
+func (m *ShopProductMutation) DrawMaxAmount() (r float64, exists bool) {
+	v := m.draw_max_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawMaxAmount returns the old "draw_max_amount" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldDrawMaxAmount(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawMaxAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawMaxAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawMaxAmount: %w", err)
+	}
+	return oldValue.DrawMaxAmount, nil
+}
+
+// AddDrawMaxAmount adds f to the "draw_max_amount" field.
+func (m *ShopProductMutation) AddDrawMaxAmount(f float64) {
+	if m.adddraw_max_amount != nil {
+		*m.adddraw_max_amount += f
+	} else {
+		m.adddraw_max_amount = &f
+	}
+}
+
+// AddedDrawMaxAmount returns the value that was added to the "draw_max_amount" field in this mutation.
+func (m *ShopProductMutation) AddedDrawMaxAmount() (r float64, exists bool) {
+	v := m.adddraw_max_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDrawMaxAmount resets all changes to the "draw_max_amount" field.
+func (m *ShopProductMutation) ResetDrawMaxAmount() {
+	m.draw_max_amount = nil
+	m.adddraw_max_amount = nil
+}
+
+// SetDrawGuaranteeCount sets the "draw_guarantee_count" field.
+func (m *ShopProductMutation) SetDrawGuaranteeCount(i int) {
+	m.draw_guarantee_count = &i
+	m.adddraw_guarantee_count = nil
+}
+
+// DrawGuaranteeCount returns the value of the "draw_guarantee_count" field in the mutation.
+func (m *ShopProductMutation) DrawGuaranteeCount() (r int, exists bool) {
+	v := m.draw_guarantee_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawGuaranteeCount returns the old "draw_guarantee_count" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldDrawGuaranteeCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawGuaranteeCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawGuaranteeCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawGuaranteeCount: %w", err)
+	}
+	return oldValue.DrawGuaranteeCount, nil
+}
+
+// AddDrawGuaranteeCount adds i to the "draw_guarantee_count" field.
+func (m *ShopProductMutation) AddDrawGuaranteeCount(i int) {
+	if m.adddraw_guarantee_count != nil {
+		*m.adddraw_guarantee_count += i
+	} else {
+		m.adddraw_guarantee_count = &i
+	}
+}
+
+// AddedDrawGuaranteeCount returns the value that was added to the "draw_guarantee_count" field in this mutation.
+func (m *ShopProductMutation) AddedDrawGuaranteeCount() (r int, exists bool) {
+	v := m.adddraw_guarantee_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDrawGuaranteeCount resets all changes to the "draw_guarantee_count" field.
+func (m *ShopProductMutation) ResetDrawGuaranteeCount() {
+	m.draw_guarantee_count = nil
+	m.adddraw_guarantee_count = nil
+}
+
+// SetDrawReturnRate sets the "draw_return_rate" field.
+func (m *ShopProductMutation) SetDrawReturnRate(f float64) {
+	m.draw_return_rate = &f
+	m.adddraw_return_rate = nil
+}
+
+// DrawReturnRate returns the value of the "draw_return_rate" field in the mutation.
+func (m *ShopProductMutation) DrawReturnRate() (r float64, exists bool) {
+	v := m.draw_return_rate
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDrawReturnRate returns the old "draw_return_rate" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldDrawReturnRate(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDrawReturnRate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDrawReturnRate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDrawReturnRate: %w", err)
+	}
+	return oldValue.DrawReturnRate, nil
+}
+
+// AddDrawReturnRate adds f to the "draw_return_rate" field.
+func (m *ShopProductMutation) AddDrawReturnRate(f float64) {
+	if m.adddraw_return_rate != nil {
+		*m.adddraw_return_rate += f
+	} else {
+		m.adddraw_return_rate = &f
+	}
+}
+
+// AddedDrawReturnRate returns the value that was added to the "draw_return_rate" field in this mutation.
+func (m *ShopProductMutation) AddedDrawReturnRate() (r float64, exists bool) {
+	v := m.adddraw_return_rate
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDrawReturnRate resets all changes to the "draw_return_rate" field.
+func (m *ShopProductMutation) ResetDrawReturnRate() {
+	m.draw_return_rate = nil
+	m.adddraw_return_rate = nil
+}
+
 // ClearCategory clears the "category" edge to the ShopCategory entity.
 func (m *ShopProductMutation) ClearCategory() {
 	m.clearedcategory = true
@@ -36830,6 +40159,60 @@ func (m *ShopProductMutation) ResetOrders() {
 	m.removedorders = nil
 }
 
+// AddDrawCycleIDs adds the "draw_cycles" edge to the ShopDrawCycle entity by ids.
+func (m *ShopProductMutation) AddDrawCycleIDs(ids ...int64) {
+	if m.draw_cycles == nil {
+		m.draw_cycles = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.draw_cycles[ids[i]] = struct{}{}
+	}
+}
+
+// ClearDrawCycles clears the "draw_cycles" edge to the ShopDrawCycle entity.
+func (m *ShopProductMutation) ClearDrawCycles() {
+	m.cleareddraw_cycles = true
+}
+
+// DrawCyclesCleared reports if the "draw_cycles" edge to the ShopDrawCycle entity was cleared.
+func (m *ShopProductMutation) DrawCyclesCleared() bool {
+	return m.cleareddraw_cycles
+}
+
+// RemoveDrawCycleIDs removes the "draw_cycles" edge to the ShopDrawCycle entity by IDs.
+func (m *ShopProductMutation) RemoveDrawCycleIDs(ids ...int64) {
+	if m.removeddraw_cycles == nil {
+		m.removeddraw_cycles = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.draw_cycles, ids[i])
+		m.removeddraw_cycles[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedDrawCycles returns the removed IDs of the "draw_cycles" edge to the ShopDrawCycle entity.
+func (m *ShopProductMutation) RemovedDrawCyclesIDs() (ids []int64) {
+	for id := range m.removeddraw_cycles {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// DrawCyclesIDs returns the "draw_cycles" edge IDs in the mutation.
+func (m *ShopProductMutation) DrawCyclesIDs() (ids []int64) {
+	for id := range m.draw_cycles {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetDrawCycles resets all changes to the "draw_cycles" edge.
+func (m *ShopProductMutation) ResetDrawCycles() {
+	m.draw_cycles = nil
+	m.cleareddraw_cycles = false
+	m.removeddraw_cycles = nil
+}
+
 // Where appends a list predicates to the ShopProductMutation builder.
 func (m *ShopProductMutation) Where(ps ...predicate.ShopProduct) {
 	m.predicates = append(m.predicates, ps...)
@@ -36864,7 +40247,7 @@ func (m *ShopProductMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopProductMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 20)
 	if m.created_at != nil {
 		fields = append(fields, shopproduct.FieldCreatedAt)
 	}
@@ -36904,6 +40287,27 @@ func (m *ShopProductMutation) Fields() []string {
 	if m.auto_delivery != nil {
 		fields = append(fields, shopproduct.FieldAutoDelivery)
 	}
+	if m.product_type != nil {
+		fields = append(fields, shopproduct.FieldProductType)
+	}
+	if m.balance_only != nil {
+		fields = append(fields, shopproduct.FieldBalanceOnly)
+	}
+	if m.draw_enabled != nil {
+		fields = append(fields, shopproduct.FieldDrawEnabled)
+	}
+	if m.draw_min_amount != nil {
+		fields = append(fields, shopproduct.FieldDrawMinAmount)
+	}
+	if m.draw_max_amount != nil {
+		fields = append(fields, shopproduct.FieldDrawMaxAmount)
+	}
+	if m.draw_guarantee_count != nil {
+		fields = append(fields, shopproduct.FieldDrawGuaranteeCount)
+	}
+	if m.draw_return_rate != nil {
+		fields = append(fields, shopproduct.FieldDrawReturnRate)
+	}
 	return fields
 }
 
@@ -36938,6 +40342,20 @@ func (m *ShopProductMutation) Field(name string) (ent.Value, bool) {
 		return m.MaxPurchase()
 	case shopproduct.FieldAutoDelivery:
 		return m.AutoDelivery()
+	case shopproduct.FieldProductType:
+		return m.ProductType()
+	case shopproduct.FieldBalanceOnly:
+		return m.BalanceOnly()
+	case shopproduct.FieldDrawEnabled:
+		return m.DrawEnabled()
+	case shopproduct.FieldDrawMinAmount:
+		return m.DrawMinAmount()
+	case shopproduct.FieldDrawMaxAmount:
+		return m.DrawMaxAmount()
+	case shopproduct.FieldDrawGuaranteeCount:
+		return m.DrawGuaranteeCount()
+	case shopproduct.FieldDrawReturnRate:
+		return m.DrawReturnRate()
 	}
 	return nil, false
 }
@@ -36973,6 +40391,20 @@ func (m *ShopProductMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldMaxPurchase(ctx)
 	case shopproduct.FieldAutoDelivery:
 		return m.OldAutoDelivery(ctx)
+	case shopproduct.FieldProductType:
+		return m.OldProductType(ctx)
+	case shopproduct.FieldBalanceOnly:
+		return m.OldBalanceOnly(ctx)
+	case shopproduct.FieldDrawEnabled:
+		return m.OldDrawEnabled(ctx)
+	case shopproduct.FieldDrawMinAmount:
+		return m.OldDrawMinAmount(ctx)
+	case shopproduct.FieldDrawMaxAmount:
+		return m.OldDrawMaxAmount(ctx)
+	case shopproduct.FieldDrawGuaranteeCount:
+		return m.OldDrawGuaranteeCount(ctx)
+	case shopproduct.FieldDrawReturnRate:
+		return m.OldDrawReturnRate(ctx)
 	}
 	return nil, fmt.Errorf("unknown ShopProduct field %s", name)
 }
@@ -37073,6 +40505,55 @@ func (m *ShopProductMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetAutoDelivery(v)
 		return nil
+	case shopproduct.FieldProductType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProductType(v)
+		return nil
+	case shopproduct.FieldBalanceOnly:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBalanceOnly(v)
+		return nil
+	case shopproduct.FieldDrawEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawEnabled(v)
+		return nil
+	case shopproduct.FieldDrawMinAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawMinAmount(v)
+		return nil
+	case shopproduct.FieldDrawMaxAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawMaxAmount(v)
+		return nil
+	case shopproduct.FieldDrawGuaranteeCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawGuaranteeCount(v)
+		return nil
+	case shopproduct.FieldDrawReturnRate:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDrawReturnRate(v)
+		return nil
 	}
 	return fmt.Errorf("unknown ShopProduct field %s", name)
 }
@@ -37096,6 +40577,18 @@ func (m *ShopProductMutation) AddedFields() []string {
 	if m.addmax_purchase != nil {
 		fields = append(fields, shopproduct.FieldMaxPurchase)
 	}
+	if m.adddraw_min_amount != nil {
+		fields = append(fields, shopproduct.FieldDrawMinAmount)
+	}
+	if m.adddraw_max_amount != nil {
+		fields = append(fields, shopproduct.FieldDrawMaxAmount)
+	}
+	if m.adddraw_guarantee_count != nil {
+		fields = append(fields, shopproduct.FieldDrawGuaranteeCount)
+	}
+	if m.adddraw_return_rate != nil {
+		fields = append(fields, shopproduct.FieldDrawReturnRate)
+	}
 	return fields
 }
 
@@ -37114,6 +40607,14 @@ func (m *ShopProductMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedMinPurchase()
 	case shopproduct.FieldMaxPurchase:
 		return m.AddedMaxPurchase()
+	case shopproduct.FieldDrawMinAmount:
+		return m.AddedDrawMinAmount()
+	case shopproduct.FieldDrawMaxAmount:
+		return m.AddedDrawMaxAmount()
+	case shopproduct.FieldDrawGuaranteeCount:
+		return m.AddedDrawGuaranteeCount()
+	case shopproduct.FieldDrawReturnRate:
+		return m.AddedDrawReturnRate()
 	}
 	return nil, false
 }
@@ -37157,6 +40658,34 @@ func (m *ShopProductMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddMaxPurchase(v)
+		return nil
+	case shopproduct.FieldDrawMinAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawMinAmount(v)
+		return nil
+	case shopproduct.FieldDrawMaxAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawMaxAmount(v)
+		return nil
+	case shopproduct.FieldDrawGuaranteeCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawGuaranteeCount(v)
+		return nil
+	case shopproduct.FieldDrawReturnRate:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDrawReturnRate(v)
 		return nil
 	}
 	return fmt.Errorf("unknown ShopProduct numeric field %s", name)
@@ -37251,13 +40780,34 @@ func (m *ShopProductMutation) ResetField(name string) error {
 	case shopproduct.FieldAutoDelivery:
 		m.ResetAutoDelivery()
 		return nil
+	case shopproduct.FieldProductType:
+		m.ResetProductType()
+		return nil
+	case shopproduct.FieldBalanceOnly:
+		m.ResetBalanceOnly()
+		return nil
+	case shopproduct.FieldDrawEnabled:
+		m.ResetDrawEnabled()
+		return nil
+	case shopproduct.FieldDrawMinAmount:
+		m.ResetDrawMinAmount()
+		return nil
+	case shopproduct.FieldDrawMaxAmount:
+		m.ResetDrawMaxAmount()
+		return nil
+	case shopproduct.FieldDrawGuaranteeCount:
+		m.ResetDrawGuaranteeCount()
+		return nil
+	case shopproduct.FieldDrawReturnRate:
+		m.ResetDrawReturnRate()
+		return nil
 	}
 	return fmt.Errorf("unknown ShopProduct field %s", name)
 }
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ShopProductMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.category != nil {
 		edges = append(edges, shopproduct.EdgeCategory)
 	}
@@ -37266,6 +40816,9 @@ func (m *ShopProductMutation) AddedEdges() []string {
 	}
 	if m.orders != nil {
 		edges = append(edges, shopproduct.EdgeOrders)
+	}
+	if m.draw_cycles != nil {
+		edges = append(edges, shopproduct.EdgeDrawCycles)
 	}
 	return edges
 }
@@ -37290,18 +40843,27 @@ func (m *ShopProductMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case shopproduct.EdgeDrawCycles:
+		ids := make([]ent.Value, 0, len(m.draw_cycles))
+		for id := range m.draw_cycles {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ShopProductMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.removedcard_keys != nil {
 		edges = append(edges, shopproduct.EdgeCardKeys)
 	}
 	if m.removedorders != nil {
 		edges = append(edges, shopproduct.EdgeOrders)
+	}
+	if m.removeddraw_cycles != nil {
+		edges = append(edges, shopproduct.EdgeDrawCycles)
 	}
 	return edges
 }
@@ -37322,13 +40884,19 @@ func (m *ShopProductMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case shopproduct.EdgeDrawCycles:
+		ids := make([]ent.Value, 0, len(m.removeddraw_cycles))
+		for id := range m.removeddraw_cycles {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ShopProductMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.clearedcategory {
 		edges = append(edges, shopproduct.EdgeCategory)
 	}
@@ -37337,6 +40905,9 @@ func (m *ShopProductMutation) ClearedEdges() []string {
 	}
 	if m.clearedorders {
 		edges = append(edges, shopproduct.EdgeOrders)
+	}
+	if m.cleareddraw_cycles {
+		edges = append(edges, shopproduct.EdgeDrawCycles)
 	}
 	return edges
 }
@@ -37351,6 +40922,8 @@ func (m *ShopProductMutation) EdgeCleared(name string) bool {
 		return m.clearedcard_keys
 	case shopproduct.EdgeOrders:
 		return m.clearedorders
+	case shopproduct.EdgeDrawCycles:
+		return m.cleareddraw_cycles
 	}
 	return false
 }
@@ -37378,6 +40951,9 @@ func (m *ShopProductMutation) ResetEdge(name string) error {
 		return nil
 	case shopproduct.EdgeOrders:
 		m.ResetOrders()
+		return nil
+	case shopproduct.EdgeDrawCycles:
+		m.ResetDrawCycles()
 		return nil
 	}
 	return fmt.Errorf("unknown ShopProduct edge %s", name)
@@ -44558,6 +48134,12 @@ type UserMutation struct {
 	shop_orders                   map[int64]struct{}
 	removedshop_orders            map[int64]struct{}
 	clearedshop_orders            bool
+	shop_draw_cycles              map[int64]struct{}
+	removedshop_draw_cycles       map[int64]struct{}
+	clearedshop_draw_cycles       bool
+	shop_balance_ledger           map[int64]struct{}
+	removedshop_balance_ledger    map[int64]struct{}
+	clearedshop_balance_ledger    bool
 	owned_accounts                map[int64]struct{}
 	removedowned_accounts         map[int64]struct{}
 	clearedowned_accounts         bool
@@ -46271,6 +49853,114 @@ func (m *UserMutation) ResetShopOrders() {
 	m.removedshop_orders = nil
 }
 
+// AddShopDrawCycleIDs adds the "shop_draw_cycles" edge to the ShopDrawCycle entity by ids.
+func (m *UserMutation) AddShopDrawCycleIDs(ids ...int64) {
+	if m.shop_draw_cycles == nil {
+		m.shop_draw_cycles = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.shop_draw_cycles[ids[i]] = struct{}{}
+	}
+}
+
+// ClearShopDrawCycles clears the "shop_draw_cycles" edge to the ShopDrawCycle entity.
+func (m *UserMutation) ClearShopDrawCycles() {
+	m.clearedshop_draw_cycles = true
+}
+
+// ShopDrawCyclesCleared reports if the "shop_draw_cycles" edge to the ShopDrawCycle entity was cleared.
+func (m *UserMutation) ShopDrawCyclesCleared() bool {
+	return m.clearedshop_draw_cycles
+}
+
+// RemoveShopDrawCycleIDs removes the "shop_draw_cycles" edge to the ShopDrawCycle entity by IDs.
+func (m *UserMutation) RemoveShopDrawCycleIDs(ids ...int64) {
+	if m.removedshop_draw_cycles == nil {
+		m.removedshop_draw_cycles = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.shop_draw_cycles, ids[i])
+		m.removedshop_draw_cycles[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedShopDrawCycles returns the removed IDs of the "shop_draw_cycles" edge to the ShopDrawCycle entity.
+func (m *UserMutation) RemovedShopDrawCyclesIDs() (ids []int64) {
+	for id := range m.removedshop_draw_cycles {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ShopDrawCyclesIDs returns the "shop_draw_cycles" edge IDs in the mutation.
+func (m *UserMutation) ShopDrawCyclesIDs() (ids []int64) {
+	for id := range m.shop_draw_cycles {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetShopDrawCycles resets all changes to the "shop_draw_cycles" edge.
+func (m *UserMutation) ResetShopDrawCycles() {
+	m.shop_draw_cycles = nil
+	m.clearedshop_draw_cycles = false
+	m.removedshop_draw_cycles = nil
+}
+
+// AddShopBalanceLedgerIDs adds the "shop_balance_ledger" edge to the ShopBalanceLedger entity by ids.
+func (m *UserMutation) AddShopBalanceLedgerIDs(ids ...int64) {
+	if m.shop_balance_ledger == nil {
+		m.shop_balance_ledger = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.shop_balance_ledger[ids[i]] = struct{}{}
+	}
+}
+
+// ClearShopBalanceLedger clears the "shop_balance_ledger" edge to the ShopBalanceLedger entity.
+func (m *UserMutation) ClearShopBalanceLedger() {
+	m.clearedshop_balance_ledger = true
+}
+
+// ShopBalanceLedgerCleared reports if the "shop_balance_ledger" edge to the ShopBalanceLedger entity was cleared.
+func (m *UserMutation) ShopBalanceLedgerCleared() bool {
+	return m.clearedshop_balance_ledger
+}
+
+// RemoveShopBalanceLedgerIDs removes the "shop_balance_ledger" edge to the ShopBalanceLedger entity by IDs.
+func (m *UserMutation) RemoveShopBalanceLedgerIDs(ids ...int64) {
+	if m.removedshop_balance_ledger == nil {
+		m.removedshop_balance_ledger = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.shop_balance_ledger, ids[i])
+		m.removedshop_balance_ledger[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedShopBalanceLedger returns the removed IDs of the "shop_balance_ledger" edge to the ShopBalanceLedger entity.
+func (m *UserMutation) RemovedShopBalanceLedgerIDs() (ids []int64) {
+	for id := range m.removedshop_balance_ledger {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ShopBalanceLedgerIDs returns the "shop_balance_ledger" edge IDs in the mutation.
+func (m *UserMutation) ShopBalanceLedgerIDs() (ids []int64) {
+	for id := range m.shop_balance_ledger {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetShopBalanceLedger resets all changes to the "shop_balance_ledger" edge.
+func (m *UserMutation) ResetShopBalanceLedger() {
+	m.shop_balance_ledger = nil
+	m.clearedshop_balance_ledger = false
+	m.removedshop_balance_ledger = nil
+}
+
 // AddOwnedAccountIDs adds the "owned_accounts" edge to the Account entity by ids.
 func (m *UserMutation) AddOwnedAccountIDs(ids ...int64) {
 	if m.owned_accounts == nil {
@@ -47042,7 +50732,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 14)
+	edges := make([]string, 0, 16)
 	if m.api_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -47075,6 +50765,12 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.shop_orders != nil {
 		edges = append(edges, user.EdgeShopOrders)
+	}
+	if m.shop_draw_cycles != nil {
+		edges = append(edges, user.EdgeShopDrawCycles)
+	}
+	if m.shop_balance_ledger != nil {
+		edges = append(edges, user.EdgeShopBalanceLedger)
 	}
 	if m.owned_accounts != nil {
 		edges = append(edges, user.EdgeOwnedAccounts)
@@ -47158,6 +50854,18 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeShopDrawCycles:
+		ids := make([]ent.Value, 0, len(m.shop_draw_cycles))
+		for id := range m.shop_draw_cycles {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeShopBalanceLedger:
+		ids := make([]ent.Value, 0, len(m.shop_balance_ledger))
+		for id := range m.shop_balance_ledger {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeOwnedAccounts:
 		ids := make([]ent.Value, 0, len(m.owned_accounts))
 		for id := range m.owned_accounts {
@@ -47182,7 +50890,7 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 14)
+	edges := make([]string, 0, 16)
 	if m.removedapi_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -47215,6 +50923,12 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedshop_orders != nil {
 		edges = append(edges, user.EdgeShopOrders)
+	}
+	if m.removedshop_draw_cycles != nil {
+		edges = append(edges, user.EdgeShopDrawCycles)
+	}
+	if m.removedshop_balance_ledger != nil {
+		edges = append(edges, user.EdgeShopBalanceLedger)
 	}
 	if m.removedowned_accounts != nil {
 		edges = append(edges, user.EdgeOwnedAccounts)
@@ -47298,6 +51012,18 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeShopDrawCycles:
+		ids := make([]ent.Value, 0, len(m.removedshop_draw_cycles))
+		for id := range m.removedshop_draw_cycles {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeShopBalanceLedger:
+		ids := make([]ent.Value, 0, len(m.removedshop_balance_ledger))
+		for id := range m.removedshop_balance_ledger {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeOwnedAccounts:
 		ids := make([]ent.Value, 0, len(m.removedowned_accounts))
 		for id := range m.removedowned_accounts {
@@ -47322,7 +51048,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 14)
+	edges := make([]string, 0, 16)
 	if m.clearedapi_keys {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -47355,6 +51081,12 @@ func (m *UserMutation) ClearedEdges() []string {
 	}
 	if m.clearedshop_orders {
 		edges = append(edges, user.EdgeShopOrders)
+	}
+	if m.clearedshop_draw_cycles {
+		edges = append(edges, user.EdgeShopDrawCycles)
+	}
+	if m.clearedshop_balance_ledger {
+		edges = append(edges, user.EdgeShopBalanceLedger)
 	}
 	if m.clearedowned_accounts {
 		edges = append(edges, user.EdgeOwnedAccounts)
@@ -47394,6 +51126,10 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedpayment_orders
 	case user.EdgeShopOrders:
 		return m.clearedshop_orders
+	case user.EdgeShopDrawCycles:
+		return m.clearedshop_draw_cycles
+	case user.EdgeShopBalanceLedger:
+		return m.clearedshop_balance_ledger
 	case user.EdgeOwnedAccounts:
 		return m.clearedowned_accounts
 	case user.EdgeAuthIdentities:
@@ -47448,6 +51184,12 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeShopOrders:
 		m.ResetShopOrders()
+		return nil
+	case user.EdgeShopDrawCycles:
+		m.ResetShopDrawCycles()
+		return nil
+	case user.EdgeShopBalanceLedger:
+		m.ResetShopBalanceLedger()
 		return nil
 	case user.EdgeOwnedAccounts:
 		m.ResetOwnedAccounts()

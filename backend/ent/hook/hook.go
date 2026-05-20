@@ -321,6 +321,18 @@ func (f SettingFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SettingMutation", m)
 }
 
+// The ShopBalanceLedgerFunc type is an adapter to allow the use of ordinary
+// function as ShopBalanceLedger mutator.
+type ShopBalanceLedgerFunc func(context.Context, *ent.ShopBalanceLedgerMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ShopBalanceLedgerFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ShopBalanceLedgerMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopBalanceLedgerMutation", m)
+}
+
 // The ShopCardKeyFunc type is an adapter to allow the use of ordinary
 // function as ShopCardKey mutator.
 type ShopCardKeyFunc func(context.Context, *ent.ShopCardKeyMutation) (ent.Value, error)
@@ -343,6 +355,18 @@ func (f ShopCategoryFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopCategoryMutation", m)
+}
+
+// The ShopDrawCycleFunc type is an adapter to allow the use of ordinary
+// function as ShopDrawCycle mutator.
+type ShopDrawCycleFunc func(context.Context, *ent.ShopDrawCycleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ShopDrawCycleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ShopDrawCycleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShopDrawCycleMutation", m)
 }
 
 // The ShopOrderFunc type is an adapter to allow the use of ordinary

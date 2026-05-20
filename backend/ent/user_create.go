@@ -20,6 +20,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -504,6 +506,36 @@ func (_c *UserCreate) AddShopOrders(v ...*ShopOrder) *UserCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddShopOrderIDs(ids...)
+}
+
+// AddShopDrawCycleIDs adds the "shop_draw_cycles" edge to the ShopDrawCycle entity by IDs.
+func (_c *UserCreate) AddShopDrawCycleIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddShopDrawCycleIDs(ids...)
+	return _c
+}
+
+// AddShopDrawCycles adds the "shop_draw_cycles" edges to the ShopDrawCycle entity.
+func (_c *UserCreate) AddShopDrawCycles(v ...*ShopDrawCycle) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddShopDrawCycleIDs(ids...)
+}
+
+// AddShopBalanceLedgerIDs adds the "shop_balance_ledger" edge to the ShopBalanceLedger entity by IDs.
+func (_c *UserCreate) AddShopBalanceLedgerIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddShopBalanceLedgerIDs(ids...)
+	return _c
+}
+
+// AddShopBalanceLedger adds the "shop_balance_ledger" edges to the ShopBalanceLedger entity.
+func (_c *UserCreate) AddShopBalanceLedger(v ...*ShopBalanceLedger) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddShopBalanceLedgerIDs(ids...)
 }
 
 // AddOwnedAccountIDs adds the "owned_accounts" edge to the Account entity by IDs.
@@ -1032,6 +1064,38 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(shoporder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ShopDrawCyclesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopDrawCyclesTable,
+			Columns: []string{user.ShopDrawCyclesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ShopBalanceLedgerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShopBalanceLedgerTable,
+			Columns: []string{user.ShopBalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

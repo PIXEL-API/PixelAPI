@@ -13,7 +13,9 @@ import (
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -350,6 +352,80 @@ func (_u *ShopOrderUpdate) ClearFailedReason() *ShopOrderUpdate {
 	return _u
 }
 
+// SetDrawRewardAmount sets the "draw_reward_amount" field.
+func (_u *ShopOrderUpdate) SetDrawRewardAmount(v float64) *ShopOrderUpdate {
+	_u.mutation.ResetDrawRewardAmount()
+	_u.mutation.SetDrawRewardAmount(v)
+	return _u
+}
+
+// SetNillableDrawRewardAmount sets the "draw_reward_amount" field if the given value is not nil.
+func (_u *ShopOrderUpdate) SetNillableDrawRewardAmount(v *float64) *ShopOrderUpdate {
+	if v != nil {
+		_u.SetDrawRewardAmount(*v)
+	}
+	return _u
+}
+
+// AddDrawRewardAmount adds value to the "draw_reward_amount" field.
+func (_u *ShopOrderUpdate) AddDrawRewardAmount(v float64) *ShopOrderUpdate {
+	_u.mutation.AddDrawRewardAmount(v)
+	return _u
+}
+
+// ClearDrawRewardAmount clears the value of the "draw_reward_amount" field.
+func (_u *ShopOrderUpdate) ClearDrawRewardAmount() *ShopOrderUpdate {
+	_u.mutation.ClearDrawRewardAmount()
+	return _u
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (_u *ShopOrderUpdate) SetDrawCycleID(v int64) *ShopOrderUpdate {
+	_u.mutation.SetDrawCycleID(v)
+	return _u
+}
+
+// SetNillableDrawCycleID sets the "draw_cycle_id" field if the given value is not nil.
+func (_u *ShopOrderUpdate) SetNillableDrawCycleID(v *int64) *ShopOrderUpdate {
+	if v != nil {
+		_u.SetDrawCycleID(*v)
+	}
+	return _u
+}
+
+// ClearDrawCycleID clears the value of the "draw_cycle_id" field.
+func (_u *ShopOrderUpdate) ClearDrawCycleID() *ShopOrderUpdate {
+	_u.mutation.ClearDrawCycleID()
+	return _u
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (_u *ShopOrderUpdate) SetDrawCycleIndex(v int) *ShopOrderUpdate {
+	_u.mutation.ResetDrawCycleIndex()
+	_u.mutation.SetDrawCycleIndex(v)
+	return _u
+}
+
+// SetNillableDrawCycleIndex sets the "draw_cycle_index" field if the given value is not nil.
+func (_u *ShopOrderUpdate) SetNillableDrawCycleIndex(v *int) *ShopOrderUpdate {
+	if v != nil {
+		_u.SetDrawCycleIndex(*v)
+	}
+	return _u
+}
+
+// AddDrawCycleIndex adds value to the "draw_cycle_index" field.
+func (_u *ShopOrderUpdate) AddDrawCycleIndex(v int) *ShopOrderUpdate {
+	_u.mutation.AddDrawCycleIndex(v)
+	return _u
+}
+
+// ClearDrawCycleIndex clears the value of the "draw_cycle_index" field.
+func (_u *ShopOrderUpdate) ClearDrawCycleIndex() *ShopOrderUpdate {
+	_u.mutation.ClearDrawCycleIndex()
+	return _u
+}
+
 // SetUser sets the "user" edge to the User entity.
 func (_u *ShopOrderUpdate) SetUser(v *User) *ShopOrderUpdate {
 	return _u.SetUserID(v.ID)
@@ -358,6 +434,26 @@ func (_u *ShopOrderUpdate) SetUser(v *User) *ShopOrderUpdate {
 // SetProduct sets the "product" edge to the ShopProduct entity.
 func (_u *ShopOrderUpdate) SetProduct(v *ShopProduct) *ShopOrderUpdate {
 	return _u.SetProductID(v.ID)
+}
+
+// SetDrawCycle sets the "draw_cycle" edge to the ShopDrawCycle entity.
+func (_u *ShopOrderUpdate) SetDrawCycle(v *ShopDrawCycle) *ShopOrderUpdate {
+	return _u.SetDrawCycleID(v.ID)
+}
+
+// AddBalanceLedgerIDs adds the "balance_ledger" edge to the ShopBalanceLedger entity by IDs.
+func (_u *ShopOrderUpdate) AddBalanceLedgerIDs(ids ...int64) *ShopOrderUpdate {
+	_u.mutation.AddBalanceLedgerIDs(ids...)
+	return _u
+}
+
+// AddBalanceLedger adds the "balance_ledger" edges to the ShopBalanceLedger entity.
+func (_u *ShopOrderUpdate) AddBalanceLedger(v ...*ShopBalanceLedger) *ShopOrderUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBalanceLedgerIDs(ids...)
 }
 
 // AddCardKeyIDs adds the "card_keys" edge to the ShopCardKey entity by IDs.
@@ -390,6 +486,33 @@ func (_u *ShopOrderUpdate) ClearUser() *ShopOrderUpdate {
 func (_u *ShopOrderUpdate) ClearProduct() *ShopOrderUpdate {
 	_u.mutation.ClearProduct()
 	return _u
+}
+
+// ClearDrawCycle clears the "draw_cycle" edge to the ShopDrawCycle entity.
+func (_u *ShopOrderUpdate) ClearDrawCycle() *ShopOrderUpdate {
+	_u.mutation.ClearDrawCycle()
+	return _u
+}
+
+// ClearBalanceLedger clears all "balance_ledger" edges to the ShopBalanceLedger entity.
+func (_u *ShopOrderUpdate) ClearBalanceLedger() *ShopOrderUpdate {
+	_u.mutation.ClearBalanceLedger()
+	return _u
+}
+
+// RemoveBalanceLedgerIDs removes the "balance_ledger" edge to ShopBalanceLedger entities by IDs.
+func (_u *ShopOrderUpdate) RemoveBalanceLedgerIDs(ids ...int64) *ShopOrderUpdate {
+	_u.mutation.RemoveBalanceLedgerIDs(ids...)
+	return _u
+}
+
+// RemoveBalanceLedger removes "balance_ledger" edges to ShopBalanceLedger entities.
+func (_u *ShopOrderUpdate) RemoveBalanceLedger(v ...*ShopBalanceLedger) *ShopOrderUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBalanceLedgerIDs(ids...)
 }
 
 // ClearCardKeys clears all "card_keys" edges to the ShopCardKey entity.
@@ -581,6 +704,24 @@ func (_u *ShopOrderUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.FailedReasonCleared() {
 		_spec.ClearField(shoporder.FieldFailedReason, field.TypeString)
 	}
+	if value, ok := _u.mutation.DrawRewardAmount(); ok {
+		_spec.SetField(shoporder.FieldDrawRewardAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawRewardAmount(); ok {
+		_spec.AddField(shoporder.FieldDrawRewardAmount, field.TypeFloat64, value)
+	}
+	if _u.mutation.DrawRewardAmountCleared() {
+		_spec.ClearField(shoporder.FieldDrawRewardAmount, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.DrawCycleIndex(); ok {
+		_spec.SetField(shoporder.FieldDrawCycleIndex, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedDrawCycleIndex(); ok {
+		_spec.AddField(shoporder.FieldDrawCycleIndex, field.TypeInt, value)
+	}
+	if _u.mutation.DrawCycleIndexCleared() {
+		_spec.ClearField(shoporder.FieldDrawCycleIndex, field.TypeInt)
+	}
 	if _u.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2O,
@@ -632,6 +773,80 @@ func (_u *ShopOrderUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(shopproduct.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DrawCycleCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   shoporder.DrawCycleTable,
+			Columns: []string{shoporder.DrawCycleColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DrawCycleIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   shoporder.DrawCycleTable,
+			Columns: []string{shoporder.DrawCycleColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BalanceLedgerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shoporder.BalanceLedgerTable,
+			Columns: []string{shoporder.BalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBalanceLedgerIDs(); len(nodes) > 0 && !_u.mutation.BalanceLedgerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shoporder.BalanceLedgerTable,
+			Columns: []string{shoporder.BalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BalanceLedgerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shoporder.BalanceLedgerTable,
+			Columns: []string{shoporder.BalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1022,6 +1237,80 @@ func (_u *ShopOrderUpdateOne) ClearFailedReason() *ShopOrderUpdateOne {
 	return _u
 }
 
+// SetDrawRewardAmount sets the "draw_reward_amount" field.
+func (_u *ShopOrderUpdateOne) SetDrawRewardAmount(v float64) *ShopOrderUpdateOne {
+	_u.mutation.ResetDrawRewardAmount()
+	_u.mutation.SetDrawRewardAmount(v)
+	return _u
+}
+
+// SetNillableDrawRewardAmount sets the "draw_reward_amount" field if the given value is not nil.
+func (_u *ShopOrderUpdateOne) SetNillableDrawRewardAmount(v *float64) *ShopOrderUpdateOne {
+	if v != nil {
+		_u.SetDrawRewardAmount(*v)
+	}
+	return _u
+}
+
+// AddDrawRewardAmount adds value to the "draw_reward_amount" field.
+func (_u *ShopOrderUpdateOne) AddDrawRewardAmount(v float64) *ShopOrderUpdateOne {
+	_u.mutation.AddDrawRewardAmount(v)
+	return _u
+}
+
+// ClearDrawRewardAmount clears the value of the "draw_reward_amount" field.
+func (_u *ShopOrderUpdateOne) ClearDrawRewardAmount() *ShopOrderUpdateOne {
+	_u.mutation.ClearDrawRewardAmount()
+	return _u
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (_u *ShopOrderUpdateOne) SetDrawCycleID(v int64) *ShopOrderUpdateOne {
+	_u.mutation.SetDrawCycleID(v)
+	return _u
+}
+
+// SetNillableDrawCycleID sets the "draw_cycle_id" field if the given value is not nil.
+func (_u *ShopOrderUpdateOne) SetNillableDrawCycleID(v *int64) *ShopOrderUpdateOne {
+	if v != nil {
+		_u.SetDrawCycleID(*v)
+	}
+	return _u
+}
+
+// ClearDrawCycleID clears the value of the "draw_cycle_id" field.
+func (_u *ShopOrderUpdateOne) ClearDrawCycleID() *ShopOrderUpdateOne {
+	_u.mutation.ClearDrawCycleID()
+	return _u
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (_u *ShopOrderUpdateOne) SetDrawCycleIndex(v int) *ShopOrderUpdateOne {
+	_u.mutation.ResetDrawCycleIndex()
+	_u.mutation.SetDrawCycleIndex(v)
+	return _u
+}
+
+// SetNillableDrawCycleIndex sets the "draw_cycle_index" field if the given value is not nil.
+func (_u *ShopOrderUpdateOne) SetNillableDrawCycleIndex(v *int) *ShopOrderUpdateOne {
+	if v != nil {
+		_u.SetDrawCycleIndex(*v)
+	}
+	return _u
+}
+
+// AddDrawCycleIndex adds value to the "draw_cycle_index" field.
+func (_u *ShopOrderUpdateOne) AddDrawCycleIndex(v int) *ShopOrderUpdateOne {
+	_u.mutation.AddDrawCycleIndex(v)
+	return _u
+}
+
+// ClearDrawCycleIndex clears the value of the "draw_cycle_index" field.
+func (_u *ShopOrderUpdateOne) ClearDrawCycleIndex() *ShopOrderUpdateOne {
+	_u.mutation.ClearDrawCycleIndex()
+	return _u
+}
+
 // SetUser sets the "user" edge to the User entity.
 func (_u *ShopOrderUpdateOne) SetUser(v *User) *ShopOrderUpdateOne {
 	return _u.SetUserID(v.ID)
@@ -1030,6 +1319,26 @@ func (_u *ShopOrderUpdateOne) SetUser(v *User) *ShopOrderUpdateOne {
 // SetProduct sets the "product" edge to the ShopProduct entity.
 func (_u *ShopOrderUpdateOne) SetProduct(v *ShopProduct) *ShopOrderUpdateOne {
 	return _u.SetProductID(v.ID)
+}
+
+// SetDrawCycle sets the "draw_cycle" edge to the ShopDrawCycle entity.
+func (_u *ShopOrderUpdateOne) SetDrawCycle(v *ShopDrawCycle) *ShopOrderUpdateOne {
+	return _u.SetDrawCycleID(v.ID)
+}
+
+// AddBalanceLedgerIDs adds the "balance_ledger" edge to the ShopBalanceLedger entity by IDs.
+func (_u *ShopOrderUpdateOne) AddBalanceLedgerIDs(ids ...int64) *ShopOrderUpdateOne {
+	_u.mutation.AddBalanceLedgerIDs(ids...)
+	return _u
+}
+
+// AddBalanceLedger adds the "balance_ledger" edges to the ShopBalanceLedger entity.
+func (_u *ShopOrderUpdateOne) AddBalanceLedger(v ...*ShopBalanceLedger) *ShopOrderUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBalanceLedgerIDs(ids...)
 }
 
 // AddCardKeyIDs adds the "card_keys" edge to the ShopCardKey entity by IDs.
@@ -1062,6 +1371,33 @@ func (_u *ShopOrderUpdateOne) ClearUser() *ShopOrderUpdateOne {
 func (_u *ShopOrderUpdateOne) ClearProduct() *ShopOrderUpdateOne {
 	_u.mutation.ClearProduct()
 	return _u
+}
+
+// ClearDrawCycle clears the "draw_cycle" edge to the ShopDrawCycle entity.
+func (_u *ShopOrderUpdateOne) ClearDrawCycle() *ShopOrderUpdateOne {
+	_u.mutation.ClearDrawCycle()
+	return _u
+}
+
+// ClearBalanceLedger clears all "balance_ledger" edges to the ShopBalanceLedger entity.
+func (_u *ShopOrderUpdateOne) ClearBalanceLedger() *ShopOrderUpdateOne {
+	_u.mutation.ClearBalanceLedger()
+	return _u
+}
+
+// RemoveBalanceLedgerIDs removes the "balance_ledger" edge to ShopBalanceLedger entities by IDs.
+func (_u *ShopOrderUpdateOne) RemoveBalanceLedgerIDs(ids ...int64) *ShopOrderUpdateOne {
+	_u.mutation.RemoveBalanceLedgerIDs(ids...)
+	return _u
+}
+
+// RemoveBalanceLedger removes "balance_ledger" edges to ShopBalanceLedger entities.
+func (_u *ShopOrderUpdateOne) RemoveBalanceLedger(v ...*ShopBalanceLedger) *ShopOrderUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBalanceLedgerIDs(ids...)
 }
 
 // ClearCardKeys clears all "card_keys" edges to the ShopCardKey entity.
@@ -1283,6 +1619,24 @@ func (_u *ShopOrderUpdateOne) sqlSave(ctx context.Context) (_node *ShopOrder, er
 	if _u.mutation.FailedReasonCleared() {
 		_spec.ClearField(shoporder.FieldFailedReason, field.TypeString)
 	}
+	if value, ok := _u.mutation.DrawRewardAmount(); ok {
+		_spec.SetField(shoporder.FieldDrawRewardAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedDrawRewardAmount(); ok {
+		_spec.AddField(shoporder.FieldDrawRewardAmount, field.TypeFloat64, value)
+	}
+	if _u.mutation.DrawRewardAmountCleared() {
+		_spec.ClearField(shoporder.FieldDrawRewardAmount, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.DrawCycleIndex(); ok {
+		_spec.SetField(shoporder.FieldDrawCycleIndex, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedDrawCycleIndex(); ok {
+		_spec.AddField(shoporder.FieldDrawCycleIndex, field.TypeInt, value)
+	}
+	if _u.mutation.DrawCycleIndexCleared() {
+		_spec.ClearField(shoporder.FieldDrawCycleIndex, field.TypeInt)
+	}
 	if _u.mutation.UserCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2O,
@@ -1334,6 +1688,80 @@ func (_u *ShopOrderUpdateOne) sqlSave(ctx context.Context) (_node *ShopOrder, er
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(shopproduct.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.DrawCycleCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   shoporder.DrawCycleTable,
+			Columns: []string{shoporder.DrawCycleColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DrawCycleIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   shoporder.DrawCycleTable,
+			Columns: []string{shoporder.DrawCycleColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BalanceLedgerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shoporder.BalanceLedgerTable,
+			Columns: []string{shoporder.BalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBalanceLedgerIDs(); len(nodes) > 0 && !_u.mutation.BalanceLedgerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shoporder.BalanceLedgerTable,
+			Columns: []string{shoporder.BalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BalanceLedgerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shoporder.BalanceLedgerTable,
+			Columns: []string{shoporder.BalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

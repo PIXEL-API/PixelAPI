@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -171,12 +173,43 @@ func (h *UserHandler) GetAffiliate(c *gin.Context) {
 		return
 	}
 
-	detail, err := h.affiliateService.GetAffiliateDetail(c.Request.Context(), subject.UserID)
+	query, err := parseAffiliateDetailQuery(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	detail, err := h.affiliateService.GetAffiliateDetail(c.Request.Context(), subject.UserID, query)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, detail)
+}
+
+func parseAffiliateDetailQuery(c *gin.Context) (service.AffiliateDetailQuery, error) {
+	var query service.AffiliateDetailQuery
+	startRaw := strings.TrimSpace(c.Query("period_start_at"))
+	endRaw := strings.TrimSpace(c.Query("period_end_at"))
+
+	if startRaw != "" {
+		start, err := time.Parse(time.RFC3339, startRaw)
+		if err != nil {
+			return query, err
+		}
+		query.PeriodStart = &start
+	}
+	if endRaw != "" {
+		end, err := time.Parse(time.RFC3339, endRaw)
+		if err != nil {
+			return query, err
+		}
+		query.PeriodEnd = &end
+	}
+	if query.PeriodStart != nil && query.PeriodEnd != nil && !query.PeriodStart.Before(*query.PeriodEnd) {
+		return query, fmt.Errorf("period_start_at must be before period_end_at")
+	}
+	return query, nil
 }
 
 // TransferAffiliateQuota transfers all available affiliate quota into current balance.

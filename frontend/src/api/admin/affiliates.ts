@@ -42,6 +42,18 @@ export interface BindInviterRequest {
   reset_validity: boolean
 }
 
+export interface ExtendInviteRewardsRequest {
+  scope: 'site' | 'inviter'
+  inviter_user_id?: number
+  all_invitees?: boolean
+  invitee_user_ids?: number[]
+  extend_days: number
+}
+
+export interface ExtendInviteRewardsResponse {
+  affected: number
+}
+
 export interface SimpleUser {
   id: number
   email: string
@@ -113,6 +125,16 @@ export async function bindInviter(
   return data
 }
 
+export async function extendInviteRewards(
+  payload: ExtendInviteRewardsRequest,
+): Promise<ExtendInviteRewardsResponse> {
+  const { data } = await apiClient.post<ExtendInviteRewardsResponse>(
+    '/admin/affiliates/invite-rewards/extend',
+    payload,
+  )
+  return data
+}
+
 export const affiliatesAPI = {
   listUsers,
   lookupUsers,
@@ -120,6 +142,7 @@ export const affiliatesAPI = {
   clearUserSettings,
   batchSetRate,
   bindInviter,
+  extendInviteRewards,
 }
 
 export default affiliatesAPI

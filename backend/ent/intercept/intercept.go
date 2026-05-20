@@ -35,8 +35,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
 	"github.com/Wei-Shaw/sub2api/ent/shopcategory"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
@@ -808,6 +810,33 @@ func (f TraverseSetting) Traverse(ctx context.Context, q ent.Query) error {
 	return fmt.Errorf("unexpected query type %T. expect *ent.SettingQuery", q)
 }
 
+// The ShopBalanceLedgerFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ShopBalanceLedgerFunc func(context.Context, *ent.ShopBalanceLedgerQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ShopBalanceLedgerFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ShopBalanceLedgerQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ShopBalanceLedgerQuery", q)
+}
+
+// The TraverseShopBalanceLedger type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseShopBalanceLedger func(context.Context, *ent.ShopBalanceLedgerQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseShopBalanceLedger) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseShopBalanceLedger) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ShopBalanceLedgerQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ShopBalanceLedgerQuery", q)
+}
+
 // The ShopCardKeyFunc type is an adapter to allow the use of ordinary function as a Querier.
 type ShopCardKeyFunc func(context.Context, *ent.ShopCardKeyQuery) (ent.Value, error)
 
@@ -860,6 +889,33 @@ func (f TraverseShopCategory) Traverse(ctx context.Context, q ent.Query) error {
 		return f(ctx, q)
 	}
 	return fmt.Errorf("unexpected query type %T. expect *ent.ShopCategoryQuery", q)
+}
+
+// The ShopDrawCycleFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ShopDrawCycleFunc func(context.Context, *ent.ShopDrawCycleQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ShopDrawCycleFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ShopDrawCycleQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ShopDrawCycleQuery", q)
+}
+
+// The TraverseShopDrawCycle type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseShopDrawCycle func(context.Context, *ent.ShopDrawCycleQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseShopDrawCycle) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseShopDrawCycle) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ShopDrawCycleQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ShopDrawCycleQuery", q)
 }
 
 // The ShopOrderFunc type is an adapter to allow the use of ordinary function as a Querier.
@@ -1214,10 +1270,14 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.SecuritySecretQuery, predicate.SecuritySecret, securitysecret.OrderOption]{typ: ent.TypeSecuritySecret, tq: q}, nil
 	case *ent.SettingQuery:
 		return &query[*ent.SettingQuery, predicate.Setting, setting.OrderOption]{typ: ent.TypeSetting, tq: q}, nil
+	case *ent.ShopBalanceLedgerQuery:
+		return &query[*ent.ShopBalanceLedgerQuery, predicate.ShopBalanceLedger, shopbalanceledger.OrderOption]{typ: ent.TypeShopBalanceLedger, tq: q}, nil
 	case *ent.ShopCardKeyQuery:
 		return &query[*ent.ShopCardKeyQuery, predicate.ShopCardKey, shopcardkey.OrderOption]{typ: ent.TypeShopCardKey, tq: q}, nil
 	case *ent.ShopCategoryQuery:
 		return &query[*ent.ShopCategoryQuery, predicate.ShopCategory, shopcategory.OrderOption]{typ: ent.TypeShopCategory, tq: q}, nil
+	case *ent.ShopDrawCycleQuery:
+		return &query[*ent.ShopDrawCycleQuery, predicate.ShopDrawCycle, shopdrawcycle.OrderOption]{typ: ent.TypeShopDrawCycle, tq: q}, nil
 	case *ent.ShopOrderQuery:
 		return &query[*ent.ShopOrderQuery, predicate.ShopOrder, shoporder.OrderOption]{typ: ent.TypeShopOrder, tq: q}, nil
 	case *ent.ShopProductQuery:

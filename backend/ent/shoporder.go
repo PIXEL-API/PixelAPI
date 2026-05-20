@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -58,6 +59,12 @@ type ShopOrder struct {
 	CancelledAt *time.Time `json:"cancelled_at,omitempty"`
 	// FailedReason holds the value of the "failed_reason" field.
 	FailedReason *string `json:"failed_reason,omitempty"`
+	// DrawRewardAmount holds the value of the "draw_reward_amount" field.
+	DrawRewardAmount *float64 `json:"draw_reward_amount,omitempty"`
+	// DrawCycleID holds the value of the "draw_cycle_id" field.
+	DrawCycleID *int64 `json:"draw_cycle_id,omitempty"`
+	// DrawCycleIndex holds the value of the "draw_cycle_index" field.
+	DrawCycleIndex *int `json:"draw_cycle_index,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the ShopOrderQuery when eager-loading is set.
 	Edges        ShopOrderEdges `json:"edges"`
@@ -70,11 +77,15 @@ type ShopOrderEdges struct {
 	User *User `json:"user,omitempty"`
 	// Product holds the value of the product edge.
 	Product *ShopProduct `json:"product,omitempty"`
+	// DrawCycle holds the value of the draw_cycle edge.
+	DrawCycle *ShopDrawCycle `json:"draw_cycle,omitempty"`
+	// BalanceLedger holds the value of the balance_ledger edge.
+	BalanceLedger []*ShopBalanceLedger `json:"balance_ledger,omitempty"`
 	// CardKeys holds the value of the card_keys edge.
 	CardKeys []*ShopCardKey `json:"card_keys,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [3]bool
+	loadedTypes [5]bool
 }
 
 // UserOrErr returns the User value or an error if the edge
@@ -99,10 +110,30 @@ func (e ShopOrderEdges) ProductOrErr() (*ShopProduct, error) {
 	return nil, &NotLoadedError{edge: "product"}
 }
 
+// DrawCycleOrErr returns the DrawCycle value or an error if the edge
+// was not loaded in eager-loading, or loaded but was not found.
+func (e ShopOrderEdges) DrawCycleOrErr() (*ShopDrawCycle, error) {
+	if e.DrawCycle != nil {
+		return e.DrawCycle, nil
+	} else if e.loadedTypes[2] {
+		return nil, &NotFoundError{label: shopdrawcycle.Label}
+	}
+	return nil, &NotLoadedError{edge: "draw_cycle"}
+}
+
+// BalanceLedgerOrErr returns the BalanceLedger value or an error if the edge
+// was not loaded in eager-loading.
+func (e ShopOrderEdges) BalanceLedgerOrErr() ([]*ShopBalanceLedger, error) {
+	if e.loadedTypes[3] {
+		return e.BalanceLedger, nil
+	}
+	return nil, &NotLoadedError{edge: "balance_ledger"}
+}
+
 // CardKeysOrErr returns the CardKeys value or an error if the edge
 // was not loaded in eager-loading.
 func (e ShopOrderEdges) CardKeysOrErr() ([]*ShopCardKey, error) {
-	if e.loadedTypes[2] {
+	if e.loadedTypes[4] {
 		return e.CardKeys, nil
 	}
 	return nil, &NotLoadedError{edge: "card_keys"}
@@ -115,9 +146,9 @@ func (*ShopOrder) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case shoporder.FieldDeliveredCards:
 			values[i] = new([]byte)
-		case shoporder.FieldUnitPrice, shoporder.FieldTotalAmount:
+		case shoporder.FieldUnitPrice, shoporder.FieldTotalAmount, shoporder.FieldDrawRewardAmount:
 			values[i] = new(sql.NullFloat64)
-		case shoporder.FieldID, shoporder.FieldUserID, shoporder.FieldProductID, shoporder.FieldQuantity, shoporder.FieldPaymentOrderID:
+		case shoporder.FieldID, shoporder.FieldUserID, shoporder.FieldProductID, shoporder.FieldQuantity, shoporder.FieldPaymentOrderID, shoporder.FieldDrawCycleID, shoporder.FieldDrawCycleIndex:
 			values[i] = new(sql.NullInt64)
 		case shoporder.FieldOrderNo, shoporder.FieldProductName, shoporder.FieldProductCoverURL, shoporder.FieldProductDescription, shoporder.FieldPaymentMethod, shoporder.FieldStatus, shoporder.FieldFailedReason:
 			values[i] = new(sql.NullString)
@@ -267,6 +298,27 @@ func (_m *ShopOrder) assignValues(columns []string, values []any) error {
 				_m.FailedReason = new(string)
 				*_m.FailedReason = value.String
 			}
+		case shoporder.FieldDrawRewardAmount:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_reward_amount", values[i])
+			} else if value.Valid {
+				_m.DrawRewardAmount = new(float64)
+				*_m.DrawRewardAmount = value.Float64
+			}
+		case shoporder.FieldDrawCycleID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_cycle_id", values[i])
+			} else if value.Valid {
+				_m.DrawCycleID = new(int64)
+				*_m.DrawCycleID = value.Int64
+			}
+		case shoporder.FieldDrawCycleIndex:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field draw_cycle_index", values[i])
+			} else if value.Valid {
+				_m.DrawCycleIndex = new(int)
+				*_m.DrawCycleIndex = int(value.Int64)
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -288,6 +340,16 @@ func (_m *ShopOrder) QueryUser() *UserQuery {
 // QueryProduct queries the "product" edge of the ShopOrder entity.
 func (_m *ShopOrder) QueryProduct() *ShopProductQuery {
 	return NewShopOrderClient(_m.config).QueryProduct(_m)
+}
+
+// QueryDrawCycle queries the "draw_cycle" edge of the ShopOrder entity.
+func (_m *ShopOrder) QueryDrawCycle() *ShopDrawCycleQuery {
+	return NewShopOrderClient(_m.config).QueryDrawCycle(_m)
+}
+
+// QueryBalanceLedger queries the "balance_ledger" edge of the ShopOrder entity.
+func (_m *ShopOrder) QueryBalanceLedger() *ShopBalanceLedgerQuery {
+	return NewShopOrderClient(_m.config).QueryBalanceLedger(_m)
 }
 
 // QueryCardKeys queries the "card_keys" edge of the ShopOrder entity.
@@ -387,6 +449,21 @@ func (_m *ShopOrder) String() string {
 	if v := _m.FailedReason; v != nil {
 		builder.WriteString("failed_reason=")
 		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.DrawRewardAmount; v != nil {
+		builder.WriteString("draw_reward_amount=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.DrawCycleID; v != nil {
+		builder.WriteString("draw_cycle_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.DrawCycleIndex; v != nil {
+		builder.WriteString("draw_cycle_index=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteByte(')')
 	return builder.String()

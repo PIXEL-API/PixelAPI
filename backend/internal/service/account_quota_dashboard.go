@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -75,6 +76,7 @@ type AccountUsageWindowSummary struct {
 	KnownAccountCount        int        `json:"known_account_count"`
 	AverageUtilization       float64    `json:"average_utilization"`
 	RemainingCapacityPercent float64    `json:"remaining_capacity_percent"`
+	EstimatedSupportHours    *float64   `json:"estimated_support_hours,omitempty"`
 	MinRemainingSeconds      *int       `json:"min_remaining_seconds,omitempty"`
 	NextResetAt              *time.Time `json:"next_reset_at,omitempty"`
 }
@@ -85,8 +87,9 @@ type accountQuotaSummaryAccumulator struct {
 }
 
 type accountUsageWindowAccumulator struct {
-	summary        AccountUsageWindowSummary
-	utilizationSum float64
+	summary                      AccountUsageWindowSummary
+	utilizationSum               float64
+	consumedCapacityPercentHours float64
 }
 
 type accountQuotaDashboardBuilder struct {
@@ -658,6 +661,9 @@ func (a *accountQuotaSummaryAccumulator) addOpenAIUsageWindow(account Account, w
 	agg.summary.RemainingCapacityPercent += remaining
 
 	if progress.ResetsAt != nil {
+		if elapsedHours := usageWindowElapsedHours(window, progress.RemainingSeconds); elapsedHours > 0 {
+			agg.consumedCapacityPercentHours += utilization / elapsedHours
+		}
 		if agg.summary.NextResetAt == nil || progress.ResetsAt.Before(*agg.summary.NextResetAt) {
 			resetAt := *progress.ResetsAt
 			agg.summary.NextResetAt = &resetAt
@@ -721,6 +727,14 @@ func (a *accountQuotaSummaryAccumulator) finalize() AccountQuotaSummary {
 			if item.KnownAccountCount > 0 {
 				item.AverageUtilization = agg.utilizationSum / float64(item.KnownAccountCount)
 			}
+			if agg.consumedCapacityPercentHours > 0 && item.RemainingCapacityPercent > 0 {
+				hours := item.RemainingCapacityPercent / agg.consumedCapacityPercentHours
+				if math.IsInf(hours, 0) || math.IsNaN(hours) {
+					item.EstimatedSupportHours = nil
+				} else {
+					item.EstimatedSupportHours = &hours
+				}
+			}
 			out.UsageWindows = append(out.UsageWindows, item)
 		}
 		sort.Slice(out.UsageWindows, func(i, j int) bool {
@@ -736,6 +750,25 @@ func finalizeQuotaDimension(summary *AccountQuotaDimensionSummary) {
 		return
 	}
 	summary.Utilization = (summary.Used / summary.Limit) * 100
+}
+
+func usageWindowElapsedHours(window string, remainingSeconds int) float64 {
+	totalSeconds := usageWindowTotalSeconds(window)
+	if totalSeconds <= 0 || remainingSeconds < 0 || remainingSeconds >= totalSeconds {
+		return 0
+	}
+	return float64(totalSeconds-remainingSeconds) / 3600
+}
+
+func usageWindowTotalSeconds(window string) int {
+	switch window {
+	case "5h":
+		return 5 * 60 * 60
+	case "7d":
+		return 7 * 24 * 60 * 60
+	default:
+		return 0
+	}
 }
 
 func usageWindowSortOrder(window string) int {

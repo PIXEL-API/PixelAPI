@@ -398,6 +398,7 @@ export default {
     availableStock: 'Stock',
     empty: 'No products available',
     stock: '{count} in stock',
+    drawProductBadge: 'Balance draw',
     noDescription: 'No description',
     buyNow: 'Buy',
     soldOut: 'Sold out',
@@ -405,6 +406,8 @@ export default {
     quantity: 'Quantity',
     unitPrice: 'Unit price',
     totalAmount: 'Total',
+    drawRewardRange: 'Random reward range',
+    drawProgress: 'Cycle progress',
     payMethod: 'Payment method',
     balancePay: 'Balance',
     balanceEnough: 'Enough balance',
@@ -415,6 +418,7 @@ export default {
     purchaseSuccess: 'Purchase successful',
     deliveryReady: 'Order {orderNo} is complete and cards are delivered',
     product: 'Product',
+    drawReward: 'Draw reward',
     deliveredCards: 'Delivered cards',
     deliveredFiles: 'Delivered files',
     downloadFile: 'Download file',
@@ -1128,6 +1132,7 @@ export default {
     overall: {
       operational: 'OPERATIONAL',
       degraded: 'DEGRADED',
+      constrained: 'CONSTRAINED',
       unavailable: 'UNAVAILABLE'
     },
     columns: {
@@ -1214,7 +1219,21 @@ export default {
       realtimeBalanceHint: 'Invite income is credited directly after each usage settlement',
       frozenQuota: 'Frozen',
       frozenQuotaHint: 'Legacy recharge rebate quota kept for compatibility',
+      todayQuota: 'Today Invite Income',
+      yesterdayQuota: 'Yesterday Invite Income',
+      last7Quota: 'Last 7 Days Invite Income',
+      periodQuota: 'Period Invite Income',
       totalQuota: 'Historical Invite Income'
+    },
+    period: {
+      start: 'Start date',
+      end: 'End date',
+      invalid: 'Please choose a valid date range',
+      presets: {
+        today: 'Today',
+        yesterday: 'Yesterday',
+        last7: 'Last 7'
+      }
     },
     transfer: {
       title: 'Legacy Rebate Transfer',
@@ -1228,10 +1247,25 @@ export default {
       title: 'Invited Users',
       empty: 'No invited users yet',
       columns: {
+        user: 'User',
         email: 'Email',
         username: 'Username',
+        bindSource: 'Bind Source',
+        status: 'Status',
+        periodConsumption: 'Period Consumption',
+        periodRebate: 'Period Income',
+        historyConsumption: 'Historical Consumption',
         rebate: 'Invite Income',
         joinedAt: 'Bound At'
+      },
+      bindSources: {
+        registration: 'Registration',
+        admin: 'Admin',
+        legacy: 'Historical'
+      },
+      status: {
+        active: 'Active',
+        disabled: 'Disabled'
       }
     },
     tips: {
@@ -1559,7 +1593,18 @@ export default {
       price: 'Price',
       originalPrice: 'Original Price',
       stockLabel: 'Stock',
+      unlimitedStock: 'Unlimited',
       purchaseLimit: 'Purchase Limit',
+      productType: 'Product Type',
+      productTypes: {
+        cardKey: 'Card product',
+        balanceDraw: 'Balance draw',
+      },
+      drawMinAmount: 'Min reward',
+      drawMaxAmount: 'Max reward',
+      drawGuaranteeCount: 'Guarantee count',
+      drawReturnRate: 'Cycle return rate',
+      drawConfigHint: 'Current cycle target reward is {amount}. The system creates a guaranteed random pool per user and product.',
       imageUrl: 'Image URL',
       cardContent: 'Card Content',
       cardTypeLabel: 'Type',
@@ -3022,6 +3067,9 @@ export default {
         exceptionAccounts: 'Exceptions',
         accountMeta: 'Total {total}, active {active}, schedulable {schedulable}',
         issueMeta: 'Limited {limited}, error {error}, disabled {disabled}',
+        accountStatus: 'Account status',
+        totalShort: 'Total {count}',
+        schedulableCount: 'Schedulable {count}',
         rateLimitedCount: 'Limited {count}',
         errorCount: 'Error {count}',
         disabledCount: 'Disabled {count}',
@@ -3039,11 +3087,13 @@ export default {
         groupBreakdownHint: 'Shared pool capacity is judged per group so a global total cannot hide a failed group.',
         groupNormalCount: 'Normal {count}',
         groupDegradedCount: 'Degraded {count}',
+        groupConstrainedCount: 'Constrained {count}',
         groupUnavailableCount: 'Unavailable {count}',
         ungrouped: 'Ungrouped',
         groupHealth: {
           normal: 'Normal',
           degraded: 'Degraded',
+          constrained: 'Constrained',
           unavailable: 'Unavailable'
         },
         empty: 'No account quota or summarizable OpenAI OAuth snapshots are available yet.',
@@ -5424,6 +5474,31 @@ export default {
             resetValidity: 'Reset validity: recalculate the invite income window from this binding time',
             submit: 'Save Binding',
             selfError: 'A user cannot invite themselves',
+          },
+          extendRewards: {
+            title: 'Extend Invite Relationships',
+            description: 'Extend active, non-permanent invite income relationships by adding days to their current expiry time.',
+            scope: 'Extension Scope',
+            scopeInviter: 'Specific inviter',
+            scopeSite: 'All active site relationships',
+            extendDays: 'Days to extend',
+            extendDaysHint: 'Adds days to the current expiry time. Allowed range: 1-3650.',
+            inviter: 'Inviter',
+            inviterPlaceholder: 'Search inviter email or username',
+            allInvitees: 'Extend all active invitee relationships for this inviter',
+            invitees: 'Selected invitees',
+            inviteePlaceholder: 'Search invitee email or username',
+            inviteeHint: 'Only relationships actually bound to this inviter, active, and non-permanent will be updated.',
+            ruleHint: 'Expired and permanent relationships are not extended.',
+            submitSite: 'Extend all active site relationships',
+            submitInviterAll: 'Extend all active relationships for inviter',
+            submitInviterSelected: 'Extend selected relationships',
+            confirmTitle: 'Confirm Invite Extension',
+            confirmSite: 'Extend all active, non-permanent site invite relationships by {days} day(s)?',
+            confirmInviterAll: 'Extend all active, non-permanent invite relationships for {email} by {days} day(s)?',
+            confirmInviterSelected: 'Extend {count} selected invite relationship(s) for {email} by {days} day(s)?',
+            success: 'Extended {count} invite relationship(s)',
+            selfError: 'Invitee cannot be the same as inviter',
           },
           customUsers: {
             title: 'Custom Invite Codes',

@@ -145,6 +145,21 @@ func FailedReason(v string) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldFailedReason, v))
 }
 
+// DrawRewardAmount applies equality check predicate on the "draw_reward_amount" field. It's identical to DrawRewardAmountEQ.
+func DrawRewardAmount(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldDrawRewardAmount, v))
+}
+
+// DrawCycleID applies equality check predicate on the "draw_cycle_id" field. It's identical to DrawCycleIDEQ.
+func DrawCycleID(v int64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldDrawCycleID, v))
+}
+
+// DrawCycleIndex applies equality check predicate on the "draw_cycle_index" field. It's identical to DrawCycleIndexEQ.
+func DrawCycleIndex(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldDrawCycleIndex, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldCreatedAt, v))
@@ -1080,6 +1095,136 @@ func FailedReasonContainsFold(v string) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldContainsFold(FieldFailedReason, v))
 }
 
+// DrawRewardAmountEQ applies the EQ predicate on the "draw_reward_amount" field.
+func DrawRewardAmountEQ(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldDrawRewardAmount, v))
+}
+
+// DrawRewardAmountNEQ applies the NEQ predicate on the "draw_reward_amount" field.
+func DrawRewardAmountNEQ(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNEQ(FieldDrawRewardAmount, v))
+}
+
+// DrawRewardAmountIn applies the In predicate on the "draw_reward_amount" field.
+func DrawRewardAmountIn(vs ...float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIn(FieldDrawRewardAmount, vs...))
+}
+
+// DrawRewardAmountNotIn applies the NotIn predicate on the "draw_reward_amount" field.
+func DrawRewardAmountNotIn(vs ...float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotIn(FieldDrawRewardAmount, vs...))
+}
+
+// DrawRewardAmountGT applies the GT predicate on the "draw_reward_amount" field.
+func DrawRewardAmountGT(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGT(FieldDrawRewardAmount, v))
+}
+
+// DrawRewardAmountGTE applies the GTE predicate on the "draw_reward_amount" field.
+func DrawRewardAmountGTE(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGTE(FieldDrawRewardAmount, v))
+}
+
+// DrawRewardAmountLT applies the LT predicate on the "draw_reward_amount" field.
+func DrawRewardAmountLT(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLT(FieldDrawRewardAmount, v))
+}
+
+// DrawRewardAmountLTE applies the LTE predicate on the "draw_reward_amount" field.
+func DrawRewardAmountLTE(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLTE(FieldDrawRewardAmount, v))
+}
+
+// DrawRewardAmountIsNil applies the IsNil predicate on the "draw_reward_amount" field.
+func DrawRewardAmountIsNil() predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIsNull(FieldDrawRewardAmount))
+}
+
+// DrawRewardAmountNotNil applies the NotNil predicate on the "draw_reward_amount" field.
+func DrawRewardAmountNotNil() predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotNull(FieldDrawRewardAmount))
+}
+
+// DrawCycleIDEQ applies the EQ predicate on the "draw_cycle_id" field.
+func DrawCycleIDEQ(v int64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldDrawCycleID, v))
+}
+
+// DrawCycleIDNEQ applies the NEQ predicate on the "draw_cycle_id" field.
+func DrawCycleIDNEQ(v int64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNEQ(FieldDrawCycleID, v))
+}
+
+// DrawCycleIDIn applies the In predicate on the "draw_cycle_id" field.
+func DrawCycleIDIn(vs ...int64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIn(FieldDrawCycleID, vs...))
+}
+
+// DrawCycleIDNotIn applies the NotIn predicate on the "draw_cycle_id" field.
+func DrawCycleIDNotIn(vs ...int64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotIn(FieldDrawCycleID, vs...))
+}
+
+// DrawCycleIDIsNil applies the IsNil predicate on the "draw_cycle_id" field.
+func DrawCycleIDIsNil() predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIsNull(FieldDrawCycleID))
+}
+
+// DrawCycleIDNotNil applies the NotNil predicate on the "draw_cycle_id" field.
+func DrawCycleIDNotNil() predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotNull(FieldDrawCycleID))
+}
+
+// DrawCycleIndexEQ applies the EQ predicate on the "draw_cycle_index" field.
+func DrawCycleIndexEQ(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldDrawCycleIndex, v))
+}
+
+// DrawCycleIndexNEQ applies the NEQ predicate on the "draw_cycle_index" field.
+func DrawCycleIndexNEQ(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNEQ(FieldDrawCycleIndex, v))
+}
+
+// DrawCycleIndexIn applies the In predicate on the "draw_cycle_index" field.
+func DrawCycleIndexIn(vs ...int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIn(FieldDrawCycleIndex, vs...))
+}
+
+// DrawCycleIndexNotIn applies the NotIn predicate on the "draw_cycle_index" field.
+func DrawCycleIndexNotIn(vs ...int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotIn(FieldDrawCycleIndex, vs...))
+}
+
+// DrawCycleIndexGT applies the GT predicate on the "draw_cycle_index" field.
+func DrawCycleIndexGT(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGT(FieldDrawCycleIndex, v))
+}
+
+// DrawCycleIndexGTE applies the GTE predicate on the "draw_cycle_index" field.
+func DrawCycleIndexGTE(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGTE(FieldDrawCycleIndex, v))
+}
+
+// DrawCycleIndexLT applies the LT predicate on the "draw_cycle_index" field.
+func DrawCycleIndexLT(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLT(FieldDrawCycleIndex, v))
+}
+
+// DrawCycleIndexLTE applies the LTE predicate on the "draw_cycle_index" field.
+func DrawCycleIndexLTE(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLTE(FieldDrawCycleIndex, v))
+}
+
+// DrawCycleIndexIsNil applies the IsNil predicate on the "draw_cycle_index" field.
+func DrawCycleIndexIsNil() predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIsNull(FieldDrawCycleIndex))
+}
+
+// DrawCycleIndexNotNil applies the NotNil predicate on the "draw_cycle_index" field.
+func DrawCycleIndexNotNil() predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotNull(FieldDrawCycleIndex))
+}
+
 // HasUser applies the HasEdge predicate on the "user" edge.
 func HasUser() predicate.ShopOrder {
 	return predicate.ShopOrder(func(s *sql.Selector) {
@@ -1118,6 +1263,52 @@ func HasProduct() predicate.ShopOrder {
 func HasProductWith(preds ...predicate.ShopProduct) predicate.ShopOrder {
 	return predicate.ShopOrder(func(s *sql.Selector) {
 		step := newProductStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasDrawCycle applies the HasEdge predicate on the "draw_cycle" edge.
+func HasDrawCycle() predicate.ShopOrder {
+	return predicate.ShopOrder(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, DrawCycleTable, DrawCycleColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasDrawCycleWith applies the HasEdge predicate on the "draw_cycle" edge with a given conditions (other predicates).
+func HasDrawCycleWith(preds ...predicate.ShopDrawCycle) predicate.ShopOrder {
+	return predicate.ShopOrder(func(s *sql.Selector) {
+		step := newDrawCycleStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasBalanceLedger applies the HasEdge predicate on the "balance_ledger" edge.
+func HasBalanceLedger() predicate.ShopOrder {
+	return predicate.ShopOrder(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, BalanceLedgerTable, BalanceLedgerColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasBalanceLedgerWith applies the HasEdge predicate on the "balance_ledger" edge with a given conditions (other predicates).
+func HasBalanceLedgerWith(preds ...predicate.ShopBalanceLedger) predicate.ShopOrder {
+	return predicate.ShopOrder(func(s *sql.Selector) {
+		step := newBalanceLedgerStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

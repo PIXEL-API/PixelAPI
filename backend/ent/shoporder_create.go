@@ -11,7 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopcardkey"
+	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -219,6 +221,48 @@ func (_c *ShopOrderCreate) SetNillableFailedReason(v *string) *ShopOrderCreate {
 	return _c
 }
 
+// SetDrawRewardAmount sets the "draw_reward_amount" field.
+func (_c *ShopOrderCreate) SetDrawRewardAmount(v float64) *ShopOrderCreate {
+	_c.mutation.SetDrawRewardAmount(v)
+	return _c
+}
+
+// SetNillableDrawRewardAmount sets the "draw_reward_amount" field if the given value is not nil.
+func (_c *ShopOrderCreate) SetNillableDrawRewardAmount(v *float64) *ShopOrderCreate {
+	if v != nil {
+		_c.SetDrawRewardAmount(*v)
+	}
+	return _c
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (_c *ShopOrderCreate) SetDrawCycleID(v int64) *ShopOrderCreate {
+	_c.mutation.SetDrawCycleID(v)
+	return _c
+}
+
+// SetNillableDrawCycleID sets the "draw_cycle_id" field if the given value is not nil.
+func (_c *ShopOrderCreate) SetNillableDrawCycleID(v *int64) *ShopOrderCreate {
+	if v != nil {
+		_c.SetDrawCycleID(*v)
+	}
+	return _c
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (_c *ShopOrderCreate) SetDrawCycleIndex(v int) *ShopOrderCreate {
+	_c.mutation.SetDrawCycleIndex(v)
+	return _c
+}
+
+// SetNillableDrawCycleIndex sets the "draw_cycle_index" field if the given value is not nil.
+func (_c *ShopOrderCreate) SetNillableDrawCycleIndex(v *int) *ShopOrderCreate {
+	if v != nil {
+		_c.SetDrawCycleIndex(*v)
+	}
+	return _c
+}
+
 // SetUser sets the "user" edge to the User entity.
 func (_c *ShopOrderCreate) SetUser(v *User) *ShopOrderCreate {
 	return _c.SetUserID(v.ID)
@@ -227,6 +271,26 @@ func (_c *ShopOrderCreate) SetUser(v *User) *ShopOrderCreate {
 // SetProduct sets the "product" edge to the ShopProduct entity.
 func (_c *ShopOrderCreate) SetProduct(v *ShopProduct) *ShopOrderCreate {
 	return _c.SetProductID(v.ID)
+}
+
+// SetDrawCycle sets the "draw_cycle" edge to the ShopDrawCycle entity.
+func (_c *ShopOrderCreate) SetDrawCycle(v *ShopDrawCycle) *ShopOrderCreate {
+	return _c.SetDrawCycleID(v.ID)
+}
+
+// AddBalanceLedgerIDs adds the "balance_ledger" edge to the ShopBalanceLedger entity by IDs.
+func (_c *ShopOrderCreate) AddBalanceLedgerIDs(ids ...int64) *ShopOrderCreate {
+	_c.mutation.AddBalanceLedgerIDs(ids...)
+	return _c
+}
+
+// AddBalanceLedger adds the "balance_ledger" edges to the ShopBalanceLedger entity.
+func (_c *ShopOrderCreate) AddBalanceLedger(v ...*ShopBalanceLedger) *ShopOrderCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddBalanceLedgerIDs(ids...)
 }
 
 // AddCardKeyIDs adds the "card_keys" edge to the ShopCardKey entity by IDs.
@@ -449,6 +513,14 @@ func (_c *ShopOrderCreate) createSpec() (*ShopOrder, *sqlgraph.CreateSpec) {
 		_spec.SetField(shoporder.FieldFailedReason, field.TypeString, value)
 		_node.FailedReason = &value
 	}
+	if value, ok := _c.mutation.DrawRewardAmount(); ok {
+		_spec.SetField(shoporder.FieldDrawRewardAmount, field.TypeFloat64, value)
+		_node.DrawRewardAmount = &value
+	}
+	if value, ok := _c.mutation.DrawCycleIndex(); ok {
+		_spec.SetField(shoporder.FieldDrawCycleIndex, field.TypeInt, value)
+		_node.DrawCycleIndex = &value
+	}
 	if nodes := _c.mutation.UserIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2O,
@@ -481,6 +553,39 @@ func (_c *ShopOrderCreate) createSpec() (*ShopOrder, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.ProductID = nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.DrawCycleIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   shoporder.DrawCycleTable,
+			Columns: []string{shoporder.DrawCycleColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopdrawcycle.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.DrawCycleID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.BalanceLedgerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   shoporder.BalanceLedgerTable,
+			Columns: []string{shoporder.BalanceLedgerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shopbalanceledger.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	if nodes := _c.mutation.CardKeysIDs(); len(nodes) > 0 {
@@ -836,6 +941,72 @@ func (u *ShopOrderUpsert) UpdateFailedReason() *ShopOrderUpsert {
 // ClearFailedReason clears the value of the "failed_reason" field.
 func (u *ShopOrderUpsert) ClearFailedReason() *ShopOrderUpsert {
 	u.SetNull(shoporder.FieldFailedReason)
+	return u
+}
+
+// SetDrawRewardAmount sets the "draw_reward_amount" field.
+func (u *ShopOrderUpsert) SetDrawRewardAmount(v float64) *ShopOrderUpsert {
+	u.Set(shoporder.FieldDrawRewardAmount, v)
+	return u
+}
+
+// UpdateDrawRewardAmount sets the "draw_reward_amount" field to the value that was provided on create.
+func (u *ShopOrderUpsert) UpdateDrawRewardAmount() *ShopOrderUpsert {
+	u.SetExcluded(shoporder.FieldDrawRewardAmount)
+	return u
+}
+
+// AddDrawRewardAmount adds v to the "draw_reward_amount" field.
+func (u *ShopOrderUpsert) AddDrawRewardAmount(v float64) *ShopOrderUpsert {
+	u.Add(shoporder.FieldDrawRewardAmount, v)
+	return u
+}
+
+// ClearDrawRewardAmount clears the value of the "draw_reward_amount" field.
+func (u *ShopOrderUpsert) ClearDrawRewardAmount() *ShopOrderUpsert {
+	u.SetNull(shoporder.FieldDrawRewardAmount)
+	return u
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (u *ShopOrderUpsert) SetDrawCycleID(v int64) *ShopOrderUpsert {
+	u.Set(shoporder.FieldDrawCycleID, v)
+	return u
+}
+
+// UpdateDrawCycleID sets the "draw_cycle_id" field to the value that was provided on create.
+func (u *ShopOrderUpsert) UpdateDrawCycleID() *ShopOrderUpsert {
+	u.SetExcluded(shoporder.FieldDrawCycleID)
+	return u
+}
+
+// ClearDrawCycleID clears the value of the "draw_cycle_id" field.
+func (u *ShopOrderUpsert) ClearDrawCycleID() *ShopOrderUpsert {
+	u.SetNull(shoporder.FieldDrawCycleID)
+	return u
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (u *ShopOrderUpsert) SetDrawCycleIndex(v int) *ShopOrderUpsert {
+	u.Set(shoporder.FieldDrawCycleIndex, v)
+	return u
+}
+
+// UpdateDrawCycleIndex sets the "draw_cycle_index" field to the value that was provided on create.
+func (u *ShopOrderUpsert) UpdateDrawCycleIndex() *ShopOrderUpsert {
+	u.SetExcluded(shoporder.FieldDrawCycleIndex)
+	return u
+}
+
+// AddDrawCycleIndex adds v to the "draw_cycle_index" field.
+func (u *ShopOrderUpsert) AddDrawCycleIndex(v int) *ShopOrderUpsert {
+	u.Add(shoporder.FieldDrawCycleIndex, v)
+	return u
+}
+
+// ClearDrawCycleIndex clears the value of the "draw_cycle_index" field.
+func (u *ShopOrderUpsert) ClearDrawCycleIndex() *ShopOrderUpsert {
+	u.SetNull(shoporder.FieldDrawCycleIndex)
 	return u
 }
 
@@ -1217,6 +1388,83 @@ func (u *ShopOrderUpsertOne) UpdateFailedReason() *ShopOrderUpsertOne {
 func (u *ShopOrderUpsertOne) ClearFailedReason() *ShopOrderUpsertOne {
 	return u.Update(func(s *ShopOrderUpsert) {
 		s.ClearFailedReason()
+	})
+}
+
+// SetDrawRewardAmount sets the "draw_reward_amount" field.
+func (u *ShopOrderUpsertOne) SetDrawRewardAmount(v float64) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetDrawRewardAmount(v)
+	})
+}
+
+// AddDrawRewardAmount adds v to the "draw_reward_amount" field.
+func (u *ShopOrderUpsertOne) AddDrawRewardAmount(v float64) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddDrawRewardAmount(v)
+	})
+}
+
+// UpdateDrawRewardAmount sets the "draw_reward_amount" field to the value that was provided on create.
+func (u *ShopOrderUpsertOne) UpdateDrawRewardAmount() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateDrawRewardAmount()
+	})
+}
+
+// ClearDrawRewardAmount clears the value of the "draw_reward_amount" field.
+func (u *ShopOrderUpsertOne) ClearDrawRewardAmount() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.ClearDrawRewardAmount()
+	})
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (u *ShopOrderUpsertOne) SetDrawCycleID(v int64) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetDrawCycleID(v)
+	})
+}
+
+// UpdateDrawCycleID sets the "draw_cycle_id" field to the value that was provided on create.
+func (u *ShopOrderUpsertOne) UpdateDrawCycleID() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateDrawCycleID()
+	})
+}
+
+// ClearDrawCycleID clears the value of the "draw_cycle_id" field.
+func (u *ShopOrderUpsertOne) ClearDrawCycleID() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.ClearDrawCycleID()
+	})
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (u *ShopOrderUpsertOne) SetDrawCycleIndex(v int) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetDrawCycleIndex(v)
+	})
+}
+
+// AddDrawCycleIndex adds v to the "draw_cycle_index" field.
+func (u *ShopOrderUpsertOne) AddDrawCycleIndex(v int) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddDrawCycleIndex(v)
+	})
+}
+
+// UpdateDrawCycleIndex sets the "draw_cycle_index" field to the value that was provided on create.
+func (u *ShopOrderUpsertOne) UpdateDrawCycleIndex() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateDrawCycleIndex()
+	})
+}
+
+// ClearDrawCycleIndex clears the value of the "draw_cycle_index" field.
+func (u *ShopOrderUpsertOne) ClearDrawCycleIndex() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.ClearDrawCycleIndex()
 	})
 }
 
@@ -1764,6 +2012,83 @@ func (u *ShopOrderUpsertBulk) UpdateFailedReason() *ShopOrderUpsertBulk {
 func (u *ShopOrderUpsertBulk) ClearFailedReason() *ShopOrderUpsertBulk {
 	return u.Update(func(s *ShopOrderUpsert) {
 		s.ClearFailedReason()
+	})
+}
+
+// SetDrawRewardAmount sets the "draw_reward_amount" field.
+func (u *ShopOrderUpsertBulk) SetDrawRewardAmount(v float64) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetDrawRewardAmount(v)
+	})
+}
+
+// AddDrawRewardAmount adds v to the "draw_reward_amount" field.
+func (u *ShopOrderUpsertBulk) AddDrawRewardAmount(v float64) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddDrawRewardAmount(v)
+	})
+}
+
+// UpdateDrawRewardAmount sets the "draw_reward_amount" field to the value that was provided on create.
+func (u *ShopOrderUpsertBulk) UpdateDrawRewardAmount() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateDrawRewardAmount()
+	})
+}
+
+// ClearDrawRewardAmount clears the value of the "draw_reward_amount" field.
+func (u *ShopOrderUpsertBulk) ClearDrawRewardAmount() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.ClearDrawRewardAmount()
+	})
+}
+
+// SetDrawCycleID sets the "draw_cycle_id" field.
+func (u *ShopOrderUpsertBulk) SetDrawCycleID(v int64) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetDrawCycleID(v)
+	})
+}
+
+// UpdateDrawCycleID sets the "draw_cycle_id" field to the value that was provided on create.
+func (u *ShopOrderUpsertBulk) UpdateDrawCycleID() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateDrawCycleID()
+	})
+}
+
+// ClearDrawCycleID clears the value of the "draw_cycle_id" field.
+func (u *ShopOrderUpsertBulk) ClearDrawCycleID() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.ClearDrawCycleID()
+	})
+}
+
+// SetDrawCycleIndex sets the "draw_cycle_index" field.
+func (u *ShopOrderUpsertBulk) SetDrawCycleIndex(v int) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetDrawCycleIndex(v)
+	})
+}
+
+// AddDrawCycleIndex adds v to the "draw_cycle_index" field.
+func (u *ShopOrderUpsertBulk) AddDrawCycleIndex(v int) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddDrawCycleIndex(v)
+	})
+}
+
+// UpdateDrawCycleIndex sets the "draw_cycle_index" field to the value that was provided on create.
+func (u *ShopOrderUpsertBulk) UpdateDrawCycleIndex() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateDrawCycleIndex()
+	})
+}
+
+// ClearDrawCycleIndex clears the value of the "draw_cycle_index" field.
+func (u *ShopOrderUpsertBulk) ClearDrawCycleIndex() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.ClearDrawCycleIndex()
 	})
 }
 

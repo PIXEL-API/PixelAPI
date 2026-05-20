@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/util/httputil"
 	"github.com/tidwall/gjson"
 )
 
@@ -63,6 +64,13 @@ const (
 	openAI403CounterWindowMinutes   = 180
 	openAIModelCapacityCooldown     = time.Minute
 )
+
+var cloudflareChallengeCooldownSteps = []time.Duration{
+	30 * time.Second,
+	time.Minute,
+	2 * time.Minute,
+	5 * time.Minute,
+}
 
 // NewRateLimitService 创建RateLimitService实例
 func NewRateLimitService(accountRepo AccountRepository, usageRepo UsageLogRepository, cfg *config.Config, geminiQuotaService *GeminiQuotaService, tempUnschedCache TempUnschedCache) *RateLimitService {
@@ -145,6 +153,10 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	if !account.ShouldHandleErrorCode(statusCode) {
 		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
+	}
+
+	if httputil.IsCloudflareChallengeResponse(statusCode, headers, responseBody) {
+		return s.handleCloudflareChallenge(ctx, account, statusCode, headers, responseBody)
 	}
 
 	// 先尝试临时不可调度规则（401除外）
@@ -712,6 +724,80 @@ func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account
 		return
 	}
 	slog.Warn("account_disabled_auth_error", "account_id", account.ID, "error", errorMsg)
+}
+
+func (s *RateLimitService) handleCloudflareChallenge(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) bool {
+	now := time.Now()
+	consecutiveCount := nextCloudflareChallengeCount(account, now)
+	cooldown := cloudflareChallengeCooldownForCount(consecutiveCount)
+	msg := fmt.Sprintf(
+		"Cloudflare challenge (%d): upstream access layer blocked the request temporarily",
+		statusCode,
+	)
+	msg = httputil.FormatCloudflareChallengeMessage(msg, headers, responseBody)
+	if upstreamBody := strings.TrimSpace(httputil.TruncateBody(responseBody, 256)); upstreamBody != "" {
+		msg += ": " + upstreamBody
+	}
+
+	until := now.Add(cooldown)
+	state := &TempUnschedState{
+		UntilUnix:        until.Unix(),
+		TriggeredAtUnix:  now.Unix(),
+		StatusCode:       statusCode,
+		MatchedKeyword:   "cloudflare_challenge",
+		RuleIndex:        -1,
+		ErrorMessage:     msg,
+		ConsecutiveCount: consecutiveCount,
+	}
+	reason := msg
+	if raw, err := json.Marshal(state); err == nil {
+		reason = string(raw)
+	}
+
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("cloudflare_challenge_temp_unschedulable_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		s.handleAuthError(ctx, account, msg)
+		return true
+	}
+	account.TempUnschedulableUntil = &until
+	account.TempUnschedulableReason = reason
+
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
+			slog.Warn("cloudflare_challenge_temp_unsched_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
+	slog.Warn("cloudflare_challenge_temp_unschedulable", "account_id", account.ID, "status_code", statusCode, "until", until, "consecutive_count", consecutiveCount)
+	return true
+}
+
+func nextCloudflareChallengeCount(account *Account, now time.Time) int {
+	if account == nil || account.TempUnschedulableUntil == nil || now.After(account.TempUnschedulableUntil.Add(time.Minute)) {
+		return 1
+	}
+	var previous TempUnschedState
+	if err := json.Unmarshal([]byte(account.TempUnschedulableReason), &previous); err != nil {
+		return 1
+	}
+	if previous.MatchedKeyword != "cloudflare_challenge" {
+		return 1
+	}
+	if previous.ConsecutiveCount < 1 {
+		return 2
+	}
+	return previous.ConsecutiveCount + 1
+}
+
+func cloudflareChallengeCooldownForCount(count int) time.Duration {
+	if count <= 1 {
+		return cloudflareChallengeCooldownSteps[0]
+	}
+	index := count - 1
+	if index >= len(cloudflareChallengeCooldownSteps) {
+		index = len(cloudflareChallengeCooldownSteps) - 1
+	}
+	return cloudflareChallengeCooldownSteps[index]
 }
 
 func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody []byte, fallback string) string {
