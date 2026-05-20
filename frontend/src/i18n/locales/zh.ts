@@ -3172,6 +3172,14 @@ export default {
           constrained: '资源紧张',
           unavailable: '不可用'
         },
+        groupHealthHelp: {
+          title: '状态说明',
+          normal: '分组可正常调度，5h 剩余容量按当前消耗速度预计可支撑 5 小时以上。',
+          degraded: '分组仍可调度，但 5h 剩余容量预计只能支撑 3-5 小时。',
+          constrained: '分组仍可调度，但 5h 剩余容量预计不足 3 小时，可能更容易限流或失败。',
+          unavailable: '分组当前不可调度，可能是分组禁用、没有可用账号、账号错误/禁用、限流、过载、临时不可调度或额度耗尽。',
+          rule: '预计支撑时间根据 5h 窗口的已用比例、已过去时间和剩余容量推算。'
+        },
         empty: '当前没有配置账号配额，也没有可汇总的 OpenAI OAuth 快照。',
         loadFailed: '额度总览加载失败'
       },
@@ -6981,6 +6989,11 @@ export default {
     fee: '手续费',
     actualPay: '实付金额',
     createOrder: '确认支付',
+    rechargeNotice: {
+      title: '充值须知',
+      message: '请严格按照订单显示的应付金额完成支付。若实际支付金额与订单金额不一致，系统将无法完成回调确认，充值或订阅可能无法自动到账。',
+      confirm: '我已知晓，继续支付',
+    },
     methods: {
       easypay: '易支付',
       alipay: '支付宝',

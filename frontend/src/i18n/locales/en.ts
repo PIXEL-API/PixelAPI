@@ -3096,6 +3096,14 @@ export default {
           constrained: 'Constrained',
           unavailable: 'Unavailable'
         },
+        groupHealthHelp: {
+          title: 'Status guide',
+          normal: 'The group can schedule normally. Based on the current burn rate, the 5h remaining capacity can last more than 5 hours.',
+          degraded: 'The group can still schedule, but the 5h remaining capacity is expected to last 3-5 hours.',
+          constrained: 'The group can still schedule, but the 5h remaining capacity is expected to last less than 3 hours, so rate limits or failures are more likely.',
+          unavailable: 'The group cannot schedule now. It may be disabled, have no usable accounts, or include accounts that are errored, disabled, limited, overloaded, temporarily unschedulable, or quota-exhausted.',
+          rule: 'Estimated support time is calculated from the 5h window usage, elapsed time, and remaining capacity.'
+        },
         empty: 'No account quota or summarizable OpenAI OAuth snapshots are available yet.',
         loadFailed: 'Failed to load quota overview'
       },
@@ -6797,6 +6805,11 @@ export default {
     fee: 'Fee',
     actualPay: 'Actual Payment',
     createOrder: 'Confirm Payment',
+    rechargeNotice: {
+      title: 'Recharge Notice',
+      message: 'Please pay the exact amount shown on the order. If the actual paid amount differs from the order amount, the system may be unable to confirm the payment callback and the recharge or subscription may not be credited automatically.',
+      confirm: 'I understand, continue',
+    },
     methods: {
       easypay: 'EasyPay',
       alipay: 'Alipay',

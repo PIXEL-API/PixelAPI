@@ -107,6 +107,25 @@ backend/internal/web/dist/*
 backend/data/
 data/
 
+# 本地备份、数据库导出和归档包，禁止进入开源仓库
+backups/
+*.dump
+*.sql.gz
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+
+# 证书和私钥
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+
 # ===================
 # 本地配置文件（包含敏感信息）
 # ===================
@@ -141,4 +160,3 @@ frontend/coverage/
 aicodex
 output/
 test/images/
-.gitignore

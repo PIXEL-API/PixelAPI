@@ -75,6 +75,23 @@
           <span class="rounded-md bg-red-50 px-2 py-0.5 font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">
             {{ t('admin.accounts.quotaDashboard.groupUnavailableCount', { count: groupHealthCounts.unavailable }) }}
           </span>
+          <HelpTooltip trigger="click" width-class="w-80">
+            <div class="space-y-2 pr-4">
+              <p class="font-semibold text-white">{{ t('admin.accounts.quotaDashboard.groupHealthHelp.title') }}</p>
+              <div class="space-y-1.5">
+                <p
+                  v-for="item in groupHealthHelpItems"
+                  :key="item.key"
+                >
+                  <span class="font-semibold text-white">{{ item.label }}</span>
+                  <span class="text-gray-300">：{{ item.description }}</span>
+                </p>
+              </div>
+              <p class="border-t border-white/10 pt-2 text-gray-300">
+                {{ t('admin.accounts.quotaDashboard.groupHealthHelp.rule') }}
+              </p>
+            </div>
+          </HelpTooltip>
         </div>
       </div>
 
@@ -274,6 +291,7 @@ import { useI18n } from 'vue-i18n'
 import type { AccountQuotaDashboard, AccountQuotaDimensionSummary, AccountQuotaGroupSummary, AccountQuotaSummary, GroupPlatform } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import { formatDateTime } from '@/utils/format'
 import { platformLabel } from '@/utils/platformColors'
 import {
@@ -382,6 +400,29 @@ const groupHealthCounts = computed(() => {
     { normal: 0, degraded: 0, constrained: 0, unavailable: 0 }
   )
 })
+
+const groupHealthHelpItems = computed(() => [
+  {
+    key: 'normal',
+    label: t('admin.accounts.quotaDashboard.groupHealth.normal'),
+    description: t('admin.accounts.quotaDashboard.groupHealthHelp.normal')
+  },
+  {
+    key: 'degraded',
+    label: t('admin.accounts.quotaDashboard.groupHealth.degraded'),
+    description: t('admin.accounts.quotaDashboard.groupHealthHelp.degraded')
+  },
+  {
+    key: 'constrained',
+    label: t('admin.accounts.quotaDashboard.groupHealth.constrained'),
+    description: t('admin.accounts.quotaDashboard.groupHealthHelp.constrained')
+  },
+  {
+    key: 'unavailable',
+    label: t('admin.accounts.quotaDashboard.groupHealth.unavailable'),
+    description: t('admin.accounts.quotaDashboard.groupHealthHelp.unavailable')
+  }
+])
 
 function typeLabel(type: string): string {
   switch (type) {

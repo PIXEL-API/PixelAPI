@@ -243,6 +243,15 @@
         </div>
       </Transition>
     </Teleport>
+    <ConfirmDialog
+      :show="showRechargeNoticeDialog"
+      :title="t('payment.rechargeNotice.title')"
+      :message="t('payment.rechargeNotice.message')"
+      :confirm-text="t('payment.rechargeNotice.confirm')"
+      :cancel-text="t('common.cancel')"
+      @confirm="confirmRechargeNotice"
+      @cancel="cancelRechargeNotice"
+    />
   </AppLayout>
 </template>
 
@@ -262,6 +271,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import { METHOD_ORDER, getPaymentPopupFeatures } from '@/components/payment/providerConfig'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   buildCreateOrderPayload,
@@ -306,6 +316,8 @@ const amount = ref<number | null>(null)
 const selectedMethod = ref('')
 const selectedPlan = ref<SubscriptionPlan | null>(null)
 const previewImage = ref('')
+const showRechargeNoticeDialog = ref(false)
+const pendingPaymentAction = ref<(() => Promise<void>) | null>(null)
 
 const RECHARGE_QUICK_AMOUNTS = [5, 10, 20, 30, 50, 100]
 
@@ -663,12 +675,32 @@ function closeRenewalModal() {
 
 async function handleSubmitRecharge() {
   if (!canSubmit.value || submitting.value) return
-  await createOrder(validAmount.value, 'balance')
+  const rechargeAmount = validAmount.value
+  requestRechargeNoticeConfirmation(() => createOrder(rechargeAmount, 'balance'))
 }
 
 async function confirmSubscribe() {
   if (!selectedPlan.value || submitting.value) return
-  await createOrder(selectedPlan.value.price, 'subscription', selectedPlan.value.id)
+  const plan = selectedPlan.value
+  requestRechargeNoticeConfirmation(() => createOrder(plan.price, 'subscription', plan.id))
+}
+
+function requestRechargeNoticeConfirmation(action: () => Promise<void>) {
+  pendingPaymentAction.value = action
+  showRechargeNoticeDialog.value = true
+}
+
+function cancelRechargeNotice() {
+  showRechargeNoticeDialog.value = false
+  pendingPaymentAction.value = null
+}
+
+async function confirmRechargeNotice() {
+  const action = pendingPaymentAction.value
+  showRechargeNoticeDialog.value = false
+  pendingPaymentAction.value = null
+  if (!action) return
+  await action()
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {
