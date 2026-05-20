@@ -1,0 +1,47 @@
+# =============================================================================
+# Sub2API Subsite Agent - Standalone Edge Node
+# =============================================================================
+# Use this file from the repository deploy/ directory on a subsite server. The
+# master server still runs the normal Sub2API deployment; this service only runs
+# the lightweight request executor.
+#
+# Quick Start:
+#   1. Copy .env.subsite.example to .env.subsite and fill required values
+#   2. mkdir -p subsite_data
+#   3. Set SUBSITE_UID/SUBSITE_GID to the owner of subsite_data when needed
+#   4. docker compose --env-file .env.subsite -f docker-compose.subsite-agent.yml up -d --build
+#   4. Check logs: docker compose --env-file .env.subsite -f docker-compose.subsite-agent.yml logs -f subsite-agent
+# =============================================================================
+
+services:
+  subsite-agent:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.subsite-agent
+    image: sub2api-subsite-agent:local
+    container_name: sub2api-subsite-agent
+    restart: unless-stopped
+    user: "${SUBSITE_UID:-1000}:${SUBSITE_GID:-1000}"
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    ports:
+      - "${SUBSITE_BIND_HOST:-0.0.0.0}:${SUBSITE_PORT:-8081}:8080"
+    volumes:
+      - ./subsite_data:/app/data
+    environment:
+      - SUBSITE_LISTEN_ADDR=0.0.0.0:8080
+      - SUBSITE_ID=${SUBSITE_ID:?SUBSITE_ID is required}
+      - SUBSITE_PUBLIC_URL=${SUBSITE_PUBLIC_URL:?SUBSITE_PUBLIC_URL is required}
+      - SUBSITE_MASTER_URL=${SUBSITE_MASTER_URL:?SUBSITE_MASTER_URL is required}
+      - SUBSITE_MASTER_SECRET=${SUBSITE_MASTER_SECRET:?SUBSITE_MASTER_SECRET is required}
+      - SUBSITE_USAGE_QUEUE_PATH=/app/data/subsite-usage.db
+      - SUBSITE_VERSION=${SUBSITE_VERSION:-local}
+      - GIN_MODE=release
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
