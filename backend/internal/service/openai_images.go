@@ -468,14 +468,7 @@ func isOpenAINativeImageOption(name string) bool {
 }
 
 func normalizeOpenAIImageSizeTier(size string) string {
-	switch strings.ToLower(strings.TrimSpace(size)) {
-	case "1024x1024":
-		return "1K"
-	case "1536x1024", "1024x1536", "1792x1024", "1024x1792", "", "auto":
-		return "2K"
-	default:
-		return "2K"
-	}
+	return NormalizeImageBillingTierOrDefault(size)
 }
 
 func (s *OpenAIGatewayService) ForwardImages(
@@ -531,15 +524,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err != nil {
 		return nil, err
 	}
-	if !parsed.Multipart {
-		setOpsUpstreamRequestBody(c, forwardBody)
-	}
+	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, true)
+	defer releaseUpstreamCtx()
 
-	token, _, err := s.GetAccessToken(ctx, account)
+	token, _, err := s.GetAccessToken(upstreamCtx, account)
 	if err != nil {
 		return nil, err
 	}
-	upstreamReq, err := s.buildOpenAIImagesRequest(ctx, c, account, forwardBody, forwardContentType, token, parsed.Endpoint)
+	upstreamReq, err := s.buildOpenAIImagesRequest(upstreamCtx, c, account, forwardBody, forwardContentType, token, parsed.Endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -582,14 +574,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			s.handleFailoverSideEffects(ctx, resp, account)
+			s.handleFailoverSideEffects(upstreamCtx, resp, account)
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
 				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
-		return s.handleErrorResponse(ctx, resp, c, account, forwardBody)
+		return s.handleErrorResponse(upstreamCtx, resp, c, account, forwardBody)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
