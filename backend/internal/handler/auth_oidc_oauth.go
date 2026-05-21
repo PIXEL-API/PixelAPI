@@ -139,10 +139,12 @@ func (h *AuthHandler) OIDCOAuthStart(c *gin.Context) {
 	}
 
 	secureCookie := isRequestHTTPS(c)
+	loginAgreementRevision := strings.TrimSpace(c.Query("login_agreement_revision"))
 	oidcSetCookie(c, oidcOAuthStateCookieName, encodeCookieValue(state), oidcOAuthCookieMaxAgeSec, secureCookie)
 	oidcSetCookie(c, oidcOAuthRedirectCookie, encodeCookieValue(redirectTo), oidcOAuthCookieMaxAgeSec, secureCookie)
 	intent := normalizeOAuthIntent(c.Query("intent"))
 	oidcSetCookie(c, oidcOAuthIntentCookieName, encodeCookieValue(intent), oidcOAuthCookieMaxAgeSec, secureCookie)
+	setOAuthLoginAgreementCookie(c, loginAgreementRevision, secureCookie)
 	setOAuthPendingBrowserCookie(c, browserSessionKey, secureCookie)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	if intent == oauthIntentBindCurrentUser {
@@ -226,6 +228,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		oidcClearCookie(c, oidcOAuthNonceCookie, secureCookie)
 		oidcClearCookie(c, oidcOAuthIntentCookieName, secureCookie)
 		oidcClearCookie(c, oidcOAuthBindUserCookieName, secureCookie)
+		clearOAuthLoginAgreementCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, oidcOAuthStateCookieName)
@@ -246,6 +249,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	}
 	intent, _ := readCookieDecoded(c, oidcOAuthIntentCookieName)
 	intent = normalizeOAuthIntent(intent)
+	loginAgreementRevision := readOAuthLoginAgreementCookie(c)
 
 	codeVerifier := ""
 	if cfg.UsePKCE {
@@ -404,6 +408,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 			ResolvedEmail:          email,
 			RedirectTo:             redirectTo,
 			BrowserSessionKey:      browserSessionKey,
+			LoginAgreementRevision: loginAgreementRevision,
 			UpstreamIdentityClaims: upstreamClaims,
 			CompletionResponse: map[string]any{
 				"redirect": redirectTo,
@@ -429,6 +434,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 			ResolvedEmail:          existingIdentityUser.Email,
 			RedirectTo:             redirectTo,
 			BrowserSessionKey:      browserSessionKey,
+			LoginAgreementRevision: loginAgreementRevision,
 			UpstreamIdentityClaims: upstreamClaims,
 			CompletionResponse: map[string]any{
 				"redirect": redirectTo,
@@ -462,6 +468,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 			email,
 			redirectTo,
 			browserSessionKey,
+			loginAgreementRevision,
 			upstreamClaims,
 			compatEmail,
 			compatEmailUser,
@@ -481,6 +488,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		email,
 		redirectTo,
 		browserSessionKey,
+		loginAgreementRevision,
 		upstreamClaims,
 		compatEmail,
 		compatEmailUser,
@@ -523,6 +531,7 @@ func (h *AuthHandler) createOIDCOAuthChoicePendingSession(
 	resolvedEmail string,
 	redirectTo string,
 	browserSessionKey string,
+	loginAgreementRevision string,
 	upstreamClaims map[string]any,
 	compatEmail string,
 	compatEmailUser *dbent.User,
@@ -575,16 +584,18 @@ func (h *AuthHandler) createOIDCOAuthChoicePendingSession(
 		ResolvedEmail:          resolvedChoiceEmail,
 		RedirectTo:             redirectTo,
 		BrowserSessionKey:      browserSessionKey,
+		LoginAgreementRevision: loginAgreementRevision,
 		UpstreamIdentityClaims: upstreamClaims,
 		CompletionResponse:     completionResponse,
 	})
 }
 
 type completeOIDCOAuthRequest struct {
-	InvitationCode   string `json:"invitation_code" binding:"required"`
-	AffCode          string `json:"aff_code,omitempty"`
-	AdoptDisplayName *bool  `json:"adopt_display_name,omitempty"`
-	AdoptAvatar      *bool  `json:"adopt_avatar,omitempty"`
+	InvitationCode         string `json:"invitation_code" binding:"required"`
+	AffCode                string `json:"aff_code,omitempty"`
+	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
+	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
+	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
 }
 
 // CompleteOIDCOAuthRegistration completes a pending OAuth registration by validating
@@ -638,6 +649,10 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		session = updatedSession
 	}
 	if err := h.ensureBackendModeAllowsNewUserLogin(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := h.ensureLoginAgreementAccepted(c.Request.Context(), requestLoginAgreementRevision(req.LoginAgreementRevision, session)); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}

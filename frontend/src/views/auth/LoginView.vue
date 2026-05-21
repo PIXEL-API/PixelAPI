@@ -144,22 +144,26 @@
             :disabled="authActionDisabled"
             :github-enabled="githubOAuthEnabled"
             :google-enabled="googleOAuthEnabled"
+            :login-agreement-revision="loginAgreementRevision"
             :show-divider="false"
           />
 
           <LinuxDoOAuthSection
             v-if="linuxdoOAuthEnabled"
             :disabled="authActionDisabled"
+            :login-agreement-revision="loginAgreementRevision"
             :show-divider="false"
           />
           <WechatOAuthSection
             v-if="wechatOAuthEnabled"
             :disabled="authActionDisabled"
+            :login-agreement-revision="loginAgreementRevision"
             :show-divider="false"
           />
           <OidcOAuthSection
             v-if="oidcOAuthEnabled"
             :disabled="authActionDisabled"
+            :login-agreement-revision="loginAgreementRevision"
             :provider-name="oidcOAuthProviderName"
             :show-divider="false"
           />
@@ -471,7 +475,8 @@ async function handleLogin(): Promise<void> {
     const response = await authStore.login({
       email: formData.email,
       password: formData.password,
-      turnstile_token: turnstileEnabled.value ? turnstileToken.value : undefined
+      turnstile_token: turnstileEnabled.value ? turnstileToken.value : undefined,
+      login_agreement_revision: loginAgreementEnabled.value ? loginAgreementRevision.value : undefined
     })
 
     // Check if 2FA is required
@@ -515,7 +520,7 @@ async function handle2FAVerify(code: string): Promise<void> {
   }
 
   try {
-    await authStore.login2FA(totpTempToken.value, code)
+    await authStore.login2FA(totpTempToken.value, code, loginAgreementEnabled.value ? loginAgreementRevision.value : undefined)
 
     // Close modal and show success
     show2FAModal.value = false

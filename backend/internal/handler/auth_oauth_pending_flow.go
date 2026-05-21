@@ -31,10 +31,12 @@ const (
 	oauthPendingBrowserCookieName = "oauth_pending_browser_session"
 	oauthPendingSessionCookiePath = "/api/v1/auth/oauth"
 	oauthPendingSessionCookieName = "oauth_pending_session"
+	oauthLoginAgreementCookieName = "oauth_login_agreement_revision"
 	oauthPendingCookieMaxAgeSec   = 10 * 60
 	oauthPendingChoiceStep        = "choose_account_action_required"
 
 	oauthCompletionResponseKey = "completion_response"
+	oauthLoginAgreementKey     = "login_agreement_revision"
 )
 
 var pendingOAuthCreateAccountPreCommitHook func(context.Context, *dbent.PendingAuthSession) error
@@ -46,30 +48,34 @@ type oauthPendingSessionPayload struct {
 	ResolvedEmail          string
 	RedirectTo             string
 	BrowserSessionKey      string
+	LoginAgreementRevision string
 	UpstreamIdentityClaims map[string]any
 	CompletionResponse     map[string]any
 }
 
 type oauthAdoptionDecisionRequest struct {
-	AdoptDisplayName *bool `json:"adopt_display_name,omitempty"`
-	AdoptAvatar      *bool `json:"adopt_avatar,omitempty"`
+	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
+	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
+	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
 }
 
 type bindPendingOAuthLoginRequest struct {
-	Email            string `json:"email" binding:"required,email"`
-	Password         string `json:"password" binding:"required"`
-	AdoptDisplayName *bool  `json:"adopt_display_name,omitempty"`
-	AdoptAvatar      *bool  `json:"adopt_avatar,omitempty"`
+	Email                  string `json:"email" binding:"required,email"`
+	Password               string `json:"password" binding:"required"`
+	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
+	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
+	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
 }
 
 type createPendingOAuthAccountRequest struct {
-	Email            string `json:"email" binding:"required,email"`
-	VerifyCode       string `json:"verify_code,omitempty"`
-	Password         string `json:"password" binding:"required,min=6"`
-	InvitationCode   string `json:"invitation_code,omitempty"`
-	AffCode          string `json:"aff_code,omitempty"`
-	AdoptDisplayName *bool  `json:"adopt_display_name,omitempty"`
-	AdoptAvatar      *bool  `json:"adopt_avatar,omitempty"`
+	Email                  string `json:"email" binding:"required,email"`
+	VerifyCode             string `json:"verify_code,omitempty"`
+	Password               string `json:"password" binding:"required,min=6"`
+	InvitationCode         string `json:"invitation_code,omitempty"`
+	AffCode                string `json:"aff_code,omitempty"`
+	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
+	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
+	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
 }
 
 type sendPendingOAuthVerifyCodeRequest struct {
@@ -144,6 +150,43 @@ func setOAuthPendingSessionCookie(c *gin.Context, sessionToken string, secure bo
 	})
 }
 
+func setOAuthLoginAgreementCookie(c *gin.Context, revision string, secure bool) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		clearOAuthLoginAgreementCookie(c, secure)
+		return
+	}
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthLoginAgreementCookieName,
+		Value:    encodeCookieValue(revision),
+		Path:     oauthPendingBrowserCookiePath,
+		MaxAge:   oauthPendingCookieMaxAgeSec,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearOAuthLoginAgreementCookie(c *gin.Context, secure bool) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthLoginAgreementCookieName,
+		Value:    "",
+		Path:     oauthPendingBrowserCookiePath,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func readOAuthLoginAgreementCookie(c *gin.Context) string {
+	revision, err := readCookieDecoded(c, oauthLoginAgreementCookieName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(revision)
+}
+
 func clearOAuthPendingSessionCookie(c *gin.Context, secure bool) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     oauthPendingSessionCookieName,
@@ -182,6 +225,13 @@ func (h *AuthHandler) createOAuthPendingSession(c *gin.Context, payload oauthPen
 		return err
 	}
 
+	localFlowState := map[string]any{
+		oauthCompletionResponseKey: payload.CompletionResponse,
+	}
+	if revision := strings.TrimSpace(payload.LoginAgreementRevision); revision != "" {
+		localFlowState[oauthLoginAgreementKey] = revision
+	}
+
 	session, err := svc.CreatePendingSession(c.Request.Context(), service.CreatePendingAuthSessionInput{
 		Intent:                 strings.TrimSpace(payload.Intent),
 		Identity:               payload.Identity,
@@ -190,9 +240,7 @@ func (h *AuthHandler) createOAuthPendingSession(c *gin.Context, payload oauthPen
 		RedirectTo:             strings.TrimSpace(payload.RedirectTo),
 		BrowserSessionKey:      strings.TrimSpace(payload.BrowserSessionKey),
 		UpstreamIdentityClaims: payload.UpstreamIdentityClaims,
-		LocalFlowState: map[string]any{
-			oauthCompletionResponseKey: payload.CompletionResponse,
-		},
+		LocalFlowState:         localFlowState,
 	})
 	if err != nil {
 		return infraerrors.InternalServer("PENDING_AUTH_SESSION_CREATE_FAILED", "failed to create pending auth session").WithCause(err)
@@ -200,6 +248,28 @@ func (h *AuthHandler) createOAuthPendingSession(c *gin.Context, payload oauthPen
 
 	setOAuthPendingSessionCookie(c, session.SessionToken, isRequestHTTPS(c))
 	return nil
+}
+
+func pendingOAuthLoginAgreementRevision(session *dbent.PendingAuthSession) string {
+	if session == nil || len(session.LocalFlowState) == 0 {
+		return ""
+	}
+	raw, ok := session.LocalFlowState[oauthLoginAgreementKey]
+	if !ok {
+		return ""
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func requestLoginAgreementRevision(req string, session *dbent.PendingAuthSession) string {
+	if trimmed := strings.TrimSpace(req); trimmed != "" {
+		return trimmed
+	}
+	return pendingOAuthLoginAgreementRevision(session)
 }
 
 func readCompletionResponse(session map[string]any) (map[string]any, bool) {
@@ -1418,6 +1488,7 @@ func clearOAuthLogoutCookies(c *gin.Context) {
 
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
+	clearOAuthLoginAgreementCookie(c, secureCookie)
 	clearOAuthBindAccessTokenCookie(c, secureCookie)
 
 	clearCookie(c, linuxDoOAuthStateCookieName, secureCookie)
@@ -1563,6 +1634,10 @@ func (h *AuthHandler) bindPendingOAuthLogin(c *gin.Context, provider string) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := h.ensureLoginAgreementAccepted(c.Request.Context(), requestLoginAgreementRevision(req.LoginAgreementRevision, session)); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	decision, err := h.ensurePendingOAuthAdoptionDecision(c, session.ID, req.adoptionDecision())
 	if err != nil {
@@ -1668,6 +1743,10 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		return
 	}
 	if err := h.ensureBackendModeAllowsNewUserLogin(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := h.ensureLoginAgreementAccepted(c.Request.Context(), requestLoginAgreementRevision(req.LoginAgreementRevision, session)); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -1866,6 +1945,11 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 			return
 		}
 		if err := h.ensureBackendModeAllowsUser(c.Request.Context(), loginUser); err != nil {
+			clearCookies()
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err := h.ensureLoginAgreementAccepted(c.Request.Context(), requestLoginAgreementRevision(adoptionDecision.LoginAgreementRevision, session)); err != nil {
 			clearCookies()
 			response.ErrorFrom(c, err)
 			return

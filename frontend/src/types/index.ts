@@ -154,6 +154,7 @@ export interface LoginRequest {
   email: string
   password: string
   turnstile_token?: string
+  login_agreement_revision?: string
 }
 
 export interface RegisterRequest {
@@ -164,6 +165,7 @@ export interface RegisterRequest {
   promo_code?: string
   invitation_code?: string
   aff_code?: string
+  login_agreement_revision?: string
 }
 
 export interface AffiliateInvitee {
@@ -1868,6 +1870,7 @@ export interface TotpLoginResponse {
 export interface TotpLogin2FARequest {
   temp_token: string
   totp_code: string
+  login_agreement_revision?: string
 }
 
 // ==================== Scheduled Test Types ====================

@@ -122,10 +122,12 @@ func (h *AuthHandler) WeChatOAuthStart(c *gin.Context) {
 
 	intent := normalizeWeChatOAuthIntent(c.Query("intent"))
 	secureCookie := isRequestHTTPS(c)
+	loginAgreementRevision := strings.TrimSpace(c.Query("login_agreement_revision"))
 	wechatSetCookie(c, wechatOAuthStateCookieName, encodeCookieValue(state), wechatOAuthCookieMaxAgeSec, secureCookie)
 	wechatSetCookie(c, wechatOAuthRedirectCookieName, encodeCookieValue(redirectTo), wechatOAuthCookieMaxAgeSec, secureCookie)
 	wechatSetCookie(c, wechatOAuthIntentCookieName, encodeCookieValue(intent), wechatOAuthCookieMaxAgeSec, secureCookie)
 	wechatSetCookie(c, wechatOAuthModeCookieName, encodeCookieValue(cfg.mode), wechatOAuthCookieMaxAgeSec, secureCookie)
+	setOAuthLoginAgreementCookie(c, loginAgreementRevision, secureCookie)
 	setOAuthPendingBrowserCookie(c, browserSessionKey, secureCookie)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	if intent == oauthIntentBindCurrentUser {
@@ -172,6 +174,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		wechatClearCookie(c, wechatOAuthIntentCookieName, secureCookie)
 		wechatClearCookie(c, wechatOAuthModeCookieName, secureCookie)
 		wechatClearCookie(c, wechatOAuthBindUserCookieName, secureCookie)
+		clearOAuthLoginAgreementCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, wechatOAuthStateCookieName)
@@ -192,6 +195,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 	}
 
 	intent, _ := readCookieDecoded(c, wechatOAuthIntentCookieName)
+	loginAgreementRevision := readOAuthLoginAgreementCookie(c)
 	mode, err := readCookieDecoded(c, wechatOAuthModeCookieName)
 	if err != nil || strings.TrimSpace(mode) == "" {
 		redirectOAuthError(c, frontendCallback, "invalid_state", "missing oauth mode", "")
@@ -248,7 +252,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 
 	normalizedIntent := normalizeWeChatOAuthIntent(intent)
 	if normalizedIntent == wechatOAuthIntentBind {
-		if err := h.createWeChatBindPendingSession(c, cfg, providerSubject, openid, redirectTo, browserSessionKey, upstreamClaims); err != nil {
+		if err := h.createWeChatBindPendingSession(c, cfg, providerSubject, openid, redirectTo, browserSessionKey, loginAgreementRevision, upstreamClaims); err != nil {
 			switch infraerrors.Code(err) {
 			case http.StatusConflict:
 				redirectOAuthError(c, frontendCallback, "ownership_conflict", infraerrors.Reason(err), infraerrors.Message(err))
@@ -280,7 +284,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 			redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
 			return
 		}
-		if err := h.createWeChatPendingSession(c, normalizedIntent, providerSubject, existingIdentityUser.Email, redirectTo, browserSessionKey, upstreamClaims, nil, nil, &existingIdentityUser.ID); err != nil {
+		if err := h.createWeChatPendingSession(c, normalizedIntent, providerSubject, existingIdentityUser.Email, redirectTo, browserSessionKey, loginAgreementRevision, upstreamClaims, nil, nil, &existingIdentityUser.ID); err != nil {
 			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
 			return
 		}
@@ -296,6 +300,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 			email,
 			redirectTo,
 			browserSessionKey,
+			loginAgreementRevision,
 			upstreamClaims,
 			"",
 			nil,
@@ -315,6 +320,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		email,
 		redirectTo,
 		browserSessionKey,
+		loginAgreementRevision,
 		upstreamClaims,
 		"",
 		nil,
@@ -489,10 +495,11 @@ func (h *AuthHandler) wechatPaymentResumeService() *service.PaymentResumeService
 }
 
 type completeWeChatOAuthRequest struct {
-	InvitationCode   string `json:"invitation_code" binding:"required"`
-	AffCode          string `json:"aff_code,omitempty"`
-	AdoptDisplayName *bool  `json:"adopt_display_name,omitempty"`
-	AdoptAvatar      *bool  `json:"adopt_avatar,omitempty"`
+	InvitationCode         string `json:"invitation_code" binding:"required"`
+	AffCode                string `json:"aff_code,omitempty"`
+	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
+	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
+	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
 }
 
 // CompleteWeChatOAuthRegistration completes a pending WeChat OAuth registration by
@@ -549,6 +556,10 @@ func (h *AuthHandler) CompleteWeChatOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if err := h.ensureLoginAgreementAccepted(c.Request.Context(), requestLoginAgreementRevision(req.LoginAgreementRevision, session)); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	email := strings.TrimSpace(session.ResolvedEmail)
 	username := pendingSessionStringValue(session.UpstreamIdentityClaims, "username")
@@ -599,6 +610,7 @@ func (h *AuthHandler) createWeChatPendingSession(
 	email string,
 	redirectTo string,
 	browserSessionKey string,
+	loginAgreementRevision string,
 	upstreamClaims map[string]any,
 	tokenPair *service.TokenPair,
 	authErr error,
@@ -631,6 +643,7 @@ func (h *AuthHandler) createWeChatPendingSession(
 		ResolvedEmail:          email,
 		RedirectTo:             redirectTo,
 		BrowserSessionKey:      browserSessionKey,
+		LoginAgreementRevision: loginAgreementRevision,
 		UpstreamIdentityClaims: upstreamClaims,
 		CompletionResponse:     completionResponse,
 	})
@@ -643,6 +656,7 @@ func (h *AuthHandler) createWeChatChoicePendingSession(
 	resolvedEmail string,
 	redirectTo string,
 	browserSessionKey string,
+	loginAgreementRevision string,
 	upstreamClaims map[string]any,
 	compatEmail string,
 	compatEmailUser *dbent.User,
@@ -690,6 +704,7 @@ func (h *AuthHandler) createWeChatChoicePendingSession(
 		ResolvedEmail:          resolvedChoiceEmail,
 		RedirectTo:             redirectTo,
 		BrowserSessionKey:      browserSessionKey,
+		LoginAgreementRevision: loginAgreementRevision,
 		UpstreamIdentityClaims: upstreamClaims,
 		CompletionResponse:     completionResponse,
 	})
@@ -702,6 +717,7 @@ func (h *AuthHandler) createWeChatBindPendingSession(
 	channelSubject string,
 	redirectTo string,
 	browserSessionKey string,
+	loginAgreementRevision string,
 	upstreamClaims map[string]any,
 ) error {
 	currentUser, err := h.readOAuthBindTargetUser(c, wechatOAuthBindUserCookieName)
@@ -718,6 +734,7 @@ func (h *AuthHandler) createWeChatBindPendingSession(
 		currentUser.Email,
 		redirectTo,
 		browserSessionKey,
+		loginAgreementRevision,
 		upstreamClaims,
 		nil,
 		nil,

@@ -890,6 +890,7 @@ async function handleRegister(): Promise<void> {
           turnstile_token: turnstileToken.value,
           promo_code: formData.promo_code || undefined,
           invitation_code: formData.invitation_code || undefined,
+          login_agreement_revision: loginAgreementEnabled.value ? loginAgreementRevision.value : undefined,
           ...(affCode ? { aff_code: affCode } : {})
         })
       )
@@ -906,6 +907,7 @@ async function handleRegister(): Promise<void> {
       turnstile_token: turnstileEnabled.value ? turnstileToken.value : undefined,
       promo_code: formData.promo_code || undefined,
       invitation_code: formData.invitation_code || undefined,
+      login_agreement_revision: loginAgreementEnabled.value ? loginAgreementRevision.value : undefined,
       ...(affCode ? { aff_code: affCode } : {})
     })
     clearAffiliateReferralCode()

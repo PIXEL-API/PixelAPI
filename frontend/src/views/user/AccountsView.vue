@@ -21,6 +21,15 @@
             <Icon name="edit" size="md" class="mr-2" />
             {{ t('admin.accounts.bulkActions.edit') }}
           </button>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="exportingData"
+            @click="openExportDataDialog"
+          >
+            <Icon name="download" size="md" class="mr-2" />
+            {{ selectedCount > 0 ? t('userAccounts.exportSelected') : t('userAccounts.exportAccounts') }}
+          </button>
           <button type="button" class="btn btn-secondary" @click="showImportModal = true">
             <Icon name="upload" size="md" class="mr-2" />
             {{ t('userAccounts.importAccounts') }}
@@ -433,6 +442,16 @@
       @cancel="closeBulkDeleteDialog"
     />
 
+    <ConfirmDialog
+      :show="showExportDataDialog"
+      :title="t('userAccounts.exportAccounts')"
+      :message="t('userAccounts.exportConfirmMessage')"
+      :confirm-text="exportingData ? t('userAccounts.exporting') : t('userAccounts.exportConfirm')"
+      :cancel-text="t('common.cancel')"
+      @confirm="handleExportData"
+      @cancel="showExportDataDialog = false"
+    />
+
     <ImportAccountsModal
       :show="showImportModal"
       @close="showImportModal = false"
@@ -525,6 +544,7 @@ const showImportModal = ref(false)
 const showBulkEditModal = ref(false)
 const showDeleteDialog = ref(false)
 const showBulkDeleteDialog = ref(false)
+const showExportDataDialog = ref(false)
 const showTestModal = ref(false)
 const showStatsModal = ref(false)
 const showReAuthModal = ref(false)
@@ -541,6 +561,7 @@ const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
 const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
+const exportingData = ref(false)
 let abortController: AbortController | null = null
 const actionMenu = reactive<{
   show: boolean
@@ -663,6 +684,73 @@ const deleteConfirmMessage = computed(() =>
 const bulkDeleteConfirmMessage = computed(() =>
   t('admin.accounts.bulkDeleteConfirm', { count: selectedCount.value })
 )
+
+function buildAccountQueryFilters(): {
+  search?: string
+  platform?: string
+  type?: string
+  status?: string
+  group_id?: string | number
+  sort_by: string
+  sort_order: 'asc' | 'desc'
+} {
+  const filters: {
+    search?: string
+    platform?: string
+    type?: string
+    status?: string
+    group_id?: string | number
+    sort_by: string
+    sort_order: 'asc' | 'desc'
+  } = {
+    sort_by: sortState.value.sort_by,
+    sort_order: sortState.value.sort_order
+  }
+  if (filterSearch.value.trim()) filters.search = filterSearch.value.trim()
+  if (filterPlatform.value) filters.platform = filterPlatform.value
+  if (filterType.value) filters.type = filterType.value
+  if (filterStatus.value) filters.status = filterStatus.value
+  if (filterGroupId.value !== '') filters.group_id = filterGroupId.value
+  return filters
+}
+
+function formatExportTimestamp(): string {
+  const now = new Date()
+  const pad2 = (value: number) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`
+}
+
+function openExportDataDialog(): void {
+  showExportDataDialog.value = true
+}
+
+async function handleExportData(): Promise<void> {
+  if (exportingData.value) return
+  exportingData.value = true
+  try {
+    const dataPayload = await accountsAPI.exportData(
+      selectedIds.value.length > 0
+        ? { ids: selectedIds.value }
+        : { filters: buildAccountQueryFilters() }
+    )
+    const timestamp = formatExportTimestamp()
+    const filename = `sub2api-user-account-${timestamp}.json`
+    const blob = new Blob([JSON.stringify(dataPayload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+    appStore.showSuccess(t('userAccounts.exportSuccess'))
+  } catch (error: any) {
+    console.error('Failed to export user accounts:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.exportFailed'))
+  } finally {
+    exportingData.value = false
+    showExportDataDialog.value = false
+  }
+}
 
 function isAccountActive(account: Account): boolean {
   return account.status === 'active'
@@ -878,28 +966,10 @@ async function loadAccounts(): Promise<void> {
   loading.value = true
 
   try {
-    const filters: {
-      search?: string
-      platform?: string
-      type?: string
-      status?: string
-      group_id?: string | number
-      sort_by: string
-      sort_order: 'asc' | 'desc'
-    } = {
-      sort_by: sortState.value.sort_by,
-      sort_order: sortState.value.sort_order
-    }
-    if (filterSearch.value.trim()) filters.search = filterSearch.value.trim()
-    if (filterPlatform.value) filters.platform = filterPlatform.value
-    if (filterType.value) filters.type = filterType.value
-    if (filterStatus.value) filters.status = filterStatus.value
-    if (filterGroupId.value !== '') filters.group_id = filterGroupId.value
-
     const response = await accountsAPI.list(
       pagination.value.page,
       pagination.value.page_size,
-      filters,
+      buildAccountQueryFilters(),
       { signal }
     )
     if (signal.aborted) return

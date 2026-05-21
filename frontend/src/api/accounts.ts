@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from './client'
-import type { Account, AccountUsageInfo, AccountUsageStatsResponse, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, UserAccountQuotaPoolDashboard, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, AccountUsageStatsResponse, AdminDataPayload, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, UserAccountQuotaPoolDashboard, WindowStats } from '@/types'
 
 const USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS = 120000
 
@@ -93,6 +93,27 @@ export async function importCredentialContents(
     '/accounts/import-credentials',
     request
   )
+  return data
+}
+
+export async function exportData(options?: {
+  ids?: number[]
+  filters?: UserAccountListFilters
+}): Promise<AdminDataPayload> {
+  const params: Record<string, string> = {}
+  if (options?.ids && options.ids.length > 0) {
+    params.ids = options.ids.join(',')
+  } else if (options?.filters) {
+    const { platform, type, status, group_id, search, sort_by, sort_order } = options.filters
+    if (platform) params.platform = platform
+    if (type) params.type = type
+    if (status) params.status = status
+    if (group_id !== undefined && group_id !== '') params.group_id = String(group_id)
+    if (search) params.search = search
+    if (sort_by) params.sort_by = sort_by
+    if (sort_order) params.sort_order = sort_order
+  }
+  const { data } = await apiClient.get<AdminDataPayload>('/accounts/data', { params })
   return data
 }
 
@@ -486,6 +507,7 @@ export const accountsAPI = {
   create,
   importAccount,
   importCredentialContents,
+  exportData,
   update,
   revalidatePublicShare,
   delete: deleteAccount,
