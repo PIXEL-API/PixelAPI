@@ -363,11 +363,11 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 	}
 	if channelPricing.InputPrice != nil {
 		pricing.InputPricePerToken = *channelPricing.InputPrice
-		pricing.InputPricePerTokenPriority = *channelPricing.InputPrice
+		pricing.InputPricePerTokenPriority = 0
 	}
 	if channelPricing.OutputPrice != nil {
 		pricing.OutputPricePerToken = *channelPricing.OutputPrice
-		pricing.OutputPricePerTokenPriority = *channelPricing.OutputPrice
+		pricing.OutputPricePerTokenPriority = 0
 	}
 	if channelPricing.CacheWritePrice != nil {
 		pricing.CacheCreationPricePerToken = *channelPricing.CacheWritePrice
@@ -376,7 +376,7 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 	}
 	if channelPricing.CacheReadPrice != nil {
 		pricing.CacheReadPricePerToken = *channelPricing.CacheReadPrice
-		pricing.CacheReadPricePerTokenPriority = *channelPricing.CacheReadPrice
+		pricing.CacheReadPricePerTokenPriority = 0
 	}
 	if channelPricing.ImageOutputPrice != nil {
 		pricing.ImageOutputPricePerToken = *channelPricing.ImageOutputPrice
@@ -471,20 +471,38 @@ func (s *BillingService) computeTokenBreakdown(
 	inputPrice := pricing.InputPricePerToken
 	outputPrice := pricing.OutputPricePerToken
 	cacheReadPrice := pricing.CacheReadPricePerToken
-	tierMultiplier := 1.0
+	inputTierMultiplier := 1.0
+	outputTierMultiplier := 1.0
+	cacheCreationTierMultiplier := 1.0
+	cacheReadTierMultiplier := 1.0
+	imageOutputTierMultiplier := 1.0
 
-	if usePriorityServiceTierPricing(serviceTier, pricing) {
+	switch normalizeBillingServiceTier(serviceTier) {
+	case "priority":
 		if pricing.InputPricePerTokenPriority > 0 {
 			inputPrice = pricing.InputPricePerTokenPriority
+		} else {
+			inputTierMultiplier = serviceTierCostMultiplier(serviceTier)
 		}
 		if pricing.OutputPricePerTokenPriority > 0 {
 			outputPrice = pricing.OutputPricePerTokenPriority
+		} else {
+			outputTierMultiplier = serviceTierCostMultiplier(serviceTier)
 		}
 		if pricing.CacheReadPricePerTokenPriority > 0 {
 			cacheReadPrice = pricing.CacheReadPricePerTokenPriority
+		} else {
+			cacheReadTierMultiplier = serviceTierCostMultiplier(serviceTier)
 		}
-	} else {
-		tierMultiplier = serviceTierCostMultiplier(serviceTier)
+		cacheCreationTierMultiplier = serviceTierCostMultiplier(serviceTier)
+		imageOutputTierMultiplier = serviceTierCostMultiplier(serviceTier)
+	case "flex":
+		tierMultiplier := serviceTierCostMultiplier(serviceTier)
+		inputTierMultiplier = tierMultiplier
+		outputTierMultiplier = tierMultiplier
+		cacheCreationTierMultiplier = tierMultiplier
+		cacheReadTierMultiplier = tierMultiplier
+		imageOutputTierMultiplier = tierMultiplier
 	}
 
 	if applyLongCtx && s.shouldApplySessionLongContextPricing(tokens, pricing) {
@@ -493,14 +511,14 @@ func (s *BillingService) computeTokenBreakdown(
 	}
 
 	bd := &CostBreakdown{}
-	bd.InputCost = float64(tokens.InputTokens) * inputPrice
+	bd.InputCost = float64(tokens.InputTokens) * inputPrice * inputTierMultiplier
 
 	// 分离图片输出 token 与文本输出 token
 	textOutputTokens := tokens.OutputTokens - tokens.ImageOutputTokens
 	if textOutputTokens < 0 {
 		textOutputTokens = 0
 	}
-	bd.OutputCost = float64(textOutputTokens) * outputPrice
+	bd.OutputCost = float64(textOutputTokens) * outputPrice * outputTierMultiplier
 
 	// 图片输出 token 费用（独立费率）
 	if tokens.ImageOutputTokens > 0 {
@@ -508,21 +526,13 @@ func (s *BillingService) computeTokenBreakdown(
 		if imgPrice == 0 {
 			imgPrice = outputPrice // 回退到常规输出价格
 		}
-		bd.ImageOutputCost = float64(tokens.ImageOutputTokens) * imgPrice
+		bd.ImageOutputCost = float64(tokens.ImageOutputTokens) * imgPrice * imageOutputTierMultiplier
 	}
 
 	// 缓存创建费用
-	bd.CacheCreationCost = s.computeCacheCreationCost(pricing, tokens)
+	bd.CacheCreationCost = s.computeCacheCreationCost(pricing, tokens) * cacheCreationTierMultiplier
 
-	bd.CacheReadCost = float64(tokens.CacheReadTokens) * cacheReadPrice
-
-	if tierMultiplier != 1.0 {
-		bd.InputCost *= tierMultiplier
-		bd.OutputCost *= tierMultiplier
-		bd.ImageOutputCost *= tierMultiplier
-		bd.CacheCreationCost *= tierMultiplier
-		bd.CacheReadCost *= tierMultiplier
-	}
+	bd.CacheReadCost = float64(tokens.CacheReadTokens) * cacheReadPrice * cacheReadTierMultiplier
 
 	bd.TotalCost = bd.InputCost + bd.OutputCost + bd.ImageOutputCost +
 		bd.CacheCreationCost + bd.CacheReadCost

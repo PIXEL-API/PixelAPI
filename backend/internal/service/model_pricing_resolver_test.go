@@ -21,6 +21,16 @@ func newTestBillingServiceForResolver() *BillingService {
 		CacheReadPricePerToken:     0.3e-6,
 		SupportsCacheBreakdown:     false,
 	}
+	bs.fallbackPrices["gpt-5.5"] = &ModelPricing{
+		InputPricePerToken:             2.5e-6,
+		InputPricePerTokenPriority:     5e-6,
+		OutputPricePerToken:            15e-6,
+		OutputPricePerTokenPriority:    30e-6,
+		CacheCreationPricePerToken:     2.5e-6,
+		CacheReadPricePerToken:         0.25e-6,
+		CacheReadPricePerTokenPriority: 0.5e-6,
+		SupportsCacheBreakdown:         false,
+	}
 	return bs
 }
 
@@ -215,9 +225,43 @@ func TestResolve_WithChannelOverride_TokenFlat(t *testing.T) {
 	require.Equal(t, "channel", resolved.Source)
 	require.NotNil(t, resolved.BasePricing)
 	require.InDelta(t, 10e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 10e-6, resolved.BasePricing.InputPricePerTokenPriority, 1e-12)
+	require.Zero(t, resolved.BasePricing.InputPricePerTokenPriority)
 	require.InDelta(t, 50e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
-	require.InDelta(t, 50e-6, resolved.BasePricing.OutputPricePerTokenPriority, 1e-12)
+	require.Zero(t, resolved.BasePricing.OutputPricePerTokenPriority)
+}
+
+func TestResolve_WithChannelOverride_PriorityUsesTierMultiplierOnChannelPrice(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:       "anthropic",
+		Models:         []string{"gpt-5.5"},
+		BillingMode:    BillingModeToken,
+		InputPrice:     testPtrFloat64(5e-6),
+		OutputPrice:    testPtrFloat64(30e-6),
+		CacheReadPrice: testPtrFloat64(0.5e-6),
+	}})
+	gid := groupIDPtr()
+	bs := newTestBillingServiceForResolver()
+
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx:     context.Background(),
+		Model:   "gpt-5.5",
+		GroupID: gid,
+		Tokens: UsageTokens{
+			InputTokens:     100_000,
+			OutputTokens:    100_000,
+			CacheReadTokens: 10_000,
+		},
+		RateMultiplier: 0.06,
+		ServiceTier:    "priority",
+		Resolver:       r,
+	})
+
+	require.NoError(t, err)
+	require.InDelta(t, 1, cost.InputCost, 1e-12)
+	require.InDelta(t, 6, cost.OutputCost, 1e-12)
+	require.InDelta(t, 0.01, cost.CacheReadCost, 1e-12)
+	require.InDelta(t, 7.01, cost.TotalCost, 1e-12)
+	require.InDelta(t, 0.4206, cost.ActualCost, 1e-12)
 }
 
 func TestResolve_WithChannelOverride_TokenPartialOverride(t *testing.T) {
