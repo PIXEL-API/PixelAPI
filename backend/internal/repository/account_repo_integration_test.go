@@ -419,7 +419,7 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 
 			tt.setup(client)
 
-			accounts, _, err := repo.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, tt.platform, tt.accType, tt.status, tt.search, tt.groupID, tt.privacyMode)
+			accounts, _, err := repo.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, tt.platform, tt.accType, tt.status, tt.search, tt.groupID, 0, tt.privacyMode)
 			s.Require().NoError(err)
 			s.Require().Len(accounts, tt.wantCount)
 			if tt.validate != nil {
@@ -486,7 +486,7 @@ func (s *AccountRepoSuite) TestPreload_And_VirtualFields() {
 	s.Require().Len(got.Groups, 1, "expected Groups to be populated")
 	s.Require().Equal(group.ID, got.Groups[0].ID)
 
-	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "acc", 0, "")
+	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "acc", 0, 0, "")
 	s.Require().NoError(err, "ListWithFilters")
 	s.Require().Equal(int64(1), page.Total)
 	s.Require().Len(accounts, 1)
@@ -494,6 +494,38 @@ func (s *AccountRepoSuite) TestPreload_And_VirtualFields() {
 	s.Require().Equal(proxy.ID, accounts[0].Proxy.ID)
 	s.Require().Len(accounts[0].GroupIDs, 1, "expected GroupIDs in list")
 	s.Require().Equal(group.ID, accounts[0].GroupIDs[0])
+}
+
+func (s *AccountRepoSuite) TestListWithFilters_ProxyID() {
+	proxy := mustCreateProxy(s.T(), s.client, &service.Proxy{Name: "filter-proxy"})
+	otherProxy := mustCreateProxy(s.T(), s.client, &service.Proxy{Name: "other-proxy", Port: 8081})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "matching-proxy", ProxyID: &proxy.ID})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "other-proxy", ProxyID: &otherProxy.ID})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "no-proxy"})
+
+	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "", 0, proxy.ID, "")
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(accounts, 1)
+	s.Require().Equal("matching-proxy", accounts[0].Name)
+	s.Require().NotNil(accounts[0].Proxy)
+	s.Require().Equal(proxy.ID, accounts[0].Proxy.ID)
+}
+
+func (s *AccountRepoSuite) TestListWithFilters_UnassignedProxy() {
+	proxy := mustCreateProxy(s.T(), s.client, &service.Proxy{Name: "assigned-proxy"})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "assigned-proxy", ProxyID: &proxy.ID})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "no-proxy-1"})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "no-proxy-2"})
+
+	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "", 0, service.AccountListProxyUnassigned, "")
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), page.Total)
+	s.Require().Len(accounts, 2)
+	for _, account := range accounts {
+		s.Require().Nil(account.ProxyID)
+		s.Require().Nil(account.Proxy)
+	}
 }
 
 // --- GroupBinding / AddToGroup / RemoveFromGroup / BindGroups / GetGroups ---

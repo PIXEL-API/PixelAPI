@@ -73,6 +73,88 @@ func setupAccountDataRouter() (*gin.Engine, *stubAdminService) {
 	return router, adminSvc
 }
 
+func setupAccountListRouter() (*gin.Engine, *stubAdminService) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	adminSvc := newStubAdminService()
+
+	h := NewAccountHandler(
+		adminSvc,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	router.GET("/api/v1/admin/accounts", h.List)
+	return router, adminSvc
+}
+
+func TestListAccountsPassesProxyFilter(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?proxy_id=34", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Equal(t, 1, adminSvc.lastListAccounts.calls)
+	require.Equal(t, int64(34), adminSvc.lastListAccounts.proxyID)
+}
+
+func TestListAccountsPassesUnassignedProxyFilter(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?proxy_id=-1", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Equal(t, 1, adminSvc.lastListAccounts.calls)
+	require.Equal(t, service.AccountListProxyUnassigned, adminSvc.lastListAccounts.proxyID)
+}
+
+func TestListAccountsRejectsInvalidProxyFilter(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?proxy_id=abc", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, 0, adminSvc.lastListAccounts.calls)
+}
+
+func TestListAccountsRejectsUnsupportedNegativeProxyFilter(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?proxy_id=-2", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, 0, adminSvc.lastListAccounts.calls)
+}
+
+func TestListAccountsPassesLegacyProxyFilterAlias(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?proxy=35", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Equal(t, 1, adminSvc.lastListAccounts.calls)
+	require.Equal(t, int64(35), adminSvc.lastListAccounts.proxyID)
+}
+
 func TestExportDataIncludesSecrets(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 
@@ -182,7 +264,7 @@ func TestExportDataPassesAccountFiltersAndSort(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/v1/admin/accounts/data?platform=openai&type=oauth&status=active&group=12&privacy_mode=blocked&search=keyword&sort_by=priority&sort_order=desc",
+		"/api/v1/admin/accounts/data?platform=openai&type=oauth&status=active&group=12&proxy_id=34&privacy_mode=blocked&search=keyword&sort_by=priority&sort_order=desc",
 		nil,
 	)
 	router.ServeHTTP(rec, req)
@@ -193,6 +275,7 @@ func TestExportDataPassesAccountFiltersAndSort(t *testing.T) {
 	require.Equal(t, "oauth", adminSvc.lastListAccounts.accountType)
 	require.Equal(t, "active", adminSvc.lastListAccounts.status)
 	require.Equal(t, int64(12), adminSvc.lastListAccounts.groupID)
+	require.Equal(t, int64(34), adminSvc.lastListAccounts.proxyID)
 	require.Equal(t, "blocked", adminSvc.lastListAccounts.privacyMode)
 	require.Equal(t, "keyword", adminSvc.lastListAccounts.search)
 	require.Equal(t, "priority", adminSvc.lastListAccounts.sortBy)

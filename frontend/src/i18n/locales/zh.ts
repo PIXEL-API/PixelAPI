@@ -3274,6 +3274,7 @@ export default {
       allTypes: '全部类型',
       allStatus: '全部状态',
       allGroups: '全部分组',
+      allProxies: '全部代理',
       ungroupedGroup: '未分配分组',
       oauthType: 'OAuth',
       // Schedulable toggle

@@ -197,7 +197,7 @@ func (s *ownedAccountDuplicateRepoStub) GetByIDs(_ context.Context, ids []int64)
 	return out, nil
 }
 
-func (s *ownedAccountDuplicateRepoStub) ListOwnedWithFilters(_ context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+func (s *ownedAccountDuplicateRepoStub) ListOwnedWithFilters(_ context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
 	rows := s.listOwnedByPlatform[platform]
 	filtered := make([]Account, 0, len(rows))
 	for _, row := range rows {
@@ -245,7 +245,7 @@ func (s *ownedAccountDuplicateRepoStub) List(context.Context, pagination.Paginat
 	panic("unexpected List call")
 }
 
-func (s *ownedAccountDuplicateRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, string) ([]Account, *pagination.PaginationResult, error) {
+func (s *ownedAccountDuplicateRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, int64, string) ([]Account, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
 }
 

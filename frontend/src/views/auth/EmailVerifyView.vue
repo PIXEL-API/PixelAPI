@@ -215,6 +215,7 @@ const initialTurnstileToken = ref<string>('')
 const promoCode = ref<string>('')
 const invitationCode = ref<string>('')
 const affCode = ref<string>('')
+const loginAgreementRevision = ref<string>('')
 const pendingAuthToken = ref<string>('')
 const pendingAuthTokenField = ref<PendingAuthTokenField>('pending_auth_token')
 const pendingProvider = ref<string>('')
@@ -267,6 +268,7 @@ onMounted(async () => {
       promoCode.value = registerData.promo_code || ''
       invitationCode.value = registerData.invitation_code || ''
       affCode.value = registerData.aff_code || loadAffiliateReferralCode()
+      loginAgreementRevision.value = registerData.login_agreement_revision || ''
       pendingAuthToken.value = registerData.pending_auth_token || activePendingSession?.token || ''
       pendingAuthTokenField.value = registerData.pending_auth_token_field || activePendingSession?.token_field || 'pending_auth_token'
       pendingProvider.value = registerData.pending_provider || activePendingSession?.provider || ''
@@ -503,6 +505,7 @@ async function handleVerify(): Promise<void> {
         email: email.value,
         password: password.value,
         verify_code: verifyCode.value.trim(),
+        login_agreement_revision: loginAgreementRevision.value || undefined,
         ...oauthAffiliatePayload(affCode.value || loadAffiliateReferralCode())
       }
       if (invitationCode.value) {
@@ -538,6 +541,7 @@ async function handleVerify(): Promise<void> {
         turnstile_token: initialTurnstileToken.value || undefined,
         promo_code: promoCode.value || undefined,
         invitation_code: invitationCode.value || undefined,
+        login_agreement_revision: loginAgreementRevision.value || undefined,
         ...(affCode.value ? { aff_code: affCode.value } : {})
       })
     }

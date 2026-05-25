@@ -7,6 +7,7 @@
             v-model:searchQuery="params.search"
             :filters="params"
             :groups="groups"
+            :proxies="filterProxies"
             @update:filters="(newFilters) => Object.assign(params, newFilters)"
             @change="debouncedReload"
             @update:searchQuery="debouncedReload"
@@ -418,6 +419,7 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const proxies = ref<AccountProxy[]>([])
+const filterProxies = ref<AccountProxy[]>([])
 const groups = ref<AdminGroup[]>([])
 const accountTableRef = ref<HTMLElement | null>(null)
 const dataTableRef = ref<InstanceType<typeof DataTable> | null>(null)
@@ -435,6 +437,7 @@ type AccountBulkEditTarget =
         type?: string
         status?: string
         group?: string
+        proxy_id?: number | string
         search?: string
         privacy_mode?: string
         sort_by?: string
@@ -671,6 +674,18 @@ const saveAutoRefreshToStorage = () => {
   }
 }
 
+const loadAccountFilterProxies = async (): Promise<AccountProxy[]> => {
+  const pageSize = 1000
+  const out: AccountProxy[] = []
+  for (let page = 1; ; page += 1) {
+    const result = await adminAPI.proxies.list(page, pageSize, { sort_by: 'name', sort_order: 'asc' })
+    out.push(...(result.items || []))
+    if (out.length >= (result.total || 0) || !result.items?.length) {
+      return out
+    }
+  }
+}
+
 if (typeof window !== 'undefined') {
   loadSavedColumns()
   loadSavedAutoRefresh()
@@ -730,6 +745,7 @@ const {
     type: '',
     status: '',
     privacy_mode: '',
+    proxy_id: '',
     group: '',
     search: '',
     sort_by: sortState.sort_by,
@@ -938,6 +954,7 @@ const refreshAccountsIncrementally = async () => {
         type?: string
         status?: string
         privacy_mode?: string
+        proxy_id?: number | string
         group?: string
         search?: string
         sort_by?: string
@@ -1405,7 +1422,8 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
 const buildBulkEditFilterSnapshot = () => {
   const rawParams = toRaw(params) as Record<string, unknown>
   const sortOrder: AccountSortOrder = rawParams.sort_order === 'desc' ? 'desc' : 'asc'
-  return {
+  const proxyID = normalizeAccountFilterProxyID(rawParams.proxy_id)
+  const filters = {
     platform: typeof rawParams.platform === 'string' ? rawParams.platform : '',
     type: typeof rawParams.type === 'string' ? rawParams.type : '',
     status: typeof rawParams.status === 'string' ? rawParams.status : '',
@@ -1415,6 +1433,7 @@ const buildBulkEditFilterSnapshot = () => {
     sort_by: typeof rawParams.sort_by === 'string' ? rawParams.sort_by : '',
     sort_order: sortOrder
   }
+  return proxyID !== 0 ? { ...filters, proxy_id: proxyID } : filters
 }
 
 const collectSelectionMetadata = (rows: Account[]) => {
@@ -1472,12 +1491,19 @@ const handleCredentialImported = (payload?: { close: boolean }) => {
 
 const handleDataImported = () => { showImportData.value = false; reload() }
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
+const ACCOUNT_PROXY_UNASSIGNED_FILTER = -1
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'
+const normalizeAccountFilterProxyID = (value: unknown): number => {
+  if (value === null || value === undefined || value === '') return 0
+  const proxyID = Number(value)
+  return Number.isInteger(proxyID) && (proxyID > 0 || proxyID === ACCOUNT_PROXY_UNASSIGNED_FILTER) ? proxyID : 0
+}
 const buildAccountQueryFilters = () => ({
   platform: params.platform || '',
   type: params.type || '',
   status: params.status || '',
   group: params.group || '',
+  proxy_id: normalizeAccountFilterProxyID(params.proxy_id) || '',
   privacy_mode: params.privacy_mode || '',
   search: params.search || '',
   sort_by: sortState.sort_by,
@@ -1513,6 +1539,11 @@ const accountMatchesCurrentFilters = (account: Account) => {
     } else if (!groupIds.includes(Number(filters.group))) {
       return false
     }
+  }
+  if (filters.proxy_id === ACCOUNT_PROXY_UNASSIGNED_FILTER) {
+    if (account.proxy_id !== null && account.proxy_id !== undefined) return false
+  } else if (filters.proxy_id && account.proxy_id !== Number(filters.proxy_id)) {
+    return false
   }
   const privacyMode = typeof account.extra?.privacy_mode === 'string' ? account.extra.privacy_mode : ''
   if (filters.privacy_mode) {
@@ -1730,8 +1761,13 @@ const handleClickOutside = (event: MouseEvent) => {
 onMounted(async () => {
   load()
   try {
-    const [p, g] = await Promise.all([adminAPI.proxies.getAll(), adminAPI.groups.getAll()])
+    const [p, fp, g] = await Promise.all([
+      adminAPI.proxies.getAll(),
+      loadAccountFilterProxies(),
+      adminAPI.groups.getAll()
+    ])
     proxies.value = p
+    filterProxies.value = fp
     groups.value = g
   } catch (error) {
     console.error('Failed to load proxies/groups:', error)

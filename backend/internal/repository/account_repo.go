@@ -491,18 +491,18 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *accountRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Account, *pagination.PaginationResult, error) {
-	return r.ListWithFilters(ctx, params, "", "", "", "", 0, "")
+	return r.ListWithFilters(ctx, params, "", "", "", "", 0, 0, "")
 }
 
-func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
-	return r.listWithFilters(ctx, params, nil, platform, accountType, status, search, groupID, privacyMode)
+func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+	return r.listWithFilters(ctx, params, nil, platform, accountType, status, search, groupID, proxyID, privacyMode)
 }
 
-func (r *accountRepository) ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+func (r *accountRepository) ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	if ownerUserID <= 0 {
 		return nil, nil, service.ErrUserNotFound
 	}
-	return r.listWithFilters(ctx, params, &ownerUserID, platform, accountType, status, search, groupID, privacyMode)
+	return r.listWithFilters(ctx, params, &ownerUserID, platform, accountType, status, search, groupID, proxyID, privacyMode)
 }
 
 func (r *accountRepository) ListQuotaPoolAccounts(ctx context.Context, ownerUserID int64) ([]service.Account, error) {
@@ -773,7 +773,7 @@ func setNullStringExtra(extra map[string]any, key string, value sql.NullString) 
 	extra[key] = value.String
 }
 
-func (r *accountRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, ownerUserID *int64, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+func (r *accountRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, ownerUserID *int64, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	q := r.client.Account.Query()
 
 	if ownerUserID != nil {
@@ -853,6 +853,11 @@ func (r *accountRepository) listWithFilters(ctx context.Context, params paginati
 		q = q.Where(dbaccount.Not(dbaccount.HasAccountGroups()))
 	} else if groupID > 0 {
 		q = q.Where(dbaccount.HasAccountGroupsWith(dbaccountgroup.GroupIDEQ(groupID)))
+	}
+	if proxyID == service.AccountListProxyUnassigned {
+		q = q.Where(dbaccount.ProxyIDIsNil())
+	} else if proxyID > 0 {
+		q = q.Where(dbaccount.ProxyIDEQ(proxyID))
 	}
 	if privacyMode != "" {
 		q = q.Where(dbpredicate.Account(func(s *entsql.Selector) {

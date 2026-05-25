@@ -206,6 +206,7 @@ type BulkUpdateAccountFilters struct {
 	Type        string `json:"type"`
 	Status      string `json:"status"`
 	Group       string `json:"group"`
+	ProxyID     int64  `json:"proxy_id"`
 	Search      string `json:"search"`
 	PrivacyMode string `json:"privacy_mode"`
 }
@@ -228,6 +229,22 @@ type AccountWithConcurrency struct {
 }
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
+
+func parseAccountProxyFilter(c *gin.Context) (int64, error) {
+	raw := strings.TrimSpace(c.Query("proxy_id"))
+	if raw == "" {
+		raw = strings.TrimSpace(c.Query("proxy"))
+	}
+	if raw == "" {
+		return 0, nil
+	}
+
+	proxyID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || proxyID == 0 || proxyID < service.AccountListProxyUnassigned {
+		return 0, infraerrors.BadRequest("INVALID_PROXY_FILTER", "invalid proxy filter")
+	}
+	return proxyID, nil
+}
 
 const (
 	adminOwnedPublicShareValidationQueueSize   = 1024
@@ -438,7 +455,13 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
-	accounts, total, err := h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+	proxyID, err := parseAccountProxyFilter(c)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	accounts, total, err := h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, proxyID, privacyMode, sortBy, sortOrder)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1802,6 +1825,7 @@ func toServiceBulkUpdateAccountFilters(filters *BulkUpdateAccountFilters) *servi
 		Type:        filters.Type,
 		Status:      filters.Status,
 		Group:       filters.Group,
+		ProxyID:     filters.ProxyID,
 		Search:      filters.Search,
 		PrivacyMode: filters.PrivacyMode,
 	}
@@ -2416,7 +2440,7 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 	accounts := make([]*service.Account, 0)
 
 	if len(req.AccountIDs) == 0 {
-		allAccounts, _, err := h.adminService.ListAccounts(ctx, 1, 10000, "gemini", "oauth", "", "", 0, "", "name", "asc")
+		allAccounts, _, err := h.adminService.ListAccounts(ctx, 1, 10000, "gemini", "oauth", "", "", 0, 0, "", "name", "asc")
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return

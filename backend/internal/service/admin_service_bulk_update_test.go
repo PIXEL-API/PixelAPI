@@ -42,6 +42,7 @@ type accountRepoStubForBulkUpdate struct {
 		status      string
 		search      string
 		groupID     int64
+		proxyID     int64
 		privacyMode string
 	}
 }
@@ -102,7 +103,7 @@ func (s *accountRepoStubForBulkUpdate) ListByGroup(_ context.Context, groupID in
 	return nil, nil
 }
 
-func (s *accountRepoStubForBulkUpdate) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+func (s *accountRepoStubForBulkUpdate) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
 	s.listCalled = true
 	s.lastListParams = params
 	s.lastListFilters.platform = platform
@@ -110,6 +111,7 @@ func (s *accountRepoStubForBulkUpdate) ListWithFilters(_ context.Context, params
 	s.lastListFilters.status = status
 	s.lastListFilters.search = search
 	s.lastListFilters.groupID = groupID
+	s.lastListFilters.proxyID = proxyID
 	s.lastListFilters.privacyMode = privacyMode
 	if s.listErr != nil {
 		return nil, nil, s.listErr
@@ -427,6 +429,7 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	filtersValue.Elem().FieldByName("Type").SetString(AccountTypeOAuth)
 	filtersValue.Elem().FieldByName("Status").SetString(StatusActive)
 	filtersValue.Elem().FieldByName("Group").SetString("12")
+	filtersValue.Elem().FieldByName("ProxyID").SetInt(34)
 	filtersValue.Elem().FieldByName("PrivacyMode").SetString(PrivacyModeCFBlocked)
 	filtersValue.Elem().FieldByName("Search").SetString("bulk-target")
 	filtersField.Set(filtersValue)
@@ -439,11 +442,36 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	require.Equal(t, StatusActive, repo.lastListFilters.status)
 	require.Equal(t, "bulk-target", repo.lastListFilters.search)
 	require.Equal(t, int64(12), repo.lastListFilters.groupID)
+	require.Equal(t, int64(34), repo.lastListFilters.proxyID)
 	require.Equal(t, PrivacyModeCFBlocked, repo.lastListFilters.privacyMode)
 	require.Equal(t, []int64{7, 11}, repo.bulkUpdateIDs)
 	require.Equal(t, 2, result.Success)
 	require.Equal(t, 0, result.Failed)
 	require.Equal(t, []int64{7, 11}, result.SuccessIDs)
+}
+
+func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromUnassignedProxyFilter(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		listData:   []Account{{ID: 7}},
+		listResult: &pagination.PaginationResult{Total: 1},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	schedulable := true
+	input := &BulkUpdateAccountsInput{
+		Filters: &BulkUpdateAccountFilters{
+			ProxyID: AccountListProxyUnassigned,
+		},
+		Schedulable: &schedulable,
+	}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), input)
+	require.NoError(t, err)
+	require.True(t, repo.listCalled)
+	require.Equal(t, AccountListProxyUnassigned, repo.lastListFilters.proxyID)
+	require.Equal(t, []int64{7}, repo.bulkUpdateIDs)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 0, result.Failed)
 }
 
 func TestAdminServiceBulkUpdateAccounts_OpenAIPlusConcurrencyAllowsAdminConfiguredValue(t *testing.T) {

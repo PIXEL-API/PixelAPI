@@ -302,7 +302,7 @@ func (s *subsiteUsageAccountRepoStub) Delete(context.Context, int64) error {
 func (s *subsiteUsageAccountRepoStub) List(context.Context, pagination.PaginationParams) ([]Account, *pagination.PaginationResult, error) {
 	panic("unexpected List call")
 }
-func (s *subsiteUsageAccountRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, string) ([]Account, *pagination.PaginationResult, error) {
+func (s *subsiteUsageAccountRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, int64, string) ([]Account, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
 }
 func (s *subsiteUsageAccountRepoStub) ListByGroup(context.Context, int64) ([]Account, error) {
@@ -695,7 +695,7 @@ func (s *subsiteAuthorizeAccountRepoStub) Delete(context.Context, int64) error {
 func (s *subsiteAuthorizeAccountRepoStub) List(context.Context, pagination.PaginationParams) ([]Account, *pagination.PaginationResult, error) {
 	panic("unexpected List call")
 }
-func (s *subsiteAuthorizeAccountRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, string) ([]Account, *pagination.PaginationResult, error) {
+func (s *subsiteAuthorizeAccountRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, int64, string) ([]Account, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
 }
 func (s *subsiteAuthorizeAccountRepoStub) ListByGroup(context.Context, int64) ([]Account, error) {

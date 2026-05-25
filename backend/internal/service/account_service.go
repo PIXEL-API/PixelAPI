@@ -33,6 +33,7 @@ var (
 )
 
 const AccountListGroupUngrouped int64 = -1
+const AccountListProxyUnassigned int64 = -1
 const AccountPrivacyModeUnsetFilter = "__unset__"
 const ownedPersonalDefaultConcurrency = 3
 const ownedPersonalDefaultPriority = 1
@@ -68,7 +69,7 @@ type AccountRepository interface {
 	Delete(ctx context.Context, id int64) error
 
 	List(ctx context.Context, params pagination.PaginationParams) ([]Account, *pagination.PaginationResult, error)
-	ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
+	ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
 	ListByGroup(ctx context.Context, groupID int64) ([]Account, error)
 	ListActive(ctx context.Context) ([]Account, error)
 	ListByPlatform(ctx context.Context, platform string) ([]Account, error)
@@ -197,7 +198,7 @@ type accountSubscriptionLookupRepository interface {
 }
 
 type ownedAccountFilterRepository interface {
-	ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
+	ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
 }
 
 type accountQuotaPoolRepository interface {
@@ -215,6 +216,7 @@ type AccountListFilters struct {
 	Status      string
 	Search      string
 	GroupID     int64
+	ProxyID     int64
 	PrivacyMode string
 }
 
@@ -354,7 +356,7 @@ func (s *AccountService) ListOwned(ctx context.Context, ownerUserID int64, param
 	if !ok {
 		return nil, nil, fmt.Errorf("owned account listing is not supported by repository")
 	}
-	accounts, result, err := repo.ListOwnedWithFilters(ctx, ownerUserID, params, filters.Platform, filters.AccountType, filters.Status, filters.Search, filters.GroupID, filters.PrivacyMode)
+	accounts, result, err := repo.ListOwnedWithFilters(ctx, ownerUserID, params, filters.Platform, filters.AccountType, filters.Status, filters.Search, filters.GroupID, filters.ProxyID, filters.PrivacyMode)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list owned accounts: %w", err)
 	}
@@ -1033,6 +1035,7 @@ func (s *AccountService) ensureOwnedAccountNotDuplicate(ctx context.Context, own
 			candidate.Type,
 			"",
 			"",
+			0,
 			0,
 			"",
 		)

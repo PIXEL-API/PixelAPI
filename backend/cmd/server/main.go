@@ -9,8 +9,10 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -151,6 +153,8 @@ func runMainServer() {
 	}
 	defer app.Cleanup()
 
+	pprofServer := startPprofServer()
+
 	// 启动服务器
 	go func() {
 		if err := app.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -174,5 +178,47 @@ func runMainServer() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
+	if pprofServer != nil {
+		if err := pprofServer.Shutdown(ctx); err != nil {
+			log.Fatalf("pprof server forced to shutdown: %v", err)
+		}
+	}
+
 	log.Println("Server exited")
+}
+
+func startPprofServer() *http.Server {
+	enabledValue := strings.TrimSpace(os.Getenv("PPROF_ENABLED"))
+	if enabledValue == "" {
+		return nil
+	}
+
+	enabled, err := strconv.ParseBool(enabledValue)
+	if err != nil {
+		log.Fatalf("Invalid PPROF_ENABLED value %q: %v", enabledValue, err)
+	}
+	if !enabled {
+		return nil
+	}
+
+	addr := strings.TrimSpace(os.Getenv("PPROF_ADDR"))
+	if addr == "" {
+		addr = "127.0.0.1:6060"
+	}
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           http.DefaultServeMux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Failed to start pprof server on %s: %v", addr, err)
+		}
+	}()
+
+	log.Printf("pprof server started on %s", addr)
+	return server
 }
