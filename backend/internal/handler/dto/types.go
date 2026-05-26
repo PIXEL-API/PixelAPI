@@ -7,17 +7,19 @@ import (
 )
 
 type User struct {
-	ID            int64      `json:"id"`
-	Email         string     `json:"email"`
-	Username      string     `json:"username"`
-	Role          string     `json:"role"`
-	Balance       float64    `json:"balance"`
-	Concurrency   int        `json:"concurrency"`
-	Status        string     `json:"status"`
-	AllowedGroups []int64    `json:"allowed_groups"`
-	LastActiveAt  *time.Time `json:"last_active_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID                  int64      `json:"id"`
+	Email               string     `json:"email"`
+	Username            string     `json:"username"`
+	Role                string     `json:"role"`
+	Balance             float64    `json:"balance"`
+	PointsBalance       float64    `json:"points_balance"`
+	PreferPointsBilling bool       `json:"prefer_points_billing"`
+	Concurrency         int        `json:"concurrency"`
+	Status              string     `json:"status"`
+	AllowedGroups       []int64    `json:"allowed_groups"`
+	LastActiveAt        *time.Time `json:"last_active_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 
 	// 余额不足通知
 	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
@@ -413,6 +415,9 @@ type UsageLog struct {
 	TotalCost         float64 `json:"total_cost"`
 	ActualCost        float64 `json:"actual_cost"`
 	RateMultiplier    float64 `json:"rate_multiplier"`
+	PointsDeducted    float64 `json:"points_deducted"`
+	BalanceDeducted   float64 `json:"balance_deducted"`
+	BillingWalletType string  `json:"billing_wallet_type"`
 
 	BillingType  int8   `json:"billing_type"`
 	RequestType  string `json:"request_type"`

@@ -37,6 +37,9 @@ export interface RevenueUsageStats {
   total_tokens: number
   standard_cost: number
   consumed_revenue: number
+  balance_consumed_amount: number
+  points_consumed_amount: number
+  points_issued_amount: number
   account_cost: number
 }
 
@@ -67,6 +70,9 @@ export interface RevenueTrendPoint {
   net_paid_amount: number
   requests: number
   consumed_revenue: number
+  balance_consumed_amount: number
+  points_consumed_amount: number
+  points_issued_amount: number
   account_cost: number
   usage_gross_profit: number
   affiliate_rebate: number

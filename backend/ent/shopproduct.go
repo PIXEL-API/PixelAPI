@@ -48,6 +48,12 @@ type ShopProduct struct {
 	ProductType string `json:"product_type,omitempty"`
 	// BalanceOnly holds the value of the "balance_only" field.
 	BalanceOnly bool `json:"balance_only,omitempty"`
+	// AllowBalancePayment holds the value of the "allow_balance_payment" field.
+	AllowBalancePayment bool `json:"allow_balance_payment,omitempty"`
+	// AllowPointsPayment holds the value of the "allow_points_payment" field.
+	AllowPointsPayment bool `json:"allow_points_payment,omitempty"`
+	// AllowPlatformPayment holds the value of the "allow_platform_payment" field.
+	AllowPlatformPayment bool `json:"allow_platform_payment,omitempty"`
 	// DrawEnabled holds the value of the "draw_enabled" field.
 	DrawEnabled bool `json:"draw_enabled,omitempty"`
 	// DrawMinAmount holds the value of the "draw_min_amount" field.
@@ -122,7 +128,7 @@ func (*ShopProduct) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case shopproduct.FieldEnabled, shopproduct.FieldAutoDelivery, shopproduct.FieldBalanceOnly, shopproduct.FieldDrawEnabled:
+		case shopproduct.FieldEnabled, shopproduct.FieldAutoDelivery, shopproduct.FieldBalanceOnly, shopproduct.FieldAllowBalancePayment, shopproduct.FieldAllowPointsPayment, shopproduct.FieldAllowPlatformPayment, shopproduct.FieldDrawEnabled:
 			values[i] = new(sql.NullBool)
 		case shopproduct.FieldPrice, shopproduct.FieldOriginalPrice, shopproduct.FieldDrawMinAmount, shopproduct.FieldDrawMaxAmount, shopproduct.FieldDrawReturnRate:
 			values[i] = new(sql.NullFloat64)
@@ -246,6 +252,24 @@ func (_m *ShopProduct) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field balance_only", values[i])
 			} else if value.Valid {
 				_m.BalanceOnly = value.Bool
+			}
+		case shopproduct.FieldAllowBalancePayment:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field allow_balance_payment", values[i])
+			} else if value.Valid {
+				_m.AllowBalancePayment = value.Bool
+			}
+		case shopproduct.FieldAllowPointsPayment:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field allow_points_payment", values[i])
+			} else if value.Valid {
+				_m.AllowPointsPayment = value.Bool
+			}
+		case shopproduct.FieldAllowPlatformPayment:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field allow_platform_payment", values[i])
+			} else if value.Valid {
+				_m.AllowPlatformPayment = value.Bool
 			}
 		case shopproduct.FieldDrawEnabled:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -385,6 +409,15 @@ func (_m *ShopProduct) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("balance_only=")
 	builder.WriteString(fmt.Sprintf("%v", _m.BalanceOnly))
+	builder.WriteString(", ")
+	builder.WriteString("allow_balance_payment=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AllowBalancePayment))
+	builder.WriteString(", ")
+	builder.WriteString("allow_points_payment=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AllowPointsPayment))
+	builder.WriteString(", ")
+	builder.WriteString("allow_platform_payment=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AllowPlatformPayment))
 	builder.WriteString(", ")
 	builder.WriteString("draw_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DrawEnabled))

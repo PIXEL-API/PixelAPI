@@ -31,6 +31,10 @@ type User struct {
 	Role string `json:"role,omitempty"`
 	// Balance holds the value of the "balance" field.
 	Balance float64 `json:"balance,omitempty"`
+	// PointsBalance holds the value of the "points_balance" field.
+	PointsBalance float64 `json:"points_balance,omitempty"`
+	// PreferPointsBilling holds the value of the "prefer_points_billing" field.
+	PreferPointsBilling bool `json:"prefer_points_billing,omitempty"`
 	// Concurrency holds the value of the "concurrency" field.
 	Concurrency int `json:"concurrency,omitempty"`
 	// Status holds the value of the "status" field.
@@ -268,9 +272,9 @@ func (*User) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled:
+		case user.FieldPreferPointsBilling, user.FieldTotpEnabled, user.FieldBalanceNotifyEnabled:
 			values[i] = new(sql.NullBool)
-		case user.FieldBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
+		case user.FieldBalance, user.FieldPointsBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
 		case user.FieldID, user.FieldConcurrency, user.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
@@ -341,6 +345,18 @@ func (_m *User) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field balance", values[i])
 			} else if value.Valid {
 				_m.Balance = value.Float64
+			}
+		case user.FieldPointsBalance:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field points_balance", values[i])
+			} else if value.Valid {
+				_m.PointsBalance = value.Float64
+			}
+		case user.FieldPreferPointsBilling:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field prefer_points_billing", values[i])
+			} else if value.Valid {
+				_m.PreferPointsBilling = value.Bool
 			}
 		case user.FieldConcurrency:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -586,6 +602,12 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("balance=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Balance))
+	builder.WriteString(", ")
+	builder.WriteString("points_balance=")
+	builder.WriteString(fmt.Sprintf("%v", _m.PointsBalance))
+	builder.WriteString(", ")
+	builder.WriteString("prefer_points_billing=")
+	builder.WriteString(fmt.Sprintf("%v", _m.PreferPointsBilling))
 	builder.WriteString(", ")
 	builder.WriteString("concurrency=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Concurrency))

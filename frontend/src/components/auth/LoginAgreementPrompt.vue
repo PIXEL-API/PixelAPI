@@ -1,14 +1,18 @@
 <template>
   <div
     v-if="mode === 'checkbox' && documents.length > 0"
-    class="px-0.5"
+    class="rounded-lg px-0.5 py-0.5 transition"
+    :class="hasError ? 'ring-1 ring-red-200 dark:ring-red-500/30' : ''"
   >
     <div class="flex items-start gap-2">
       <input
         id="login-agreement-consent"
         type="checkbox"
         :checked="accepted"
+        :aria-invalid="hasError"
+        :aria-describedby="hasError ? 'login-agreement-consent-error' : undefined"
         class="mt-[2px] h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600 dark:bg-dark-900"
+        :class="hasError ? 'border-red-500 focus:ring-red-500 dark:border-red-400' : ''"
         @change="handleCheckboxChange"
       />
       <div class="min-w-0 flex-1">
@@ -31,20 +35,38 @@
             <span v-if="index < documents.length - 1">、</span>
           </template>
         </p>
+        <p
+          v-if="hasError"
+          id="login-agreement-consent-error"
+          class="mt-1 text-[13px] leading-5 text-red-600 dark:text-red-400"
+        >
+          {{ errorMessage }}
+        </p>
       </div>
     </div>
   </div>
 
   <div
     v-else-if="!accepted && documents.length > 0"
-    class="rounded-lg border border-primary-100 bg-primary-50/70 p-3 text-sm text-primary-900 dark:border-primary-500/20 dark:bg-primary-500/10 dark:text-primary-100"
+    class="rounded-lg border p-3 text-sm transition"
+    :class="hasError
+      ? 'border-red-200 bg-red-50/80 text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100'
+      : 'border-primary-100 bg-primary-50/70 text-primary-900 dark:border-primary-500/20 dark:bg-primary-500/10 dark:text-primary-100'"
   >
     <div class="flex items-start gap-3">
-      <Icon name="shield" size="sm" class="mt-0.5 flex-shrink-0 text-primary-600 dark:text-primary-300" />
+      <Icon
+        name="shield"
+        size="sm"
+        class="mt-0.5 flex-shrink-0"
+        :class="hasError ? 'text-red-600 dark:text-red-300' : 'text-primary-600 dark:text-primary-300'"
+      />
       <div class="min-w-0 flex-1">
-        <p class="font-medium">继续登录前需要先同意最新条款。</p>
-        <p class="mt-1 text-primary-700 dark:text-primary-200/80">
-          未同意前，账号密码输入和快捷登录会保持禁用。
+        <p class="font-medium">继续{{ actionName }}前需要先同意最新条款。</p>
+        <p
+          class="mt-1"
+          :class="hasError ? 'text-red-700 dark:text-red-200/80' : 'text-primary-700 dark:text-primary-200/80'"
+        >
+          {{ hasError ? errorMessage : '提交前请先查看并同意条款。' }}
         </p>
       </div>
       <button
@@ -149,8 +171,12 @@ const props = withDefaults(defineProps<{
   mode: 'modal' | 'checkbox' | string
   updatedAt?: string
   visible: boolean
+  errorMessage?: string
+  actionName?: string
 }>(), {
-  updatedAt: ''
+  updatedAt: '',
+  errorMessage: '',
+  actionName: '登录'
 })
 
 const emit = defineEmits<{
@@ -164,6 +190,9 @@ const documents = computed(() => props.documents.filter((doc) => doc.title.trim(
 const updatedAt = computed(() => props.updatedAt || '')
 const accepted = computed(() => props.accepted)
 const mode = computed(() => props.mode === 'checkbox' ? 'checkbox' : 'modal')
+const errorMessage = computed(() => props.errorMessage.trim())
+const hasError = computed(() => errorMessage.value.length > 0)
+const actionName = computed(() => props.actionName.trim() || '登录')
 
 function documentRoute(doc: LoginAgreementDocument) {
   return {

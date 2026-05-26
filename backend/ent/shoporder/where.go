@@ -95,6 +95,11 @@ func ProductDescription(v string) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldProductDescription, v))
 }
 
+// ProductType applies equality check predicate on the "product_type" field. It's identical to ProductTypeEQ.
+func ProductType(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldProductType, v))
+}
+
 // UnitPrice applies equality check predicate on the "unit_price" field. It's identical to UnitPriceEQ.
 func UnitPrice(v float64) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldUnitPrice, v))
@@ -108,6 +113,11 @@ func Quantity(v int) predicate.ShopOrder {
 // TotalAmount applies equality check predicate on the "total_amount" field. It's identical to TotalAmountEQ.
 func TotalAmount(v float64) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldTotalAmount, v))
+}
+
+// PointsAmount applies equality check predicate on the "points_amount" field. It's identical to PointsAmountEQ.
+func PointsAmount(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldPointsAmount, v))
 }
 
 // PaymentMethod applies equality check predicate on the "payment_method" field. It's identical to PaymentMethodEQ.
@@ -560,6 +570,71 @@ func ProductDescriptionContainsFold(v string) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldContainsFold(FieldProductDescription, v))
 }
 
+// ProductTypeEQ applies the EQ predicate on the "product_type" field.
+func ProductTypeEQ(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldProductType, v))
+}
+
+// ProductTypeNEQ applies the NEQ predicate on the "product_type" field.
+func ProductTypeNEQ(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNEQ(FieldProductType, v))
+}
+
+// ProductTypeIn applies the In predicate on the "product_type" field.
+func ProductTypeIn(vs ...string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIn(FieldProductType, vs...))
+}
+
+// ProductTypeNotIn applies the NotIn predicate on the "product_type" field.
+func ProductTypeNotIn(vs ...string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotIn(FieldProductType, vs...))
+}
+
+// ProductTypeGT applies the GT predicate on the "product_type" field.
+func ProductTypeGT(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGT(FieldProductType, v))
+}
+
+// ProductTypeGTE applies the GTE predicate on the "product_type" field.
+func ProductTypeGTE(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGTE(FieldProductType, v))
+}
+
+// ProductTypeLT applies the LT predicate on the "product_type" field.
+func ProductTypeLT(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLT(FieldProductType, v))
+}
+
+// ProductTypeLTE applies the LTE predicate on the "product_type" field.
+func ProductTypeLTE(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLTE(FieldProductType, v))
+}
+
+// ProductTypeContains applies the Contains predicate on the "product_type" field.
+func ProductTypeContains(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldContains(FieldProductType, v))
+}
+
+// ProductTypeHasPrefix applies the HasPrefix predicate on the "product_type" field.
+func ProductTypeHasPrefix(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldHasPrefix(FieldProductType, v))
+}
+
+// ProductTypeHasSuffix applies the HasSuffix predicate on the "product_type" field.
+func ProductTypeHasSuffix(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldHasSuffix(FieldProductType, v))
+}
+
+// ProductTypeEqualFold applies the EqualFold predicate on the "product_type" field.
+func ProductTypeEqualFold(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEqualFold(FieldProductType, v))
+}
+
+// ProductTypeContainsFold applies the ContainsFold predicate on the "product_type" field.
+func ProductTypeContainsFold(v string) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldContainsFold(FieldProductType, v))
+}
+
 // UnitPriceEQ applies the EQ predicate on the "unit_price" field.
 func UnitPriceEQ(v float64) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldUnitPrice, v))
@@ -678,6 +753,46 @@ func TotalAmountLT(v float64) predicate.ShopOrder {
 // TotalAmountLTE applies the LTE predicate on the "total_amount" field.
 func TotalAmountLTE(v float64) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldLTE(FieldTotalAmount, v))
+}
+
+// PointsAmountEQ applies the EQ predicate on the "points_amount" field.
+func PointsAmountEQ(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldPointsAmount, v))
+}
+
+// PointsAmountNEQ applies the NEQ predicate on the "points_amount" field.
+func PointsAmountNEQ(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNEQ(FieldPointsAmount, v))
+}
+
+// PointsAmountIn applies the In predicate on the "points_amount" field.
+func PointsAmountIn(vs ...float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIn(FieldPointsAmount, vs...))
+}
+
+// PointsAmountNotIn applies the NotIn predicate on the "points_amount" field.
+func PointsAmountNotIn(vs ...float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotIn(FieldPointsAmount, vs...))
+}
+
+// PointsAmountGT applies the GT predicate on the "points_amount" field.
+func PointsAmountGT(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGT(FieldPointsAmount, v))
+}
+
+// PointsAmountGTE applies the GTE predicate on the "points_amount" field.
+func PointsAmountGTE(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGTE(FieldPointsAmount, v))
+}
+
+// PointsAmountLT applies the LT predicate on the "points_amount" field.
+func PointsAmountLT(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLT(FieldPointsAmount, v))
+}
+
+// PointsAmountLTE applies the LTE predicate on the "points_amount" field.
+func PointsAmountLTE(v float64) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLTE(FieldPointsAmount, v))
 }
 
 // PaymentMethodEQ applies the EQ predicate on the "payment_method" field.

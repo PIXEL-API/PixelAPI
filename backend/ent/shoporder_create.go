@@ -107,6 +107,20 @@ func (_c *ShopOrderCreate) SetNillableProductDescription(v *string) *ShopOrderCr
 	return _c
 }
 
+// SetProductType sets the "product_type" field.
+func (_c *ShopOrderCreate) SetProductType(v string) *ShopOrderCreate {
+	_c.mutation.SetProductType(v)
+	return _c
+}
+
+// SetNillableProductType sets the "product_type" field if the given value is not nil.
+func (_c *ShopOrderCreate) SetNillableProductType(v *string) *ShopOrderCreate {
+	if v != nil {
+		_c.SetProductType(*v)
+	}
+	return _c
+}
+
 // SetUnitPrice sets the "unit_price" field.
 func (_c *ShopOrderCreate) SetUnitPrice(v float64) *ShopOrderCreate {
 	_c.mutation.SetUnitPrice(v)
@@ -122,6 +136,20 @@ func (_c *ShopOrderCreate) SetQuantity(v int) *ShopOrderCreate {
 // SetTotalAmount sets the "total_amount" field.
 func (_c *ShopOrderCreate) SetTotalAmount(v float64) *ShopOrderCreate {
 	_c.mutation.SetTotalAmount(v)
+	return _c
+}
+
+// SetPointsAmount sets the "points_amount" field.
+func (_c *ShopOrderCreate) SetPointsAmount(v float64) *ShopOrderCreate {
+	_c.mutation.SetPointsAmount(v)
+	return _c
+}
+
+// SetNillablePointsAmount sets the "points_amount" field if the given value is not nil.
+func (_c *ShopOrderCreate) SetNillablePointsAmount(v *float64) *ShopOrderCreate {
+	if v != nil {
+		_c.SetPointsAmount(*v)
+	}
 	return _c
 }
 
@@ -351,6 +379,14 @@ func (_c *ShopOrderCreate) defaults() {
 		v := shoporder.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.ProductType(); !ok {
+		v := shoporder.DefaultProductType
+		_c.mutation.SetProductType(v)
+	}
+	if _, ok := _c.mutation.PointsAmount(); !ok {
+		v := shoporder.DefaultPointsAmount
+		_c.mutation.SetPointsAmount(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := shoporder.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -387,6 +423,14 @@ func (_c *ShopOrderCreate) check() error {
 			return &ValidationError{Name: "product_name", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.product_name": %w`, err)}
 		}
 	}
+	if _, ok := _c.mutation.ProductType(); !ok {
+		return &ValidationError{Name: "product_type", err: errors.New(`ent: missing required field "ShopOrder.product_type"`)}
+	}
+	if v, ok := _c.mutation.ProductType(); ok {
+		if err := shoporder.ProductTypeValidator(v); err != nil {
+			return &ValidationError{Name: "product_type", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.product_type": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.UnitPrice(); !ok {
 		return &ValidationError{Name: "unit_price", err: errors.New(`ent: missing required field "ShopOrder.unit_price"`)}
 	}
@@ -395,6 +439,9 @@ func (_c *ShopOrderCreate) check() error {
 	}
 	if _, ok := _c.mutation.TotalAmount(); !ok {
 		return &ValidationError{Name: "total_amount", err: errors.New(`ent: missing required field "ShopOrder.total_amount"`)}
+	}
+	if _, ok := _c.mutation.PointsAmount(); !ok {
+		return &ValidationError{Name: "points_amount", err: errors.New(`ent: missing required field "ShopOrder.points_amount"`)}
 	}
 	if _, ok := _c.mutation.PaymentMethod(); !ok {
 		return &ValidationError{Name: "payment_method", err: errors.New(`ent: missing required field "ShopOrder.payment_method"`)}
@@ -469,6 +516,10 @@ func (_c *ShopOrderCreate) createSpec() (*ShopOrder, *sqlgraph.CreateSpec) {
 		_spec.SetField(shoporder.FieldProductDescription, field.TypeString, value)
 		_node.ProductDescription = &value
 	}
+	if value, ok := _c.mutation.ProductType(); ok {
+		_spec.SetField(shoporder.FieldProductType, field.TypeString, value)
+		_node.ProductType = value
+	}
 	if value, ok := _c.mutation.UnitPrice(); ok {
 		_spec.SetField(shoporder.FieldUnitPrice, field.TypeFloat64, value)
 		_node.UnitPrice = value
@@ -480,6 +531,10 @@ func (_c *ShopOrderCreate) createSpec() (*ShopOrder, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.TotalAmount(); ok {
 		_spec.SetField(shoporder.FieldTotalAmount, field.TypeFloat64, value)
 		_node.TotalAmount = value
+	}
+	if value, ok := _c.mutation.PointsAmount(); ok {
+		_spec.SetField(shoporder.FieldPointsAmount, field.TypeFloat64, value)
+		_node.PointsAmount = value
 	}
 	if value, ok := _c.mutation.PaymentMethod(); ok {
 		_spec.SetField(shoporder.FieldPaymentMethod, field.TypeString, value)
@@ -752,6 +807,18 @@ func (u *ShopOrderUpsert) ClearProductDescription() *ShopOrderUpsert {
 	return u
 }
 
+// SetProductType sets the "product_type" field.
+func (u *ShopOrderUpsert) SetProductType(v string) *ShopOrderUpsert {
+	u.Set(shoporder.FieldProductType, v)
+	return u
+}
+
+// UpdateProductType sets the "product_type" field to the value that was provided on create.
+func (u *ShopOrderUpsert) UpdateProductType() *ShopOrderUpsert {
+	u.SetExcluded(shoporder.FieldProductType)
+	return u
+}
+
 // SetUnitPrice sets the "unit_price" field.
 func (u *ShopOrderUpsert) SetUnitPrice(v float64) *ShopOrderUpsert {
 	u.Set(shoporder.FieldUnitPrice, v)
@@ -803,6 +870,24 @@ func (u *ShopOrderUpsert) UpdateTotalAmount() *ShopOrderUpsert {
 // AddTotalAmount adds v to the "total_amount" field.
 func (u *ShopOrderUpsert) AddTotalAmount(v float64) *ShopOrderUpsert {
 	u.Add(shoporder.FieldTotalAmount, v)
+	return u
+}
+
+// SetPointsAmount sets the "points_amount" field.
+func (u *ShopOrderUpsert) SetPointsAmount(v float64) *ShopOrderUpsert {
+	u.Set(shoporder.FieldPointsAmount, v)
+	return u
+}
+
+// UpdatePointsAmount sets the "points_amount" field to the value that was provided on create.
+func (u *ShopOrderUpsert) UpdatePointsAmount() *ShopOrderUpsert {
+	u.SetExcluded(shoporder.FieldPointsAmount)
+	return u
+}
+
+// AddPointsAmount adds v to the "points_amount" field.
+func (u *ShopOrderUpsert) AddPointsAmount(v float64) *ShopOrderUpsert {
+	u.Add(shoporder.FieldPointsAmount, v)
 	return u
 }
 
@@ -1167,6 +1252,20 @@ func (u *ShopOrderUpsertOne) ClearProductDescription() *ShopOrderUpsertOne {
 	})
 }
 
+// SetProductType sets the "product_type" field.
+func (u *ShopOrderUpsertOne) SetProductType(v string) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetProductType(v)
+	})
+}
+
+// UpdateProductType sets the "product_type" field to the value that was provided on create.
+func (u *ShopOrderUpsertOne) UpdateProductType() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateProductType()
+	})
+}
+
 // SetUnitPrice sets the "unit_price" field.
 func (u *ShopOrderUpsertOne) SetUnitPrice(v float64) *ShopOrderUpsertOne {
 	return u.Update(func(s *ShopOrderUpsert) {
@@ -1227,6 +1326,27 @@ func (u *ShopOrderUpsertOne) AddTotalAmount(v float64) *ShopOrderUpsertOne {
 func (u *ShopOrderUpsertOne) UpdateTotalAmount() *ShopOrderUpsertOne {
 	return u.Update(func(s *ShopOrderUpsert) {
 		s.UpdateTotalAmount()
+	})
+}
+
+// SetPointsAmount sets the "points_amount" field.
+func (u *ShopOrderUpsertOne) SetPointsAmount(v float64) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetPointsAmount(v)
+	})
+}
+
+// AddPointsAmount adds v to the "points_amount" field.
+func (u *ShopOrderUpsertOne) AddPointsAmount(v float64) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddPointsAmount(v)
+	})
+}
+
+// UpdatePointsAmount sets the "points_amount" field to the value that was provided on create.
+func (u *ShopOrderUpsertOne) UpdatePointsAmount() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdatePointsAmount()
 	})
 }
 
@@ -1791,6 +1911,20 @@ func (u *ShopOrderUpsertBulk) ClearProductDescription() *ShopOrderUpsertBulk {
 	})
 }
 
+// SetProductType sets the "product_type" field.
+func (u *ShopOrderUpsertBulk) SetProductType(v string) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetProductType(v)
+	})
+}
+
+// UpdateProductType sets the "product_type" field to the value that was provided on create.
+func (u *ShopOrderUpsertBulk) UpdateProductType() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateProductType()
+	})
+}
+
 // SetUnitPrice sets the "unit_price" field.
 func (u *ShopOrderUpsertBulk) SetUnitPrice(v float64) *ShopOrderUpsertBulk {
 	return u.Update(func(s *ShopOrderUpsert) {
@@ -1851,6 +1985,27 @@ func (u *ShopOrderUpsertBulk) AddTotalAmount(v float64) *ShopOrderUpsertBulk {
 func (u *ShopOrderUpsertBulk) UpdateTotalAmount() *ShopOrderUpsertBulk {
 	return u.Update(func(s *ShopOrderUpsert) {
 		s.UpdateTotalAmount()
+	})
+}
+
+// SetPointsAmount sets the "points_amount" field.
+func (u *ShopOrderUpsertBulk) SetPointsAmount(v float64) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetPointsAmount(v)
+	})
+}
+
+// AddPointsAmount adds v to the "points_amount" field.
+func (u *ShopOrderUpsertBulk) AddPointsAmount(v float64) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddPointsAmount(v)
+	})
+}
+
+// UpdatePointsAmount sets the "points_amount" field to the value that was provided on create.
+func (u *ShopOrderUpsertBulk) UpdatePointsAmount() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdatePointsAmount()
 	})
 }
 

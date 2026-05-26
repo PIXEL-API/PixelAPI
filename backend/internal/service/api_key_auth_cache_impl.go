@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 10 // v10: require group scope for private-group billing decisions
+const apiKeyAuthSnapshotVersion = 11 // v11: include user points fields for points billing eligibility
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -224,6 +224,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Status:                     apiKey.User.Status,
 			Role:                       apiKey.User.Role,
 			Balance:                    apiKey.User.Balance,
+			PointsBalance:              apiKey.User.PointsBalance,
+			PreferPointsBilling:        apiKey.User.PreferPointsBilling,
 			Concurrency:                apiKey.User.Concurrency,
 			Email:                      apiKey.User.Email,
 			Username:                   apiKey.User.Username,
@@ -318,6 +320,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			Status:                     snapshot.User.Status,
 			Role:                       snapshot.User.Role,
 			Balance:                    snapshot.User.Balance,
+			PointsBalance:              snapshot.User.PointsBalance,
+			PreferPointsBilling:        snapshot.User.PreferPointsBilling,
 			Concurrency:                snapshot.User.Concurrency,
 			Email:                      snapshot.User.Email,
 			Username:                   snapshot.User.Username,

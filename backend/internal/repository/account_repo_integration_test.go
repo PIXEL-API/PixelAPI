@@ -369,16 +369,22 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 		{
 			name: "filter_by_ungrouped",
 			setup: func(client *dbent.Client) {
-				group := mustCreateGroup(s.T(), client, &service.Group{Name: "g-ungrouped"})
+				publicGroup := mustCreateGroup(s.T(), client, &service.Group{Name: "g-public", Scope: service.GroupScopePublic})
+				privateGroup := mustCreateGroup(s.T(), client, &service.Group{Name: "g-private", Scope: service.GroupScopeUserPrivate})
 				grouped := mustCreateAccount(s.T(), client, &service.Account{Name: "grouped-account"})
+				privateOnly := mustCreateAccount(s.T(), client, &service.Account{Name: "private-only-account"})
+				mixed := mustCreateAccount(s.T(), client, &service.Account{Name: "mixed-account"})
 				mustCreateAccount(s.T(), client, &service.Account{Name: "ungrouped-account"})
-				mustBindAccountToGroup(s.T(), client, grouped.ID, group.ID, 1)
+				mustBindAccountToGroup(s.T(), client, grouped.ID, publicGroup.ID, 1)
+				mustBindAccountToGroup(s.T(), client, privateOnly.ID, privateGroup.ID, 1)
+				mustBindAccountToGroup(s.T(), client, mixed.ID, privateGroup.ID, 1)
+				mustBindAccountToGroup(s.T(), client, mixed.ID, publicGroup.ID, 2)
 			},
 			groupID:   service.AccountListGroupUngrouped,
-			wantCount: 1,
+			wantCount: 2,
 			validate: func(accounts []service.Account) {
-				s.Require().Equal("ungrouped-account", accounts[0].Name)
-				s.Require().Empty(accounts[0].GroupIDs)
+				names := []string{accounts[0].Name, accounts[1].Name}
+				s.Require().ElementsMatch([]string{"private-only-account", "ungrouped-account"}, names)
 			},
 		},
 		{

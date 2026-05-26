@@ -355,10 +355,38 @@ func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS points_ledger (
+			id integer PRIMARY KEY AUTOINCREMENT,
+			user_id integer NOT NULL,
+			direction varchar(10) NOT NULL,
+			amount decimal(20,10) NOT NULL,
+			reason varchar(50) NOT NULL,
+			ref_type varchar(50) NOT NULL,
+			ref_id integer,
+			balance_before decimal(20,10) NOT NULL,
+			balance_after decimal(20,10) NOT NULL,
+			operator_user_id integer,
+			metadata text NOT NULL DEFAULT '{}',
+			created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		t.Fatalf("create points ledger test table: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_points_ledger_unique_ref_reason
+		ON points_ledger (user_id, direction, reason, ref_type, ref_id)
+		WHERE ref_id IS NOT NULL
+	`); err != nil {
+		t.Fatalf("create points ledger test index: %v", err)
 	}
 
 	drv := entsql.OpenDB(dialect.SQLite, db)

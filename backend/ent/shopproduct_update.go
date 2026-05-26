@@ -279,6 +279,48 @@ func (_u *ShopProductUpdate) SetNillableBalanceOnly(v *bool) *ShopProductUpdate 
 	return _u
 }
 
+// SetAllowBalancePayment sets the "allow_balance_payment" field.
+func (_u *ShopProductUpdate) SetAllowBalancePayment(v bool) *ShopProductUpdate {
+	_u.mutation.SetAllowBalancePayment(v)
+	return _u
+}
+
+// SetNillableAllowBalancePayment sets the "allow_balance_payment" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableAllowBalancePayment(v *bool) *ShopProductUpdate {
+	if v != nil {
+		_u.SetAllowBalancePayment(*v)
+	}
+	return _u
+}
+
+// SetAllowPointsPayment sets the "allow_points_payment" field.
+func (_u *ShopProductUpdate) SetAllowPointsPayment(v bool) *ShopProductUpdate {
+	_u.mutation.SetAllowPointsPayment(v)
+	return _u
+}
+
+// SetNillableAllowPointsPayment sets the "allow_points_payment" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableAllowPointsPayment(v *bool) *ShopProductUpdate {
+	if v != nil {
+		_u.SetAllowPointsPayment(*v)
+	}
+	return _u
+}
+
+// SetAllowPlatformPayment sets the "allow_platform_payment" field.
+func (_u *ShopProductUpdate) SetAllowPlatformPayment(v bool) *ShopProductUpdate {
+	_u.mutation.SetAllowPlatformPayment(v)
+	return _u
+}
+
+// SetNillableAllowPlatformPayment sets the "allow_platform_payment" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableAllowPlatformPayment(v *bool) *ShopProductUpdate {
+	if v != nil {
+		_u.SetAllowPlatformPayment(*v)
+	}
+	return _u
+}
+
 // SetDrawEnabled sets the "draw_enabled" field.
 func (_u *ShopProductUpdate) SetDrawEnabled(v bool) *ShopProductUpdate {
 	_u.mutation.SetDrawEnabled(v)
@@ -626,6 +668,15 @@ func (_u *ShopProductUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.BalanceOnly(); ok {
 		_spec.SetField(shopproduct.FieldBalanceOnly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowBalancePayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowBalancePayment, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowPointsPayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowPointsPayment, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowPlatformPayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowPlatformPayment, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.DrawEnabled(); ok {
 		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
@@ -1085,6 +1136,48 @@ func (_u *ShopProductUpdateOne) SetNillableBalanceOnly(v *bool) *ShopProductUpda
 	return _u
 }
 
+// SetAllowBalancePayment sets the "allow_balance_payment" field.
+func (_u *ShopProductUpdateOne) SetAllowBalancePayment(v bool) *ShopProductUpdateOne {
+	_u.mutation.SetAllowBalancePayment(v)
+	return _u
+}
+
+// SetNillableAllowBalancePayment sets the "allow_balance_payment" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableAllowBalancePayment(v *bool) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetAllowBalancePayment(*v)
+	}
+	return _u
+}
+
+// SetAllowPointsPayment sets the "allow_points_payment" field.
+func (_u *ShopProductUpdateOne) SetAllowPointsPayment(v bool) *ShopProductUpdateOne {
+	_u.mutation.SetAllowPointsPayment(v)
+	return _u
+}
+
+// SetNillableAllowPointsPayment sets the "allow_points_payment" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableAllowPointsPayment(v *bool) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetAllowPointsPayment(*v)
+	}
+	return _u
+}
+
+// SetAllowPlatformPayment sets the "allow_platform_payment" field.
+func (_u *ShopProductUpdateOne) SetAllowPlatformPayment(v bool) *ShopProductUpdateOne {
+	_u.mutation.SetAllowPlatformPayment(v)
+	return _u
+}
+
+// SetNillableAllowPlatformPayment sets the "allow_platform_payment" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableAllowPlatformPayment(v *bool) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetAllowPlatformPayment(*v)
+	}
+	return _u
+}
+
 // SetDrawEnabled sets the "draw_enabled" field.
 func (_u *ShopProductUpdateOne) SetDrawEnabled(v bool) *ShopProductUpdateOne {
 	_u.mutation.SetDrawEnabled(v)
@@ -1462,6 +1555,15 @@ func (_u *ShopProductUpdateOne) sqlSave(ctx context.Context) (_node *ShopProduct
 	}
 	if value, ok := _u.mutation.BalanceOnly(); ok {
 		_spec.SetField(shopproduct.FieldBalanceOnly, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowBalancePayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowBalancePayment, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowPointsPayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowPointsPayment, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowPlatformPayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowPlatformPayment, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.DrawEnabled(); ok {
 		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)

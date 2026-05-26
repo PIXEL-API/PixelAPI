@@ -34,7 +34,7 @@ func NewRedeemHandler(adminService service.AdminService, redeemService *service.
 // GenerateRedeemCodesRequest represents generate redeem codes request
 type GenerateRedeemCodesRequest struct {
 	Count        int     `json:"count" binding:"required,min=1,max=100"`
-	Type         string  `json:"type" binding:"required,oneof=balance concurrency subscription invitation"`
+	Type         string  `json:"type" binding:"required,oneof=balance points concurrency subscription invitation"`
 	Value        float64 `json:"value"`
 	GroupID      *int64  `json:"group_id"`      // 订阅类型必填
 	ValidityDays int     `json:"validity_days"` // 订阅类型使用，正数增加/负数退款扣减
@@ -44,7 +44,7 @@ type GenerateRedeemCodesRequest struct {
 // Type 为 omitempty 而非 required 是为了向后兼容旧版调用方（不传 type 时默认 balance）。
 type CreateAndRedeemCodeRequest struct {
 	Code         string  `json:"code" binding:"required,min=3,max=128"`
-	Type         string  `json:"type" binding:"omitempty,oneof=balance concurrency subscription invitation"` // 不传时默认 balance（向后兼容）
+	Type         string  `json:"type" binding:"omitempty,oneof=balance points concurrency subscription invitation"` // 不传时默认 balance（向后兼容）
 	Value        float64 `json:"value" binding:"required"`
 	UserID       int64   `json:"user_id" binding:"required,gt=0"`
 	GroupID      *int64  `json:"group_id"`      // subscription 类型必填
@@ -156,6 +156,10 @@ func (h *RedeemHandler) CreateAndRedeem(c *gin.Context) {
 			response.BadRequest(c, "validity_days must not be zero for subscription type")
 			return
 		}
+	}
+	if req.Type == "points" && req.Value <= 0 {
+		response.BadRequest(c, "points redeem code value must be greater than 0")
+		return
 	}
 
 	executeAdminIdempotentJSON(c, "admin.redeem_codes.create_and_redeem", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
@@ -291,6 +295,7 @@ func (h *RedeemHandler) GetStats(c *gin.Context) {
 		"total_value_distributed": 0.0,
 		"by_type": gin.H{
 			"balance":     0,
+			"points":      0,
 			"concurrency": 0,
 			"trial":       0,
 		},

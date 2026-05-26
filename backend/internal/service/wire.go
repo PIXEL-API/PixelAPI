@@ -438,6 +438,17 @@ func ProvideBillingCacheService(
 	return NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg)
 }
 
+// ProvideGroupRateScheduleService creates and starts the group rate schedule worker.
+func ProvideGroupRateScheduleService(
+	repo GroupRateScheduleRepository,
+	groupRepo GroupRepository,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+) *GroupRateScheduleService {
+	svc := NewGroupRateScheduleService(repo, groupRepo, authCacheInvalidator, defaultGroupRateScheduleInterval)
+	svc.Start()
+	return svc
+}
+
 func ProvideAuthService(
 	entClient *dbent.Client,
 	userRepo UserRepository,
@@ -535,6 +546,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	NewGroupService,
+	ProvideGroupRateScheduleService,
 	ProvideAccountService,
 	NewAccountSharePolicyService,
 	NewProxyService,

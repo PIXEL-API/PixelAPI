@@ -31,6 +31,7 @@ const props = withDefaults(defineProps<{
   loginAgreementRevision?: string
   providerName?: string
   showDivider?: boolean
+  beforeStart?: () => boolean
 }>(), {
   providerName: 'OIDC',
   showDivider: true
@@ -47,6 +48,9 @@ const normalizedProviderName = computed(() => {
 const providerInitial = computed(() => normalizedProviderName.value.charAt(0).toUpperCase() || 'O')
 
 function startLogin(): void {
+  if (props.beforeStart && !props.beforeStart()) {
+    return
+  }
   const redirectTo = (route.query.redirect as string) || '/dashboard'
   storeOAuthAffiliateCode(resolveAffiliateReferralCode(props.affCode, route.query.aff, route.query.aff_code))
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'

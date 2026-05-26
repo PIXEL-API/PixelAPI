@@ -7,22 +7,24 @@ import (
 )
 
 type User struct {
-	ID             int64
-	Email          string
-	Username       string
-	Notes          string
-	AvatarURL      string
-	AvatarSource   string
-	AvatarMIME     string
-	AvatarByteSize int
-	AvatarSHA256   string
-	PasswordHash   string
-	Role           string
-	Balance        float64
-	Concurrency    int
-	Status         string
-	AllowedGroups  []int64
-	TokenVersion   int64 // Incremented on password change to invalidate existing tokens
+	ID                  int64
+	Email               string
+	Username            string
+	Notes               string
+	AvatarURL           string
+	AvatarSource        string
+	AvatarMIME          string
+	AvatarByteSize      int
+	AvatarSHA256        string
+	PasswordHash        string
+	Role                string
+	Balance             float64
+	PointsBalance       float64
+	PreferPointsBilling bool
+	Concurrency         int
+	Status              string
+	AllowedGroups       []int64
+	TokenVersion        int64 // Incremented on password change to invalidate existing tokens
 	// TokenVersionResolved indicates TokenVersion already contains the fingerprint-derived
 	// value expected in JWT claims and refresh-token state.
 	TokenVersionResolved bool
@@ -68,6 +70,14 @@ func (u *User) IsAdmin() bool {
 
 func (u *User) IsActive() bool {
 	return u.Status == StatusActive
+}
+
+func CanUsePointsForUsage(user *User) bool {
+	return user != nil && user.PreferPointsBilling && user.PointsBalance > 0
+}
+
+func HasUsageBillingFunds(user *User) bool {
+	return user != nil && (user.Balance > 0 || CanUsePointsForUsage(user))
 }
 
 // CanBindGroup checks whether a user can bind to a given group.

@@ -50,6 +50,7 @@ type ChangePasswordRequest struct {
 type UpdateProfileRequest struct {
 	Username               *string  `json:"username"`
 	AvatarURL              *string  `json:"avatar_url"`
+	PreferPointsBilling    *bool    `json:"prefer_points_billing"`
 	BalanceNotifyEnabled   *bool    `json:"balance_notify_enabled"`
 	BalanceNotifyThreshold *float64 `json:"balance_notify_threshold"`
 }
@@ -146,6 +147,7 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 	svcReq := service.UpdateProfileRequest{
 		Username:               req.Username,
 		AvatarURL:              req.AvatarURL,
+		PreferPointsBilling:    req.PreferPointsBilling,
 		BalanceNotifyEnabled:   req.BalanceNotifyEnabled,
 		BalanceNotifyThreshold: req.BalanceNotifyThreshold,
 	}

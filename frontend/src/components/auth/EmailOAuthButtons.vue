@@ -43,6 +43,7 @@ const props = withDefaults(defineProps<{
   githubEnabled?: boolean
   googleEnabled?: boolean
   showDivider?: boolean
+  beforeStart?: () => boolean
 }>(), {
   showDivider: true
 })
@@ -72,6 +73,9 @@ function providerLabel(provider: EmailOAuthProvider): string {
 }
 
 function startLogin(provider: EmailOAuthProvider): void {
+  if (props.beforeStart && !props.beforeStart()) {
+    return
+  }
   const redirectTo = (route.query.redirect as string) || '/dashboard'
   const affiliateCode = resolveAffiliateReferralCode(props.affCode, route.query.aff, route.query.aff_code)
   storeOAuthAffiliateCode(affiliateCode)

@@ -175,6 +175,24 @@ export interface GroupRateMultiplierEntry {
   rpm_override?: number | null
 }
 
+export interface GroupRateSchedule {
+  id: number
+  group_id: number
+  start_minute: number
+  end_minute: number
+  rate_multiplier: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface GroupRateScheduleInput {
+  start_minute: number
+  end_minute: number
+  rate_multiplier: number
+  enabled: boolean
+}
+
 /**
  * Get rate multipliers for users in a group
  * @param id - Group ID
@@ -183,6 +201,22 @@ export interface GroupRateMultiplierEntry {
 export async function getGroupRateMultipliers(id: number): Promise<GroupRateMultiplierEntry[]> {
   const { data } = await apiClient.get<GroupRateMultiplierEntry[]>(
     `/admin/groups/${id}/rate-multipliers`
+  )
+  return data
+}
+
+export async function getGroupRateSchedules(id: number): Promise<GroupRateSchedule[]> {
+  const { data } = await apiClient.get<GroupRateSchedule[]>(`/admin/groups/${id}/rate-schedules`)
+  return data
+}
+
+export async function replaceGroupRateSchedules(
+  id: number,
+  entries: GroupRateScheduleInput[]
+): Promise<GroupRateSchedule[]> {
+  const { data } = await apiClient.put<GroupRateSchedule[]>(
+    `/admin/groups/${id}/rate-schedules`,
+    { entries }
   )
   return data
 }
@@ -319,6 +353,8 @@ export const groupsAPI = {
   toggleStatus,
   getStats,
   getGroupApiKeys,
+  getGroupRateSchedules,
+  replaceGroupRateSchedules,
   getGroupRateMultipliers,
   clearGroupRateMultipliers,
   batchSetGroupRateMultipliers,

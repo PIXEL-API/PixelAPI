@@ -68,6 +68,82 @@ func (s *openAIRecordUsageUserRepoStub) DeductBalance(ctx context.Context, id in
 	return s.deductErr
 }
 
+type openAIRecordUsageWalletRepoStub struct {
+	openAIRecordUsageUserRepoStub
+
+	walletCalls        int
+	lastPreferPoints   bool
+	lastWalletAmount   float64
+	lastWalletCtxErr   error
+	lastWalletMetadata map[string]any
+}
+
+func (s *openAIRecordUsageWalletRepoStub) AdjustUsageBillingWallet(ctx context.Context, userID int64, amount float64, preferPoints bool, metadata map[string]any) (*UsageBillingApplyResult, error) {
+	s.walletCalls++
+	s.lastPreferPoints = preferPoints
+	s.lastWalletAmount = amount
+	s.lastWalletCtxErr = ctx.Err()
+	s.lastWalletMetadata = metadata
+	return &UsageBillingApplyResult{Applied: true, PointsDeducted: amount}, nil
+}
+
+type openAIRecordUsageBillingCacheStub struct {
+	BillingCache
+
+	invalidateCalls     int
+	lastInvalidatedUser int64
+}
+
+func (s *openAIRecordUsageBillingCacheStub) GetUserBalance(ctx context.Context, userID int64) (float64, error) {
+	return 0, nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) SetUserBalance(ctx context.Context, userID int64, balance float64) error {
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) DeductUserBalance(ctx context.Context, userID int64, amount float64) error {
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) InvalidateUserBalance(ctx context.Context, userID int64) error {
+	s.invalidateCalls++
+	s.lastInvalidatedUser = userID
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) GetSubscriptionCache(ctx context.Context, userID, groupID int64) (*SubscriptionCacheData, error) {
+	return nil, nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) SetSubscriptionCache(ctx context.Context, userID, groupID int64, data *SubscriptionCacheData) error {
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) UpdateSubscriptionUsage(ctx context.Context, userID, groupID int64, cost float64) error {
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) InvalidateSubscriptionCache(ctx context.Context, userID, groupID int64) error {
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) GetAPIKeyRateLimit(ctx context.Context, keyID int64) (*APIKeyRateLimitCacheData, error) {
+	return nil, nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) SetAPIKeyRateLimit(ctx context.Context, keyID int64, data *APIKeyRateLimitCacheData) error {
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) UpdateAPIKeyRateLimitUsage(ctx context.Context, keyID int64, cost float64) error {
+	return nil
+}
+
+func (s *openAIRecordUsageBillingCacheStub) InvalidateAPIKeyRateLimit(ctx context.Context, keyID int64) error {
+	return nil
+}
+
 type openAIRecordUsageSubRepoStub struct {
 	UserSubscriptionRepository
 
@@ -85,6 +161,8 @@ func (s *openAIRecordUsageSubRepoStub) IncrementUsage(ctx context.Context, id in
 type openAIRecordUsageAPIKeyQuotaStub struct {
 	quotaCalls          int
 	rateLimitCalls      int
+	authInvalidateCalls int
+	lastAuthUserID      int64
 	err                 error
 	lastAmount          float64
 	lastQuotaCtxErr     error
@@ -103,6 +181,11 @@ func (s *openAIRecordUsageAPIKeyQuotaStub) UpdateRateLimitUsage(ctx context.Cont
 	s.lastAmount = cost
 	s.lastRateLimitCtxErr = ctx.Err()
 	return s.err
+}
+
+func (s *openAIRecordUsageAPIKeyQuotaStub) InvalidateAuthCacheByUserID(ctx context.Context, userID int64) {
+	s.authInvalidateCalls++
+	s.lastAuthUserID = userID
 }
 
 type openAIUserGroupRateRepoStub struct {

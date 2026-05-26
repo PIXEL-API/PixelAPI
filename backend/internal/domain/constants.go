@@ -46,6 +46,7 @@ const (
 // Redeem type constants
 const (
 	RedeemTypeBalance      = "balance"
+	RedeemTypePoints       = "points"
 	RedeemTypeConcurrency  = "concurrency"
 	RedeemTypeSubscription = "subscription"
 	RedeemTypeInvitation   = "invitation"
@@ -60,6 +61,7 @@ const (
 // Admin adjustment type constants
 const (
 	AdjustmentTypeAdminBalance     = "admin_balance"     // 管理员调整余额
+	AdjustmentTypeAdminPoints      = "admin_points"      // 管理员调整积分
 	AdjustmentTypeAdminConcurrency = "admin_concurrency" // 管理员调整并发数
 )
 

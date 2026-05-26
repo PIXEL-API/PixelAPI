@@ -48,11 +48,17 @@ func (ShopOrder) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
+		field.String("product_type").
+			MaxLen(30).
+			Default("card_key"),
 		field.Float("unit_price").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
 		field.Int("quantity"),
 		field.Float("total_amount").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
+		field.Float("points_amount").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			Default(0),
 		field.String("payment_method").
 			MaxLen(30),
 		field.Int64("payment_order_id").

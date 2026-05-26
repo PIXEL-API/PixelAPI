@@ -15,6 +15,7 @@
           <template #cell-price="{ value }">¥{{ Number(value || 0).toFixed(2) }}</template>
           <template #cell-category_id="{ value, row }">{{ row.category?.name || categoryName(value) }}</template>
           <template #cell-product_type="{ value }">{{ productTypeLabel(value) }}</template>
+          <template #cell-payment_methods="{ row }">{{ paymentMethodsText(row) }}</template>
           <template #cell-stock="{ value, row }">{{ row.stock_unlimited ? t('admin.store.unlimitedStock') : value }}</template>
           <template #cell-status="{ value }">
             <span :class="['badge', value === 'active' ? 'badge-success' : 'badge-gray']">{{ t(`admin.store.status.${value}`) }}</span>
@@ -65,6 +66,30 @@
               <label class="input-label">{{ t('admin.store.sortOrder') }}</label>
               <input v-model.number="form.sort_order" class="input" type="number" />
             </div>
+            <div class="sm:col-span-2 grid gap-3 sm:grid-cols-3">
+              <label class="payment-toggle-card">
+                <span>
+                  <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.store.allowBalancePayment') }}</span>
+                  <span class="mt-1 block text-xs text-gray-500 dark:text-dark-400">{{ t('admin.store.allowBalancePaymentHint') }}</span>
+                </span>
+                <Toggle :model-value="form.allow_balance_payment" @update:modelValue="setPaymentMethod('balance', $event)" />
+              </label>
+              <label class="payment-toggle-card">
+                <span>
+                  <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.store.allowPointsPayment') }}</span>
+                  <span class="mt-1 block text-xs text-gray-500 dark:text-dark-400">{{ t('admin.store.allowPointsPaymentHint') }}</span>
+                </span>
+                <Toggle :model-value="form.allow_points_payment" @update:modelValue="setPaymentMethod('points', $event)" />
+              </label>
+              <label class="payment-toggle-card">
+                <span>
+                  <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.store.allowPlatformPayment') }}</span>
+                  <span class="mt-1 block text-xs text-gray-500 dark:text-dark-400">{{ t('admin.store.allowPlatformPaymentHint') }}</span>
+                </span>
+                <Toggle :model-value="form.allow_platform_payment" @update:modelValue="setPaymentMethod('platform', $event)" />
+              </label>
+            </div>
+            <p v-if="paymentMethodError" class="sm:col-span-2 text-sm text-red-600 dark:text-red-400">{{ paymentMethodError }}</p>
             <div>
               <label class="input-label">{{ t('admin.store.purchaseLimit') }}</label>
               <input v-model.number="form.purchase_limit" class="input" type="number" min="0" :disabled="isDrawProduct" />
@@ -86,7 +111,7 @@
               <input v-model.number="form.draw_config.return_rate" class="input" type="number" min="0.0001" step="0.0001" required />
             </div>
             <div v-if="isDrawProduct" class="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
-              {{ t('admin.store.drawConfigHint', { amount: drawTargetAmount.toFixed(2) }) }}
+              {{ t('admin.store.drawConfigHint', { amount: drawTargetAmountText, unit: drawRewardUnitLabel }) }}
             </div>
             <div class="sm:col-span-2">
               <label class="input-label">{{ t('admin.store.imageUrl') }}</label>
@@ -120,6 +145,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -141,6 +167,9 @@ const form = reactive({
   sort_order: 0,
   image_url: '',
   purchase_limit: null as number | null,
+  allow_balance_payment: true,
+  allow_points_payment: false,
+  allow_platform_payment: true,
   product_type: 'card_key' as StoreProductType,
   balance_only: false,
   draw_config: {
@@ -158,6 +187,7 @@ const columns = computed<Column[]>(() => [
   { key: 'category_id', label: t('admin.store.category') },
   { key: 'product_type', label: t('admin.store.productType') },
   { key: 'price', label: t('admin.store.price') },
+  { key: 'payment_methods', label: t('admin.store.paymentMethods') },
   { key: 'stock', label: t('admin.store.stockLabel') },
   { key: 'status', label: t('common.status') },
   { key: 'actions', label: t('common.actions') },
@@ -173,16 +203,44 @@ const statusOptions = computed(() => [
 const productTypeOptions = computed(() => [
   { value: 'card_key', label: t('admin.store.productTypes.cardKey') },
   { value: 'balance_draw', label: t('admin.store.productTypes.balanceDraw') },
+  { value: 'points_draw', label: t('admin.store.productTypes.pointsDraw') },
 ])
-const isDrawProduct = computed(() => form.product_type === 'balance_draw')
+const isDrawProduct = computed(() => form.product_type === 'balance_draw' || form.product_type === 'points_draw')
 const drawTargetAmount = computed(() => Math.round(form.price * form.draw_config.guarantee_count * form.draw_config.return_rate * 100) / 100)
+const isPointsDrawProduct = computed(() => form.product_type === 'points_draw')
+const drawTargetAmountText = computed(() => isPointsDrawProduct.value
+  ? drawTargetAmount.value.toFixed(10).replace(/\.?0+$/, '') || '0'
+  : drawTargetAmount.value.toFixed(2))
+const drawRewardUnitLabel = computed(() => isPointsDrawProduct.value ? t('common.points') : t('common.balance'))
+const enabledPaymentMethodCount = computed(() =>
+  Number(form.allow_balance_payment) + Number(form.allow_points_payment) + Number(form.allow_platform_payment),
+)
+const paymentMethodError = computed(() => enabledPaymentMethodCount.value <= 0 ? t('admin.store.paymentMethodRequired') : '')
 
 function categoryName(id?: number | null) {
   if (!id) return t('common.uncategorized')
   return categories.value.find(category => category.id === id)?.name || `#${id}`
 }
 function productTypeLabel(value?: string) {
-  return value === 'balance_draw' ? t('admin.store.productTypes.balanceDraw') : t('admin.store.productTypes.cardKey')
+  if (value === 'balance_draw') return t('admin.store.productTypes.balanceDraw')
+  if (value === 'points_draw') return t('admin.store.productTypes.pointsDraw')
+  return t('admin.store.productTypes.cardKey')
+}
+function paymentMethodsText(product: StoreProduct) {
+  const methods: string[] = []
+  if (product.allow_balance_payment !== false) methods.push(t('common.balance'))
+  if (product.allow_points_payment === true) methods.push(t('common.points'))
+  if (product.allow_platform_payment !== false) methods.push(t('admin.store.platformPayment'))
+  return methods.length > 0 ? methods.join(' / ') : t('common.disabled')
+}
+function setPaymentMethod(method: 'balance' | 'points' | 'platform', enabled: boolean) {
+  if (!enabled && enabledPaymentMethodCount.value <= 1) {
+    appStore.showError(t('admin.store.paymentMethodRequired'))
+    return
+  }
+  if (method === 'balance') form.allow_balance_payment = enabled
+  else if (method === 'points') form.allow_points_payment = enabled
+  else form.allow_platform_payment = enabled
 }
 function nullableNumber(value: number | null) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -197,6 +255,9 @@ function resetForm() {
   form.sort_order = 0
   form.image_url = ''
   form.purchase_limit = null
+  form.allow_balance_payment = true
+  form.allow_points_payment = false
+  form.allow_platform_payment = true
   form.product_type = 'card_key'
   form.balance_only = false
   form.draw_config.enabled = false
@@ -219,7 +280,10 @@ function openEdit(product: StoreProduct) {
   form.purchase_limit = product.purchase_limit ?? null
   form.product_type = product.product_type || 'card_key'
   form.balance_only = product.balance_only === true
-  form.draw_config.enabled = product.draw_config?.enabled ?? form.product_type === 'balance_draw'
+  form.allow_balance_payment = product.allow_balance_payment !== false
+  form.allow_points_payment = product.allow_points_payment === true
+  form.allow_platform_payment = product.allow_platform_payment !== false
+  form.draw_config.enabled = product.draw_config?.enabled ?? (form.product_type === 'balance_draw' || form.product_type === 'points_draw')
   form.draw_config.min_amount = product.draw_config?.min_amount ?? 1
   form.draw_config.max_amount = product.draw_config?.max_amount ?? 5
   form.draw_config.guarantee_count = product.draw_config?.guarantee_count ?? 20
@@ -244,6 +308,10 @@ async function loadProducts() {
   }
 }
 async function submitForm() {
+  if (paymentMethodError.value) {
+    appStore.showError(paymentMethodError.value)
+    return
+  }
   saving.value = true
   try {
     const payload = {
@@ -258,6 +326,9 @@ async function submitForm() {
       min_purchase: 1,
       max_purchase: isDrawProduct.value ? 1 : nullableNumber(form.purchase_limit) || 1,
       auto_delivery: true,
+      allow_balance_payment: form.allow_balance_payment,
+      allow_points_payment: form.allow_points_payment,
+      allow_platform_payment: form.allow_platform_payment,
       product_type: form.product_type,
       balance_only: isDrawProduct.value,
       draw_config: isDrawProduct.value
@@ -293,3 +364,22 @@ function setPage(page: number) { pagination.page = page; loadProducts() }
 function setPageSize(pageSize: number) { pagination.page_size = pageSize; pagination.page = 1; loadProducts() }
 onMounted(async () => { await loadCategories(); await loadProducts() })
 </script>
+
+<style scoped>
+.payment-toggle-card {
+  display: flex;
+  min-height: 5.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(229 231 235);
+  background: rgb(249 250 251);
+  padding: 0.75rem;
+}
+
+.dark .payment-toggle-card {
+  border-color: rgb(55 65 81);
+  background: rgb(31 41 55);
+}
+</style>

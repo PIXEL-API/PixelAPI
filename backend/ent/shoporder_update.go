@@ -136,6 +136,20 @@ func (_u *ShopOrderUpdate) ClearProductDescription() *ShopOrderUpdate {
 	return _u
 }
 
+// SetProductType sets the "product_type" field.
+func (_u *ShopOrderUpdate) SetProductType(v string) *ShopOrderUpdate {
+	_u.mutation.SetProductType(v)
+	return _u
+}
+
+// SetNillableProductType sets the "product_type" field if the given value is not nil.
+func (_u *ShopOrderUpdate) SetNillableProductType(v *string) *ShopOrderUpdate {
+	if v != nil {
+		_u.SetProductType(*v)
+	}
+	return _u
+}
+
 // SetUnitPrice sets the "unit_price" field.
 func (_u *ShopOrderUpdate) SetUnitPrice(v float64) *ShopOrderUpdate {
 	_u.mutation.ResetUnitPrice()
@@ -196,6 +210,27 @@ func (_u *ShopOrderUpdate) SetNillableTotalAmount(v *float64) *ShopOrderUpdate {
 // AddTotalAmount adds value to the "total_amount" field.
 func (_u *ShopOrderUpdate) AddTotalAmount(v float64) *ShopOrderUpdate {
 	_u.mutation.AddTotalAmount(v)
+	return _u
+}
+
+// SetPointsAmount sets the "points_amount" field.
+func (_u *ShopOrderUpdate) SetPointsAmount(v float64) *ShopOrderUpdate {
+	_u.mutation.ResetPointsAmount()
+	_u.mutation.SetPointsAmount(v)
+	return _u
+}
+
+// SetNillablePointsAmount sets the "points_amount" field if the given value is not nil.
+func (_u *ShopOrderUpdate) SetNillablePointsAmount(v *float64) *ShopOrderUpdate {
+	if v != nil {
+		_u.SetPointsAmount(*v)
+	}
+	return _u
+}
+
+// AddPointsAmount adds value to the "points_amount" field.
+func (_u *ShopOrderUpdate) AddPointsAmount(v float64) *ShopOrderUpdate {
+	_u.mutation.AddPointsAmount(v)
 	return _u
 }
 
@@ -584,6 +619,11 @@ func (_u *ShopOrderUpdate) check() error {
 			return &ValidationError{Name: "product_name", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.product_name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ProductType(); ok {
+		if err := shoporder.ProductTypeValidator(v); err != nil {
+			return &ValidationError{Name: "product_type", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.product_type": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.PaymentMethod(); ok {
 		if err := shoporder.PaymentMethodValidator(v); err != nil {
 			return &ValidationError{Name: "payment_method", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.payment_method": %w`, err)}
@@ -636,6 +676,9 @@ func (_u *ShopOrderUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.ProductDescriptionCleared() {
 		_spec.ClearField(shoporder.FieldProductDescription, field.TypeString)
 	}
+	if value, ok := _u.mutation.ProductType(); ok {
+		_spec.SetField(shoporder.FieldProductType, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.UnitPrice(); ok {
 		_spec.SetField(shoporder.FieldUnitPrice, field.TypeFloat64, value)
 	}
@@ -653,6 +696,12 @@ func (_u *ShopOrderUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedTotalAmount(); ok {
 		_spec.AddField(shoporder.FieldTotalAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.PointsAmount(); ok {
+		_spec.SetField(shoporder.FieldPointsAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPointsAmount(); ok {
+		_spec.AddField(shoporder.FieldPointsAmount, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.PaymentMethod(); ok {
 		_spec.SetField(shoporder.FieldPaymentMethod, field.TypeString, value)
@@ -1021,6 +1070,20 @@ func (_u *ShopOrderUpdateOne) ClearProductDescription() *ShopOrderUpdateOne {
 	return _u
 }
 
+// SetProductType sets the "product_type" field.
+func (_u *ShopOrderUpdateOne) SetProductType(v string) *ShopOrderUpdateOne {
+	_u.mutation.SetProductType(v)
+	return _u
+}
+
+// SetNillableProductType sets the "product_type" field if the given value is not nil.
+func (_u *ShopOrderUpdateOne) SetNillableProductType(v *string) *ShopOrderUpdateOne {
+	if v != nil {
+		_u.SetProductType(*v)
+	}
+	return _u
+}
+
 // SetUnitPrice sets the "unit_price" field.
 func (_u *ShopOrderUpdateOne) SetUnitPrice(v float64) *ShopOrderUpdateOne {
 	_u.mutation.ResetUnitPrice()
@@ -1081,6 +1144,27 @@ func (_u *ShopOrderUpdateOne) SetNillableTotalAmount(v *float64) *ShopOrderUpdat
 // AddTotalAmount adds value to the "total_amount" field.
 func (_u *ShopOrderUpdateOne) AddTotalAmount(v float64) *ShopOrderUpdateOne {
 	_u.mutation.AddTotalAmount(v)
+	return _u
+}
+
+// SetPointsAmount sets the "points_amount" field.
+func (_u *ShopOrderUpdateOne) SetPointsAmount(v float64) *ShopOrderUpdateOne {
+	_u.mutation.ResetPointsAmount()
+	_u.mutation.SetPointsAmount(v)
+	return _u
+}
+
+// SetNillablePointsAmount sets the "points_amount" field if the given value is not nil.
+func (_u *ShopOrderUpdateOne) SetNillablePointsAmount(v *float64) *ShopOrderUpdateOne {
+	if v != nil {
+		_u.SetPointsAmount(*v)
+	}
+	return _u
+}
+
+// AddPointsAmount adds value to the "points_amount" field.
+func (_u *ShopOrderUpdateOne) AddPointsAmount(v float64) *ShopOrderUpdateOne {
+	_u.mutation.AddPointsAmount(v)
 	return _u
 }
 
@@ -1482,6 +1566,11 @@ func (_u *ShopOrderUpdateOne) check() error {
 			return &ValidationError{Name: "product_name", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.product_name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ProductType(); ok {
+		if err := shoporder.ProductTypeValidator(v); err != nil {
+			return &ValidationError{Name: "product_type", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.product_type": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.PaymentMethod(); ok {
 		if err := shoporder.PaymentMethodValidator(v); err != nil {
 			return &ValidationError{Name: "payment_method", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.payment_method": %w`, err)}
@@ -1551,6 +1640,9 @@ func (_u *ShopOrderUpdateOne) sqlSave(ctx context.Context) (_node *ShopOrder, er
 	if _u.mutation.ProductDescriptionCleared() {
 		_spec.ClearField(shoporder.FieldProductDescription, field.TypeString)
 	}
+	if value, ok := _u.mutation.ProductType(); ok {
+		_spec.SetField(shoporder.FieldProductType, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.UnitPrice(); ok {
 		_spec.SetField(shoporder.FieldUnitPrice, field.TypeFloat64, value)
 	}
@@ -1568,6 +1660,12 @@ func (_u *ShopOrderUpdateOne) sqlSave(ctx context.Context) (_node *ShopOrder, er
 	}
 	if value, ok := _u.mutation.AddedTotalAmount(); ok {
 		_spec.AddField(shoporder.FieldTotalAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.PointsAmount(); ok {
+		_spec.SetField(shoporder.FieldPointsAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPointsAmount(); ok {
+		_spec.AddField(shoporder.FieldPointsAmount, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.PaymentMethod(); ok {
 		_spec.SetField(shoporder.FieldPaymentMethod, field.TypeString, value)

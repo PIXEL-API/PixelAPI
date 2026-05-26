@@ -37,12 +37,16 @@ type ShopOrder struct {
 	ProductCoverURL *string `json:"product_cover_url,omitempty"`
 	// ProductDescription holds the value of the "product_description" field.
 	ProductDescription *string `json:"product_description,omitempty"`
+	// ProductType holds the value of the "product_type" field.
+	ProductType string `json:"product_type,omitempty"`
 	// UnitPrice holds the value of the "unit_price" field.
 	UnitPrice float64 `json:"unit_price,omitempty"`
 	// Quantity holds the value of the "quantity" field.
 	Quantity int `json:"quantity,omitempty"`
 	// TotalAmount holds the value of the "total_amount" field.
 	TotalAmount float64 `json:"total_amount,omitempty"`
+	// PointsAmount holds the value of the "points_amount" field.
+	PointsAmount float64 `json:"points_amount,omitempty"`
 	// PaymentMethod holds the value of the "payment_method" field.
 	PaymentMethod string `json:"payment_method,omitempty"`
 	// PaymentOrderID holds the value of the "payment_order_id" field.
@@ -146,11 +150,11 @@ func (*ShopOrder) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case shoporder.FieldDeliveredCards:
 			values[i] = new([]byte)
-		case shoporder.FieldUnitPrice, shoporder.FieldTotalAmount, shoporder.FieldDrawRewardAmount:
+		case shoporder.FieldUnitPrice, shoporder.FieldTotalAmount, shoporder.FieldPointsAmount, shoporder.FieldDrawRewardAmount:
 			values[i] = new(sql.NullFloat64)
 		case shoporder.FieldID, shoporder.FieldUserID, shoporder.FieldProductID, shoporder.FieldQuantity, shoporder.FieldPaymentOrderID, shoporder.FieldDrawCycleID, shoporder.FieldDrawCycleIndex:
 			values[i] = new(sql.NullInt64)
-		case shoporder.FieldOrderNo, shoporder.FieldProductName, shoporder.FieldProductCoverURL, shoporder.FieldProductDescription, shoporder.FieldPaymentMethod, shoporder.FieldStatus, shoporder.FieldFailedReason:
+		case shoporder.FieldOrderNo, shoporder.FieldProductName, shoporder.FieldProductCoverURL, shoporder.FieldProductDescription, shoporder.FieldProductType, shoporder.FieldPaymentMethod, shoporder.FieldStatus, shoporder.FieldFailedReason:
 			values[i] = new(sql.NullString)
 		case shoporder.FieldCreatedAt, shoporder.FieldUpdatedAt, shoporder.FieldPaidAt, shoporder.FieldCompletedAt, shoporder.FieldCancelledAt:
 			values[i] = new(sql.NullTime)
@@ -225,6 +229,12 @@ func (_m *ShopOrder) assignValues(columns []string, values []any) error {
 				_m.ProductDescription = new(string)
 				*_m.ProductDescription = value.String
 			}
+		case shoporder.FieldProductType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field product_type", values[i])
+			} else if value.Valid {
+				_m.ProductType = value.String
+			}
 		case shoporder.FieldUnitPrice:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field unit_price", values[i])
@@ -242,6 +252,12 @@ func (_m *ShopOrder) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field total_amount", values[i])
 			} else if value.Valid {
 				_m.TotalAmount = value.Float64
+			}
+		case shoporder.FieldPointsAmount:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field points_amount", values[i])
+			} else if value.Valid {
+				_m.PointsAmount = value.Float64
 			}
 		case shoporder.FieldPaymentMethod:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -408,6 +424,9 @@ func (_m *ShopOrder) String() string {
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")
+	builder.WriteString("product_type=")
+	builder.WriteString(_m.ProductType)
+	builder.WriteString(", ")
 	builder.WriteString("unit_price=")
 	builder.WriteString(fmt.Sprintf("%v", _m.UnitPrice))
 	builder.WriteString(", ")
@@ -416,6 +435,9 @@ func (_m *ShopOrder) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("total_amount=")
 	builder.WriteString(fmt.Sprintf("%v", _m.TotalAmount))
+	builder.WriteString(", ")
+	builder.WriteString("points_amount=")
+	builder.WriteString(fmt.Sprintf("%v", _m.PointsAmount))
 	builder.WriteString(", ")
 	builder.WriteString("payment_method=")
 	builder.WriteString(_m.PaymentMethod)

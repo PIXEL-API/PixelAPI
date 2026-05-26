@@ -228,6 +228,48 @@ func (_c *ShopProductCreate) SetNillableBalanceOnly(v *bool) *ShopProductCreate 
 	return _c
 }
 
+// SetAllowBalancePayment sets the "allow_balance_payment" field.
+func (_c *ShopProductCreate) SetAllowBalancePayment(v bool) *ShopProductCreate {
+	_c.mutation.SetAllowBalancePayment(v)
+	return _c
+}
+
+// SetNillableAllowBalancePayment sets the "allow_balance_payment" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableAllowBalancePayment(v *bool) *ShopProductCreate {
+	if v != nil {
+		_c.SetAllowBalancePayment(*v)
+	}
+	return _c
+}
+
+// SetAllowPointsPayment sets the "allow_points_payment" field.
+func (_c *ShopProductCreate) SetAllowPointsPayment(v bool) *ShopProductCreate {
+	_c.mutation.SetAllowPointsPayment(v)
+	return _c
+}
+
+// SetNillableAllowPointsPayment sets the "allow_points_payment" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableAllowPointsPayment(v *bool) *ShopProductCreate {
+	if v != nil {
+		_c.SetAllowPointsPayment(*v)
+	}
+	return _c
+}
+
+// SetAllowPlatformPayment sets the "allow_platform_payment" field.
+func (_c *ShopProductCreate) SetAllowPlatformPayment(v bool) *ShopProductCreate {
+	_c.mutation.SetAllowPlatformPayment(v)
+	return _c
+}
+
+// SetNillableAllowPlatformPayment sets the "allow_platform_payment" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableAllowPlatformPayment(v *bool) *ShopProductCreate {
+	if v != nil {
+		_c.SetAllowPlatformPayment(*v)
+	}
+	return _c
+}
+
 // SetDrawEnabled sets the "draw_enabled" field.
 func (_c *ShopProductCreate) SetDrawEnabled(v bool) *ShopProductCreate {
 	_c.mutation.SetDrawEnabled(v)
@@ -423,6 +465,18 @@ func (_c *ShopProductCreate) defaults() {
 		v := shopproduct.DefaultBalanceOnly
 		_c.mutation.SetBalanceOnly(v)
 	}
+	if _, ok := _c.mutation.AllowBalancePayment(); !ok {
+		v := shopproduct.DefaultAllowBalancePayment
+		_c.mutation.SetAllowBalancePayment(v)
+	}
+	if _, ok := _c.mutation.AllowPointsPayment(); !ok {
+		v := shopproduct.DefaultAllowPointsPayment
+		_c.mutation.SetAllowPointsPayment(v)
+	}
+	if _, ok := _c.mutation.AllowPlatformPayment(); !ok {
+		v := shopproduct.DefaultAllowPlatformPayment
+		_c.mutation.SetAllowPlatformPayment(v)
+	}
 	if _, ok := _c.mutation.DrawEnabled(); !ok {
 		v := shopproduct.DefaultDrawEnabled
 		_c.mutation.SetDrawEnabled(v)
@@ -489,6 +543,15 @@ func (_c *ShopProductCreate) check() error {
 	}
 	if _, ok := _c.mutation.BalanceOnly(); !ok {
 		return &ValidationError{Name: "balance_only", err: errors.New(`ent: missing required field "ShopProduct.balance_only"`)}
+	}
+	if _, ok := _c.mutation.AllowBalancePayment(); !ok {
+		return &ValidationError{Name: "allow_balance_payment", err: errors.New(`ent: missing required field "ShopProduct.allow_balance_payment"`)}
+	}
+	if _, ok := _c.mutation.AllowPointsPayment(); !ok {
+		return &ValidationError{Name: "allow_points_payment", err: errors.New(`ent: missing required field "ShopProduct.allow_points_payment"`)}
+	}
+	if _, ok := _c.mutation.AllowPlatformPayment(); !ok {
+		return &ValidationError{Name: "allow_platform_payment", err: errors.New(`ent: missing required field "ShopProduct.allow_platform_payment"`)}
 	}
 	if _, ok := _c.mutation.DrawEnabled(); !ok {
 		return &ValidationError{Name: "draw_enabled", err: errors.New(`ent: missing required field "ShopProduct.draw_enabled"`)}
@@ -587,6 +650,18 @@ func (_c *ShopProductCreate) createSpec() (*ShopProduct, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.BalanceOnly(); ok {
 		_spec.SetField(shopproduct.FieldBalanceOnly, field.TypeBool, value)
 		_node.BalanceOnly = value
+	}
+	if value, ok := _c.mutation.AllowBalancePayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowBalancePayment, field.TypeBool, value)
+		_node.AllowBalancePayment = value
+	}
+	if value, ok := _c.mutation.AllowPointsPayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowPointsPayment, field.TypeBool, value)
+		_node.AllowPointsPayment = value
+	}
+	if value, ok := _c.mutation.AllowPlatformPayment(); ok {
+		_spec.SetField(shopproduct.FieldAllowPlatformPayment, field.TypeBool, value)
+		_node.AllowPlatformPayment = value
 	}
 	if value, ok := _c.mutation.DrawEnabled(); ok {
 		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
@@ -944,6 +1019,42 @@ func (u *ShopProductUpsert) SetBalanceOnly(v bool) *ShopProductUpsert {
 // UpdateBalanceOnly sets the "balance_only" field to the value that was provided on create.
 func (u *ShopProductUpsert) UpdateBalanceOnly() *ShopProductUpsert {
 	u.SetExcluded(shopproduct.FieldBalanceOnly)
+	return u
+}
+
+// SetAllowBalancePayment sets the "allow_balance_payment" field.
+func (u *ShopProductUpsert) SetAllowBalancePayment(v bool) *ShopProductUpsert {
+	u.Set(shopproduct.FieldAllowBalancePayment, v)
+	return u
+}
+
+// UpdateAllowBalancePayment sets the "allow_balance_payment" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateAllowBalancePayment() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldAllowBalancePayment)
+	return u
+}
+
+// SetAllowPointsPayment sets the "allow_points_payment" field.
+func (u *ShopProductUpsert) SetAllowPointsPayment(v bool) *ShopProductUpsert {
+	u.Set(shopproduct.FieldAllowPointsPayment, v)
+	return u
+}
+
+// UpdateAllowPointsPayment sets the "allow_points_payment" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateAllowPointsPayment() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldAllowPointsPayment)
+	return u
+}
+
+// SetAllowPlatformPayment sets the "allow_platform_payment" field.
+func (u *ShopProductUpsert) SetAllowPlatformPayment(v bool) *ShopProductUpsert {
+	u.Set(shopproduct.FieldAllowPlatformPayment, v)
+	return u
+}
+
+// UpdateAllowPlatformPayment sets the "allow_platform_payment" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateAllowPlatformPayment() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldAllowPlatformPayment)
 	return u
 }
 
@@ -1332,6 +1443,48 @@ func (u *ShopProductUpsertOne) SetBalanceOnly(v bool) *ShopProductUpsertOne {
 func (u *ShopProductUpsertOne) UpdateBalanceOnly() *ShopProductUpsertOne {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateBalanceOnly()
+	})
+}
+
+// SetAllowBalancePayment sets the "allow_balance_payment" field.
+func (u *ShopProductUpsertOne) SetAllowBalancePayment(v bool) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetAllowBalancePayment(v)
+	})
+}
+
+// UpdateAllowBalancePayment sets the "allow_balance_payment" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateAllowBalancePayment() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateAllowBalancePayment()
+	})
+}
+
+// SetAllowPointsPayment sets the "allow_points_payment" field.
+func (u *ShopProductUpsertOne) SetAllowPointsPayment(v bool) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetAllowPointsPayment(v)
+	})
+}
+
+// UpdateAllowPointsPayment sets the "allow_points_payment" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateAllowPointsPayment() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateAllowPointsPayment()
+	})
+}
+
+// SetAllowPlatformPayment sets the "allow_platform_payment" field.
+func (u *ShopProductUpsertOne) SetAllowPlatformPayment(v bool) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetAllowPlatformPayment(v)
+	})
+}
+
+// UpdateAllowPlatformPayment sets the "allow_platform_payment" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateAllowPlatformPayment() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateAllowPlatformPayment()
 	})
 }
 
@@ -1900,6 +2053,48 @@ func (u *ShopProductUpsertBulk) SetBalanceOnly(v bool) *ShopProductUpsertBulk {
 func (u *ShopProductUpsertBulk) UpdateBalanceOnly() *ShopProductUpsertBulk {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateBalanceOnly()
+	})
+}
+
+// SetAllowBalancePayment sets the "allow_balance_payment" field.
+func (u *ShopProductUpsertBulk) SetAllowBalancePayment(v bool) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetAllowBalancePayment(v)
+	})
+}
+
+// UpdateAllowBalancePayment sets the "allow_balance_payment" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateAllowBalancePayment() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateAllowBalancePayment()
+	})
+}
+
+// SetAllowPointsPayment sets the "allow_points_payment" field.
+func (u *ShopProductUpsertBulk) SetAllowPointsPayment(v bool) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetAllowPointsPayment(v)
+	})
+}
+
+// UpdateAllowPointsPayment sets the "allow_points_payment" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateAllowPointsPayment() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateAllowPointsPayment()
+	})
+}
+
+// SetAllowPlatformPayment sets the "allow_platform_payment" field.
+func (u *ShopProductUpsertBulk) SetAllowPlatformPayment(v bool) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetAllowPlatformPayment(v)
+	})
+}
+
+// UpdateAllowPlatformPayment sets the "allow_platform_payment" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateAllowPlatformPayment() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateAllowPlatformPayment()
 	})
 }
 

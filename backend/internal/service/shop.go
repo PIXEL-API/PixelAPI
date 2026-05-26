@@ -36,6 +36,7 @@ const (
 
 	ShopProductTypeCardKey     = "card_key"
 	ShopProductTypeBalanceDraw = "balance_draw"
+	ShopProductTypePointsDraw  = "points_draw"
 
 	ShopFileCardStorageProviderOSS = "oss"
 	ShopFileCardMaxSizeBytes       = int64(200 * 1024)
@@ -47,6 +48,7 @@ const (
 	ShopOrderStatusFailed    = "failed"
 
 	ShopPaymentMethodBalance = "balance"
+	ShopPaymentMethodPoints  = "points"
 
 	ShopBalanceLedgerEntryNet = "net"
 )
@@ -64,6 +66,7 @@ var (
 	ErrShopInvalidQuantity          = infraerrors.BadRequest("SHOP_INVALID_QUANTITY", "invalid purchase quantity")
 	ErrShopInsufficientStock        = infraerrors.Conflict("SHOP_INSUFFICIENT_STOCK", "insufficient shop stock")
 	ErrShopInsufficientBalance      = infraerrors.Forbidden("SHOP_INSUFFICIENT_BALANCE", "insufficient balance")
+	ErrShopInsufficientPoints       = infraerrors.Forbidden("SHOP_INSUFFICIENT_POINTS", "insufficient points")
 	ErrShopUnsupportedPayment       = infraerrors.BadRequest("SHOP_UNSUPPORTED_PAYMENT_METHOD", "unsupported shop payment method")
 	ErrShopInvalidOrderStatus       = infraerrors.Conflict("SHOP_INVALID_ORDER_STATUS", "invalid shop order status")
 	ErrShopPaymentAmountMismatch    = infraerrors.Conflict("SHOP_PAYMENT_AMOUNT_MISMATCH", "shop payment amount mismatch")
@@ -150,27 +153,30 @@ type ShopCategoryDTO struct {
 }
 
 type ShopProductDTO struct {
-	ID             int64                `json:"id"`
-	CategoryID     *int64               `json:"category_id,omitempty"`
-	Category       *ShopCategoryDTO     `json:"category,omitempty"`
-	Name           string               `json:"name"`
-	CoverURL       *string              `json:"cover_url,omitempty"`
-	Description    *string              `json:"description,omitempty"`
-	Price          float64              `json:"price"`
-	OriginalPrice  *float64             `json:"original_price,omitempty"`
-	Enabled        bool                 `json:"enabled"`
-	SortOrder      int                  `json:"sort_order"`
-	MinPurchase    int                  `json:"min_purchase"`
-	MaxPurchase    int                  `json:"max_purchase"`
-	AutoDelivery   bool                 `json:"auto_delivery"`
-	ProductType    string               `json:"product_type"`
-	BalanceOnly    bool                 `json:"balance_only"`
-	DrawConfig     *ShopDrawConfigDTO   `json:"draw_config,omitempty"`
-	DrawProgress   *ShopDrawProgressDTO `json:"draw_progress,omitempty"`
-	Stock          int                  `json:"stock"`
-	StockUnlimited bool                 `json:"stock_unlimited"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
+	ID                   int64                `json:"id"`
+	CategoryID           *int64               `json:"category_id,omitempty"`
+	Category             *ShopCategoryDTO     `json:"category,omitempty"`
+	Name                 string               `json:"name"`
+	CoverURL             *string              `json:"cover_url,omitempty"`
+	Description          *string              `json:"description,omitempty"`
+	Price                float64              `json:"price"`
+	OriginalPrice        *float64             `json:"original_price,omitempty"`
+	Enabled              bool                 `json:"enabled"`
+	SortOrder            int                  `json:"sort_order"`
+	MinPurchase          int                  `json:"min_purchase"`
+	MaxPurchase          int                  `json:"max_purchase"`
+	AutoDelivery         bool                 `json:"auto_delivery"`
+	ProductType          string               `json:"product_type"`
+	BalanceOnly          bool                 `json:"balance_only"`
+	AllowBalancePayment  bool                 `json:"allow_balance_payment"`
+	AllowPointsPayment   bool                 `json:"allow_points_payment"`
+	AllowPlatformPayment bool                 `json:"allow_platform_payment"`
+	DrawConfig           *ShopDrawConfigDTO   `json:"draw_config,omitempty"`
+	DrawProgress         *ShopDrawProgressDTO `json:"draw_progress,omitempty"`
+	Stock                int                  `json:"stock"`
+	StockUnlimited       bool                 `json:"stock_unlimited"`
+	CreatedAt            time.Time            `json:"created_at"`
+	UpdatedAt            time.Time            `json:"updated_at"`
 }
 
 type ShopDrawConfigDTO struct {
@@ -194,15 +200,18 @@ type ShopOrderDTO struct {
 	ProductName        string                 `json:"product_name"`
 	ProductCoverURL    *string                `json:"product_cover_url,omitempty"`
 	ProductDescription *string                `json:"product_description,omitempty"`
+	ProductType        string                 `json:"product_type"`
 	UnitPrice          float64                `json:"unit_price"`
 	Quantity           int                    `json:"quantity"`
 	TotalAmount        float64                `json:"total_amount"`
+	PointsAmount       float64                `json:"points_amount"`
 	PaymentMethod      string                 `json:"payment_method"`
 	PaymentOrderID     *int64                 `json:"payment_order_id,omitempty"`
 	Status             string                 `json:"status"`
 	DeliveredCards     []string               `json:"delivered_cards"`
 	DeliveredFiles     []ShopDeliveredFileDTO `json:"delivered_files"`
 	DrawRewardAmount   *float64               `json:"draw_reward_amount,omitempty"`
+	DrawRewardType     string                 `json:"draw_reward_type,omitempty"`
 	DrawCycleID        *int64                 `json:"draw_cycle_id,omitempty"`
 	DrawCycleIndex     *int                   `json:"draw_cycle_index,omitempty"`
 	PaidAt             *time.Time             `json:"paid_at,omitempty"`
@@ -293,39 +302,45 @@ type ShopUpdateCategoryRequest struct {
 }
 
 type ShopCreateProductRequest struct {
-	CategoryID    *int64               `json:"category_id"`
-	Name          string               `json:"name"`
-	CoverURL      *string              `json:"cover_url"`
-	Description   *string              `json:"description"`
-	Price         float64              `json:"price"`
-	OriginalPrice *float64             `json:"original_price"`
-	Enabled       *bool                `json:"enabled"`
-	SortOrder     int                  `json:"sort_order"`
-	MinPurchase   int                  `json:"min_purchase"`
-	MaxPurchase   int                  `json:"max_purchase"`
-	AutoDelivery  *bool                `json:"auto_delivery"`
-	ProductType   string               `json:"product_type"`
-	BalanceOnly   *bool                `json:"balance_only"`
-	DrawConfig    *ShopDrawConfigInput `json:"draw_config"`
+	CategoryID           *int64               `json:"category_id"`
+	Name                 string               `json:"name"`
+	CoverURL             *string              `json:"cover_url"`
+	Description          *string              `json:"description"`
+	Price                float64              `json:"price"`
+	OriginalPrice        *float64             `json:"original_price"`
+	Enabled              *bool                `json:"enabled"`
+	SortOrder            int                  `json:"sort_order"`
+	MinPurchase          int                  `json:"min_purchase"`
+	MaxPurchase          int                  `json:"max_purchase"`
+	AutoDelivery         *bool                `json:"auto_delivery"`
+	ProductType          string               `json:"product_type"`
+	BalanceOnly          *bool                `json:"balance_only"`
+	AllowBalancePayment  *bool                `json:"allow_balance_payment"`
+	AllowPointsPayment   *bool                `json:"allow_points_payment"`
+	AllowPlatformPayment *bool                `json:"allow_platform_payment"`
+	DrawConfig           *ShopDrawConfigInput `json:"draw_config"`
 }
 
 type ShopUpdateProductRequest struct {
-	CategoryID         *int64               `json:"category_id"`
-	ClearCategory      bool                 `json:"clear_category"`
-	Name               *string              `json:"name"`
-	CoverURL           *string              `json:"cover_url"`
-	Description        *string              `json:"description"`
-	Price              *float64             `json:"price"`
-	OriginalPrice      *float64             `json:"original_price"`
-	ClearOriginalPrice bool                 `json:"clear_original_price"`
-	Enabled            *bool                `json:"enabled"`
-	SortOrder          *int                 `json:"sort_order"`
-	MinPurchase        *int                 `json:"min_purchase"`
-	MaxPurchase        *int                 `json:"max_purchase"`
-	AutoDelivery       *bool                `json:"auto_delivery"`
-	ProductType        *string              `json:"product_type"`
-	BalanceOnly        *bool                `json:"balance_only"`
-	DrawConfig         *ShopDrawConfigInput `json:"draw_config"`
+	CategoryID           *int64               `json:"category_id"`
+	ClearCategory        bool                 `json:"clear_category"`
+	Name                 *string              `json:"name"`
+	CoverURL             *string              `json:"cover_url"`
+	Description          *string              `json:"description"`
+	Price                *float64             `json:"price"`
+	OriginalPrice        *float64             `json:"original_price"`
+	ClearOriginalPrice   bool                 `json:"clear_original_price"`
+	Enabled              *bool                `json:"enabled"`
+	SortOrder            *int                 `json:"sort_order"`
+	MinPurchase          *int                 `json:"min_purchase"`
+	MaxPurchase          *int                 `json:"max_purchase"`
+	AutoDelivery         *bool                `json:"auto_delivery"`
+	ProductType          *string              `json:"product_type"`
+	BalanceOnly          *bool                `json:"balance_only"`
+	AllowBalancePayment  *bool                `json:"allow_balance_payment"`
+	AllowPointsPayment   *bool                `json:"allow_points_payment"`
+	AllowPlatformPayment *bool                `json:"allow_platform_payment"`
+	DrawConfig           *ShopDrawConfigInput `json:"draw_config"`
 }
 
 type ShopDrawConfigInput struct {
@@ -415,7 +430,7 @@ func (s *ShopService) ListProducts(ctx context.Context, params ShopListProductsP
 	out := make([]ShopProductDTO, 0, len(products))
 	for _, item := range products {
 		itemStock := stock[item.ID]
-		if item.ProductType == ShopProductTypeBalanceDraw {
+		if isShopDrawProductType(item.ProductType) {
 			itemStock = 0
 		}
 		dto := mapShopProduct(item, itemStock)
@@ -447,7 +462,7 @@ func (s *ShopService) GetProduct(ctx context.Context, id int64, admin bool) (*Sh
 	if err != nil {
 		return nil, err
 	}
-	if product.ProductType == ShopProductTypeBalanceDraw {
+	if isShopDrawProductType(product.ProductType) {
 		stock = 0
 	}
 	dto := mapShopProduct(product, stock)
@@ -456,7 +471,7 @@ func (s *ShopService) GetProduct(ctx context.Context, id int64, admin bool) (*Sh
 
 func (s *ShopService) ListDrawProgress(ctx context.Context, userID int64) (map[int64]*ShopDrawProgressDTO, error) {
 	products, err := s.entClient.ShopProduct.Query().
-		Where(shopproduct.EnabledEQ(true), shopproduct.ProductTypeEQ(ShopProductTypeBalanceDraw)).
+		Where(shopproduct.EnabledEQ(true), shopproduct.ProductTypeIn(ShopProductTypeBalanceDraw, ShopProductTypePointsDraw)).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list shop draw products for progress: %w", err)
@@ -506,6 +521,9 @@ func (s *ShopService) CreateOrder(ctx context.Context, req ShopCreateOrderReques
 	if req.PaymentMethod == ShopPaymentMethodBalance {
 		return s.createBalanceOrder(ctx, req)
 	}
+	if req.PaymentMethod == ShopPaymentMethodPoints {
+		return s.createPointsOrder(ctx, req)
+	}
 	if req.IsWeChatBrowser &&
 		strings.TrimSpace(req.OpenID) == "" &&
 		payment.GetBasePaymentType(req.PaymentMethod) == payment.TypeWxpay &&
@@ -527,6 +545,9 @@ func (s *ShopService) createBalanceOrder(ctx context.Context, req ShopCreateOrde
 	if err != nil {
 		return nil, err
 	}
+	if !product.AllowBalancePayment {
+		return nil, ErrShopUnsupportedPayment
+	}
 	totalAmount := normalizeShopAmount(product.Price * float64(req.Quantity))
 
 	userQuery := tx.User.Query().Where(user.IDEQ(req.UserID))
@@ -545,7 +566,7 @@ func (s *ShopService) createBalanceOrder(ctx context.Context, req ShopCreateOrde
 	}
 
 	var drawReward *shopDrawRewardResult
-	if product.ProductType == ShopProductTypeBalanceDraw {
+	if isShopDrawProductType(product.ProductType) {
 		drawReward, err = s.nextDrawRewardInTx(ctx, tx, req.UserID, product)
 		if err != nil {
 			return nil, err
@@ -584,19 +605,147 @@ func (s *ShopService) createBalanceOrder(ctx context.Context, req ShopCreateOrde
 		return nil, fmt.Errorf("complete shop balance order: %w", err)
 	}
 	balanceDelta := -totalAmount
-	if drawReward != nil {
+	if drawReward != nil && product.ProductType == ShopProductTypeBalanceDraw {
 		balanceDelta = normalizeShopAmount(balanceDelta + drawReward.Amount)
 	}
 	balanceAfter := normalizeShopAmount(u.Balance + balanceDelta)
-	if err := s.createShopBalanceLedgerInTx(ctx, tx, order.ID, req.UserID, u.Balance, totalAmount, drawReward); err != nil {
+	if err := s.createShopBalanceLedgerInTx(ctx, tx, order.ID, req.UserID, u.Balance, totalAmount, drawRewardForBalance(product, drawReward)); err != nil {
 		return nil, err
 	}
 	if _, err := tx.User.UpdateOneID(req.UserID).AddBalance(balanceDelta).Save(ctx); err != nil {
 		return nil, fmt.Errorf("deduct shop balance: %w", err)
 	}
+	if drawReward != nil && product.ProductType == ShopProductTypePointsDraw {
+		if err := applyPointsAdjustmentInTx(ctx, tx, pointsAdjustmentInput{
+			UserID:    req.UserID,
+			Delta:     drawReward.Amount,
+			Reason:    "shop_draw_reward",
+			RefType:   "shop_order",
+			RefID:     order.ID,
+			Metadata:  map[string]any{"product_id": product.ID, "quantity": req.Quantity},
+			ClampZero: false,
+		}); err != nil {
+			return nil, fmt.Errorf("credit shop draw reward points: %w", err)
+		}
+	}
 	u.Balance = balanceAfter
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit shop balance order: %w", err)
+	}
+	s.invalidateUserBalance(ctx, req.UserID)
+	order.Unwrap()
+	dto := mapShopOrder(order, nil)
+	if err := s.hydrateOrderDeliveredFiles(ctx, &dto); err != nil {
+		return nil, err
+	}
+	return &dto, nil
+}
+
+func (s *ShopService) createPointsOrder(ctx context.Context, req ShopCreateOrderRequest) (*ShopOrderDTO, error) {
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin shop points transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	product, err := s.validateProductForPurchase(ctx, tx, req.ProductID, req.Quantity)
+	if err != nil {
+		return nil, err
+	}
+	if !product.AllowPointsPayment {
+		return nil, ErrShopUnsupportedPayment
+	}
+	totalAmount := normalizeShopAmount(product.Price * float64(req.Quantity))
+
+	userQuery := tx.User.Query().Where(user.IDEQ(req.UserID))
+	if shopTxSupportsRowLock(tx) {
+		userQuery.ForUpdate()
+	}
+	u, err := userQuery.Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("lock user points: %w", err)
+	}
+	if u.PointsBalance+1e-9 < totalAmount {
+		return nil, ErrShopInsufficientPoints
+	}
+
+	var drawReward *shopDrawRewardResult
+	if isShopDrawProductType(product.ProductType) {
+		drawReward, err = s.nextDrawRewardInTx(ctx, tx, req.UserID, product)
+		if err != nil {
+			return nil, err
+		}
+	}
+	order, err := s.createShopOrderInTx(ctx, tx, req, product, totalAmount, ShopOrderStatusPaid)
+	if err != nil {
+		return nil, err
+	}
+	delivered := []string{}
+	if drawReward != nil {
+		order, err = tx.ShopOrder.UpdateOneID(order.ID).
+			SetDrawRewardAmount(drawReward.Amount).
+			SetDrawCycleID(drawReward.CycleID).
+			SetDrawCycleIndex(drawReward.CycleIndex).
+			Save(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("attach shop draw reward: %w", err)
+		}
+		delivered = []string{fmt.Sprintf("%.2f", drawReward.Amount)}
+	} else {
+		delivered, err = s.deliverOrderInTx(ctx, tx, order)
+	}
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	order, err = tx.ShopOrder.UpdateOneID(order.ID).
+		SetStatus(ShopOrderStatusCompleted).
+		SetPointsAmount(totalAmount).
+		SetPaidAt(now).
+		SetCompletedAt(now).
+		SetDeliveredCards(delivered).
+		ClearFailedReason().
+		Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("complete shop points order: %w", err)
+	}
+	if err := applyPointsAdjustmentInTx(ctx, tx, pointsAdjustmentInput{
+		UserID:    req.UserID,
+		Delta:     -totalAmount,
+		Reason:    "shop_order",
+		RefType:   "shop_order",
+		RefID:     order.ID,
+		Metadata:  map[string]any{"product_id": product.ID, "quantity": req.Quantity},
+		ClampZero: false,
+	}); err != nil {
+		return nil, fmt.Errorf("deduct shop points: %w", err)
+	}
+	if drawReward != nil && product.ProductType == ShopProductTypeBalanceDraw {
+		if err := s.createShopBalanceLedgerInTx(ctx, tx, order.ID, req.UserID, u.Balance, 0, drawReward); err != nil {
+			return nil, err
+		}
+		if _, err := tx.User.UpdateOneID(req.UserID).AddBalance(drawReward.Amount).Save(ctx); err != nil {
+			return nil, fmt.Errorf("credit shop draw reward balance: %w", err)
+		}
+	}
+	if drawReward != nil && product.ProductType == ShopProductTypePointsDraw {
+		if err := applyPointsAdjustmentInTx(ctx, tx, pointsAdjustmentInput{
+			UserID:    req.UserID,
+			Delta:     drawReward.Amount,
+			Reason:    "shop_draw_reward",
+			RefType:   "shop_order",
+			RefID:     order.ID,
+			Metadata:  map[string]any{"product_id": product.ID, "quantity": req.Quantity},
+			ClampZero: false,
+		}); err != nil {
+			return nil, fmt.Errorf("credit shop draw reward points: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit shop points order: %w", err)
 	}
 	s.invalidateUserBalance(ctx, req.UserID)
 	order.Unwrap()
@@ -621,7 +770,7 @@ func (s *ShopService) createPlatformPaymentOrder(ctx context.Context, req ShopCr
 	if err != nil {
 		return nil, err
 	}
-	if product.BalanceOnly || product.ProductType == ShopProductTypeBalanceDraw {
+	if !product.AllowPlatformPayment {
 		return nil, ErrShopUnsupportedPayment
 	}
 	totalAmount := normalizeShopAmount(product.Price * float64(req.Quantity))
@@ -662,8 +811,10 @@ func (s *ShopService) createPlatformPaymentOrder(ctx context.Context, req ShopCr
 	if err != nil {
 		return nil, fmt.Errorf("link shop payment order: %w", err)
 	}
-	if _, err := s.reserveCardsForOrderInTx(ctx, tx, order, paymentOrder.ExpiresAt); err != nil {
-		return nil, err
+	if !isShopDrawProductType(product.ProductType) {
+		if _, err := s.reserveCardsForOrderInTx(ctx, tx, order, paymentOrder.ExpiresAt); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit shop platform payment order: %w", err)
@@ -755,7 +906,7 @@ func (s *ShopService) ConfirmPaidAndDeliver(ctx context.Context, paymentOrderID 
 		return ErrShopPaymentAmountMismatch
 	}
 
-	delivered, err := s.deliverOrderInTx(ctx, tx, order)
+	delivered, err := s.fulfillPaidPlatformShopOrderInTx(ctx, tx, order)
 	if err != nil {
 		_ = s.markShopFulfillmentFailedInTx(ctx, tx, order.ID, paymentOrderID, err.Error())
 		if commitErr := tx.Commit(); commitErr != nil {
@@ -789,6 +940,62 @@ func (s *ShopService) ConfirmPaidAndDeliver(ctx context.Context, paymentOrderID 
 		return fmt.Errorf("commit shop fulfillment: %w", err)
 	}
 	return nil
+}
+
+func (s *ShopService) fulfillPaidPlatformShopOrderInTx(ctx context.Context, tx *dbent.Tx, order *dbent.ShopOrder) ([]string, error) {
+	if !isShopDrawProductType(order.ProductType) {
+		return s.deliverOrderInTx(ctx, tx, order)
+	}
+	productQuery := tx.ShopProduct.Query().Where(shopproduct.IDEQ(order.ProductID))
+	if shopTxSupportsRowLock(tx) {
+		productQuery.ForUpdate()
+	}
+	product, err := productQuery.Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, ErrShopProductNotFound
+		}
+		return nil, fmt.Errorf("lock shop draw product: %w", err)
+	}
+	drawReward, err := s.nextDrawRewardInTx(ctx, tx, order.UserID, product)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ShopOrder.UpdateOneID(order.ID).
+		SetDrawRewardAmount(drawReward.Amount).
+		SetDrawCycleID(drawReward.CycleID).
+		SetDrawCycleIndex(drawReward.CycleIndex).
+		Save(ctx); err != nil {
+		return nil, fmt.Errorf("attach shop draw reward: %w", err)
+	}
+	if product.ProductType == ShopProductTypeBalanceDraw {
+		u, err := tx.User.Query().Where(user.IDEQ(order.UserID)).Only(ctx)
+		if err != nil {
+			if dbent.IsNotFound(err) {
+				return nil, ErrUserNotFound
+			}
+			return nil, fmt.Errorf("get user for shop draw balance reward: %w", err)
+		}
+		if err := s.createShopBalanceLedgerInTx(ctx, tx, order.ID, order.UserID, u.Balance, 0, drawReward); err != nil {
+			return nil, err
+		}
+		if _, err := tx.User.UpdateOneID(order.UserID).AddBalance(drawReward.Amount).Save(ctx); err != nil {
+			return nil, fmt.Errorf("credit shop draw reward balance: %w", err)
+		}
+		return []string{fmt.Sprintf("%.2f", drawReward.Amount)}, nil
+	}
+	if err := applyPointsAdjustmentInTx(ctx, tx, pointsAdjustmentInput{
+		UserID:    order.UserID,
+		Delta:     drawReward.Amount,
+		Reason:    "shop_draw_reward",
+		RefType:   "shop_order",
+		RefID:     order.ID,
+		Metadata:  map[string]any{"product_id": product.ID, "quantity": order.Quantity},
+		ClampZero: false,
+	}); err != nil {
+		return nil, fmt.Errorf("credit shop draw reward points: %w", err)
+	}
+	return []string{fmt.Sprintf("%.2f", drawReward.Amount)}, nil
 }
 
 func (s *ShopService) markShopFulfillmentFailedInTx(ctx context.Context, tx *dbent.Tx, shopOrderID, paymentOrderID int64, reason string) error {
@@ -928,8 +1135,8 @@ func (s *ShopService) validateProductForPurchase(ctx context.Context, tx *dbent.
 	if !product.AutoDelivery {
 		return nil, ErrShopAutoDeliveryRequired
 	}
-	if product.ProductType == ShopProductTypeBalanceDraw {
-		if err := validateShopDrawProductConfig(product.Price, product.MinPurchase, product.MaxPurchase, product.AutoDelivery, product.ProductType, product.BalanceOnly, shopDrawConfigInputFromProduct(product)); err != nil {
+	if isShopDrawProductType(product.ProductType) {
+		if err := validateShopDrawProductConfig(product.Price, product.MinPurchase, product.MaxPurchase, product.AutoDelivery, product.ProductType, product.BalanceOnly, product.AllowBalancePayment, product.AllowPointsPayment, product.AllowPlatformPayment, shopDrawConfigInputFromProduct(product)); err != nil {
 			return nil, err
 		}
 		if quantity != 1 {
@@ -972,13 +1179,29 @@ func (s *ShopService) createShopOrderInTx(ctx context.Context, tx *dbent.Tx, req
 		SetProductName(product.Name).
 		SetNillableProductCoverURL(product.CoverURL).
 		SetNillableProductDescription(product.Description).
+		SetProductType(product.ProductType).
 		SetUnitPrice(normalizeShopAmount(product.Price)).
 		SetQuantity(req.Quantity).
 		SetTotalAmount(totalAmount).
+		SetPointsAmount(pointsAmountForOrder(req.PaymentMethod, totalAmount)).
 		SetPaymentMethod(req.PaymentMethod).
 		SetStatus(status).
 		SetDeliveredCards([]string{}).
 		Save(ctx)
+}
+
+func pointsAmountForOrder(paymentMethod string, totalAmount float64) float64 {
+	if paymentMethod == ShopPaymentMethodPoints {
+		return totalAmount
+	}
+	return 0
+}
+
+func drawRewardForBalance(product *dbent.ShopProduct, reward *shopDrawRewardResult) *shopDrawRewardResult {
+	if product == nil || product.ProductType != ShopProductTypeBalanceDraw {
+		return nil
+	}
+	return reward
 }
 
 func (s *ShopService) createShopBalanceLedgerInTx(ctx context.Context, tx *dbent.Tx, orderID, userID int64, balanceBefore, totalAmount float64, drawReward *shopDrawRewardResult) error {
@@ -1514,7 +1737,7 @@ func (s *ShopService) AdminCreateProduct(ctx context.Context, req ShopCreateProd
 	if productType == "" {
 		return nil, ErrShopInvalidInput
 	}
-	if productType == ShopProductTypeBalanceDraw {
+	if isShopDrawProductType(productType) {
 		req.MinPurchase = 1
 		req.MaxPurchase = 1
 		autoDelivery := true
@@ -1547,8 +1770,23 @@ func (s *ShopService) AdminCreateProduct(ctx context.Context, req ShopCreateProd
 	if req.BalanceOnly != nil {
 		balanceOnly = *req.BalanceOnly
 	}
+	allowBalancePayment := true
+	if req.AllowBalancePayment != nil {
+		allowBalancePayment = *req.AllowBalancePayment
+	}
+	allowPointsPayment := false
+	if req.AllowPointsPayment != nil {
+		allowPointsPayment = *req.AllowPointsPayment
+	}
+	allowPlatformPayment := !balanceOnly
+	if req.AllowPlatformPayment != nil {
+		allowPlatformPayment = *req.AllowPlatformPayment
+	}
 	drawConfig := normalizeShopDrawConfig(req.DrawConfig)
-	if err := validateShopDrawProductConfig(req.Price, minPurchase, maxPurchase, autoDelivery, productType, balanceOnly, drawConfig); err != nil {
+	if err := validateShopPaymentMethods(allowBalancePayment, allowPointsPayment, allowPlatformPayment); err != nil {
+		return nil, err
+	}
+	if err := validateShopDrawProductConfig(req.Price, minPurchase, maxPurchase, autoDelivery, productType, balanceOnly, allowBalancePayment, allowPointsPayment, allowPlatformPayment, drawConfig); err != nil {
 		return nil, err
 	}
 	create := s.entClient.ShopProduct.Create().
@@ -1565,6 +1803,9 @@ func (s *ShopService) AdminCreateProduct(ctx context.Context, req ShopCreateProd
 		SetAutoDelivery(autoDelivery).
 		SetProductType(productType).
 		SetBalanceOnly(balanceOnly).
+		SetAllowBalancePayment(allowBalancePayment).
+		SetAllowPointsPayment(allowPointsPayment).
+		SetAllowPlatformPayment(allowPlatformPayment).
 		SetDrawEnabled(drawConfig.Enabled).
 		SetDrawMinAmount(drawConfig.MinAmount).
 		SetDrawMaxAmount(drawConfig.MaxAmount).
@@ -1595,6 +1836,7 @@ func (s *ShopService) AdminUpdateProduct(ctx context.Context, id int64, req Shop
 			return nil, ErrShopInvalidInput
 		}
 	}
+	productTypeChanged := productType != current.ProductType
 	if req.MinPurchase != nil {
 		minPurchase = *req.MinPurchase
 	}
@@ -1609,7 +1851,25 @@ func (s *ShopService) AdminUpdateProduct(ctx context.Context, id int64, req Shop
 	if req.BalanceOnly != nil {
 		balanceOnly = *req.BalanceOnly
 	}
-	if productType == ShopProductTypeBalanceDraw {
+	allowBalancePayment := current.AllowBalancePayment
+	if req.AllowBalancePayment != nil {
+		allowBalancePayment = *req.AllowBalancePayment
+	} else if productTypeChanged {
+		allowBalancePayment = true
+	}
+	allowPointsPayment := current.AllowPointsPayment
+	if req.AllowPointsPayment != nil {
+		allowPointsPayment = *req.AllowPointsPayment
+	}
+	allowPlatformPayment := current.AllowPlatformPayment
+	if req.AllowPlatformPayment != nil {
+		allowPlatformPayment = *req.AllowPlatformPayment
+	} else if req.BalanceOnly != nil {
+		allowPlatformPayment = !balanceOnly
+	} else if productTypeChanged {
+		allowPlatformPayment = true
+	}
+	if isShopDrawProductType(productType) {
 		minPurchase = 1
 		maxPurchase = 1
 		autoDelivery = true
@@ -1640,10 +1900,13 @@ func (s *ShopService) AdminUpdateProduct(ctx context.Context, id int64, req Shop
 	if productType == ShopProductTypeCardKey {
 		drawConfig = &ShopDrawConfigInput{}
 	}
-	if err := validateShopDrawProductConfig(price, minPurchase, maxPurchase, autoDelivery, productType, balanceOnly, drawConfig); err != nil {
+	if err := validateShopPaymentMethods(allowBalancePayment, allowPointsPayment, allowPlatformPayment); err != nil {
 		return nil, err
 	}
-	if shopDrawEconomicsChanged(current, price, minPurchase, maxPurchase, autoDelivery, productType, balanceOnly, drawConfig) {
+	if err := validateShopDrawProductConfig(price, minPurchase, maxPurchase, autoDelivery, productType, balanceOnly, allowBalancePayment, allowPointsPayment, allowPlatformPayment, drawConfig); err != nil {
+		return nil, err
+	}
+	if shopDrawEconomicsChanged(current, price, minPurchase, maxPurchase, autoDelivery, productType, balanceOnly, allowBalancePayment, allowPointsPayment, allowPlatformPayment, drawConfig) {
 		hasActiveCycles, err := s.hasActiveShopDrawCycles(ctx, id)
 		if err != nil {
 			return nil, err
@@ -1698,6 +1961,9 @@ func (s *ShopService) AdminUpdateProduct(ctx context.Context, id int64, req Shop
 		SetAutoDelivery(autoDelivery).
 		SetProductType(productType).
 		SetBalanceOnly(balanceOnly).
+		SetAllowBalancePayment(allowBalancePayment).
+		SetAllowPointsPayment(allowPointsPayment).
+		SetAllowPlatformPayment(allowPlatformPayment).
 		SetDrawEnabled(drawConfig.Enabled).
 		SetDrawMinAmount(drawConfig.MinAmount).
 		SetDrawMaxAmount(drawConfig.MaxAmount).
@@ -2056,8 +2322,23 @@ func normalizeShopProductType(productType string) string {
 		return ShopProductTypeCardKey
 	}
 	switch productType {
-	case ShopProductTypeCardKey, ShopProductTypeBalanceDraw:
+	case ShopProductTypeCardKey, ShopProductTypeBalanceDraw, ShopProductTypePointsDraw:
 		return productType
+	default:
+		return ""
+	}
+}
+
+func isShopDrawProductType(productType string) bool {
+	return productType == ShopProductTypeBalanceDraw || productType == ShopProductTypePointsDraw
+}
+
+func drawRewardTypeForProductType(productType string) string {
+	switch productType {
+	case ShopProductTypeBalanceDraw:
+		return "balance"
+	case ShopProductTypePointsDraw:
+		return "points"
 	default:
 		return ""
 	}
@@ -2089,7 +2370,14 @@ func normalizeShopDrawConfig(input *ShopDrawConfigInput) *ShopDrawConfigInput {
 	}
 }
 
-func validateShopDrawProductConfig(price float64, minPurchase, maxPurchase int, autoDelivery bool, productType string, balanceOnly bool, input *ShopDrawConfigInput) error {
+func validateShopPaymentMethods(allowBalancePayment, allowPointsPayment, allowPlatformPayment bool) error {
+	if !allowBalancePayment && !allowPointsPayment && !allowPlatformPayment {
+		return ErrShopUnsupportedPayment
+	}
+	return nil
+}
+
+func validateShopDrawProductConfig(price float64, minPurchase, maxPurchase int, autoDelivery bool, productType string, balanceOnly bool, _ bool, _ bool, _ bool, input *ShopDrawConfigInput) error {
 	productType = normalizeShopProductType(productType)
 	if productType == "" {
 		return ErrShopInvalidInput
@@ -2100,6 +2388,9 @@ func validateShopDrawProductConfig(price float64, minPurchase, maxPurchase int, 
 			return ErrShopInvalidInput
 		}
 		return nil
+	}
+	if !isShopDrawProductType(productType) {
+		return ErrShopInvalidInput
 	}
 	if !balanceOnly || !autoDelivery || minPurchase != 1 || maxPurchase != 1 || !config.Enabled {
 		return ErrShopInvalidInput
@@ -2121,7 +2412,7 @@ func validateShopDrawProductConfig(price float64, minPurchase, maxPurchase int, 
 	return nil
 }
 
-func shopDrawEconomicsChanged(current *dbent.ShopProduct, price float64, minPurchase, maxPurchase int, autoDelivery bool, productType string, balanceOnly bool, input *ShopDrawConfigInput) bool {
+func shopDrawEconomicsChanged(current *dbent.ShopProduct, price float64, minPurchase, maxPurchase int, autoDelivery bool, productType string, balanceOnly bool, allowBalancePayment bool, allowPointsPayment bool, allowPlatformPayment bool, input *ShopDrawConfigInput) bool {
 	if current == nil {
 		return false
 	}
@@ -2132,6 +2423,9 @@ func shopDrawEconomicsChanged(current *dbent.ShopProduct, price float64, minPurc
 		current.AutoDelivery != autoDelivery ||
 		current.ProductType != productType ||
 		current.BalanceOnly != balanceOnly ||
+		current.AllowBalancePayment != allowBalancePayment ||
+		current.AllowPointsPayment != allowPointsPayment ||
+		current.AllowPlatformPayment != allowPlatformPayment ||
 		current.DrawEnabled != config.Enabled ||
 		normalizeShopAmount(current.DrawMinAmount) != config.MinAmount ||
 		normalizeShopAmount(current.DrawMaxAmount) != config.MaxAmount ||
@@ -2154,7 +2448,7 @@ func generateShopDrawRewardPool(price float64, input *ShopDrawConfigInput) ([]fl
 	targetCents := int64(math.Round(price * float64(config.GuaranteeCount) * config.ReturnRate * shopDrawAmountScale))
 	minCents := int64(math.Round(config.MinAmount * shopDrawAmountScale))
 	maxCents := int64(math.Round(config.MaxAmount * shopDrawAmountScale))
-	if err := validateShopDrawProductConfig(price, 1, 1, true, ShopProductTypeBalanceDraw, true, config); err != nil {
+	if err := validateShopDrawProductConfig(price, 1, 1, true, ShopProductTypeBalanceDraw, true, true, false, false, config); err != nil {
 		return nil, 0, err
 	}
 	amountCents := make([]int64, config.GuaranteeCount)
@@ -2272,24 +2566,27 @@ func mapShopCategory(item *dbent.ShopCategory) ShopCategoryDTO {
 
 func mapShopProduct(item *dbent.ShopProduct, stock int) ShopProductDTO {
 	dto := ShopProductDTO{
-		ID:             item.ID,
-		CategoryID:     item.CategoryID,
-		Name:           item.Name,
-		CoverURL:       item.CoverURL,
-		Description:    item.Description,
-		Price:          item.Price,
-		OriginalPrice:  item.OriginalPrice,
-		Enabled:        item.Enabled,
-		SortOrder:      item.SortOrder,
-		MinPurchase:    item.MinPurchase,
-		MaxPurchase:    item.MaxPurchase,
-		AutoDelivery:   item.AutoDelivery,
-		ProductType:    item.ProductType,
-		BalanceOnly:    item.BalanceOnly,
-		Stock:          stock,
-		StockUnlimited: item.ProductType == ShopProductTypeBalanceDraw,
-		CreatedAt:      item.CreatedAt,
-		UpdatedAt:      item.UpdatedAt,
+		ID:                   item.ID,
+		CategoryID:           item.CategoryID,
+		Name:                 item.Name,
+		CoverURL:             item.CoverURL,
+		Description:          item.Description,
+		Price:                item.Price,
+		OriginalPrice:        item.OriginalPrice,
+		Enabled:              item.Enabled,
+		SortOrder:            item.SortOrder,
+		MinPurchase:          item.MinPurchase,
+		MaxPurchase:          item.MaxPurchase,
+		AutoDelivery:         item.AutoDelivery,
+		ProductType:          item.ProductType,
+		BalanceOnly:          item.BalanceOnly,
+		AllowBalancePayment:  item.AllowBalancePayment,
+		AllowPointsPayment:   item.AllowPointsPayment,
+		AllowPlatformPayment: item.AllowPlatformPayment,
+		Stock:                stock,
+		StockUnlimited:       isShopDrawProductType(item.ProductType),
+		CreatedAt:            item.CreatedAt,
+		UpdatedAt:            item.UpdatedAt,
 	}
 	if item.DrawEnabled {
 		dto.DrawConfig = &ShopDrawConfigDTO{
@@ -2320,15 +2617,18 @@ func mapShopOrder(item *dbent.ShopOrder, paymentResp *CreateOrderResponse) ShopO
 		ProductName:        item.ProductName,
 		ProductCoverURL:    item.ProductCoverURL,
 		ProductDescription: item.ProductDescription,
+		ProductType:        item.ProductType,
 		UnitPrice:          item.UnitPrice,
 		Quantity:           item.Quantity,
 		TotalAmount:        item.TotalAmount,
+		PointsAmount:       item.PointsAmount,
 		PaymentMethod:      item.PaymentMethod,
 		PaymentOrderID:     item.PaymentOrderID,
 		Status:             item.Status,
 		DeliveredCards:     delivered,
 		DeliveredFiles:     []ShopDeliveredFileDTO{},
 		DrawRewardAmount:   item.DrawRewardAmount,
+		DrawRewardType:     drawRewardTypeForProductType(item.ProductType),
 		DrawCycleID:        item.DrawCycleID,
 		DrawCycleIndex:     item.DrawCycleIndex,
 		PaidAt:             item.PaidAt,

@@ -16,6 +16,9 @@
           <p class="mt-2 text-sm text-primary-100">
             {{ t('redeem.concurrency') }}: {{ user?.concurrency || 0 }} {{ t('redeem.requests') }}
           </p>
+          <p class="mt-1 text-sm text-primary-100">
+            {{ t('redeem.points') }}: {{ formatPoints(user?.points_balance || 0) }}
+          </p>
         </div>
       </div>
 
@@ -96,7 +99,7 @@
                   {{ t('redeem.redeemSuccess') }}
                 </h3>
                 <div class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">
-                  <p>{{ redeemResult.message }}</p>
+                  <p>{{ redeemResult.message || t('redeem.codeRedeemSuccess') }}</p>
                   <div class="mt-3 space-y-1">
                     <p v-if="redeemResult.type === 'balance'" class="font-medium">
                       {{ t('redeem.added') }}: ${{ redeemResult.value.toFixed(2) }}
@@ -104,6 +107,10 @@
                     <p v-else-if="redeemResult.type === 'concurrency'" class="font-medium">
                       {{ t('redeem.added') }}: {{ redeemResult.value }}
                       {{ t('redeem.concurrentRequests') }}
+                    </p>
+                    <p v-else-if="redeemResult.type === 'points'" class="font-medium">
+                      {{ t('redeem.added') }}: {{ formatPoints(redeemResult.value) }}
+                      {{ t('redeem.points') }}
                     </p>
                     <p v-else-if="redeemResult.type === 'subscription'" class="font-medium">
                       {{ t('redeem.subscriptionAssigned') }}
@@ -123,6 +130,10 @@
                       <span class="font-semibold"
                         >{{ redeemResult.new_concurrency }} {{ t('redeem.requests') }}</span
                       >
+                    </p>
+                    <p v-if="redeemResult.type === 'points' && user?.points_balance !== undefined">
+                      {{ t('redeem.newPoints') }}:
+                      <span class="font-semibold">{{ formatPoints(user.points_balance) }}</span>
                     </p>
                   </div>
                 </div>
@@ -242,9 +253,13 @@
                         : 'bg-red-100 dark:bg-red-900/30'
                       : isSubscriptionType(item.type)
                         ? 'bg-purple-100 dark:bg-purple-900/30'
-                        : item.value >= 0
-                          ? 'bg-blue-100 dark:bg-blue-900/30'
-                          : 'bg-orange-100 dark:bg-orange-900/30'
+                        : isPointsType(item.type)
+                          ? item.value >= 0
+                            ? 'bg-cyan-100 dark:bg-cyan-900/30'
+                            : 'bg-red-100 dark:bg-red-900/30'
+                          : item.value >= 0
+                            ? 'bg-blue-100 dark:bg-blue-900/30'
+                            : 'bg-orange-100 dark:bg-orange-900/30'
                   ]"
                 >
                   <!-- 余额类型图标 -->
@@ -264,6 +279,17 @@
                     name="badge"
                     size="md"
                     class="text-purple-600 dark:text-purple-400"
+                  />
+                  <!-- 积分类型图标 -->
+                  <Icon
+                    v-else-if="isPointsType(item.type)"
+                    name="gift"
+                    size="md"
+                    :class="
+                      item.value >= 0
+                        ? 'text-cyan-600 dark:text-cyan-400'
+                        : 'text-red-600 dark:text-red-400'
+                    "
                   />
                   <!-- 并发类型图标 -->
                   <Icon
@@ -296,9 +322,13 @@
                         : 'text-red-600 dark:text-red-400'
                       : isSubscriptionType(item.type)
                         ? 'text-purple-600 dark:text-purple-400'
-                        : item.value >= 0
-                          ? 'text-blue-600 dark:text-blue-400'
-                          : 'text-orange-600 dark:text-orange-400'
+                        : isPointsType(item.type)
+                          ? item.value >= 0
+                            ? 'text-cyan-600 dark:text-cyan-400'
+                            : 'text-red-600 dark:text-red-400'
+                          : item.value >= 0
+                            ? 'text-blue-600 dark:text-blue-400'
+                            : 'text-orange-600 dark:text-orange-400'
                   ]"
                 >
                   {{ formatHistoryValue(item) }}
@@ -362,7 +392,7 @@ const user = computed(() => authStore.user)
 const redeemCode = ref('')
 const submitting = ref(false)
 const redeemResult = ref<{
-  message: string
+  message?: string
   type: string
   value: number
   new_balance?: number
@@ -386,8 +416,12 @@ const isSubscriptionType = (type: string) => {
   return type === 'subscription'
 }
 
+const isPointsType = (type: string) => {
+  return type === 'points' || type === 'admin_points'
+}
+
 const isAdminAdjustment = (type: string) => {
-  return type === 'admin_balance' || type === 'admin_concurrency'
+  return type === 'admin_balance' || type === 'admin_concurrency' || type === 'admin_points'
 }
 
 const getHistoryItemTitle = (item: RedeemHistoryItem) => {
@@ -399,6 +433,10 @@ const getHistoryItemTitle = (item: RedeemHistoryItem) => {
     return t('redeem.concurrencyAddedRedeem')
   } else if (item.type === 'admin_concurrency') {
     return item.value >= 0 ? t('redeem.concurrencyAddedAdmin') : t('redeem.concurrencyReducedAdmin')
+  } else if (item.type === 'points') {
+    return t('redeem.pointsAddedRedeem')
+  } else if (item.type === 'admin_points') {
+    return item.value >= 0 ? t('redeem.pointsAddedAdmin') : t('redeem.pointsDeductedAdmin')
   } else if (item.type === 'subscription') {
     return t('redeem.subscriptionAssigned')
   }
@@ -414,10 +452,17 @@ const formatHistoryValue = (item: RedeemHistoryItem) => {
     const days = item.validity_days || Math.round(item.value)
     const groupName = item.group?.name || ''
     return groupName ? `${days}${t('redeem.days')} - ${groupName}` : `${days}${t('redeem.days')}`
+  } else if (isPointsType(item.type)) {
+    const sign = item.value >= 0 ? '+' : ''
+    return `${sign}${formatPoints(item.value)} ${t('redeem.points')}`
   } else {
     const sign = item.value >= 0 ? '+' : ''
     return `${sign}${item.value} ${t('redeem.requests')}`
   }
+}
+
+function formatPoints(value: number): string {
+  return Number(value || 0).toFixed(10).replace(/\.?0+$/, '') || '0'
 }
 
 const fetchHistory = async () => {

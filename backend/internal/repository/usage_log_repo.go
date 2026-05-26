@@ -1352,6 +1352,11 @@ func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *servic
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
+	logs := []service.UsageLog{*log}
+	if err = r.hydrateUsageLogWalletDeductions(ctx, logs); err != nil {
+		return nil, err
+	}
+	*log = logs[0]
 	return log, nil
 }
 
@@ -4369,6 +4374,9 @@ func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, wh
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := r.hydrateUsageLogWalletDeductions(ctx, logs); err != nil {
+		return nil, nil, err
+	}
 	return logs, paginationResultFromTotal(total, params), nil
 }
 
@@ -4383,6 +4391,9 @@ func (r *usageLogRepository) listUsageLogsWithFastPagination(ctx context.Context
 
 	logs, err := r.queryUsageLogs(ctx, query, listArgs...)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := r.hydrateUsageLogWalletDeductions(ctx, logs); err != nil {
 		return nil, nil, err
 	}
 
@@ -4448,6 +4459,106 @@ func (r *usageLogRepository) queryUsageLogs(ctx context.Context, query string, a
 		return nil, err
 	}
 	return logs, nil
+}
+
+func (r *usageLogRepository) hydrateUsageLogWalletDeductions(ctx context.Context, logs []service.UsageLog) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(logs))
+	byID := make(map[int64]*service.UsageLog, len(logs))
+	for i := range logs {
+		if logs[i].ID <= 0 {
+			continue
+		}
+		ids = append(ids, logs[i].ID)
+		byID[logs[i].ID] = &logs[i]
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := r.hydrateUsageLogPointsDeductions(ctx, byID, ids); err != nil {
+		return err
+	}
+	if err := r.hydrateUsageLogBalanceDeductions(ctx, byID, ids); err != nil {
+		return err
+	}
+	for i := range logs {
+		logs[i].BillingWalletType = usageLogWalletType(logs[i])
+	}
+	return nil
+}
+
+func (r *usageLogRepository) hydrateUsageLogPointsDeductions(ctx context.Context, byID map[int64]*service.UsageLog, ids []int64) error {
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT ref_id, COALESCE(SUM(amount), 0)::double precision
+		FROM points_ledger
+		WHERE ref_type = 'usage_log'
+			AND reason = 'usage_charge'
+			AND direction = 'debit'
+			AND ref_id = ANY($1)
+		GROUP BY ref_id
+	`, pq.Array(ids))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var amount float64
+		if err := rows.Scan(&id, &amount); err != nil {
+			return err
+		}
+		if log := byID[id]; log != nil {
+			log.PointsDeducted = amount
+		}
+	}
+	return rows.Err()
+}
+
+func (r *usageLogRepository) hydrateUsageLogBalanceDeductions(ctx context.Context, byID map[int64]*service.UsageLog, ids []int64) error {
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT ref_id, COALESCE(SUM(amount), 0)::double precision
+		FROM user_balance_ledger
+		WHERE ref_type = 'usage_log'
+			AND reason = 'usage_charge'
+			AND direction = 'debit'
+			AND ref_id = ANY($1)
+		GROUP BY ref_id
+	`, pq.Array(ids))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var amount float64
+		if err := rows.Scan(&id, &amount); err != nil {
+			return err
+		}
+		if log := byID[id]; log != nil {
+			log.BalanceDeducted = amount
+		}
+	}
+	return rows.Err()
+}
+
+func usageLogWalletType(log service.UsageLog) string {
+	if log.BillingType == service.BillingTypeSubscription {
+		return "subscription"
+	}
+	hasPoints := log.PointsDeducted > 0
+	hasBalance := log.BalanceDeducted > 0
+	switch {
+	case hasPoints && hasBalance:
+		return "mixed"
+	case hasPoints:
+		return "points"
+	case hasBalance:
+		return "balance"
+	default:
+		return "none"
+	}
 }
 
 func (r *usageLogRepository) hydrateUsageLogAssociations(ctx context.Context, logs []service.UsageLog) error {

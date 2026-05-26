@@ -92,7 +92,7 @@
               <p class="mt-3 line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-gray-500 dark:text-dark-400">
                 {{ product.description || t('store.noDescription') }}
               </p>
-              <div v-if="product.product_type === 'balance_draw'" class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800">
+              <div v-if="isDrawProduct(product)" class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800">
                 <div class="flex justify-between gap-3">
                   <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawProgress') }}</span>
                   <span class="font-semibold text-gray-900 dark:text-white">{{ drawProgressText(product) }}</span>
@@ -162,9 +162,13 @@
                     {{ drawProgressText(checkoutProduct) }}
                   </span>
                 </div>
-                <div v-if="authStore.isAuthenticated" class="mt-2 flex justify-between">
+                <div v-if="authStore.isAuthenticated && checkoutProduct.allow_balance_payment !== false" class="mt-2 flex justify-between">
                   <span class="text-gray-500 dark:text-dark-400">{{ t('payment.currentBalance') }}</span>
                   <span class="font-medium text-gray-900 dark:text-white">${{ currentBalance.toFixed(2) }}</span>
+                </div>
+                <div v-if="authStore.isAuthenticated && checkoutProduct.allow_points_payment" class="mt-2 flex justify-between">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.currentPoints') }}</span>
+                  <span class="font-medium text-gray-900 dark:text-white">{{ currentPoints.toFixed(10).replace(/\.?0+$/, '') || '0' }}</span>
                 </div>
               </div>
 
@@ -172,8 +176,9 @@
                 <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {{ t('store.payMethod') }}
                 </label>
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <button
+                    v-if="isBalancePaymentAllowed"
                     type="button"
                     class="store-pay-option"
                     :class="{ 'store-pay-option-active': payMethod === 'balance' }"
@@ -184,10 +189,22 @@
                     <span class="text-xs text-gray-500 dark:text-dark-400">{{ balancePayHint }}</span>
                   </button>
                   <button
+                    v-if="isPointsPaymentAllowed"
+                    type="button"
+                    class="store-pay-option"
+                    :class="{ 'store-pay-option-active': payMethod === 'points' }"
+                    :disabled="!canPayByPoints"
+                    @click="payMethod = 'points'"
+                  >
+                    <span class="font-semibold">{{ t('store.pointsPay') }}</span>
+                    <span class="text-xs text-gray-500 dark:text-dark-400">{{ pointsPayHint }}</span>
+                  </button>
+                  <button
+                    v-if="isPlatformPaymentAllowed"
                     type="button"
                     class="store-pay-option"
                     :class="{ 'store-pay-option-active': payMethod === 'payment' }"
-                    :disabled="methodOptions.length === 0 || isCheckoutDrawProduct"
+                    :disabled="methodOptions.length === 0"
                     @click="payMethod = 'payment'"
                   >
                     <span class="font-semibold">{{ t('store.gatewayPay') }}</span>
@@ -247,7 +264,7 @@
                 <div v-if="completedOrder.draw_reward_amount !== null && completedOrder.draw_reward_amount !== undefined" class="mt-2 flex justify-between gap-3">
                   <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawReward') }}</span>
                   <span class="font-medium text-emerald-600 dark:text-emerald-300">
-                    ${{ completedOrder.draw_reward_amount.toFixed(2) }}
+                    {{ formatDrawReward(completedOrder) }}
                   </span>
                 </div>
               </div>
@@ -314,7 +331,8 @@ import { METHOD_ORDER, getPaymentPopupFeatures } from '@/components/payment/prov
 import { decidePaymentLaunch, getVisibleMethods, normalizeVisibleMethod, type PaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
 import type { CheckoutInfoResponse, CreateOrderResult } from '@/types/payment'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
-import type { StoreCategory, StoreOrder, StorePayMethod, StoreProduct } from '@/types/store'
+import { formatStoreDrawReward } from '@/utils/storeRewards'
+import type { StoreCategory, StoreDrawConfig, StoreOrder, StorePayMethod, StoreProduct } from '@/types/store'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -344,11 +362,12 @@ const filteredProducts = computed(() => products.value.filter((product) =>
 ))
 const totalStock = computed(() => products.value.reduce((sum, product) => sum + (product.stock_unlimited ? 0 : Math.max(0, product.stock)), 0))
 const currentBalance = computed(() => Number(authStore.user?.balance || 0))
+const currentPoints = computed(() => Number(authStore.user?.points_balance || 0))
 const checkoutMinQuantity = computed(() => Math.max(1, checkoutProduct.value?.min_purchase || 1))
 const checkoutMaxQuantity = computed(() => {
   const product = checkoutProduct.value
   if (!product) return 1
-  if (product.product_type === 'balance_draw') return 1
+  if (isDrawProduct(product)) return 1
   const maxPurchase = product.max_purchase > 0 ? product.max_purchase : product.stock
   return Math.max(checkoutMinQuantity.value, Math.min(product.stock, maxPurchase))
 })
@@ -358,11 +377,11 @@ const checkoutAmount = computed(() => {
   return Math.round(product.price * Math.max(checkoutMinQuantity.value, quantity.value || checkoutMinQuantity.value) * 100) / 100
 })
 const visibleMethods = computed(() => getVisibleMethods(checkout.value?.methods || {}))
-const isCheckoutDrawProduct = computed(() => checkoutProduct.value?.product_type === 'balance_draw')
+const isCheckoutDrawProduct = computed(() => isDrawProduct(checkoutProduct.value || null))
 const drawRewardRangeText = computed(() => {
   const config = checkoutProduct.value?.draw_config
   if (!config) return ''
-  return `$${config.min_amount.toFixed(2)} - $${config.max_amount.toFixed(2)}`
+  return formatDrawRewardRange(checkoutProduct.value, config)
 })
 const enabledMethods = computed(() => Object.keys(visibleMethods.value).sort((a, b) => {
   const ai = METHOD_ORDER.indexOf(a as typeof METHOD_ORDER[number])
@@ -374,13 +393,21 @@ const methodOptions = computed<PaymentMethodOption[]>(() => enabledMethods.value
   fee_rate: visibleMethods.value[type]?.fee_rate ?? 0,
   available: visibleMethods.value[type]?.available !== false && amountFitsMethod(checkoutAmount.value, type),
 })))
-const canPayByBalance = computed(() => currentBalance.value >= checkoutAmount.value && checkoutAmount.value > 0)
-const balancePayHint = computed(() => canPayByBalance.value ? t('store.balanceEnough') : t('store.balanceNotEnough'))
+const isBalancePaymentAllowed = computed(() => checkoutProduct.value?.allow_balance_payment !== false)
+const isPointsPaymentAllowed = computed(() => checkoutProduct.value?.allow_points_payment === true)
+const isPlatformPaymentAllowed = computed(() => checkoutProduct.value?.allow_platform_payment !== false)
+const canPayByBalance = computed(() => isBalancePaymentAllowed.value && currentBalance.value >= checkoutAmount.value && checkoutAmount.value > 0)
+const canPayByPoints = computed(() => isPointsPaymentAllowed.value && currentPoints.value >= checkoutAmount.value && checkoutAmount.value > 0)
+const balancePayHint = computed(() => {
+  if (!isBalancePaymentAllowed.value) return t('store.paymentMethodUnavailable')
+  return canPayByBalance.value ? t('store.balanceEnough') : t('store.balanceNotEnough')
+})
+const pointsPayHint = computed(() => canPayByPoints.value ? t('store.pointsEnough') : t('store.pointsNotEnough'))
 const canSubmitCheckout = computed(() => {
   if (!checkoutProduct.value || quantity.value < checkoutMinQuantity.value || quantity.value > checkoutMaxQuantity.value) return false
   if (payMethod.value === 'balance') return canPayByBalance.value
-  if (isCheckoutDrawProduct.value) return false
-  return !!selectedMethod.value && amountFitsMethod(checkoutAmount.value, selectedMethod.value)
+  if (payMethod.value === 'points') return canPayByPoints.value
+  return isPlatformPaymentAllowed.value && !!selectedMethod.value && amountFitsMethod(checkoutAmount.value, selectedMethod.value)
 })
 
 function emptyPaymentState(): PaymentRecoverySnapshot {
@@ -419,7 +446,28 @@ function amountFitsMethod(amount: number, method: string): boolean {
 }
 
 function isProductPurchasable(product: StoreProduct): boolean {
-  return product.product_type === 'balance_draw' || product.stock > 0
+  return isDrawProduct(product) || product.stock > 0
+}
+
+function isDrawProduct(product: StoreProduct | null): boolean {
+  return product?.product_type === 'balance_draw' || product?.product_type === 'points_draw'
+}
+
+function drawRewardUnit(productType?: string | null): string {
+  return productType === 'points_draw' ? '' : '$'
+}
+
+function formatDrawReward(order: StoreOrder): string {
+  return formatStoreDrawReward(order)
+}
+
+function formatDrawRewardRange(product: StoreProduct | null, config: StoreDrawConfig): string {
+  if (product?.product_type === 'points_draw') {
+    const min = config.min_amount.toFixed(10).replace(/\.?0+$/, '') || '0'
+    const max = config.max_amount.toFixed(10).replace(/\.?0+$/, '') || '0'
+    return `${min} - ${max}`
+  }
+  return `${drawRewardUnit(product?.product_type)}${config.min_amount.toFixed(2)} - ${drawRewardUnit(product?.product_type)}${config.max_amount.toFixed(2)}`
 }
 
 function drawProgressText(product: StoreProduct | null): string {
@@ -431,10 +479,26 @@ function drawProgressText(product: StoreProduct | null): string {
 }
 
 function createCheckoutIdempotencyKey(): string {
-  if (!window.crypto?.randomUUID) {
-    throw new Error('crypto.randomUUID is required to create store orders')
+  const crypto = globalThis.crypto
+  if (crypto?.randomUUID) {
+    return crypto.randomUUID()
   }
-  return window.crypto.randomUUID()
+  if (!crypto?.getRandomValues) {
+    throw new Error('crypto.getRandomValues is required to create store orders')
+  }
+
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0'))
+  return [
+    hex.slice(0, 4).join(''),
+    hex.slice(4, 6).join(''),
+    hex.slice(6, 8).join(''),
+    hex.slice(8, 10).join(''),
+    hex.slice(10, 16).join(''),
+  ].join('-')
 }
 
 async function startCheckout(product: StoreProduct) {
@@ -453,7 +517,17 @@ async function startCheckout(product: StoreProduct) {
   }
   checkoutProduct.value = product
   quantity.value = Math.max(1, product.min_purchase || 1)
-  payMethod.value = product.product_type === 'balance_draw' || canPayByBalance.value ? 'balance' : 'payment'
+  if (canPayByBalance.value) {
+    payMethod.value = 'balance'
+  } else if (product.allow_points_payment && canPayByPoints.value) {
+    payMethod.value = 'points'
+  } else if (product.allow_platform_payment !== false) {
+    payMethod.value = 'payment'
+  } else if (product.allow_balance_payment !== false) {
+    payMethod.value = 'balance'
+  } else {
+    payMethod.value = 'points'
+  }
   if (!selectedMethod.value && enabledMethods.value.length > 0) {
     selectedMethod.value = enabledMethods.value[0]
   }
@@ -486,7 +560,7 @@ async function submitCheckout() {
     const orderResponse = await storeAPI.createOrder({
       product_id: checkoutProduct.value.id,
       quantity: quantity.value,
-      payment_method: payMethod.value === 'balance' ? 'balance' : selectedMethod.value,
+      payment_method: payMethod.value === 'payment' ? selectedMethod.value : payMethod.value,
       return_url: `${window.location.origin}/payment/result`,
       payment_source: selectedMethod.value === 'wxpay' && /MicroMessenger/i.test(window.navigator.userAgent)
         ? 'wechat_in_app_resume'
@@ -494,9 +568,21 @@ async function submitCheckout() {
       is_mobile: isMobileDevice(),
     }, checkoutIdempotencyKey.value)
     const storeOrder = orderResponse.data
-    if (payMethod.value === 'balance') {
+    if (payMethod.value === 'balance' || payMethod.value === 'points') {
       if (authStore.user) {
-        authStore.user.balance = Math.max(0, currentBalance.value - storeOrder.total_amount + Number(storeOrder.draw_reward_amount || 0))
+        const drawReward = Number(storeOrder.draw_reward_amount || 0)
+        const rewardIsPoints = storeOrder.draw_reward_type === 'points' || storeOrder.product_type === 'points_draw'
+        if (payMethod.value === 'balance') {
+          authStore.user.balance = Math.max(0, currentBalance.value - storeOrder.total_amount + (rewardIsPoints ? 0 : drawReward))
+          if (rewardIsPoints && drawReward > 0) {
+            authStore.user.points_balance = currentPoints.value + drawReward
+          }
+        } else {
+          authStore.user.points_balance = Math.max(0, currentPoints.value - storeOrder.total_amount + (rewardIsPoints ? drawReward : 0))
+          if (!rewardIsPoints && drawReward > 0) {
+            authStore.user.balance = currentBalance.value + drawReward
+          }
+        }
       }
       appStore.showSuccess(t('store.purchaseSuccess'))
       checkoutProduct.value = null

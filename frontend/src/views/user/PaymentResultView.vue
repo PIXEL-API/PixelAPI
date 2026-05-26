@@ -92,7 +92,7 @@
             <div v-if="shopOrder.draw_reward_amount !== null && shopOrder.draw_reward_amount !== undefined" class="rounded-lg bg-emerald-50 p-4 text-sm dark:bg-emerald-950/30">
               <div class="flex justify-between gap-3">
                 <span class="text-emerald-700 dark:text-emerald-300">{{ t('store.drawReward') }}</span>
-                <span class="font-semibold text-emerald-800 dark:text-emerald-200">${{ shopOrder.draw_reward_amount.toFixed(2) }}</span>
+                <span class="font-semibold text-emerald-800 dark:text-emerald-200">{{ formatStoreDrawReward(shopOrder) }}</span>
               </div>
             </div>
 
@@ -168,6 +168,7 @@ import {
 import { usePaymentStore } from '@/stores/payment'
 import { paymentAPI } from '@/api/payment'
 import { storeAPI } from '@/api/store'
+import { formatStoreDrawReward } from '@/utils/storeRewards'
 import type { PaymentOrder } from '@/types/payment'
 import type { StoreOrder } from '@/types/store'
 import { normalizePaymentMethodForDisplay, paymentMethodI18nKey } from './paymentUx'

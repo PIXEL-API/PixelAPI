@@ -3,15 +3,19 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/shopspring/decimal"
 )
 
 var (
@@ -69,6 +73,22 @@ type RedeemCodeResponse struct {
 	Value     float64   `json:"value"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+func validateRedeemCodeValue(codeType string, value float64) error {
+	switch codeType {
+	case RedeemTypeInvitation:
+		return nil
+	case RedeemTypePoints:
+		if value <= 0 {
+			return errors.New("points value must be greater than 0")
+		}
+	default:
+		if value == 0 {
+			return errors.New("value must not be zero")
+		}
+	}
+	return nil
 }
 
 // RedeemService 兑换码服务
@@ -131,18 +151,17 @@ func (s *RedeemService) GenerateCodes(ctx context.Context, req GenerateCodesRequ
 		return nil, errors.New("count must be greater than 0")
 	}
 
-	// 邀请码类型不需要数值，其他类型需要非零值（支持负数用于退款）
-	if req.Type != RedeemTypeInvitation && req.Value == 0 {
-		return nil, errors.New("value must not be zero")
+	codeType := req.Type
+	if codeType == "" {
+		codeType = RedeemTypeBalance
 	}
 
 	if req.Count > 1000 {
 		return nil, errors.New("cannot generate more than 1000 codes at once")
 	}
 
-	codeType := req.Type
-	if codeType == "" {
-		codeType = RedeemTypeBalance
+	if err := validateRedeemCodeValue(codeType, req.Value); err != nil {
+		return nil, err
 	}
 
 	// 邀请码类型的 value 设为 0
@@ -188,8 +207,8 @@ func (s *RedeemService) CreateCode(ctx context.Context, code *RedeemCode) error 
 	if code.Type == "" {
 		code.Type = RedeemTypeBalance
 	}
-	if code.Type != RedeemTypeInvitation && code.Value == 0 {
-		return errors.New("value must not be zero")
+	if err := validateRedeemCodeValue(code.Type, code.Value); err != nil {
+		return err
 	}
 	if code.Status == "" {
 		code.Status = StatusUnused
@@ -283,6 +302,9 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	}
 
 	// 验证兑换码类型的前置条件
+	if redeemCode.Type == RedeemTypePoints && redeemCode.Value <= 0 {
+		return nil, infraerrors.BadRequest("REDEEM_CODE_INVALID", "invalid points redeem code: value must be greater than 0")
+	}
 	if redeemCode.Type == RedeemTypeSubscription && redeemCode.GroupID == nil {
 		return nil, infraerrors.BadRequest("REDEEM_CODE_INVALID", "invalid subscription redeem code: missing group_id")
 	}
@@ -322,6 +344,19 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		}
 		if err := s.userRepo.UpdateBalance(txCtx, userID, amount); err != nil {
 			return nil, fmt.Errorf("update user balance: %w", err)
+		}
+
+	case RedeemTypePoints:
+		if err := applyPointsAdjustmentInTx(txCtx, tx, pointsAdjustmentInput{
+			UserID:    userID,
+			Delta:     redeemCode.Value,
+			Reason:    "redeem_code",
+			RefType:   "redeem_code",
+			RefID:     redeemCode.ID,
+			Metadata:  map[string]any{"code": redeemCode.Code},
+			ClampZero: true,
+		}); err != nil {
+			return nil, fmt.Errorf("update user points: %w", err)
 		}
 
 	case RedeemTypeConcurrency:
@@ -389,7 +424,7 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 // invalidateRedeemCaches 失效兑换相关的缓存
 func (s *RedeemService) invalidateRedeemCaches(ctx context.Context, userID int64, redeemCode *RedeemCode) {
 	switch redeemCode.Type {
-	case RedeemTypeBalance:
+	case RedeemTypeBalance, RedeemTypePoints:
 		if s.authCacheInvalidator != nil {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 		}
@@ -496,6 +531,192 @@ func (s *RedeemService) GetUserHistory(ctx context.Context, userID int64, limit 
 		return nil, fmt.Errorf("get user redeem history: %w", err)
 	}
 	return codes, nil
+}
+
+type serviceSQLQueryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+type serviceSQLExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+type pointsAdjustmentInput struct {
+	UserID         int64
+	Delta          float64
+	Reason         string
+	RefType        string
+	RefID          int64
+	OperatorUserID int64
+	Metadata       map[string]any
+	ClampZero      bool
+}
+
+func currentPointsBalanceInTx(ctx context.Context, tx *dbent.Tx, userID int64) (float64, error) {
+	if tx == nil {
+		return 0, errors.New("points balance lookup requires transaction")
+	}
+	if userID <= 0 {
+		return 0, ErrUserNotFound
+	}
+	queryer, ok := tx.Driver().(serviceSQLQueryer)
+	if !ok {
+		return 0, errors.New("points balance lookup requires QueryContext support")
+	}
+	return currentPointsBalanceWithQueryer(ctx, queryer, userID, tx.Driver().Dialect() == dialect.Postgres)
+}
+
+func applyPointsAdjustmentInTx(ctx context.Context, tx *dbent.Tx, in pointsAdjustmentInput) error {
+	if tx == nil {
+		return errors.New("points adjustment requires transaction")
+	}
+	if in.UserID <= 0 {
+		return ErrUserNotFound
+	}
+	if in.Delta == 0 {
+		return nil
+	}
+	queryer, ok := tx.Driver().(serviceSQLQueryer)
+	if !ok {
+		return errors.New("points adjustment requires QueryContext support")
+	}
+	execer, ok := tx.Driver().(serviceSQLExecer)
+	if !ok {
+		return errors.New("points adjustment requires ExecContext support")
+	}
+
+	balanceBefore, err := currentPointsBalanceWithQueryer(ctx, queryer, in.UserID, tx.Driver().Dialect() == dialect.Postgres)
+	if err != nil {
+		return err
+	}
+
+	delta := in.Delta
+	if in.ClampZero && delta < 0 && balanceBefore+delta < 0 {
+		delta = -balanceBefore
+	}
+	balanceAfter := balanceBefore + delta
+	if balanceAfter < -1e-9 {
+		return infraerrors.BadRequest("POINTS_BALANCE_NEGATIVE", "points balance cannot be negative")
+	}
+	if balanceAfter < 0 {
+		balanceAfter = 0
+	}
+
+	amount := delta
+	direction := "credit"
+	if amount < 0 {
+		direction = "debit"
+		amount = -amount
+	}
+	dialectName := tx.Driver().Dialect()
+	amountValue := decimal.NewFromFloat(amount).Round(10).StringFixed(10)
+	balanceBeforeValue := decimal.NewFromFloat(balanceBefore).Round(10).StringFixed(10)
+	balanceAfterValue := decimal.NewFromFloat(balanceAfter).Round(10).StringFixed(10)
+	updateQuery := `
+		UPDATE users
+		SET points_balance = $1,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND deleted_at IS NULL
+	`
+	if dialectName == dialect.Postgres {
+		updateQuery = `
+			UPDATE users
+			SET points_balance = $1::numeric,
+				updated_at = NOW()
+			WHERE id = $2 AND deleted_at IS NULL
+		`
+	}
+	if _, err := execer.ExecContext(ctx, updateQuery, balanceAfterValue, in.UserID); err != nil {
+		return err
+	}
+
+	if amount == 0 {
+		return nil
+	}
+	metadata := in.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	rawMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	var refID any
+	if in.RefID > 0 {
+		refID = in.RefID
+	}
+	var operatorUserID any
+	if in.OperatorUserID > 0 {
+		operatorUserID = in.OperatorUserID
+	}
+	insertQuery := `
+		INSERT INTO points_ledger (
+			user_id, direction, amount, reason, ref_type, ref_id,
+			balance_before, balance_after, operator_user_id, metadata
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10
+		)
+		ON CONFLICT DO NOTHING
+	`
+	if dialectName == dialect.Postgres {
+		insertQuery = `
+			INSERT INTO points_ledger (
+				user_id, direction, amount, reason, ref_type, ref_id,
+				balance_before, balance_after, operator_user_id, metadata
+			) VALUES (
+				$1, $2, $3::numeric, $4, $5, $6,
+				$7::numeric, $8::numeric, $9, $10::jsonb
+			)
+			ON CONFLICT DO NOTHING
+		`
+	}
+	_, err = execer.ExecContext(ctx, insertQuery,
+		in.UserID,
+		direction,
+		amountValue,
+		strings.TrimSpace(in.Reason),
+		strings.TrimSpace(in.RefType),
+		refID,
+		balanceBeforeValue,
+		balanceAfterValue,
+		operatorUserID,
+		string(rawMetadata),
+	)
+	return err
+}
+
+func currentPointsBalanceWithQueryer(ctx context.Context, queryer serviceSQLQueryer, userID int64, forUpdate bool) (float64, error) {
+	var balanceBefore float64
+	query := `
+		SELECT points_balance
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	if forUpdate {
+		query += " FOR UPDATE"
+	}
+	rows, err := queryer.QueryContext(ctx, query, userID)
+	if err != nil {
+		return 0, err
+	}
+	if rows.Next() {
+		if err := rows.Scan(&balanceBefore); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+	} else {
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		_ = rows.Close()
+		return 0, ErrUserNotFound
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	return balanceBefore, nil
 }
 
 // reduceOrCancelSubscription 缩短订阅天数，剩余天数 <= 0 时取消订阅

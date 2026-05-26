@@ -77,11 +77,14 @@ type RevenueCashStats struct {
 }
 
 type RevenueUsageStats struct {
-	Requests        int64   `json:"requests"`
-	TotalTokens     int64   `json:"total_tokens"`
-	StandardCost    float64 `json:"standard_cost"`
-	ConsumedRevenue float64 `json:"consumed_revenue"`
-	AccountCost     float64 `json:"account_cost"`
+	Requests              int64   `json:"requests"`
+	TotalTokens           int64   `json:"total_tokens"`
+	StandardCost          float64 `json:"standard_cost"`
+	ConsumedRevenue       float64 `json:"consumed_revenue"`
+	BalanceConsumedAmount float64 `json:"balance_consumed_amount"`
+	PointsConsumedAmount  float64 `json:"points_consumed_amount"`
+	PointsIssuedAmount    float64 `json:"points_issued_amount"`
+	AccountCost           float64 `json:"account_cost"`
 }
 
 type RevenueAdjustmentStats struct {
@@ -111,6 +114,9 @@ type RevenueTrendPoint struct {
 	NetPaidAmount          float64 `json:"net_paid_amount"`
 	Requests               int64   `json:"requests"`
 	ConsumedRevenue        float64 `json:"consumed_revenue"`
+	BalanceConsumedAmount  float64 `json:"balance_consumed_amount"`
+	PointsConsumedAmount   float64 `json:"points_consumed_amount"`
+	PointsIssuedAmount     float64 `json:"points_issued_amount"`
 	AccountCost            float64 `json:"account_cost"`
 	UsageGrossProfit       float64 `json:"usage_gross_profit"`
 	AffiliateRebate        float64 `json:"affiliate_rebate"`
@@ -218,6 +224,9 @@ func (s *RevenueService) GetSummary(ctx context.Context, params RevenueQueryPara
 		return nil, err
 	}
 	if err := s.fillRevenueUsageStats(ctx, params, out, pointIndex); err != nil {
+		return nil, err
+	}
+	if err := s.fillRevenueWalletBreakdownStats(ctx, params, out, pointIndex); err != nil {
 		return nil, err
 	}
 	if err := s.fillRevenueAffiliateStats(ctx, params, out, pointIndex); err != nil {
@@ -916,6 +925,125 @@ func (s *RevenueService) fillRevenueUsageStatsFromSnapshots(ctx context.Context,
 	return nil
 }
 
+func (s *RevenueService) fillRevenueWalletBreakdownStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
+	userBalanceFilter, userBalanceArgs := revenueUserFilter("user_id", params.UserID, 4)
+	balanceQuery := `
+		SELECT COALESCE(SUM(amount), 0)::double precision
+		FROM user_balance_ledger
+		WHERE created_at >= $1 AND created_at < $2
+			AND direction = 'debit'
+			AND reason = $3
+	`
+	balanceQuery += userBalanceFilter
+	balanceArgs := []any{params.StartTime, params.EndTime, "usage_charge"}
+	balanceArgs = append(balanceArgs, userBalanceArgs...)
+	if err := s.querySingle(ctx, balanceQuery, balanceArgs, &out.Usage.BalanceConsumedAmount); err != nil {
+		return fmt.Errorf("query revenue balance consumed stats: %w", err)
+	}
+
+	userPointsFilter, userPointsArgs := revenueUserFilter("user_id", params.UserID, 8)
+	pointsQuery := `
+		SELECT
+			COALESCE(SUM(amount) FILTER (WHERE direction = 'debit' AND reason IN ($3, $4)), 0)::double precision AS points_consumed,
+			COALESCE(SUM(amount) FILTER (WHERE direction = 'credit' AND reason IN ($5, $6, $7)), 0)::double precision AS points_issued
+		FROM points_ledger
+		WHERE created_at >= $1 AND created_at < $2
+	`
+	pointsQuery += userPointsFilter
+	pointsArgs := []any{
+		params.StartTime,
+		params.EndTime,
+		"usage_charge",
+		"shop_order",
+		"redeem_code",
+		"admin_adjustment",
+		"shop_draw_reward",
+	}
+	pointsArgs = append(pointsArgs, userPointsArgs...)
+	if err := s.querySingle(ctx, pointsQuery, pointsArgs, &out.Usage.PointsConsumedAmount, &out.Usage.PointsIssuedAmount); err != nil {
+		return fmt.Errorf("query revenue points stats: %w", err)
+	}
+
+	bucketExpr := revenueBucketExpression("created_at", params.Granularity)
+	trendBalanceUserFilter, trendBalanceUserArgs := revenueUserFilter("user_id", params.UserID, 5)
+	trendBalanceQuery := fmt.Sprintf(`
+		SELECT %s AS bucket, COALESCE(SUM(amount), 0)::double precision AS balance_consumed
+		FROM user_balance_ledger
+		WHERE created_at >= $1 AND created_at < $2
+			AND direction = 'debit'
+			AND reason = $4
+			%s
+		GROUP BY 1
+		ORDER BY 1
+	`, bucketExpr, trendBalanceUserFilter)
+	trendBalanceArgs := []any{params.StartTime, params.EndTime, params.Timezone, "usage_charge"}
+	trendBalanceArgs = append(trendBalanceArgs, trendBalanceUserArgs...)
+	rows, err := s.entClient.QueryContext(ctx, trendBalanceQuery, trendBalanceArgs...)
+	if err != nil {
+		return fmt.Errorf("query revenue balance consumed trend: %w", err)
+	}
+	for rows.Next() {
+		var bucket string
+		var amount float64
+		if err := rows.Scan(&bucket, &amount); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan revenue balance consumed trend: %w", err)
+		}
+		if idx, ok := pointIndex[bucket]; ok {
+			out.Trend[idx].BalanceConsumedAmount = amount
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate revenue balance consumed trend: %w", err)
+	}
+	_ = rows.Close()
+
+	trendPointsUserFilter, trendPointsUserArgs := revenueUserFilter("user_id", params.UserID, 9)
+	trendPointsQuery := fmt.Sprintf(`
+		SELECT
+			%s AS bucket,
+			COALESCE(SUM(amount) FILTER (WHERE direction = 'debit' AND reason IN ($4, $5)), 0)::double precision AS points_consumed,
+			COALESCE(SUM(amount) FILTER (WHERE direction = 'credit' AND reason IN ($6, $7, $8)), 0)::double precision AS points_issued
+		FROM points_ledger
+		WHERE created_at >= $1 AND created_at < $2
+			%s
+		GROUP BY 1
+		ORDER BY 1
+	`, bucketExpr, trendPointsUserFilter)
+	trendPointsArgs := []any{
+		params.StartTime,
+		params.EndTime,
+		params.Timezone,
+		"usage_charge",
+		"shop_order",
+		"redeem_code",
+		"admin_adjustment",
+		"shop_draw_reward",
+	}
+	trendPointsArgs = append(trendPointsArgs, trendPointsUserArgs...)
+	rows, err = s.entClient.QueryContext(ctx, trendPointsQuery, trendPointsArgs...)
+	if err != nil {
+		return fmt.Errorf("query revenue points trend: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var bucket string
+		var consumed, issued float64
+		if err := rows.Scan(&bucket, &consumed, &issued); err != nil {
+			return fmt.Errorf("scan revenue points trend: %w", err)
+		}
+		if idx, ok := pointIndex[bucket]; ok {
+			out.Trend[idx].PointsConsumedAmount = consumed
+			out.Trend[idx].PointsIssuedAmount = issued
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate revenue points trend: %w", err)
+	}
+	return nil
+}
+
 func (s *RevenueService) fillRevenueAffiliateStats(ctx context.Context, params RevenueQueryParams, out *RevenueSummary, pointIndex map[string]int) error {
 	userFilter, userArgs := revenueUserFilter("user_id", params.UserID, 5)
 	query := `
@@ -1233,6 +1361,9 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 
 	out.Usage.StandardCost = roundRevenue(out.Usage.StandardCost)
 	out.Usage.ConsumedRevenue = roundRevenue(out.Usage.ConsumedRevenue)
+	out.Usage.BalanceConsumedAmount = roundRevenue(out.Usage.BalanceConsumedAmount)
+	out.Usage.PointsConsumedAmount = roundRevenue(out.Usage.PointsConsumedAmount)
+	out.Usage.PointsIssuedAmount = roundRevenue(out.Usage.PointsIssuedAmount)
 	out.Usage.AccountCost = roundRevenue(out.Usage.AccountCost)
 
 	out.Adjustments.AffiliateRebate = roundRevenue(out.Adjustments.AffiliateRebate)
@@ -1255,6 +1386,9 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 		p.RefundAmount = roundRevenue(p.RefundAmount)
 		p.NetPaidAmount = roundRevenue(p.PaidAmount - p.RefundAmount)
 		p.ConsumedRevenue = roundRevenue(p.ConsumedRevenue)
+		p.BalanceConsumedAmount = roundRevenue(p.BalanceConsumedAmount)
+		p.PointsConsumedAmount = roundRevenue(p.PointsConsumedAmount)
+		p.PointsIssuedAmount = roundRevenue(p.PointsIssuedAmount)
 		p.AccountCost = roundRevenue(p.AccountCost)
 		p.UsageGrossProfit = roundRevenue(p.ConsumedRevenue - p.AccountCost)
 		p.AffiliateRebate = roundRevenue(p.AffiliateRebate)

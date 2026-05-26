@@ -176,6 +176,11 @@ func (s *stubAdminService) UpdateUserBalance(ctx context.Context, userID int64, 
 	return &user, nil
 }
 
+func (s *stubAdminService) UpdateUserPoints(ctx context.Context, userID int64, points float64, operation string, notes string, operatorUserID int64) (*service.User, error) {
+	user := service.User{ID: userID, PointsBalance: points, Status: service.StatusActive}
+	return &user, nil
+}
+
 func (s *stubAdminService) GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]service.APIKey, int64, error) {
 	return s.apiKeys, int64(len(s.apiKeys)), nil
 }

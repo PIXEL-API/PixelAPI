@@ -56,7 +56,7 @@
               required
               autofocus
               autocomplete="email"
-              :disabled="registrationActionDisabled"
+              :disabled="formControlsDisabled"
               class="input pl-11"
               :class="{ 'input-error': errors.email }"
               :placeholder="t('auth.emailPlaceholder')"
@@ -79,14 +79,14 @@
               :type="showPassword ? 'text' : 'password'"
               required
               autocomplete="new-password"
-              :disabled="registrationActionDisabled"
+              :disabled="formControlsDisabled"
               class="input pl-11 pr-11"
               :class="{ 'input-error': errors.password }"
               :placeholder="t('auth.createPasswordPlaceholder')"
             />
             <button
               type="button"
-              :disabled="registrationActionDisabled"
+              :disabled="formControlsDisabled"
               @click="showPassword = !showPassword"
               class="absolute inset-y-0 right-0 flex items-center pr-3.5 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-dark-300"
             >
@@ -112,7 +112,7 @@
               id="invitation_code"
               v-model="formData.invitation_code"
               type="text"
-              :disabled="registrationActionDisabled"
+              :disabled="formControlsDisabled"
               class="input pl-11 pr-10"
               :class="{
                 'border-green-500 focus:border-green-500 focus:ring-green-500': invitationValidation.valid,
@@ -160,7 +160,7 @@
               id="promo_code"
               v-model="formData.promo_code"
               type="text"
-              :disabled="registrationActionDisabled"
+              :disabled="formControlsDisabled"
               class="input pl-11 pr-10"
               :class="{
                 'border-green-500 focus:border-green-500 focus:ring-green-500': promoValidation.valid,
@@ -212,6 +212,8 @@
           :mode="loginAgreementMode"
           :updated-at="loginAgreementUpdatedAt"
           :visible="showAgreementModal"
+          :error-message="agreementError"
+          action-name="注册"
           @accept="acceptLoginAgreement"
           @reject="rejectLoginAgreement"
           @open="showAgreementModal = true"
@@ -220,7 +222,7 @@
         <!-- Submit Button -->
         <button
           type="submit"
-          :disabled="registrationActionDisabled || (turnstileEnabled && !turnstileToken)"
+          :disabled="submitDisabled || (turnstileEnabled && !turnstileToken)"
           class="btn btn-primary w-full"
         >
           <svg
@@ -265,30 +267,38 @@
         </div>
 
         <EmailOAuthButtons
-          :disabled="registrationActionDisabled"
+          :disabled="submitDisabled"
           :aff-code="formData.aff_code"
           :github-enabled="githubOAuthEnabled"
           :google-enabled="googleOAuthEnabled"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
           :show-divider="false"
         />
 
         <LinuxDoOAuthSection
           v-if="linuxdoOAuthEnabled"
-          :disabled="registrationActionDisabled"
+          :disabled="submitDisabled"
           :aff-code="formData.aff_code"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
           :show-divider="false"
         />
         <WechatOAuthSection
           v-if="wechatOAuthEnabled"
-          :disabled="registrationActionDisabled"
+          :disabled="submitDisabled"
           :aff-code="formData.aff_code"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
           :show-divider="false"
         />
         <OidcOAuthSection
           v-if="oidcOAuthEnabled"
-          :disabled="registrationActionDisabled"
+          :disabled="submitDisabled"
           :provider-name="oidcOAuthProviderName"
           :aff-code="formData.aff_code"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
           :show-divider="false"
         />
       </div>
@@ -378,6 +388,7 @@ const loginAgreementRevision = ref<string>('')
 const loginAgreementDocuments = ref<LoginAgreementDocument[]>([])
 const agreementAccepted = ref<boolean>(false)
 const showAgreementModal = ref<boolean>(false)
+const agreementError = ref<string>('')
 
 // Turnstile
 const turnstileRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
@@ -440,9 +451,9 @@ const agreementGateActive = computed(
   () => loginAgreementEnabled.value && !agreementAccepted.value
 )
 
-const registrationActionDisabled = computed(
-  () => isLoading.value || !settingsLoaded.value || agreementGateActive.value
-)
+const formControlsDisabled = computed(() => isLoading.value || !settingsLoaded.value)
+
+const submitDisabled = computed(() => isLoading.value || !settingsLoaded.value)
 
 watch(validationToastMessage, (value, previousValue) => {
   if (value && value !== previousValue) {
@@ -550,8 +561,7 @@ function applyLoginAgreementSettings(settings: {
     `${loginAgreementUpdatedAt.value}:${documents.map((doc) => `${doc.id}:${doc.title}`).join('|')}`
 
   agreementAccepted.value = !loginAgreementEnabled.value || hasAcceptedLoginAgreement(loginAgreementRevision.value)
-  showAgreementModal.value =
-    loginAgreementEnabled.value && !agreementAccepted.value && loginAgreementMode.value !== 'checkbox'
+  showAgreementModal.value = false
 }
 
 function hasAcceptedLoginAgreement(revision: string): boolean {
@@ -582,13 +592,33 @@ function acceptLoginAgreement(): void {
   }
   agreementAccepted.value = true
   showAgreementModal.value = false
+  agreementError.value = ''
 }
 
 function rejectLoginAgreement(): void {
   localStorage.removeItem(LOGIN_AGREEMENT_STORAGE_KEY)
   agreementAccepted.value = false
   showAgreementModal.value = false
-  appStore.showWarning('未同意最新条款前，无法注册或使用快捷登录。')
+  agreementError.value = '请先阅读并同意最新条款后再注册。'
+  appStore.showWarning(agreementError.value)
+}
+
+function validateAgreementBeforeSubmit(): boolean {
+  if (!agreementGateActive.value) {
+    agreementError.value = ''
+    return true
+  }
+
+  agreementError.value = '请先阅读并同意最新条款后再注册。'
+  appStore.showWarning(agreementError.value)
+  if (loginAgreementMode.value !== 'checkbox') {
+    showAgreementModal.value = true
+  }
+  return false
+}
+
+function validateAgreementBeforeOAuth(): boolean {
+  return validateAgreementBeforeSubmit()
 }
 
 // ==================== Promo Code Validation ====================
@@ -774,11 +804,7 @@ function validateForm(): boolean {
 
   let isValid = true
 
-  if (agreementGateActive.value) {
-    appStore.showWarning('请先阅读并同意最新条款后再注册。')
-    if (loginAgreementMode.value !== 'checkbox') {
-      showAgreementModal.value = true
-    }
+  if (!validateAgreementBeforeSubmit()) {
     return false
   }
 

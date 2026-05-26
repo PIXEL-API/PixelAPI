@@ -115,7 +115,7 @@
           <div v-if="selectedShopOrder.draw_reward_amount !== null && selectedShopOrder.draw_reward_amount !== undefined" class="mb-4 rounded-lg bg-emerald-50 p-4 text-sm dark:bg-emerald-950/30">
             <div class="flex justify-between gap-3">
               <span class="text-emerald-700 dark:text-emerald-300">{{ t('store.drawReward') }}</span>
-              <span class="font-semibold text-emerald-800 dark:text-emerald-200">${{ selectedShopOrder.draw_reward_amount.toFixed(2) }}</span>
+              <span class="font-semibold text-emerald-800 dark:text-emerald-200">{{ formatStoreDrawReward(selectedShopOrder) }}</span>
             </div>
           </div>
 
@@ -215,6 +215,7 @@ import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
 import { adminStoreAPI } from '@/api/admin/store'
 import { extractI18nErrorMessage } from '@/utils/apiError'
+import { formatStoreDrawReward } from '@/utils/storeRewards'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import { useClipboard } from '@/composables/useClipboard'
 import type { AdminPaymentOrderDetail, PaymentOrder, PaymentOrderAuditLog } from '@/types/payment'

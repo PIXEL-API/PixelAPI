@@ -486,6 +486,29 @@ func TestUnbindUserAuthProviderRemovesProviderAndReturnsUpdatedProfile(t *testin
 	require.True(t, summaries.LinuxDo.CanBind)
 }
 
+func TestUpdateProfileInvalidateAuthCacheWhenPreferPointsBillingChanges(t *testing.T) {
+	repo := &mockUserRepo{
+		getByIDUser: &User{
+			ID:                  16,
+			Email:               "points-profile@example.com",
+			Username:            "points-profile",
+			Concurrency:         2,
+			PreferPointsBilling: false,
+		},
+	}
+	invalidator := &mockAuthCacheInvalidator{}
+	svc := NewUserService(repo, nil, invalidator, nil)
+	preferPoints := true
+
+	updated, err := svc.UpdateProfile(context.Background(), 16, UpdateProfileRequest{
+		PreferPointsBilling: &preferPoints,
+	})
+
+	require.NoError(t, err)
+	require.True(t, updated.PreferPointsBilling)
+	require.Equal(t, []int64{16}, invalidator.invalidatedUserIDs)
+}
+
 func TestGetProfileIdentitySummaries_HidesBindActionWhenProviderExplicitlyDisabled(t *testing.T) {
 	repo := &mockUserRepo{
 		getByIDUser: &User{

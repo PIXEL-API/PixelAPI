@@ -40,6 +40,7 @@ const props = withDefaults(defineProps<{
   affCode?: string
   loginAgreementRevision?: string
   showDivider?: boolean
+  beforeStart?: () => boolean
 }>(), {
   showDivider: true,
 })
@@ -84,6 +85,9 @@ onMounted(() => {
 
 function startLogin(): void {
   if (buttonDisabled.value || !resolvedStart.value.mode) {
+    return
+  }
+  if (props.beforeStart && !props.beforeStart()) {
     return
   }
   const redirectTo = (route.query.redirect as string) || '/dashboard'

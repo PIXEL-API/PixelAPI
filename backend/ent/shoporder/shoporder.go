@@ -30,12 +30,16 @@ const (
 	FieldProductCoverURL = "product_cover_url"
 	// FieldProductDescription holds the string denoting the product_description field in the database.
 	FieldProductDescription = "product_description"
+	// FieldProductType holds the string denoting the product_type field in the database.
+	FieldProductType = "product_type"
 	// FieldUnitPrice holds the string denoting the unit_price field in the database.
 	FieldUnitPrice = "unit_price"
 	// FieldQuantity holds the string denoting the quantity field in the database.
 	FieldQuantity = "quantity"
 	// FieldTotalAmount holds the string denoting the total_amount field in the database.
 	FieldTotalAmount = "total_amount"
+	// FieldPointsAmount holds the string denoting the points_amount field in the database.
+	FieldPointsAmount = "points_amount"
 	// FieldPaymentMethod holds the string denoting the payment_method field in the database.
 	FieldPaymentMethod = "payment_method"
 	// FieldPaymentOrderID holds the string denoting the payment_order_id field in the database.
@@ -118,9 +122,11 @@ var Columns = []string{
 	FieldProductName,
 	FieldProductCoverURL,
 	FieldProductDescription,
+	FieldProductType,
 	FieldUnitPrice,
 	FieldQuantity,
 	FieldTotalAmount,
+	FieldPointsAmount,
 	FieldPaymentMethod,
 	FieldPaymentOrderID,
 	FieldStatus,
@@ -155,6 +161,12 @@ var (
 	OrderNoValidator func(string) error
 	// ProductNameValidator is a validator for the "product_name" field. It is called by the builders before save.
 	ProductNameValidator func(string) error
+	// DefaultProductType holds the default value on creation for the "product_type" field.
+	DefaultProductType string
+	// ProductTypeValidator is a validator for the "product_type" field. It is called by the builders before save.
+	ProductTypeValidator func(string) error
+	// DefaultPointsAmount holds the default value on creation for the "points_amount" field.
+	DefaultPointsAmount float64
 	// PaymentMethodValidator is a validator for the "payment_method" field. It is called by the builders before save.
 	PaymentMethodValidator func(string) error
 	// DefaultStatus holds the default value on creation for the "status" field.
@@ -211,6 +223,11 @@ func ByProductDescription(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldProductDescription, opts...).ToFunc()
 }
 
+// ByProductType orders the results by the product_type field.
+func ByProductType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProductType, opts...).ToFunc()
+}
+
 // ByUnitPrice orders the results by the unit_price field.
 func ByUnitPrice(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUnitPrice, opts...).ToFunc()
@@ -224,6 +241,11 @@ func ByQuantity(opts ...sql.OrderTermOption) OrderOption {
 // ByTotalAmount orders the results by the total_amount field.
 func ByTotalAmount(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTotalAmount, opts...).ToFunc()
+}
+
+// ByPointsAmount orders the results by the points_amount field.
+func ByPointsAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPointsAmount, opts...).ToFunc()
 }
 
 // ByPaymentMethod orders the results by the payment_method field.

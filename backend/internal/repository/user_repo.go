@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -88,6 +89,8 @@ func (r *userRepository) Create(ctx context.Context, userIn *service.User) error
 		SetPasswordHash(userIn.PasswordHash).
 		SetRole(userIn.Role).
 		SetBalance(userIn.Balance).
+		SetPointsBalance(userIn.PointsBalance).
+		SetPreferPointsBilling(userIn.PreferPointsBilling).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
 		SetSignupSource(userSignupSourceOrDefault(userIn.SignupSource)).
@@ -214,6 +217,8 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		SetPasswordHash(userIn.PasswordHash).
 		SetRole(userIn.Role).
 		SetBalance(userIn.Balance).
+		SetPointsBalance(userIn.PointsBalance).
+		SetPreferPointsBilling(userIn.PreferPointsBilling).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
 		SetBalanceNotifyEnabled(userIn.BalanceNotifyEnabled).
@@ -533,6 +538,9 @@ func userListOrder(params pagination.PaginationParams) []func(*entsql.Selector) 
 	case "balance":
 		field = dbuser.FieldBalance
 		defaultField = false
+	case "points_balance":
+		field = dbuser.FieldPointsBalance
+		defaultField = false
 	case "concurrency":
 		field = dbuser.FieldConcurrency
 		defaultField = false
@@ -723,6 +731,163 @@ func (r *userRepository) DeductBalance(ctx context.Context, id int64, amount flo
 		return service.ErrUserNotFound
 	}
 	return nil
+}
+
+func (r *userRepository) AdjustUsageBillingWallet(ctx context.Context, userID int64, amount float64, preferPoints bool, metadata map[string]any) (*service.UsageBillingApplyResult, error) {
+	if userID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+	if amount <= 0 {
+		return &service.UsageBillingApplyResult{Applied: true}, nil
+	}
+
+	var tx *dbent.Tx
+	ownedTx := false
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		tx = existingTx
+	} else {
+		createdTx, err := r.client.Tx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		tx = createdTx
+		ownedTx = true
+		defer func() { _ = tx.Rollback() }()
+	}
+
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return nil, fmt.Errorf("sql executor is not configured")
+	}
+
+	var currentBalance float64
+	var currentPoints float64
+	if err := scanSingleRow(ctx, exec, `
+		SELECT balance, points_balance
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, []any{userID}, &currentBalance, &currentPoints); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	pointsDeducted := 0.0
+	balanceDeducted := 0.0
+	newPointsBalance := currentPoints
+	newBalance := currentBalance
+	metadataJSON, err := usageBillingWalletMetadataJSON(metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	if preferPoints {
+		pointsDeducted = amount
+		if currentPoints < pointsDeducted {
+			pointsDeducted = currentPoints
+		}
+		if pointsDeducted < 0 {
+			pointsDeducted = 0
+		}
+		balanceDeducted = amount - pointsDeducted
+		if balanceDeducted < 0 {
+			balanceDeducted = 0
+		}
+		newPointsBalance = currentPoints - pointsDeducted
+		newBalance = currentBalance - balanceDeducted
+		if _, err := exec.ExecContext(ctx, `
+			UPDATE users
+			SET points_balance = $1::numeric,
+				balance = $2::numeric,
+				updated_at = NOW()
+			WHERE id = $3 AND deleted_at IS NULL
+		`, decimalFromFloat(newPointsBalance).StringFixed(10), decimalFromSignedFloat(newBalance).StringFixed(10), userID); err != nil {
+			return nil, err
+		}
+		if pointsDeducted > 0 {
+			if _, err := exec.ExecContext(ctx, `
+				INSERT INTO points_ledger (
+					user_id, direction, amount, reason, ref_type, ref_id,
+					balance_before, balance_after, operator_user_id, metadata
+				) VALUES (
+					$1, $2, $3::numeric, $4, $5, $6,
+					$7::numeric, $8::numeric, $9, $10::jsonb
+				)
+				ON CONFLICT DO NOTHING
+			`, userID, "debit", decimalFromFloat(pointsDeducted).StringFixed(10), "usage_charge", "usage_request", nil,
+				decimalFromFloat(currentPoints).StringFixed(10),
+				decimalFromFloat(newPointsBalance).StringFixed(10), nil, metadataJSON); err != nil {
+				return nil, err
+			}
+		}
+		if balanceDeducted > 0 {
+			if _, err := exec.ExecContext(ctx, `
+				INSERT INTO user_balance_ledger (
+					user_id, direction, amount, reason, ref_type, ref_id, balance_after, metadata
+				) VALUES (
+					$1, $2, $3::numeric, $4, $5, $6, $7::numeric, $8::jsonb
+				)
+				ON CONFLICT DO NOTHING
+			`, userID, "debit", decimalFromFloat(balanceDeducted).StringFixed(10), "usage_charge", "usage_request", nil,
+				decimalFromSignedFloat(newBalance).StringFixed(10), metadataJSON); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		balanceDeducted = amount
+		newBalance = currentBalance - amount
+		if _, err := exec.ExecContext(ctx, `
+			UPDATE users
+			SET balance = $1::numeric,
+				updated_at = NOW()
+			WHERE id = $2 AND deleted_at IS NULL
+		`, decimalFromSignedFloat(newBalance).StringFixed(10), userID); err != nil {
+			return nil, err
+		}
+		if _, err := exec.ExecContext(ctx, `
+			INSERT INTO user_balance_ledger (
+				user_id, direction, amount, reason, ref_type, ref_id, balance_after, metadata
+			) VALUES (
+				$1, $2, $3::numeric, $4, $5, $6, $7::numeric, $8::jsonb
+			)
+			ON CONFLICT DO NOTHING
+		`, userID, "debit", decimalFromFloat(balanceDeducted).StringFixed(10), "usage_charge", "usage_request", nil,
+			decimalFromSignedFloat(newBalance).StringFixed(10), metadataJSON); err != nil {
+			return nil, err
+		}
+	}
+
+	if ownedTx {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+
+	var newPointsPtr *float64
+	if preferPoints {
+		newPointsPtr = &newPointsBalance
+	}
+	newBalancePtr := &newBalance
+	return &service.UsageBillingApplyResult{
+		Applied:          true,
+		NewBalance:       newBalancePtr,
+		NewPointsBalance: newPointsPtr,
+		PointsDeducted:   pointsDeducted,
+		BalanceDeducted:  balanceDeducted,
+	}, nil
+}
+
+func usageBillingWalletMetadataJSON(metadata map[string]any) (string, error) {
+	if metadata == nil {
+		return "{}", nil
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount int) error {

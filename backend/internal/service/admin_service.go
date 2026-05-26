@@ -32,6 +32,7 @@ type AdminService interface {
 	UpdateUser(ctx context.Context, id int64, input *UpdateUserInput) (*User, error)
 	DeleteUser(ctx context.Context, id int64) error
 	UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error)
+	UpdateUserPoints(ctx context.Context, userID int64, points float64, operation string, notes string, operatorUserID int64) (*User, error)
 	GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error)
 	GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error)
 	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
@@ -919,6 +920,102 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 	}
 
 	return user, nil
+}
+
+func (s *adminServiceImpl) UpdateUserPoints(ctx context.Context, userID int64, points float64, operation string, notes string, operatorUserID int64) (*User, error) {
+	if points <= 0 {
+		return nil, infraerrors.BadRequest("POINTS_AMOUNT_INVALID", "points amount must be greater than 0")
+	}
+
+	var delta float64
+	switch operation {
+	case "set":
+	case "add":
+		delta = points
+	case "subtract":
+		delta = -points
+	default:
+		return nil, infraerrors.BadRequest("POINTS_OPERATION_INVALID", "invalid points operation")
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin points adjustment transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+
+	if operation == "set" {
+		currentPoints, err := currentPointsBalanceInTx(txCtx, tx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("lock user points: %w", err)
+		}
+		delta = points - currentPoints
+	}
+	if delta == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit noop points adjustment transaction: %w", err)
+		}
+		updated, err := s.userRepo.GetByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		return updated, nil
+	}
+
+	code, err := GenerateRedeemCode()
+	if err != nil {
+		return nil, fmt.Errorf("generate points adjustment code: %w", err)
+	}
+	now := time.Now()
+	adjustmentRecord := &RedeemCode{
+		Code:   code,
+		Type:   AdjustmentTypeAdminPoints,
+		Value:  delta,
+		Status: StatusUsed,
+		UsedBy: &userID,
+		UsedAt: &now,
+		Notes:  notes,
+	}
+	if err := s.redeemCodeRepo.Create(txCtx, adjustmentRecord); err != nil {
+		return nil, fmt.Errorf("create points adjustment redeem code: %w", err)
+	}
+	if err := applyPointsAdjustmentInTx(txCtx, tx, pointsAdjustmentInput{
+		UserID:         userID,
+		Delta:          delta,
+		Reason:         "admin_adjustment",
+		RefType:        "redeem_code",
+		RefID:          adjustmentRecord.ID,
+		OperatorUserID: operatorUserID,
+		Metadata: map[string]any{
+			"operation": operation,
+			"notes":     notes,
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("update user points: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit points adjustment transaction: %w", err)
+	}
+
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+	if s.billingCacheService != nil {
+		go func() {
+			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.billingCacheService.InvalidateUserBalance(cacheCtx, userID); err != nil {
+				logger.LegacyPrintf("service.admin", "invalidate user balance cache after points update failed: user_id=%d err=%v", userID, err)
+			}
+		}()
+	}
+
+	updated, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *adminServiceImpl) GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error) {
@@ -2968,6 +3065,9 @@ func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *Gener
 		if !group.IsSubscriptionType() {
 			return nil, errors.New("group must be subscription type")
 		}
+	}
+	if err := validateRedeemCodeValue(input.Type, input.Value); err != nil {
+		return nil, err
 	}
 
 	codes := make([]RedeemCode, 0, input.Count)

@@ -22,6 +22,9 @@ function normalizeProduct<T extends StoreProduct>(product: T): T {
     purchase_limit: product.max_purchase,
     product_type: product.product_type || 'card_key',
     balance_only: product.balance_only === true,
+    allow_balance_payment: product.allow_balance_payment !== false,
+    allow_points_payment: product.allow_points_payment === true,
+    allow_platform_payment: product.allow_platform_payment !== false,
     stock_unlimited: product.stock_unlimited === true,
     status: product.enabled ? 'active' : 'inactive',
   }
@@ -30,6 +33,9 @@ function normalizeProduct<T extends StoreProduct>(product: T): T {
 function normalizeOrder(order: StoreOrder): StoreOrder {
   return {
     ...order,
+    product_type: order.product_type || 'card_key',
+    points_amount: Number(order.points_amount || 0),
+    draw_reward_type: order.draw_reward_type || null,
     delivered_cards: order.delivered_cards || [],
     delivered_files: order.delivered_files || [],
   }

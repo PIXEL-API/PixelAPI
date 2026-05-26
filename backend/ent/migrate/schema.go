@@ -1483,9 +1483,11 @@ var (
 		{Name: "product_name", Type: field.TypeString, Size: 150},
 		{Name: "product_cover_url", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "product_description", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "product_type", Type: field.TypeString, Size: 30, Default: "card_key"},
 		{Name: "unit_price", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "quantity", Type: field.TypeInt},
 		{Name: "total_amount", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
+		{Name: "points_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "payment_method", Type: field.TypeString, Size: 30},
 		{Name: "payment_order_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "status", Type: field.TypeString, Size: 30, Default: "pending"},
@@ -1508,19 +1510,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "shop_orders_shop_draw_cycles_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[20]},
+				Columns:    []*schema.Column{ShopOrdersColumns[22]},
 				RefColumns: []*schema.Column{ShopDrawCyclesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "shop_orders_shop_products_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[21]},
+				Columns:    []*schema.Column{ShopOrdersColumns[23]},
 				RefColumns: []*schema.Column{ShopProductsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "shop_orders_users_shop_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[22]},
+				Columns:    []*schema.Column{ShopOrdersColumns[24]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -1529,27 +1531,27 @@ var (
 			{
 				Name:    "shoporder_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[22]},
+				Columns: []*schema.Column{ShopOrdersColumns[24]},
 			},
 			{
 				Name:    "shoporder_product_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[21]},
+				Columns: []*schema.Column{ShopOrdersColumns[23]},
 			},
 			{
 				Name:    "shoporder_payment_order_id",
 				Unique:  true,
-				Columns: []*schema.Column{ShopOrdersColumns[11]},
+				Columns: []*schema.Column{ShopOrdersColumns[13]},
 			},
 			{
 				Name:    "shoporder_draw_cycle_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[20]},
+				Columns: []*schema.Column{ShopOrdersColumns[22]},
 			},
 			{
 				Name:    "shoporder_status",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[12]},
+				Columns: []*schema.Column{ShopOrdersColumns[14]},
 			},
 			{
 				Name:    "shoporder_created_at",
@@ -1575,6 +1577,9 @@ var (
 		{Name: "auto_delivery", Type: field.TypeBool, Default: true},
 		{Name: "product_type", Type: field.TypeString, Size: 30, Default: "card_key"},
 		{Name: "balance_only", Type: field.TypeBool, Default: false},
+		{Name: "allow_balance_payment", Type: field.TypeBool, Default: true},
+		{Name: "allow_points_payment", Type: field.TypeBool, Default: false},
+		{Name: "allow_platform_payment", Type: field.TypeBool, Default: true},
 		{Name: "draw_enabled", Type: field.TypeBool, Default: false},
 		{Name: "draw_min_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "draw_max_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
@@ -1590,7 +1595,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "shop_products_shop_categories_products",
-				Columns:    []*schema.Column{ShopProductsColumns[20]},
+				Columns:    []*schema.Column{ShopProductsColumns[23]},
 				RefColumns: []*schema.Column{ShopCategoriesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -1599,7 +1604,7 @@ var (
 			{
 				Name:    "shopproduct_category_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopProductsColumns[20]},
+				Columns: []*schema.Column{ShopProductsColumns[23]},
 			},
 			{
 				Name:    "shopproduct_enabled",
@@ -1862,6 +1867,8 @@ var (
 		{Name: "password_hash", Type: field.TypeString, Size: 255},
 		{Name: "role", Type: field.TypeString, Size: 20, Default: "user"},
 		{Name: "balance", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "points_balance", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "prefer_points_billing", Type: field.TypeBool, Default: false},
 		{Name: "concurrency", Type: field.TypeInt, Default: 5},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "username", Type: field.TypeString, Size: 100, Default: ""},
@@ -1888,7 +1895,7 @@ var (
 			{
 				Name:    "user_status",
 				Unique:  false,
-				Columns: []*schema.Column{UsersColumns[9]},
+				Columns: []*schema.Column{UsersColumns[11]},
 			},
 			{
 				Name:    "user_deleted_at",

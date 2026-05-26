@@ -38,12 +38,13 @@ type UsageBillingCommand struct {
 	ImageCount          int
 	MediaType           string
 
-	BalanceCost         float64
-	SubscriptionCost    float64
+	BalanceCost                float64
+	PreferPointsBilling        bool
+	SubscriptionCost           float64
 	PrivateGroupCommissionCost float64
-	APIKeyQuotaCost     float64
-	APIKeyRateLimitCost float64
-	AccountQuotaCost    float64
+	APIKeyQuotaCost            float64
+	APIKeyRateLimitCost        float64
+	AccountQuotaCost           float64
 
 	LeaseUsageRequests int64
 	LeaseUsageTokens   int64
@@ -85,7 +86,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		return ""
 	}
 	raw := fmt.Sprintf(
-		"%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
+		"%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%t|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
 		c.UserID,
 		c.AccountID,
 		c.APIKeyID,
@@ -102,6 +103,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		strings.TrimSpace(c.MediaType),
 		valueOrZero(c.SubscriptionID),
 		c.BalanceCost,
+		c.PreferPointsBilling,
 		c.SubscriptionCost,
 		c.PrivateGroupCommissionCost,
 		c.APIKeyQuotaCost,
@@ -145,6 +147,10 @@ type UsageBillingApplyResult struct {
 	Applied              bool
 	APIKeyQuotaExhausted bool
 	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
+	NewPointsBalance     *float64           // post-deduction points balance (nil = no points deduction)
+	PointsDeducted       float64            // points deducted for the request
+	BalanceDeducted      float64            // balance deducted for the request
+	CommissionDeducted   float64            // balance deducted for private-group commission
 	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
 	UsageLogID           *int64             // persisted usage log id when the billing transaction wrote one
 	BalanceCreditUserIDs []int64            // users credited by settlement side effects; callers should invalidate balance caches

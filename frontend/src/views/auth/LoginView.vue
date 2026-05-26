@@ -28,7 +28,7 @@
               required
               autofocus
               autocomplete="email"
-              :disabled="authActionDisabled"
+              :disabled="formControlsDisabled"
               class="input pl-11"
               :class="{ 'input-error': errors.email }"
               :placeholder="t('auth.emailPlaceholder')"
@@ -51,7 +51,7 @@
               :type="showPassword ? 'text' : 'password'"
               required
               autocomplete="current-password"
-              :disabled="authActionDisabled"
+              :disabled="formControlsDisabled"
               class="input pl-11 pr-11"
               :class="{ 'input-error': errors.password }"
               :placeholder="t('auth.passwordPlaceholder')"
@@ -59,7 +59,7 @@
             <button
               type="button"
               @click="showPassword = !showPassword"
-              :disabled="authActionDisabled"
+              :disabled="formControlsDisabled"
               class="absolute inset-y-0 right-0 flex items-center pr-3.5 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-dark-300"
             >
               <Icon v-if="showPassword" name="eyeOff" size="md" />
@@ -92,7 +92,7 @@
         <!-- Submit Button -->
         <button
           type="submit"
-          :disabled="authActionDisabled || (turnstileEnabled && !turnstileToken)"
+          :disabled="submitDisabled || (turnstileEnabled && !turnstileToken)"
           class="btn btn-primary w-full"
         >
           <svg
@@ -126,6 +126,8 @@
           :mode="loginAgreementMode"
           :updated-at="loginAgreementUpdatedAt"
           :visible="showAgreementModal"
+          :error-message="agreementError"
+          action-name="登录"
           @accept="acceptLoginAgreement"
           @reject="rejectLoginAgreement"
           @open="showAgreementModal = true"
@@ -141,30 +143,34 @@
           </div>
 
           <EmailOAuthButtons
-            :disabled="authActionDisabled"
+            :disabled="submitDisabled"
             :github-enabled="githubOAuthEnabled"
             :google-enabled="googleOAuthEnabled"
             :login-agreement-revision="loginAgreementRevision"
+            :before-start="validateAgreementBeforeOAuth"
             :show-divider="false"
           />
 
           <LinuxDoOAuthSection
             v-if="linuxdoOAuthEnabled"
-            :disabled="authActionDisabled"
+            :disabled="submitDisabled"
             :login-agreement-revision="loginAgreementRevision"
+            :before-start="validateAgreementBeforeOAuth"
             :show-divider="false"
           />
           <WechatOAuthSection
             v-if="wechatOAuthEnabled"
-            :disabled="authActionDisabled"
+            :disabled="submitDisabled"
             :login-agreement-revision="loginAgreementRevision"
+            :before-start="validateAgreementBeforeOAuth"
             :show-divider="false"
           />
           <OidcOAuthSection
             v-if="oidcOAuthEnabled"
-            :disabled="authActionDisabled"
+            :disabled="submitDisabled"
             :login-agreement-revision="loginAgreementRevision"
             :provider-name="oidcOAuthProviderName"
+            :before-start="validateAgreementBeforeOAuth"
             :show-divider="false"
           />
         </div>
@@ -249,6 +255,7 @@ const loginAgreementRevision = ref<string>('')
 const loginAgreementDocuments = ref<LoginAgreementDocument[]>([])
 const agreementAccepted = ref<boolean>(false)
 const showAgreementModal = ref<boolean>(false)
+const agreementError = ref<string>('')
 
 // Turnstile
 const turnstileRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
@@ -279,9 +286,9 @@ const agreementGateActive = computed(
   () => loginAgreementEnabled.value && !agreementAccepted.value
 )
 
-const authActionDisabled = computed(
-  () => isLoading.value || !publicSettingsLoaded.value || agreementGateActive.value
-)
+const formControlsDisabled = computed(() => isLoading.value || !publicSettingsLoaded.value)
+
+const submitDisabled = computed(() => isLoading.value || !publicSettingsLoaded.value)
 
 const showOAuthLogin = computed(
   () =>
@@ -354,8 +361,7 @@ function applyLoginAgreementSettings(settings: {
     `${loginAgreementUpdatedAt.value}:${documents.map((doc) => `${doc.id}:${doc.title}`).join('|')}`
 
   agreementAccepted.value = !loginAgreementEnabled.value || hasAcceptedLoginAgreement(loginAgreementRevision.value)
-  showAgreementModal.value =
-    loginAgreementEnabled.value && !agreementAccepted.value && loginAgreementMode.value !== 'checkbox'
+  showAgreementModal.value = false
 }
 
 function hasAcceptedLoginAgreement(revision: string): boolean {
@@ -386,13 +392,33 @@ function acceptLoginAgreement(): void {
   }
   agreementAccepted.value = true
   showAgreementModal.value = false
+  agreementError.value = ''
 }
 
 function rejectLoginAgreement(): void {
   localStorage.removeItem(LOGIN_AGREEMENT_STORAGE_KEY)
   agreementAccepted.value = false
   showAgreementModal.value = false
-  appStore.showWarning('未同意最新条款前，无法输入账号密码或使用快捷登录。')
+  agreementError.value = '请先阅读并同意最新条款后再登录。'
+  appStore.showWarning(agreementError.value)
+}
+
+function validateAgreementBeforeSubmit(): boolean {
+  if (!agreementGateActive.value) {
+    agreementError.value = ''
+    return true
+  }
+
+  agreementError.value = '请先阅读并同意最新条款后再登录。'
+  appStore.showWarning(agreementError.value)
+  if (loginAgreementMode.value !== 'checkbox') {
+    showAgreementModal.value = true
+  }
+  return false
+}
+
+function validateAgreementBeforeOAuth(): boolean {
+  return validateAgreementBeforeSubmit()
 }
 
 // ==================== Turnstile Handlers ====================
@@ -422,11 +448,7 @@ function validateForm(): boolean {
 
   let isValid = true
 
-  if (agreementGateActive.value) {
-    appStore.showWarning('请先阅读并同意最新条款后再登录。')
-    if (loginAgreementMode.value !== 'checkbox') {
-      showAgreementModal.value = true
-    }
+  if (!validateAgreementBeforeSubmit()) {
     return false
   }
 

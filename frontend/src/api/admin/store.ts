@@ -25,6 +25,9 @@ function productToView(product: StoreProduct): StoreProduct {
     purchase_limit: product.max_purchase,
     product_type: product.product_type || 'card_key',
     balance_only: product.balance_only === true,
+    allow_balance_payment: product.allow_balance_payment !== false,
+    allow_points_payment: product.allow_points_payment === true,
+    allow_platform_payment: product.allow_platform_payment !== false,
     stock_unlimited: product.stock_unlimited === true,
     status: product.enabled ? 'active' : 'inactive',
   }
@@ -41,6 +44,9 @@ function cardToView(card: StoreCard): StoreCard {
 function normalizeOrder(order: StoreOrder): StoreOrder {
   return {
     ...order,
+    product_type: order.product_type || 'card_key',
+    draw_reward_type: order.draw_reward_type || null,
+    points_amount: Number(order.points_amount || 0),
     delivered_cards: order.delivered_cards || [],
     delivered_files: order.delivered_files || [],
   }
@@ -92,6 +98,9 @@ function productPayload(data: UpsertStoreProductRequest) {
     auto_delivery: data.auto_delivery ?? true,
     product_type: data.product_type || 'card_key',
     balance_only: data.balance_only === true,
+    allow_balance_payment: data.allow_balance_payment !== false,
+    allow_points_payment: data.allow_points_payment === true,
+    allow_platform_payment: data.allow_platform_payment !== false,
     draw_config: data.draw_config ?? null,
   }
   return payload
