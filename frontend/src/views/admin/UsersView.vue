@@ -413,6 +413,21 @@
             </div>
           </template>
 
+          <template #cell-points_balance="{ value, row }">
+            <div class="flex items-center gap-2">
+              <span class="font-medium text-gray-900 dark:text-white">
+                {{ Number(value || 0).toFixed(10).replace(/\.?0+$/, '') || '0' }}
+              </span>
+              <button
+                @click.stop="handleAddPoints(row)"
+                class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20"
+                :title="t('admin.users.addPoints')"
+              >
+                {{ t('common.add') }}
+              </button>
+            </div>
+          </template>
+
           <template #cell-usage="{ row }">
             <div class="text-sm">
               <div class="flex items-center gap-1.5">
@@ -591,6 +606,26 @@
 
               <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
 
+              <!-- Add Points -->
+              <button
+                @click="handleAddPoints(user); closeActionMenu()"
+                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+              >
+                <Icon name="gift" size="sm" class="text-emerald-500" :stroke-width="2" />
+                {{ t('admin.users.addPoints') }}
+              </button>
+
+              <!-- Deduct Points -->
+              <button
+                @click="handleDeductPoints(user); closeActionMenu()"
+                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+              >
+                <Icon name="minus" size="sm" class="text-amber-500" :stroke-width="2" />
+                {{ t('admin.users.deductPoints') }}
+              </button>
+
+              <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
+
               <!-- Delete (not for admin) -->
               <button
                 v-if="user.role !== 'admin'"
@@ -612,6 +647,7 @@
     <UserApiKeysModal :show="showApiKeysModal" :user="viewingUser" @close="closeApiKeysModal" />
     <UserAllowedGroupsModal :show="showAllowedGroupsModal" :user="allowedGroupsUser" @close="closeAllowedGroupsModal" @success="loadUsers" />
     <UserBalanceModal :show="showBalanceModal" :user="balanceUser" :operation="balanceOperation" @close="closeBalanceModal" @success="loadUsers" />
+    <UserPointsModal :show="showPointsModal" :user="pointsUser" :operation="pointsOperation" @close="closePointsModal" @success="loadUsers" />
     <UserBalanceHistoryModal :show="showBalanceHistoryModal" :user="balanceHistoryUser" @close="closeBalanceHistoryModal" @deposit="handleDepositFromHistory" @withdraw="handleWithdrawFromHistory" />
     <GroupReplaceModal :show="showGroupReplaceModal" :user="groupReplaceUser" :old-group="groupReplaceOldGroup" :all-groups="allGroups" @close="closeGroupReplaceModal" @success="loadUsers" />
     <UserAttributesConfigModal :show="showAttributesModal" @close="handleAttributesModalClose" />
@@ -646,6 +682,7 @@ import UserEditModal from '@/components/admin/user/UserEditModal.vue'
 import UserApiKeysModal from '@/components/admin/user/UserApiKeysModal.vue'
 import UserAllowedGroupsModal from '@/components/admin/user/UserAllowedGroupsModal.vue'
 import UserBalanceModal from '@/components/admin/user/UserBalanceModal.vue'
+import UserPointsModal from '@/components/admin/user/UserPointsModal.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
 import GroupReplaceModal from '@/components/admin/user/GroupReplaceModal.vue'
 
@@ -709,6 +746,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'groups', label: t('admin.users.columns.groups'), sortable: false },
   { key: 'subscriptions', label: t('admin.users.columns.subscriptions'), sortable: false },
   { key: 'balance', label: t('admin.users.columns.balance'), sortable: true },
+  { key: 'points_balance', label: t('admin.users.columns.points'), sortable: true },
   { key: 'usage', label: t('admin.users.columns.usage'), sortable: false },
   { key: 'concurrency', label: t('admin.users.columns.concurrency'), sortable: true },
   { key: 'status', label: t('admin.users.columns.status'), sortable: true },
@@ -805,7 +843,7 @@ const searchQuery = ref('')
 const USER_SORT_STORAGE_KEY = 'admin-users-table-sort'
 const loadInitialSortState = (): { sort_by: string; sort_order: 'asc' | 'desc' } => {
   const fallback = { sort_by: 'created_at', sort_order: 'desc' as 'asc' | 'desc' }
-  const sortable = new Set(['email', 'id', 'username', 'role', 'balance', 'concurrency', 'status', 'last_used_at', 'last_active_at', 'created_at'])
+  const sortable = new Set(['email', 'id', 'username', 'role', 'balance', 'points_balance', 'concurrency', 'status', 'last_used_at', 'last_active_at', 'created_at'])
   try {
     const raw = localStorage.getItem(USER_SORT_STORAGE_KEY)
     if (!raw) return fallback
@@ -1035,7 +1073,7 @@ const openActionMenu = (user: AdminUser, e: MouseEvent) => {
 
     const rect = target.getBoundingClientRect()
     const menuWidth = 200
-    const menuHeight = 240
+    const menuHeight = 320
     const padding = 8
     const viewportWidth = window.innerWidth
     const viewportHeight = window.innerHeight
@@ -1120,6 +1158,11 @@ const groupReplaceOldGroup = ref<{ id: number; name: string } | null>(null)
 const showBalanceModal = ref(false)
 const balanceUser = ref<AdminUser | null>(null)
 const balanceOperation = ref<'add' | 'subtract'>('add')
+
+// Points adjustment modal state
+const showPointsModal = ref(false)
+const pointsUser = ref<AdminUser | null>(null)
+const pointsOperation = ref<'add' | 'subtract'>('add')
 
 // Balance History modal state
 const showBalanceHistoryModal = ref(false)
@@ -1378,6 +1421,23 @@ const handleWithdraw = (user: AdminUser) => {
 const closeBalanceModal = () => {
   showBalanceModal.value = false
   balanceUser.value = null
+}
+
+const handleAddPoints = (user: AdminUser) => {
+  pointsUser.value = user
+  pointsOperation.value = 'add'
+  showPointsModal.value = true
+}
+
+const handleDeductPoints = (user: AdminUser) => {
+  pointsUser.value = user
+  pointsOperation.value = 'subtract'
+  showPointsModal.value = true
+}
+
+const closePointsModal = () => {
+  showPointsModal.value = false
+  pointsUser.value = null
 }
 
 const handleBalanceHistory = (user: AdminUser) => {

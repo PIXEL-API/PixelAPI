@@ -196,6 +196,13 @@
             </span>
           </template>
 
+          <template #cell-payment_source="{ row }">
+            <div class="flex flex-col gap-1 text-xs">
+              <span :class="paymentSourceClass(row)">{{ paymentSourceLabel(row) }}</span>
+              <span v-if="walletDeductionText(row)" class="text-gray-500 dark:text-gray-400">{{ walletDeductionText(row) }}</span>
+            </div>
+          </template>
+
           <template #cell-tokens="{ row }">
             <!-- 图片生成请求（仅按次计费时显示图片格式） -->
             <div v-if="row.image_count > 0 && row.billing_mode === 'image'" class="flex items-center gap-1.5">
@@ -278,10 +285,13 @@
           </template>
 
           <template #cell-cost="{ row }">
-            <div class="flex items-center gap-1.5 text-sm">
-              <span class="font-medium text-green-600 dark:text-green-400">
-                ${{ row.actual_cost.toFixed(6) }}
-              </span>
+            <div class="flex items-start gap-1.5 text-sm">
+              <div class="flex flex-col">
+                <span class="font-medium text-green-600 dark:text-green-400">
+                  ${{ row.actual_cost.toFixed(6) }}
+                </span>
+                <span v-if="walletDeductionText(row)" class="text-xs text-gray-500 dark:text-gray-400">{{ walletDeductionText(row) }}</span>
+              </div>
               <!-- Cost Detail Tooltip -->
               <div
                 class="group relative"
@@ -551,6 +561,7 @@ const columns = computed<Column[]>(() => [
   { key: 'endpoint', label: t('usage.endpoint'), sortable: false },
   { key: 'stream', label: t('usage.type'), sortable: false },
   { key: 'billing_mode', label: t('admin.usage.billingMode'), sortable: false },
+  { key: 'payment_source', label: t('usage.paymentSource'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
   { key: 'first_token', label: t('usage.firstToken'), sortable: false },
@@ -573,6 +584,64 @@ const apiKeyOptions = computed(() => {
     }))
   ]
 })
+
+const epsilon = 1e-9
+
+function formatPointsAmount(value?: number | null) {
+  const amount = Number(value || 0)
+  if (!Number.isFinite(amount) || Math.abs(amount) <= epsilon) return '0'
+  return amount.toFixed(10).replace(/\.?0+$/, '') || '0'
+}
+
+function billingWalletType(row: UsageLog) {
+  if (row.billing_wallet_type) return row.billing_wallet_type
+  if (row.billing_type === 1) return 'subscription'
+  const points = Number(row.points_deducted || 0)
+  const balance = Number(row.balance_deducted || 0)
+  if (points > epsilon && balance > epsilon) return 'mixed'
+  if (points > epsilon) return 'points'
+  if (balance > epsilon) return 'balance'
+  return 'none'
+}
+
+function paymentSourceLabel(row: UsageLog) {
+  switch (billingWalletType(row)) {
+    case 'subscription':
+      return t('usage.paymentSources.subscription')
+    case 'points':
+      return t('usage.paymentSources.points')
+    case 'balance':
+      return t('usage.paymentSources.balance')
+    case 'mixed':
+      return t('usage.paymentSources.mixed')
+    default:
+      return t('usage.paymentSources.none')
+  }
+}
+
+function paymentSourceClass(row: UsageLog) {
+  switch (billingWalletType(row)) {
+    case 'subscription':
+      return 'font-medium text-purple-600 dark:text-purple-300'
+    case 'points':
+      return 'font-medium text-amber-600 dark:text-amber-300'
+    case 'balance':
+      return 'font-medium text-green-600 dark:text-green-300'
+    case 'mixed':
+      return 'font-medium text-blue-600 dark:text-blue-300'
+    default:
+      return 'font-medium text-gray-500 dark:text-gray-400'
+  }
+}
+
+function walletDeductionText(row: UsageLog) {
+  const points = Number(row.points_deducted || 0)
+  const balance = Number(row.balance_deducted || 0)
+  const parts: string[] = []
+  if (points > epsilon) parts.push(`${formatPointsAmount(points)} ${t('common.points')}`)
+  if (balance > epsilon) parts.push(`$${balance.toFixed(6)}`)
+  return parts.join(' + ')
+}
 
 // Helper function to format date in local timezone
 const formatLocalDate = (date: Date): string => {
@@ -838,6 +907,9 @@ const exportToCSV = async () => {
       'Inbound Endpoint',
       'Type',
       'Billing Mode',
+      'Payment Source',
+      'Points Deducted',
+      'Balance Deducted',
       'Input Tokens',
       'Output Tokens',
       'Cache Read Tokens',
@@ -857,6 +929,9 @@ const exportToCSV = async () => {
         log.inbound_endpoint || '',
         getRequestTypeExportText(log),
         getBillingModeLabel(log.billing_mode, t),
+        paymentSourceLabel(log),
+        formatPointsAmount(log.points_deducted),
+        Number(log.balance_deducted || 0).toFixed(8),
         log.input_tokens,
         log.output_tokens,
         log.cache_read_tokens,

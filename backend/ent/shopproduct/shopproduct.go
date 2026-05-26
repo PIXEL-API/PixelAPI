@@ -44,6 +44,12 @@ const (
 	FieldProductType = "product_type"
 	// FieldBalanceOnly holds the string denoting the balance_only field in the database.
 	FieldBalanceOnly = "balance_only"
+	// FieldAllowBalancePayment holds the string denoting the allow_balance_payment field in the database.
+	FieldAllowBalancePayment = "allow_balance_payment"
+	// FieldAllowPointsPayment holds the string denoting the allow_points_payment field in the database.
+	FieldAllowPointsPayment = "allow_points_payment"
+	// FieldAllowPlatformPayment holds the string denoting the allow_platform_payment field in the database.
+	FieldAllowPlatformPayment = "allow_platform_payment"
 	// FieldDrawEnabled holds the string denoting the draw_enabled field in the database.
 	FieldDrawEnabled = "draw_enabled"
 	// FieldDrawMinAmount holds the string denoting the draw_min_amount field in the database.
@@ -112,6 +118,9 @@ var Columns = []string{
 	FieldAutoDelivery,
 	FieldProductType,
 	FieldBalanceOnly,
+	FieldAllowBalancePayment,
+	FieldAllowPointsPayment,
+	FieldAllowPlatformPayment,
 	FieldDrawEnabled,
 	FieldDrawMinAmount,
 	FieldDrawMaxAmount,
@@ -156,6 +165,12 @@ var (
 	ProductTypeValidator func(string) error
 	// DefaultBalanceOnly holds the default value on creation for the "balance_only" field.
 	DefaultBalanceOnly bool
+	// DefaultAllowBalancePayment holds the default value on creation for the "allow_balance_payment" field.
+	DefaultAllowBalancePayment bool
+	// DefaultAllowPointsPayment holds the default value on creation for the "allow_points_payment" field.
+	DefaultAllowPointsPayment bool
+	// DefaultAllowPlatformPayment holds the default value on creation for the "allow_platform_payment" field.
+	DefaultAllowPlatformPayment bool
 	// DefaultDrawEnabled holds the default value on creation for the "draw_enabled" field.
 	DefaultDrawEnabled bool
 	// DefaultDrawMinAmount holds the default value on creation for the "draw_min_amount" field.
@@ -249,6 +264,21 @@ func ByProductType(opts ...sql.OrderTermOption) OrderOption {
 // ByBalanceOnly orders the results by the balance_only field.
 func ByBalanceOnly(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBalanceOnly, opts...).ToFunc()
+}
+
+// ByAllowBalancePayment orders the results by the allow_balance_payment field.
+func ByAllowBalancePayment(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowBalancePayment, opts...).ToFunc()
+}
+
+// ByAllowPointsPayment orders the results by the allow_points_payment field.
+func ByAllowPointsPayment(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowPointsPayment, opts...).ToFunc()
+}
+
+// ByAllowPlatformPayment orders the results by the allow_platform_payment field.
+func ByAllowPlatformPayment(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowPlatformPayment, opts...).ToFunc()
 }
 
 // ByDrawEnabled orders the results by the draw_enabled field.

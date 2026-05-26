@@ -57,7 +57,7 @@
             </div>
           </div>
 
-          <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-4">
             <div
               data-testid="profile-overview-metric-balance"
               class="rounded-xl bg-white/90 px-4 py-3 shadow-sm ring-1 ring-white/80 dark:bg-dark-900/60 dark:ring-dark-700"
@@ -67,6 +67,17 @@
               </p>
               <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
                 {{ formatCurrency(user?.balance || 0) }}
+              </p>
+            </div>
+            <div
+              data-testid="profile-overview-metric-points"
+              class="rounded-xl bg-white/90 px-4 py-3 shadow-sm ring-1 ring-white/80 dark:bg-dark-900/60 dark:ring-dark-700"
+            >
+              <p class="text-xs font-medium text-gray-400 dark:text-gray-500">
+                {{ t('profile.points') }}
+              </p>
+              <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
+                {{ formatPoints(user?.points_balance || 0) }}
               </p>
             </div>
             <div
@@ -124,6 +135,7 @@
             <div class="rounded-xl border border-gray-100 bg-gray-50/70 p-5 dark:border-dark-700 dark:bg-dark-900/30">
               <ProfileEditForm
                 :initial-username="user?.username || ''"
+                :initial-prefer-points-billing="user?.prefer_points_billing === true"
                 embedded
               />
             </div>
@@ -272,6 +284,10 @@ const providerLabels = computed<Record<UserAuthProvider, string>>(() => ({
 
 function formatCurrency(value: number): string {
   return `$${value.toFixed(2)}`
+}
+
+function formatPoints(value: number): string {
+  return Number(value || 0).toFixed(10).replace(/\.?0+$/, '') || '0'
 }
 
 function normalizeProvider(value: string): UserAuthProvider | null {

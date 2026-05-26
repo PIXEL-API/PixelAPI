@@ -116,6 +116,48 @@ func TestGatewayServiceRecordUsage_BillingUsesDetachedContext(t *testing.T) {
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
 }
 
+func TestGatewayServiceRecordUsage_LegacyBillingHonorsPreferPoints(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: false, err: context.DeadlineExceeded}
+	userRepo := &openAIRecordUsageWalletRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	quotaSvc := &openAIRecordUsageAPIKeyQuotaStub{}
+	billingCache := &openAIRecordUsageBillingCacheStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, subRepo)
+	svc.billingCacheService = NewBillingCacheService(billingCache, nil, nil, nil, nil, nil, &config.Config{})
+	t.Cleanup(svc.billingCacheService.Stop)
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_legacy_points",
+			Usage: ClaudeUsage{
+				InputTokens:  10,
+				OutputTokens: 6,
+			},
+			Model:    "claude-sonnet-4",
+			Duration: time.Second,
+		},
+		APIKey: &APIKey{ID: 501},
+		User: &User{
+			ID:                  601,
+			PointsBalance:       10,
+			PreferPointsBilling: true,
+		},
+		Account:       &Account{ID: 701},
+		APIKeyService: quotaSvc,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, userRepo.walletCalls)
+	require.True(t, userRepo.lastPreferPoints)
+	require.Greater(t, userRepo.lastWalletAmount, 0.0)
+	require.Equal(t, 0, userRepo.deductCalls)
+	require.NoError(t, userRepo.lastWalletCtxErr)
+	require.Equal(t, 1, billingCache.invalidateCalls)
+	require.Equal(t, int64(601), billingCache.lastInvalidatedUser)
+	require.Equal(t, 1, quotaSvc.authInvalidateCalls)
+	require.Equal(t, int64(601), quotaSvc.lastAuthUserID)
+}
+
 func TestGatewayServiceRecordUsage_BillingFingerprintIncludesRequestPayloadHash(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}

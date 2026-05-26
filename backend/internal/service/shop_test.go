@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"strconv"
@@ -209,6 +210,160 @@ func TestShopBalanceDrawBlocksEconomicsUpdateWhenCycleActive(t *testing.T) {
 	require.Equal(t, "SHOP_DRAW_CYCLE_ACTIVE", errorCodeForTest(err))
 }
 
+func TestShopPointsPaymentBalanceDrawCreditsBalanceAndDeductsPoints(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	user := createShopTestUser(t, ctx, client, "points-balance-draw@example.com")
+	user, err := client.User.UpdateOneID(user.ID).SetPointsBalance(10).Save(ctx)
+	require.NoError(t, err)
+	product := createShopTestBalanceDrawProduct(t, ctx, client, "Points pay balance draw product")
+	product, err = client.ShopProduct.UpdateOneID(product.ID).SetAllowPointsPayment(true).Save(ctx)
+	require.NoError(t, err)
+
+	order, err := svc.CreateOrder(ctx, ShopCreateOrderRequest{
+		UserID:        user.ID,
+		ProductID:     product.ID,
+		Quantity:      1,
+		PaymentMethod: ShopPaymentMethodPoints,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ShopOrderStatusCompleted, order.Status)
+	require.Equal(t, ShopPaymentMethodPoints, order.PaymentMethod)
+	require.Equal(t, ShopProductTypeBalanceDraw, order.ProductType)
+	require.Equal(t, "balance", order.DrawRewardType)
+	require.Equal(t, product.Price, normalizeShopAmount(order.PointsAmount))
+	require.NotNil(t, order.DrawRewardAmount)
+	require.NotNil(t, order.DrawCycleID)
+	require.NotNil(t, order.DrawCycleIndex)
+
+	user, err = client.User.Get(ctx, user.ID)
+	require.NoError(t, err)
+	require.Equal(t, 7.0, normalizeShopAmount(user.PointsBalance))
+	require.Equal(t, normalizeShopAmount(*order.DrawRewardAmount), normalizeShopAmount(user.Balance))
+	ledger, err := client.ShopBalanceLedger.Query().
+		Where(shopbalanceledger.ShopOrderIDEQ(order.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0.0, normalizeShopAmount(ledger.DebitAmount))
+	require.Equal(t, normalizeShopAmount(*order.DrawRewardAmount), normalizeShopAmount(ledger.CreditAmount))
+	require.Equal(t, normalizeShopAmount(*order.DrawRewardAmount), normalizeShopAmount(ledger.BalanceAfter))
+	require.Equal(t, 1, countShopTestPointsLedger(t, ctx, client, order.ID, "debit", "shop_order"))
+	require.Equal(t, 0, countShopTestPointsLedger(t, ctx, client, order.ID, "credit", "shop_draw_reward"))
+}
+
+func TestShopProductPaymentMethodToggles(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	user := createShopTestUser(t, ctx, client, "shop-methods@example.com")
+	_, err := client.User.UpdateOneID(user.ID).SetBalance(100).SetPointsBalance(100).Save(ctx)
+	require.NoError(t, err)
+	product := createShopTestProduct(t, ctx, client, "Method toggle product")
+	createShopTestCard(t, ctx, client, product.ID, "METHOD-CARD-1")
+
+	_, err = client.ShopProduct.UpdateOneID(product.ID).
+		SetAllowBalancePayment(false).
+		SetAllowPointsPayment(true).
+		SetAllowPlatformPayment(false).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = svc.CreateOrder(ctx, ShopCreateOrderRequest{
+		UserID:        user.ID,
+		ProductID:     product.ID,
+		Quantity:      1,
+		PaymentMethod: ShopPaymentMethodBalance,
+	})
+	require.Error(t, err)
+	require.Equal(t, "SHOP_UNSUPPORTED_PAYMENT_METHOD", errorCodeForTest(err))
+
+	order, err := svc.CreateOrder(ctx, ShopCreateOrderRequest{
+		UserID:        user.ID,
+		ProductID:     product.ID,
+		Quantity:      1,
+		PaymentMethod: ShopPaymentMethodPoints,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ShopOrderStatusCompleted, order.Status)
+	require.Equal(t, ShopPaymentMethodPoints, order.PaymentMethod)
+}
+
+func TestAdminProductRejectsNoPaymentMethods(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	allowBalance := false
+	allowPoints := false
+	allowPlatform := false
+
+	_, err := svc.AdminCreateProduct(ctx, ShopCreateProductRequest{
+		Name:                 "No payment methods",
+		Price:                1,
+		MinPurchase:          1,
+		MaxPurchase:          1,
+		ProductType:          ShopProductTypeCardKey,
+		AllowBalancePayment:  &allowBalance,
+		AllowPointsPayment:   &allowPoints,
+		AllowPlatformPayment: &allowPlatform,
+	})
+	require.Error(t, err)
+	require.Equal(t, "SHOP_UNSUPPORTED_PAYMENT_METHOD", errorCodeForTest(err))
+}
+
+func TestShopPointsDrawCreditsPointsReward(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	user := createShopTestUser(t, ctx, client, "points-draw@example.com")
+	user, err := client.User.UpdateOneID(user.ID).SetBalance(10).SetPointsBalance(10).Save(ctx)
+	require.NoError(t, err)
+	product := createShopTestPointsDrawProduct(t, ctx, client, "Points draw product")
+
+	balanceOrder, err := svc.CreateOrder(ctx, ShopCreateOrderRequest{
+		UserID:        user.ID,
+		ProductID:     product.ID,
+		Quantity:      1,
+		PaymentMethod: ShopPaymentMethodBalance,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ShopOrderStatusCompleted, balanceOrder.Status)
+	require.Equal(t, ShopProductTypePointsDraw, balanceOrder.ProductType)
+	require.Equal(t, "points", balanceOrder.DrawRewardType)
+	require.NotNil(t, balanceOrder.DrawRewardAmount)
+	user, err = client.User.Get(ctx, user.ID)
+	require.NoError(t, err)
+	require.Equal(t, 7.0, normalizeShopAmount(user.Balance))
+	require.Equal(t, normalizeShopAmount(10+*balanceOrder.DrawRewardAmount), normalizeShopAmount(user.PointsBalance))
+	ledger, err := client.ShopBalanceLedger.Query().
+		Where(shopbalanceledger.ShopOrderIDEQ(balanceOrder.ID)).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, product.Price, normalizeShopAmount(ledger.DebitAmount))
+	require.Equal(t, 0.0, normalizeShopAmount(ledger.CreditAmount))
+	require.Equal(t, 1, countShopTestPointsLedger(t, ctx, client, balanceOrder.ID, "credit", "shop_draw_reward"))
+
+	pointsOrder, err := svc.CreateOrder(ctx, ShopCreateOrderRequest{
+		UserID:        user.ID,
+		ProductID:     product.ID,
+		Quantity:      1,
+		PaymentMethod: ShopPaymentMethodPoints,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ShopOrderStatusCompleted, pointsOrder.Status)
+	require.Equal(t, ShopProductTypePointsDraw, pointsOrder.ProductType)
+	require.Equal(t, "points", pointsOrder.DrawRewardType)
+	require.NotNil(t, pointsOrder.DrawRewardAmount)
+	user, err = client.User.Get(ctx, user.ID)
+	require.NoError(t, err)
+	expectedPoints := 10 + *balanceOrder.DrawRewardAmount - product.Price + *pointsOrder.DrawRewardAmount
+	require.Equal(t, normalizeShopAmount(expectedPoints), normalizeShopAmount(user.PointsBalance))
+	require.Equal(t, 7.0, normalizeShopAmount(user.Balance))
+	require.Equal(t, 0, countShopTestBalanceLedger(t, ctx, client, pointsOrder.ID))
+	require.Equal(t, 1, countShopTestPointsLedger(t, ctx, client, pointsOrder.ID, "debit", "shop_order"))
+	require.Equal(t, 1, countShopTestPointsLedger(t, ctx, client, pointsOrder.ID, "credit", "shop_draw_reward"))
+}
+
 func TestShopPlatformFulfillmentReallocatesAvailableCardAfterReservationReleased(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
@@ -396,6 +551,32 @@ func createShopTestBalanceDrawProduct(t *testing.T, ctx context.Context, client 
 		SetAutoDelivery(true).
 		SetProductType(ShopProductTypeBalanceDraw).
 		SetBalanceOnly(true).
+		SetAllowBalancePayment(true).
+		SetAllowPlatformPayment(false).
+		SetDrawEnabled(true).
+		SetDrawMinAmount(1).
+		SetDrawMaxAmount(5).
+		SetDrawGuaranteeCount(20).
+		SetDrawReturnRate(1).
+		Save(ctx)
+	require.NoError(t, err)
+	return product
+}
+
+func createShopTestPointsDrawProduct(t *testing.T, ctx context.Context, client *dbent.Client, name string) *dbent.ShopProduct {
+	t.Helper()
+	product, err := client.ShopProduct.Create().
+		SetName(name).
+		SetPrice(3).
+		SetEnabled(true).
+		SetMinPurchase(1).
+		SetMaxPurchase(1).
+		SetAutoDelivery(true).
+		SetProductType(ShopProductTypePointsDraw).
+		SetBalanceOnly(true).
+		SetAllowBalancePayment(true).
+		SetAllowPointsPayment(true).
+		SetAllowPlatformPayment(false).
 		SetDrawEnabled(true).
 		SetDrawMinAmount(1).
 		SetDrawMaxAmount(5).
@@ -456,6 +637,37 @@ func execShopTestSQL(t *testing.T, ctx context.Context, client *dbent.Client, qu
 	require.True(t, ok, "test client must use ent sql driver")
 	_, err := drv.DB().ExecContext(ctx, query, args...)
 	require.NoError(t, err)
+}
+
+func queryShopTestRow(t *testing.T, ctx context.Context, client *dbent.Client, query string, args ...any) *sql.Row {
+	t.Helper()
+	drv, ok := client.Driver().(*entsql.Driver)
+	require.True(t, ok, "test client must use ent sql driver")
+	return drv.DB().QueryRowContext(ctx, query, args...)
+}
+
+func countShopTestBalanceLedger(t *testing.T, ctx context.Context, client *dbent.Client, orderID int64) int {
+	t.Helper()
+	count, err := client.ShopBalanceLedger.Query().
+		Where(shopbalanceledger.ShopOrderIDEQ(orderID)).
+		Count(ctx)
+	require.NoError(t, err)
+	return count
+}
+
+func countShopTestPointsLedger(t *testing.T, ctx context.Context, client *dbent.Client, orderID int64, direction, reason string) int {
+	t.Helper()
+	var count int
+	err := queryShopTestRow(t, ctx, client, `
+		SELECT COUNT(*)
+		FROM points_ledger
+		WHERE ref_type = 'shop_order'
+			AND ref_id = $1
+			AND direction = $2
+			AND reason = $3
+	`, orderID, direction, reason).Scan(&count)
+	require.NoError(t, err)
+	return count
 }
 
 func newShopFileCardTestSettingRepo() *paymentConfigSettingRepoStub {

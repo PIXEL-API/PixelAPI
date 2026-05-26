@@ -17,9 +17,10 @@ import (
 
 // GroupHandler handles admin group management
 type GroupHandler struct {
-	adminService         service.AdminService
-	dashboardService     *service.DashboardService
-	groupCapacityService *service.GroupCapacityService
+	adminService             service.AdminService
+	dashboardService         *service.DashboardService
+	groupCapacityService     *service.GroupCapacityService
+	groupRateScheduleService *service.GroupRateScheduleService
 }
 
 func parseAdminGroupScope(scope string, includePrivate bool) (string, error) {
@@ -88,11 +89,12 @@ func (f optionalLimitField) ToServiceInput() *float64 {
 }
 
 // NewGroupHandler creates a new admin group handler
-func NewGroupHandler(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService) *GroupHandler {
+func NewGroupHandler(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService, groupRateScheduleService *service.GroupRateScheduleService) *GroupHandler {
 	return &GroupHandler{
-		adminService:         adminService,
-		dashboardService:     dashboardService,
-		groupCapacityService: groupCapacityService,
+		adminService:             adminService,
+		dashboardService:         dashboardService,
+		groupCapacityService:     groupCapacityService,
+		groupRateScheduleService: groupRateScheduleService,
 	}
 }
 
@@ -499,6 +501,86 @@ func (h *GroupHandler) ClearGroupRateMultipliers(c *gin.Context) {
 // BatchSetGroupRateMultipliersRequest represents batch set rate multipliers request
 type BatchSetGroupRateMultipliersRequest struct {
 	Entries []service.GroupRateMultiplierInput `json:"entries" binding:"required"`
+}
+
+// GroupRateScheduleRequest represents one group time-range multiplier rule.
+type GroupRateScheduleRequest struct {
+	StartMinute    int     `json:"start_minute"`
+	EndMinute      int     `json:"end_minute"`
+	RateMultiplier float64 `json:"rate_multiplier"`
+	Enabled        *bool   `json:"enabled"`
+}
+
+// ReplaceGroupRateSchedulesRequest represents replacing all rate schedules for a group.
+type ReplaceGroupRateSchedulesRequest struct {
+	Entries []GroupRateScheduleRequest `json:"entries"`
+}
+
+// GetGroupRateSchedules handles listing time-range rate schedules for a group.
+// GET /api/v1/admin/groups/:id/rate-schedules
+func (h *GroupHandler) GetGroupRateSchedules(c *gin.Context) {
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+	if h.groupRateScheduleService == nil {
+		response.Success(c, []service.GroupRateSchedule{})
+		return
+	}
+
+	schedules, err := h.groupRateScheduleService.List(c.Request.Context(), groupID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if schedules == nil {
+		schedules = []service.GroupRateSchedule{}
+	}
+	response.Success(c, schedules)
+}
+
+// ReplaceGroupRateSchedules handles replacing time-range rate schedules for a group.
+// PUT /api/v1/admin/groups/:id/rate-schedules
+func (h *GroupHandler) ReplaceGroupRateSchedules(c *gin.Context) {
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+	if h.groupRateScheduleService == nil {
+		response.Error(c, 500, "Group rate schedule service is not configured")
+		return
+	}
+
+	var req ReplaceGroupRateSchedulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	inputs := make([]service.GroupRateScheduleInput, 0, len(req.Entries))
+	for _, entry := range req.Entries {
+		enabled := true
+		if entry.Enabled != nil {
+			enabled = *entry.Enabled
+		}
+		inputs = append(inputs, service.GroupRateScheduleInput{
+			StartMinute:    entry.StartMinute,
+			EndMinute:      entry.EndMinute,
+			RateMultiplier: entry.RateMultiplier,
+			Enabled:        enabled,
+		})
+	}
+	schedules, err := h.groupRateScheduleService.Replace(c.Request.Context(), groupID, inputs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if schedules == nil {
+		schedules = []service.GroupRateSchedule{}
+	}
+	response.Success(c, schedules)
 }
 
 // BatchSetGroupRateMultipliers handles batch setting rate multipliers for a group

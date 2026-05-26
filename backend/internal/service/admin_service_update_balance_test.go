@@ -95,3 +95,21 @@ func TestAdminService_UpdateUserBalance_NoChangeNoInvalidate(t *testing.T) {
 	require.Empty(t, invalidator.userIDs)
 	require.Empty(t, redeemRepo.created)
 }
+
+func TestRedeemService_GenerateCodesRejectsNonPositivePointsValue(t *testing.T) {
+	svc := &RedeemService{redeemRepo: &redeemRepoStub{}}
+
+	_, err := svc.GenerateCodes(context.Background(), GenerateCodesRequest{
+		Count: 1,
+		Type:  RedeemTypePoints,
+		Value: -1,
+	})
+	require.Error(t, err)
+
+	_, err = svc.GenerateCodes(context.Background(), GenerateCodesRequest{
+		Count: 1,
+		Type:  RedeemTypePoints,
+		Value: 0,
+	})
+	require.Error(t, err)
+}

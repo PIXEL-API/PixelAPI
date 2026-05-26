@@ -130,6 +130,21 @@ func BalanceOnly(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldBalanceOnly, v))
 }
 
+// AllowBalancePayment applies equality check predicate on the "allow_balance_payment" field. It's identical to AllowBalancePaymentEQ.
+func AllowBalancePayment(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldAllowBalancePayment, v))
+}
+
+// AllowPointsPayment applies equality check predicate on the "allow_points_payment" field. It's identical to AllowPointsPaymentEQ.
+func AllowPointsPayment(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldAllowPointsPayment, v))
+}
+
+// AllowPlatformPayment applies equality check predicate on the "allow_platform_payment" field. It's identical to AllowPlatformPaymentEQ.
+func AllowPlatformPayment(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldAllowPlatformPayment, v))
+}
+
 // DrawEnabled applies equality check predicate on the "draw_enabled" field. It's identical to DrawEnabledEQ.
 func DrawEnabled(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldDrawEnabled, v))
@@ -783,6 +798,36 @@ func BalanceOnlyEQ(v bool) predicate.ShopProduct {
 // BalanceOnlyNEQ applies the NEQ predicate on the "balance_only" field.
 func BalanceOnlyNEQ(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldNEQ(FieldBalanceOnly, v))
+}
+
+// AllowBalancePaymentEQ applies the EQ predicate on the "allow_balance_payment" field.
+func AllowBalancePaymentEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldAllowBalancePayment, v))
+}
+
+// AllowBalancePaymentNEQ applies the NEQ predicate on the "allow_balance_payment" field.
+func AllowBalancePaymentNEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldAllowBalancePayment, v))
+}
+
+// AllowPointsPaymentEQ applies the EQ predicate on the "allow_points_payment" field.
+func AllowPointsPaymentEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldAllowPointsPayment, v))
+}
+
+// AllowPointsPaymentNEQ applies the NEQ predicate on the "allow_points_payment" field.
+func AllowPointsPaymentNEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldAllowPointsPayment, v))
+}
+
+// AllowPlatformPaymentEQ applies the EQ predicate on the "allow_platform_payment" field.
+func AllowPlatformPaymentEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldAllowPlatformPayment, v))
+}
+
+// AllowPlatformPaymentNEQ applies the NEQ predicate on the "allow_platform_payment" field.
+func AllowPlatformPaymentNEQ(v bool) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldAllowPlatformPayment, v))
 }
 
 // DrawEnabledEQ applies the EQ predicate on the "draw_enabled" field.

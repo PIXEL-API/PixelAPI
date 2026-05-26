@@ -57,6 +57,7 @@ const (
 // Redeem type constants
 const (
 	RedeemTypeBalance      = domain.RedeemTypeBalance
+	RedeemTypePoints       = domain.RedeemTypePoints
 	RedeemTypeConcurrency  = domain.RedeemTypeConcurrency
 	RedeemTypeSubscription = domain.RedeemTypeSubscription
 	RedeemTypeInvitation   = domain.RedeemTypeInvitation
@@ -71,6 +72,7 @@ const (
 // Admin adjustment type constants
 const (
 	AdjustmentTypeAdminBalance     = domain.AdjustmentTypeAdminBalance     // 管理员调整余额
+	AdjustmentTypeAdminPoints      = domain.AdjustmentTypeAdminPoints      // 管理员调整积分
 	AdjustmentTypeAdminConcurrency = domain.AdjustmentTypeAdminConcurrency // 管理员调整并发数
 )
 

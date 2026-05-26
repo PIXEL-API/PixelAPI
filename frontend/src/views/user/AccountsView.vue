@@ -670,7 +670,7 @@ const statusFilterOptions = computed(() => [
 
 const groupFilterOptions = computed(() => [
   { value: '', label: t('keys.allGroups') },
-  { value: -1, label: t('keys.noGroup') },
+  { value: -1, label: t('userAccounts.privateDefaultGroupOnly') },
   ...groups.value.map((group) => ({
     value: group.id,
     label: group.name

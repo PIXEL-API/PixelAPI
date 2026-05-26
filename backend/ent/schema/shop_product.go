@@ -67,6 +67,12 @@ func (ShopProduct) Fields() []ent.Field {
 			Default("card_key"),
 		field.Bool("balance_only").
 			Default(false),
+		field.Bool("allow_balance_payment").
+			Default(true),
+		field.Bool("allow_points_payment").
+			Default(false),
+		field.Bool("allow_platform_payment").
+			Default(true),
 		field.Bool("draw_enabled").
 			Default(false),
 		field.Float("draw_min_amount").

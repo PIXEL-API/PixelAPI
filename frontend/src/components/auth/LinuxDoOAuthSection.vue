@@ -49,6 +49,7 @@ const props = withDefaults(defineProps<{
   affCode?: string
   loginAgreementRevision?: string
   showDivider?: boolean
+  beforeStart?: () => boolean
 }>(), {
   showDivider: true
 })
@@ -57,6 +58,9 @@ const route = useRoute()
 const { t } = useI18n()
 
 function startLogin(): void {
+  if (props.beforeStart && !props.beforeStart()) {
+    return
+  }
   const redirectTo = (route.query.redirect as string) || '/dashboard'
   storeOAuthAffiliateCode(resolveAffiliateReferralCode(props.affCode, route.query.aff, route.query.aff_code))
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'

@@ -5,10 +5,10 @@ export type StoreCardStatus = 'available' | 'locked' | 'sold' | 'disabled'
 export type StoreCardViewStatus = StoreCardStatus | 'unused'
 export type StoreCardType = 'text' | 'file'
 export type StoreOrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled' | 'failed'
-export type StorePayMethod = 'balance' | 'payment'
+export type StorePayMethod = 'balance' | 'points' | 'payment'
 export type StoreCategoryStatus = 'active' | 'inactive'
 export type StoreProductStatus = 'active' | 'inactive'
-export type StoreProductType = 'card_key' | 'balance_draw'
+export type StoreProductType = 'card_key' | 'balance_draw' | 'points_draw'
 
 export interface StoreDrawConfig {
   enabled: boolean
@@ -56,6 +56,9 @@ export interface StoreProduct {
   auto_delivery: boolean
   product_type: StoreProductType
   balance_only: boolean
+  allow_balance_payment: boolean
+  allow_points_payment: boolean
+  allow_platform_payment: boolean
   draw_config?: StoreDrawConfig | null
   draw_progress?: StoreDrawProgress | null
   stock_unlimited?: boolean
@@ -98,15 +101,18 @@ export interface StoreOrder {
   product_name: string
   product_cover_url?: string | null
   product_description?: string | null
+  product_type: StoreProductType
   unit_price: number
   quantity: number
   total_amount: number
+  points_amount: number
   payment_method: string
   payment_order_id?: number | null
   status: StoreOrderStatus
   delivered_cards: string[]
   delivered_files: StoreDeliveredFile[]
   draw_reward_amount?: number | null
+  draw_reward_type?: 'balance' | 'points' | null
   draw_cycle_id?: number | null
   draw_cycle_index?: number | null
   paid_at?: string | null
@@ -168,6 +174,9 @@ export interface UpsertStoreProductRequest {
   auto_delivery?: boolean
   product_type?: StoreProductType
   balance_only?: boolean
+  allow_balance_payment?: boolean
+  allow_points_payment?: boolean
+  allow_platform_payment?: boolean
   draw_config?: StoreDrawConfig | null
 }
 

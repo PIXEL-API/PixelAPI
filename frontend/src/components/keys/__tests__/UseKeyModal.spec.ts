@@ -38,18 +38,20 @@ function mountUseKeyModal() {
 }
 
 describe('UseKeyModal', () => {
-  it('includes codex_local_access provider alias in Codex CLI config', () => {
+  it('renders current Codex CLI OpenAI config without local access provider alias', () => {
     const wrapper = mountUseKeyModal()
 
     const codeBlock = wrapper.find('pre code')
     expect(codeBlock.exists()).toBe(true)
+    expect(codeBlock.text()).toContain('model = "gpt-5.5"')
+    expect(codeBlock.text()).toContain('review_model = "gpt-5.5"')
     expect(codeBlock.text()).toContain('[model_providers.OpenAI]')
-    expect(codeBlock.text()).toContain('[model_providers.codex_local_access]')
+    expect(codeBlock.text()).not.toContain('[model_providers.codex_local_access]')
     expect(codeBlock.text()).toContain('base_url = "https://example.com/v1"')
     expect(codeBlock.text()).toContain('wire_api = "responses"')
   })
 
-  it('keeps codex_local_access provider alias in WebSocket Codex CLI config', async () => {
+  it('renders WebSocket Codex CLI config without local access provider alias', async () => {
     const wrapper = mountUseKeyModal()
 
     const wsTab = wrapper.findAll('button').find((button) =>
@@ -63,7 +65,7 @@ describe('UseKeyModal', () => {
     const codeBlock = wrapper.find('pre code')
     expect(codeBlock.exists()).toBe(true)
     expect(codeBlock.text()).toContain('[model_providers.OpenAI]')
-    expect(codeBlock.text()).toContain('[model_providers.codex_local_access]')
+    expect(codeBlock.text()).not.toContain('[model_providers.codex_local_access]')
     expect(codeBlock.text()).toContain('supports_websockets = true')
     expect(codeBlock.text()).toContain('[features]')
     expect(codeBlock.text()).toContain('responses_websockets_v2 = true')

@@ -29,6 +29,10 @@ const (
 	FieldRole = "role"
 	// FieldBalance holds the string denoting the balance field in the database.
 	FieldBalance = "balance"
+	// FieldPointsBalance holds the string denoting the points_balance field in the database.
+	FieldPointsBalance = "points_balance"
+	// FieldPreferPointsBilling holds the string denoting the prefer_points_billing field in the database.
+	FieldPreferPointsBilling = "prefer_points_billing"
 	// FieldConcurrency holds the string denoting the concurrency field in the database.
 	FieldConcurrency = "concurrency"
 	// FieldStatus holds the string denoting the status field in the database.
@@ -226,6 +230,8 @@ var Columns = []string{
 	FieldPasswordHash,
 	FieldRole,
 	FieldBalance,
+	FieldPointsBalance,
+	FieldPreferPointsBilling,
 	FieldConcurrency,
 	FieldStatus,
 	FieldUsername,
@@ -284,6 +290,10 @@ var (
 	RoleValidator func(string) error
 	// DefaultBalance holds the default value on creation for the "balance" field.
 	DefaultBalance float64
+	// DefaultPointsBalance holds the default value on creation for the "points_balance" field.
+	DefaultPointsBalance float64
+	// DefaultPreferPointsBilling holds the default value on creation for the "prefer_points_billing" field.
+	DefaultPreferPointsBilling bool
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
 	DefaultConcurrency int
 	// DefaultStatus holds the default value on creation for the "status" field.
@@ -355,6 +365,16 @@ func ByRole(opts ...sql.OrderTermOption) OrderOption {
 // ByBalance orders the results by the balance field.
 func ByBalance(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBalance, opts...).ToFunc()
+}
+
+// ByPointsBalance orders the results by the points_balance field.
+func ByPointsBalance(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPointsBalance, opts...).ToFunc()
+}
+
+// ByPreferPointsBilling orders the results by the prefer_points_billing field.
+func ByPreferPointsBilling(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPreferPointsBilling, opts...).ToFunc()
 }
 
 // ByConcurrency orders the results by the concurrency field.

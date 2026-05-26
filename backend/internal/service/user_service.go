@@ -184,6 +184,7 @@ type UpdateProfileRequest struct {
 	Username               *string  `json:"username"`
 	AvatarURL              *string  `json:"avatar_url"`
 	Concurrency            *int     `json:"concurrency"`
+	PreferPointsBilling    *bool    `json:"prefer_points_billing"`
 	BalanceNotifyEnabled   *bool    `json:"balance_notify_enabled"`
 	BalanceNotifyThreshold *float64 `json:"balance_notify_threshold"`
 }
@@ -390,28 +391,25 @@ func (s *UserService) UnbindUserAuthProviderWithResult(ctx context.Context, user
 // UpdateProfile 更新用户资料
 func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req UpdateProfileRequest) (*User, error) {
 	if txRunner, ok := s.userRepo.(userProfileIdentityTxRunner); ok {
-		var (
-			updated        *User
-			oldConcurrency int
-		)
+		var updated *User
 		if err := txRunner.WithUserProfileIdentityTx(ctx, func(txCtx context.Context) error {
 			var err error
-			updated, oldConcurrency, err = s.updateProfile(txCtx, userID, req)
+			updated, _, err = s.updateProfile(txCtx, userID, req)
 			return err
 		}); err != nil {
 			return nil, err
 		}
-		if s.authCacheInvalidator != nil && updated != nil && updated.Concurrency != oldConcurrency {
+		if s.authCacheInvalidator != nil && updated != nil {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 		}
 		return updated, nil
 	}
 
-	updated, oldConcurrency, err := s.updateProfile(ctx, userID, req)
+	updated, _, err := s.updateProfile(ctx, userID, req)
 	if err != nil {
 		return nil, err
 	}
-	if s.authCacheInvalidator != nil && updated.Concurrency != oldConcurrency {
+	if s.authCacheInvalidator != nil && updated != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
 	return updated, nil
@@ -451,6 +449,9 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 
 	if req.Concurrency != nil {
 		user.Concurrency = *req.Concurrency
+	}
+	if req.PreferPointsBilling != nil {
+		user.PreferPointsBilling = *req.PreferPointsBilling
 	}
 
 	if req.BalanceNotifyEnabled != nil {

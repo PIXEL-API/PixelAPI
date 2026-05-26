@@ -86,6 +86,8 @@ export interface User {
   wechat_bound?: boolean
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
+  points_balance?: number // User points balance for API usage and store purchases
+  prefer_points_billing?: boolean // Whether model calls should use points before balance
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
@@ -1252,7 +1254,7 @@ export interface AdminDataImportResult {
 
 // ==================== Usage & Redeem Types ====================
 
-export type RedeemCodeType = 'balance' | 'concurrency' | 'subscription' | 'invitation'
+export type RedeemCodeType = 'balance' | 'points' | 'concurrency' | 'subscription' | 'invitation'
 export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2'
 
 export interface UsageLog {
@@ -1284,6 +1286,9 @@ export interface UsageLog {
   total_cost: number
   actual_cost: number
   rate_multiplier: number
+  points_deducted?: number
+  balance_deducted?: number
+  billing_wallet_type?: 'subscription' | 'balance' | 'points' | 'mixed' | 'none' | string
   billing_type: number
 
   request_type?: UsageRequestType

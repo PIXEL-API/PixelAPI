@@ -119,6 +119,34 @@ func (_c *UserCreate) SetNillableBalance(v *float64) *UserCreate {
 	return _c
 }
 
+// SetPointsBalance sets the "points_balance" field.
+func (_c *UserCreate) SetPointsBalance(v float64) *UserCreate {
+	_c.mutation.SetPointsBalance(v)
+	return _c
+}
+
+// SetNillablePointsBalance sets the "points_balance" field if the given value is not nil.
+func (_c *UserCreate) SetNillablePointsBalance(v *float64) *UserCreate {
+	if v != nil {
+		_c.SetPointsBalance(*v)
+	}
+	return _c
+}
+
+// SetPreferPointsBilling sets the "prefer_points_billing" field.
+func (_c *UserCreate) SetPreferPointsBilling(v bool) *UserCreate {
+	_c.mutation.SetPreferPointsBilling(v)
+	return _c
+}
+
+// SetNillablePreferPointsBilling sets the "prefer_points_billing" field if the given value is not nil.
+func (_c *UserCreate) SetNillablePreferPointsBilling(v *bool) *UserCreate {
+	if v != nil {
+		_c.SetPreferPointsBilling(*v)
+	}
+	return _c
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (_c *UserCreate) SetConcurrency(v int) *UserCreate {
 	_c.mutation.SetConcurrency(v)
@@ -642,6 +670,14 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultBalance
 		_c.mutation.SetBalance(v)
 	}
+	if _, ok := _c.mutation.PointsBalance(); !ok {
+		v := user.DefaultPointsBalance
+		_c.mutation.SetPointsBalance(v)
+	}
+	if _, ok := _c.mutation.PreferPointsBilling(); !ok {
+		v := user.DefaultPreferPointsBilling
+		_c.mutation.SetPreferPointsBilling(v)
+	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		v := user.DefaultConcurrency
 		_c.mutation.SetConcurrency(v)
@@ -723,6 +759,12 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.Balance(); !ok {
 		return &ValidationError{Name: "balance", err: errors.New(`ent: missing required field "User.balance"`)}
+	}
+	if _, ok := _c.mutation.PointsBalance(); !ok {
+		return &ValidationError{Name: "points_balance", err: errors.New(`ent: missing required field "User.points_balance"`)}
+	}
+	if _, ok := _c.mutation.PreferPointsBilling(); !ok {
+		return &ValidationError{Name: "prefer_points_billing", err: errors.New(`ent: missing required field "User.prefer_points_billing"`)}
 	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		return &ValidationError{Name: "concurrency", err: errors.New(`ent: missing required field "User.concurrency"`)}
@@ -826,6 +868,14 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Balance(); ok {
 		_spec.SetField(user.FieldBalance, field.TypeFloat64, value)
 		_node.Balance = value
+	}
+	if value, ok := _c.mutation.PointsBalance(); ok {
+		_spec.SetField(user.FieldPointsBalance, field.TypeFloat64, value)
+		_node.PointsBalance = value
+	}
+	if value, ok := _c.mutation.PreferPointsBilling(); ok {
+		_spec.SetField(user.FieldPreferPointsBilling, field.TypeBool, value)
+		_node.PreferPointsBilling = value
 	}
 	if value, ok := _c.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)
@@ -1287,6 +1337,36 @@ func (u *UserUpsert) AddBalance(v float64) *UserUpsert {
 	return u
 }
 
+// SetPointsBalance sets the "points_balance" field.
+func (u *UserUpsert) SetPointsBalance(v float64) *UserUpsert {
+	u.Set(user.FieldPointsBalance, v)
+	return u
+}
+
+// UpdatePointsBalance sets the "points_balance" field to the value that was provided on create.
+func (u *UserUpsert) UpdatePointsBalance() *UserUpsert {
+	u.SetExcluded(user.FieldPointsBalance)
+	return u
+}
+
+// AddPointsBalance adds v to the "points_balance" field.
+func (u *UserUpsert) AddPointsBalance(v float64) *UserUpsert {
+	u.Add(user.FieldPointsBalance, v)
+	return u
+}
+
+// SetPreferPointsBilling sets the "prefer_points_billing" field.
+func (u *UserUpsert) SetPreferPointsBilling(v bool) *UserUpsert {
+	u.Set(user.FieldPreferPointsBilling, v)
+	return u
+}
+
+// UpdatePreferPointsBilling sets the "prefer_points_billing" field to the value that was provided on create.
+func (u *UserUpsert) UpdatePreferPointsBilling() *UserUpsert {
+	u.SetExcluded(user.FieldPreferPointsBilling)
+	return u
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (u *UserUpsert) SetConcurrency(v int) *UserUpsert {
 	u.Set(user.FieldConcurrency, v)
@@ -1673,6 +1753,41 @@ func (u *UserUpsertOne) AddBalance(v float64) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateBalance() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateBalance()
+	})
+}
+
+// SetPointsBalance sets the "points_balance" field.
+func (u *UserUpsertOne) SetPointsBalance(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetPointsBalance(v)
+	})
+}
+
+// AddPointsBalance adds v to the "points_balance" field.
+func (u *UserUpsertOne) AddPointsBalance(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.AddPointsBalance(v)
+	})
+}
+
+// UpdatePointsBalance sets the "points_balance" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdatePointsBalance() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdatePointsBalance()
+	})
+}
+
+// SetPreferPointsBilling sets the "prefer_points_billing" field.
+func (u *UserUpsertOne) SetPreferPointsBilling(v bool) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetPreferPointsBilling(v)
+	})
+}
+
+// UpdatePreferPointsBilling sets the "prefer_points_billing" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdatePreferPointsBilling() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdatePreferPointsBilling()
 	})
 }
 
@@ -2269,6 +2384,41 @@ func (u *UserUpsertBulk) AddBalance(v float64) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateBalance() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateBalance()
+	})
+}
+
+// SetPointsBalance sets the "points_balance" field.
+func (u *UserUpsertBulk) SetPointsBalance(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetPointsBalance(v)
+	})
+}
+
+// AddPointsBalance adds v to the "points_balance" field.
+func (u *UserUpsertBulk) AddPointsBalance(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.AddPointsBalance(v)
+	})
+}
+
+// UpdatePointsBalance sets the "points_balance" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdatePointsBalance() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdatePointsBalance()
+	})
+}
+
+// SetPreferPointsBilling sets the "prefer_points_billing" field.
+func (u *UserUpsertBulk) SetPreferPointsBilling(v bool) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetPreferPointsBilling(v)
+	})
+}
+
+// UpdatePreferPointsBilling sets the "prefer_points_billing" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdatePreferPointsBilling() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdatePreferPointsBilling()
 	})
 }
 

@@ -850,7 +850,7 @@ func (r *accountRepository) listWithFilters(ctx context.Context, params paginati
 		q = q.Where(dbaccount.NameContainsFold(search))
 	}
 	if groupID == service.AccountListGroupUngrouped {
-		q = q.Where(dbaccount.Not(dbaccount.HasAccountGroups()))
+		q = q.Where(accountHasNoNonPrivateGroups())
 	} else if groupID > 0 {
 		q = q.Where(dbaccount.HasAccountGroupsWith(dbaccountgroup.GroupIDEQ(groupID)))
 	}
@@ -940,6 +940,15 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		return []func(*entsql.Selector){dbent.Asc(dbaccount.FieldName), dbent.Asc(dbaccount.FieldID)}
 	}
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbaccount.FieldID)}
+}
+
+func accountHasNoNonPrivateGroups() dbpredicate.Account {
+	return dbaccount.Not(dbaccount.HasAccountGroupsWith(
+		dbaccountgroup.HasGroupWith(
+			dbgroup.DeletedAtIsNil(),
+			dbgroup.ScopeNEQ(service.GroupScopeUserPrivate),
+		),
+	))
 }
 
 func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {

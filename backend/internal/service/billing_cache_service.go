@@ -679,12 +679,12 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 			return err
 		}
 		if group.IsUserPrivateScope() {
-			if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
+			if err := s.checkBalanceOrPointsEligibility(ctx, user); err != nil {
 				return err
 			}
 		}
 	} else {
-		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
+		if err := s.checkBalanceOrPointsEligibility(ctx, user); err != nil {
 			return err
 		}
 	}
@@ -807,6 +807,18 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userI
 	}
 
 	return nil
+}
+
+// checkBalanceOrPointsEligibility allows requests when either withdrawable balance
+// or user-enabled points can pay for the next usage request.
+func (s *BillingCacheService) checkBalanceOrPointsEligibility(ctx context.Context, user *User) error {
+	if user == nil {
+		return ErrInsufficientBalance
+	}
+	if CanUsePointsForUsage(user) {
+		return nil
+	}
+	return s.checkBalanceEligibility(ctx, user.ID)
 }
 
 // checkSubscriptionEligibility 检查订阅模式资格

@@ -36727,12 +36727,15 @@ type ShopOrderMutation struct {
 	product_name          *string
 	product_cover_url     *string
 	product_description   *string
+	product_type          *string
 	unit_price            *float64
 	addunit_price         *float64
 	quantity              *int
 	addquantity           *int
 	total_amount          *float64
 	addtotal_amount       *float64
+	points_amount         *float64
+	addpoints_amount      *float64
 	payment_method        *string
 	payment_order_id      *int64
 	addpayment_order_id   *int64
@@ -37177,6 +37180,42 @@ func (m *ShopOrderMutation) ResetProductDescription() {
 	delete(m.clearedFields, shoporder.FieldProductDescription)
 }
 
+// SetProductType sets the "product_type" field.
+func (m *ShopOrderMutation) SetProductType(s string) {
+	m.product_type = &s
+}
+
+// ProductType returns the value of the "product_type" field in the mutation.
+func (m *ShopOrderMutation) ProductType() (r string, exists bool) {
+	v := m.product_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProductType returns the old "product_type" field's value of the ShopOrder entity.
+// If the ShopOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopOrderMutation) OldProductType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProductType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProductType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProductType: %w", err)
+	}
+	return oldValue.ProductType, nil
+}
+
+// ResetProductType resets all changes to the "product_type" field.
+func (m *ShopOrderMutation) ResetProductType() {
+	m.product_type = nil
+}
+
 // SetUnitPrice sets the "unit_price" field.
 func (m *ShopOrderMutation) SetUnitPrice(f float64) {
 	m.unit_price = &f
@@ -37343,6 +37382,62 @@ func (m *ShopOrderMutation) AddedTotalAmount() (r float64, exists bool) {
 func (m *ShopOrderMutation) ResetTotalAmount() {
 	m.total_amount = nil
 	m.addtotal_amount = nil
+}
+
+// SetPointsAmount sets the "points_amount" field.
+func (m *ShopOrderMutation) SetPointsAmount(f float64) {
+	m.points_amount = &f
+	m.addpoints_amount = nil
+}
+
+// PointsAmount returns the value of the "points_amount" field in the mutation.
+func (m *ShopOrderMutation) PointsAmount() (r float64, exists bool) {
+	v := m.points_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPointsAmount returns the old "points_amount" field's value of the ShopOrder entity.
+// If the ShopOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopOrderMutation) OldPointsAmount(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPointsAmount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPointsAmount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPointsAmount: %w", err)
+	}
+	return oldValue.PointsAmount, nil
+}
+
+// AddPointsAmount adds f to the "points_amount" field.
+func (m *ShopOrderMutation) AddPointsAmount(f float64) {
+	if m.addpoints_amount != nil {
+		*m.addpoints_amount += f
+	} else {
+		m.addpoints_amount = &f
+	}
+}
+
+// AddedPointsAmount returns the value that was added to the "points_amount" field in this mutation.
+func (m *ShopOrderMutation) AddedPointsAmount() (r float64, exists bool) {
+	v := m.addpoints_amount
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetPointsAmount resets all changes to the "points_amount" field.
+func (m *ShopOrderMutation) ResetPointsAmount() {
+	m.points_amount = nil
+	m.addpoints_amount = nil
 }
 
 // SetPaymentMethod sets the "payment_method" field.
@@ -38160,7 +38255,7 @@ func (m *ShopOrderMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopOrderMutation) Fields() []string {
-	fields := make([]string, 0, 22)
+	fields := make([]string, 0, 24)
 	if m.created_at != nil {
 		fields = append(fields, shoporder.FieldCreatedAt)
 	}
@@ -38185,6 +38280,9 @@ func (m *ShopOrderMutation) Fields() []string {
 	if m.product_description != nil {
 		fields = append(fields, shoporder.FieldProductDescription)
 	}
+	if m.product_type != nil {
+		fields = append(fields, shoporder.FieldProductType)
+	}
 	if m.unit_price != nil {
 		fields = append(fields, shoporder.FieldUnitPrice)
 	}
@@ -38193,6 +38291,9 @@ func (m *ShopOrderMutation) Fields() []string {
 	}
 	if m.total_amount != nil {
 		fields = append(fields, shoporder.FieldTotalAmount)
+	}
+	if m.points_amount != nil {
+		fields = append(fields, shoporder.FieldPointsAmount)
 	}
 	if m.payment_method != nil {
 		fields = append(fields, shoporder.FieldPaymentMethod)
@@ -38251,12 +38352,16 @@ func (m *ShopOrderMutation) Field(name string) (ent.Value, bool) {
 		return m.ProductCoverURL()
 	case shoporder.FieldProductDescription:
 		return m.ProductDescription()
+	case shoporder.FieldProductType:
+		return m.ProductType()
 	case shoporder.FieldUnitPrice:
 		return m.UnitPrice()
 	case shoporder.FieldQuantity:
 		return m.Quantity()
 	case shoporder.FieldTotalAmount:
 		return m.TotalAmount()
+	case shoporder.FieldPointsAmount:
+		return m.PointsAmount()
 	case shoporder.FieldPaymentMethod:
 		return m.PaymentMethod()
 	case shoporder.FieldPaymentOrderID:
@@ -38304,12 +38409,16 @@ func (m *ShopOrderMutation) OldField(ctx context.Context, name string) (ent.Valu
 		return m.OldProductCoverURL(ctx)
 	case shoporder.FieldProductDescription:
 		return m.OldProductDescription(ctx)
+	case shoporder.FieldProductType:
+		return m.OldProductType(ctx)
 	case shoporder.FieldUnitPrice:
 		return m.OldUnitPrice(ctx)
 	case shoporder.FieldQuantity:
 		return m.OldQuantity(ctx)
 	case shoporder.FieldTotalAmount:
 		return m.OldTotalAmount(ctx)
+	case shoporder.FieldPointsAmount:
+		return m.OldPointsAmount(ctx)
 	case shoporder.FieldPaymentMethod:
 		return m.OldPaymentMethod(ctx)
 	case shoporder.FieldPaymentOrderID:
@@ -38397,6 +38506,13 @@ func (m *ShopOrderMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetProductDescription(v)
 		return nil
+	case shoporder.FieldProductType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProductType(v)
+		return nil
 	case shoporder.FieldUnitPrice:
 		v, ok := value.(float64)
 		if !ok {
@@ -38417,6 +38533,13 @@ func (m *ShopOrderMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTotalAmount(v)
+		return nil
+	case shoporder.FieldPointsAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPointsAmount(v)
 		return nil
 	case shoporder.FieldPaymentMethod:
 		v, ok := value.(string)
@@ -38512,6 +38635,9 @@ func (m *ShopOrderMutation) AddedFields() []string {
 	if m.addtotal_amount != nil {
 		fields = append(fields, shoporder.FieldTotalAmount)
 	}
+	if m.addpoints_amount != nil {
+		fields = append(fields, shoporder.FieldPointsAmount)
+	}
 	if m.addpayment_order_id != nil {
 		fields = append(fields, shoporder.FieldPaymentOrderID)
 	}
@@ -38535,6 +38661,8 @@ func (m *ShopOrderMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedQuantity()
 	case shoporder.FieldTotalAmount:
 		return m.AddedTotalAmount()
+	case shoporder.FieldPointsAmount:
+		return m.AddedPointsAmount()
 	case shoporder.FieldPaymentOrderID:
 		return m.AddedPaymentOrderID()
 	case shoporder.FieldDrawRewardAmount:
@@ -38570,6 +38698,13 @@ func (m *ShopOrderMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddTotalAmount(v)
+		return nil
+	case shoporder.FieldPointsAmount:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPointsAmount(v)
 		return nil
 	case shoporder.FieldPaymentOrderID:
 		v, ok := value.(int64)
@@ -38712,6 +38847,9 @@ func (m *ShopOrderMutation) ResetField(name string) error {
 	case shoporder.FieldProductDescription:
 		m.ResetProductDescription()
 		return nil
+	case shoporder.FieldProductType:
+		m.ResetProductType()
+		return nil
 	case shoporder.FieldUnitPrice:
 		m.ResetUnitPrice()
 		return nil
@@ -38720,6 +38858,9 @@ func (m *ShopOrderMutation) ResetField(name string) error {
 		return nil
 	case shoporder.FieldTotalAmount:
 		m.ResetTotalAmount()
+		return nil
+	case shoporder.FieldPointsAmount:
+		m.ResetPointsAmount()
 		return nil
 	case shoporder.FieldPaymentMethod:
 		m.ResetPaymentMethod()
@@ -38947,6 +39088,9 @@ type ShopProductMutation struct {
 	auto_delivery           *bool
 	product_type            *string
 	balance_only            *bool
+	allow_balance_payment   *bool
+	allow_points_payment    *bool
+	allow_platform_payment  *bool
 	draw_enabled            *bool
 	draw_min_amount         *float64
 	adddraw_min_amount      *float64
@@ -39764,6 +39908,114 @@ func (m *ShopProductMutation) ResetBalanceOnly() {
 	m.balance_only = nil
 }
 
+// SetAllowBalancePayment sets the "allow_balance_payment" field.
+func (m *ShopProductMutation) SetAllowBalancePayment(b bool) {
+	m.allow_balance_payment = &b
+}
+
+// AllowBalancePayment returns the value of the "allow_balance_payment" field in the mutation.
+func (m *ShopProductMutation) AllowBalancePayment() (r bool, exists bool) {
+	v := m.allow_balance_payment
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAllowBalancePayment returns the old "allow_balance_payment" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldAllowBalancePayment(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAllowBalancePayment is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAllowBalancePayment requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAllowBalancePayment: %w", err)
+	}
+	return oldValue.AllowBalancePayment, nil
+}
+
+// ResetAllowBalancePayment resets all changes to the "allow_balance_payment" field.
+func (m *ShopProductMutation) ResetAllowBalancePayment() {
+	m.allow_balance_payment = nil
+}
+
+// SetAllowPointsPayment sets the "allow_points_payment" field.
+func (m *ShopProductMutation) SetAllowPointsPayment(b bool) {
+	m.allow_points_payment = &b
+}
+
+// AllowPointsPayment returns the value of the "allow_points_payment" field in the mutation.
+func (m *ShopProductMutation) AllowPointsPayment() (r bool, exists bool) {
+	v := m.allow_points_payment
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAllowPointsPayment returns the old "allow_points_payment" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldAllowPointsPayment(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAllowPointsPayment is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAllowPointsPayment requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAllowPointsPayment: %w", err)
+	}
+	return oldValue.AllowPointsPayment, nil
+}
+
+// ResetAllowPointsPayment resets all changes to the "allow_points_payment" field.
+func (m *ShopProductMutation) ResetAllowPointsPayment() {
+	m.allow_points_payment = nil
+}
+
+// SetAllowPlatformPayment sets the "allow_platform_payment" field.
+func (m *ShopProductMutation) SetAllowPlatformPayment(b bool) {
+	m.allow_platform_payment = &b
+}
+
+// AllowPlatformPayment returns the value of the "allow_platform_payment" field in the mutation.
+func (m *ShopProductMutation) AllowPlatformPayment() (r bool, exists bool) {
+	v := m.allow_platform_payment
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAllowPlatformPayment returns the old "allow_platform_payment" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldAllowPlatformPayment(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAllowPlatformPayment is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAllowPlatformPayment requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAllowPlatformPayment: %w", err)
+	}
+	return oldValue.AllowPlatformPayment, nil
+}
+
+// ResetAllowPlatformPayment resets all changes to the "allow_platform_payment" field.
+func (m *ShopProductMutation) ResetAllowPlatformPayment() {
+	m.allow_platform_payment = nil
+}
+
 // SetDrawEnabled sets the "draw_enabled" field.
 func (m *ShopProductMutation) SetDrawEnabled(b bool) {
 	m.draw_enabled = &b
@@ -40247,7 +40499,7 @@ func (m *ShopProductMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopProductMutation) Fields() []string {
-	fields := make([]string, 0, 20)
+	fields := make([]string, 0, 23)
 	if m.created_at != nil {
 		fields = append(fields, shopproduct.FieldCreatedAt)
 	}
@@ -40292,6 +40544,15 @@ func (m *ShopProductMutation) Fields() []string {
 	}
 	if m.balance_only != nil {
 		fields = append(fields, shopproduct.FieldBalanceOnly)
+	}
+	if m.allow_balance_payment != nil {
+		fields = append(fields, shopproduct.FieldAllowBalancePayment)
+	}
+	if m.allow_points_payment != nil {
+		fields = append(fields, shopproduct.FieldAllowPointsPayment)
+	}
+	if m.allow_platform_payment != nil {
+		fields = append(fields, shopproduct.FieldAllowPlatformPayment)
 	}
 	if m.draw_enabled != nil {
 		fields = append(fields, shopproduct.FieldDrawEnabled)
@@ -40346,6 +40607,12 @@ func (m *ShopProductMutation) Field(name string) (ent.Value, bool) {
 		return m.ProductType()
 	case shopproduct.FieldBalanceOnly:
 		return m.BalanceOnly()
+	case shopproduct.FieldAllowBalancePayment:
+		return m.AllowBalancePayment()
+	case shopproduct.FieldAllowPointsPayment:
+		return m.AllowPointsPayment()
+	case shopproduct.FieldAllowPlatformPayment:
+		return m.AllowPlatformPayment()
 	case shopproduct.FieldDrawEnabled:
 		return m.DrawEnabled()
 	case shopproduct.FieldDrawMinAmount:
@@ -40395,6 +40662,12 @@ func (m *ShopProductMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldProductType(ctx)
 	case shopproduct.FieldBalanceOnly:
 		return m.OldBalanceOnly(ctx)
+	case shopproduct.FieldAllowBalancePayment:
+		return m.OldAllowBalancePayment(ctx)
+	case shopproduct.FieldAllowPointsPayment:
+		return m.OldAllowPointsPayment(ctx)
+	case shopproduct.FieldAllowPlatformPayment:
+		return m.OldAllowPlatformPayment(ctx)
 	case shopproduct.FieldDrawEnabled:
 		return m.OldDrawEnabled(ctx)
 	case shopproduct.FieldDrawMinAmount:
@@ -40518,6 +40791,27 @@ func (m *ShopProductMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetBalanceOnly(v)
+		return nil
+	case shopproduct.FieldAllowBalancePayment:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAllowBalancePayment(v)
+		return nil
+	case shopproduct.FieldAllowPointsPayment:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAllowPointsPayment(v)
+		return nil
+	case shopproduct.FieldAllowPlatformPayment:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAllowPlatformPayment(v)
 		return nil
 	case shopproduct.FieldDrawEnabled:
 		v, ok := value.(bool)
@@ -40785,6 +41079,15 @@ func (m *ShopProductMutation) ResetField(name string) error {
 		return nil
 	case shopproduct.FieldBalanceOnly:
 		m.ResetBalanceOnly()
+		return nil
+	case shopproduct.FieldAllowBalancePayment:
+		m.ResetAllowBalancePayment()
+		return nil
+	case shopproduct.FieldAllowPointsPayment:
+		m.ResetAllowPointsPayment()
+		return nil
+	case shopproduct.FieldAllowPlatformPayment:
+		m.ResetAllowPlatformPayment()
 		return nil
 	case shopproduct.FieldDrawEnabled:
 		m.ResetDrawEnabled()
@@ -48080,6 +48383,9 @@ type UserMutation struct {
 	role                          *string
 	balance                       *float64
 	addbalance                    *float64
+	points_balance                *float64
+	addpoints_balance             *float64
+	prefer_points_billing         *bool
 	concurrency                   *int
 	addconcurrency                *int
 	status                        *string
@@ -48535,6 +48841,98 @@ func (m *UserMutation) AddedBalance() (r float64, exists bool) {
 func (m *UserMutation) ResetBalance() {
 	m.balance = nil
 	m.addbalance = nil
+}
+
+// SetPointsBalance sets the "points_balance" field.
+func (m *UserMutation) SetPointsBalance(f float64) {
+	m.points_balance = &f
+	m.addpoints_balance = nil
+}
+
+// PointsBalance returns the value of the "points_balance" field in the mutation.
+func (m *UserMutation) PointsBalance() (r float64, exists bool) {
+	v := m.points_balance
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPointsBalance returns the old "points_balance" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldPointsBalance(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPointsBalance is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPointsBalance requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPointsBalance: %w", err)
+	}
+	return oldValue.PointsBalance, nil
+}
+
+// AddPointsBalance adds f to the "points_balance" field.
+func (m *UserMutation) AddPointsBalance(f float64) {
+	if m.addpoints_balance != nil {
+		*m.addpoints_balance += f
+	} else {
+		m.addpoints_balance = &f
+	}
+}
+
+// AddedPointsBalance returns the value that was added to the "points_balance" field in this mutation.
+func (m *UserMutation) AddedPointsBalance() (r float64, exists bool) {
+	v := m.addpoints_balance
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetPointsBalance resets all changes to the "points_balance" field.
+func (m *UserMutation) ResetPointsBalance() {
+	m.points_balance = nil
+	m.addpoints_balance = nil
+}
+
+// SetPreferPointsBilling sets the "prefer_points_billing" field.
+func (m *UserMutation) SetPreferPointsBilling(b bool) {
+	m.prefer_points_billing = &b
+}
+
+// PreferPointsBilling returns the value of the "prefer_points_billing" field in the mutation.
+func (m *UserMutation) PreferPointsBilling() (r bool, exists bool) {
+	v := m.prefer_points_billing
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPreferPointsBilling returns the old "prefer_points_billing" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldPreferPointsBilling(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPreferPointsBilling is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPreferPointsBilling requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPreferPointsBilling: %w", err)
+	}
+	return oldValue.PreferPointsBilling, nil
+}
+
+// ResetPreferPointsBilling resets all changes to the "prefer_points_billing" field.
+func (m *UserMutation) ResetPreferPointsBilling() {
+	m.prefer_points_billing = nil
 }
 
 // SetConcurrency sets the "concurrency" field.
@@ -50157,7 +50555,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 25)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -50178,6 +50576,12 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.balance != nil {
 		fields = append(fields, user.FieldBalance)
+	}
+	if m.points_balance != nil {
+		fields = append(fields, user.FieldPointsBalance)
+	}
+	if m.prefer_points_billing != nil {
+		fields = append(fields, user.FieldPreferPointsBilling)
 	}
 	if m.concurrency != nil {
 		fields = append(fields, user.FieldConcurrency)
@@ -50249,6 +50653,10 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.Role()
 	case user.FieldBalance:
 		return m.Balance()
+	case user.FieldPointsBalance:
+		return m.PointsBalance()
+	case user.FieldPreferPointsBilling:
+		return m.PreferPointsBilling()
 	case user.FieldConcurrency:
 		return m.Concurrency()
 	case user.FieldStatus:
@@ -50304,6 +50712,10 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldRole(ctx)
 	case user.FieldBalance:
 		return m.OldBalance(ctx)
+	case user.FieldPointsBalance:
+		return m.OldPointsBalance(ctx)
+	case user.FieldPreferPointsBilling:
+		return m.OldPreferPointsBilling(ctx)
 	case user.FieldConcurrency:
 		return m.OldConcurrency(ctx)
 	case user.FieldStatus:
@@ -50393,6 +50805,20 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetBalance(v)
+		return nil
+	case user.FieldPointsBalance:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPointsBalance(v)
+		return nil
+	case user.FieldPreferPointsBilling:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPreferPointsBilling(v)
 		return nil
 	case user.FieldConcurrency:
 		v, ok := value.(int)
@@ -50517,6 +50943,9 @@ func (m *UserMutation) AddedFields() []string {
 	if m.addbalance != nil {
 		fields = append(fields, user.FieldBalance)
 	}
+	if m.addpoints_balance != nil {
+		fields = append(fields, user.FieldPointsBalance)
+	}
 	if m.addconcurrency != nil {
 		fields = append(fields, user.FieldConcurrency)
 	}
@@ -50539,6 +50968,8 @@ func (m *UserMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case user.FieldBalance:
 		return m.AddedBalance()
+	case user.FieldPointsBalance:
+		return m.AddedPointsBalance()
 	case user.FieldConcurrency:
 		return m.AddedConcurrency()
 	case user.FieldBalanceNotifyThreshold:
@@ -50562,6 +50993,13 @@ func (m *UserMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddBalance(v)
+		return nil
+	case user.FieldPointsBalance:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPointsBalance(v)
 		return nil
 	case user.FieldConcurrency:
 		v, ok := value.(int)
@@ -50677,6 +51115,12 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldBalance:
 		m.ResetBalance()
+		return nil
+	case user.FieldPointsBalance:
+		m.ResetPointsBalance()
+		return nil
+	case user.FieldPreferPointsBilling:
+		m.ResetPreferPointsBilling()
 		return nil
 	case user.FieldConcurrency:
 		m.ResetConcurrency()

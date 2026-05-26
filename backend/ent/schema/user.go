@@ -49,6 +49,11 @@ func (User) Fields() []ent.Field {
 		field.Float("balance").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Default(0),
+		field.Float("points_balance").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).
+			Default(0),
+		field.Bool("prefer_points_billing").
+			Default(false),
 		field.Int("concurrency").
 			Default(5),
 		field.String("status").

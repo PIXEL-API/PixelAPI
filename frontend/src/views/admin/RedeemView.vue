@@ -100,6 +100,7 @@
           <template #cell-value="{ value, row }">
             <span class="text-sm font-medium text-gray-900 dark:text-white">
               <template v-if="row.type === 'balance'">${{ value.toFixed(2) }}</template>
+              <template v-else-if="row.type === 'points'">{{ value.toFixed(10).replace(/\.?0+$/, '') || '0' }}</template>
               <template v-else-if="row.type === 'subscription'">
                 {{ row.validity_days || 30 }} {{ t('admin.redeem.days') }}
                 <span v-if="row.group" class="ml-1 text-xs text-gray-500 dark:text-gray-400"
@@ -224,14 +225,16 @@
                 {{
                   generateForm.type === 'balance'
                     ? t('admin.redeem.amount')
+                    : generateForm.type === 'points'
+                      ? t('admin.redeem.pointsValue')
                     : t('admin.redeem.columns.value')
                 }}
               </label>
               <input
                 v-model.number="generateForm.value"
                 type="number"
-                :step="generateForm.type === 'balance' ? '0.01' : '1'"
-                :min="generateForm.type === 'balance' ? '0.01' : '1'"
+                :step="generateForm.type === 'balance' ? '0.01' : generateForm.type === 'points' ? '0.0000000001' : '1'"
+                :min="generateForm.type === 'balance' || generateForm.type === 'points' ? '0.01' : '1'"
                 required
                 class="input"
               />
@@ -511,6 +514,7 @@ const columns = computed<Column[]>(() => [
 
 const typeOptions = computed(() => [
   { value: 'balance', label: t('admin.redeem.balance') },
+  { value: 'points', label: t('admin.redeem.points') },
   { value: 'concurrency', label: t('admin.redeem.concurrency') },
   { value: 'subscription', label: t('admin.redeem.subscription') },
   { value: 'invitation', label: t('admin.redeem.invitation') }
@@ -519,6 +523,7 @@ const typeOptions = computed(() => [
 const filterTypeOptions = computed(() => [
   { value: '', label: t('admin.redeem.allTypes') },
   { value: 'balance', label: t('admin.redeem.balance') },
+  { value: 'points', label: t('admin.redeem.points') },
   { value: 'concurrency', label: t('admin.redeem.concurrency') },
   { value: 'subscription', label: t('admin.redeem.subscription') },
   { value: 'invitation', label: t('admin.redeem.invitation') }

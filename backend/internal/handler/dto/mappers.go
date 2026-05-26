@@ -18,6 +18,8 @@ func UserFromServiceShallow(u *service.User) *User {
 		Username:                   u.Username,
 		Role:                       u.Role,
 		Balance:                    u.Balance,
+		PointsBalance:              u.PointsBalance,
+		PreferPointsBilling:        u.PreferPointsBilling,
 		Concurrency:                u.Concurrency,
 		Status:                     u.Status,
 		AllowedGroups:              u.AllowedGroups,
@@ -574,9 +576,9 @@ func redeemCodeFromServiceBase(rc *service.RedeemCode) RedeemCode {
 		Group:        GroupFromServiceShallow(rc.Group),
 	}
 
-	// For admin_balance/admin_concurrency types, include notes so users can see
+	// For admin adjustment types, include notes so users can see
 	// why they were charged or credited by admin
-	if (rc.Type == "admin_balance" || rc.Type == "admin_concurrency") && rc.Notes != "" {
+	if (rc.Type == "admin_balance" || rc.Type == "admin_points" || rc.Type == "admin_concurrency") && rc.Notes != "" {
 		out.Notes = &rc.Notes
 	}
 
@@ -629,6 +631,9 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		TotalCost:             l.TotalCost,
 		ActualCost:            l.ActualCost,
 		RateMultiplier:        l.RateMultiplier,
+		PointsDeducted:        l.PointsDeducted,
+		BalanceDeducted:       l.BalanceDeducted,
+		BillingWalletType:     l.BillingWalletType,
 		BillingType:           l.BillingType,
 		RequestType:           requestType.String(),
 		Stream:                stream,

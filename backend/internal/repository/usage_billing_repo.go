@@ -124,26 +124,53 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 
 	if cmd.BalanceCost > 0 {
-		newBalance, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceCost)
+		newPointsBalance, newBalance, pointsDeducted, balanceDeducted, err := deductUsageBillingWallet(ctx, tx, cmd.UserID, cmd.BalanceCost, cmd.PreferPointsBilling)
 		if err != nil {
 			return err
 		}
-		result.NewBalance = &newBalance
-		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-			UserID:       cmd.UserID,
-			Direction:    "debit",
-			Amount:       decimalFromFloat(cmd.BalanceCost),
-			Reason:       "usage_charge",
-			RefType:      "usage_log",
-			RefID:        nullablePositiveInt64(usageLogID),
-			BalanceAfter: decimalFromFloat(newBalance),
-			Metadata: map[string]any{
-				"request_id": cmd.RequestID,
-				"api_key_id": cmd.APIKeyID,
-				"account_id": cmd.AccountID,
-			},
-		}); err != nil {
-			return err
+		if pointsDeducted > 0 {
+			result.NewPointsBalance = &newPointsBalance
+			result.PointsDeducted = pointsDeducted
+			if err := insertPointsLedger(ctx, tx, pointsLedgerInput{
+				UserID:        cmd.UserID,
+				Direction:     "debit",
+				Amount:        decimalFromFloat(pointsDeducted),
+				Reason:        "usage_charge",
+				RefType:       "usage_log",
+				RefID:         nullablePositiveInt64(usageLogID),
+				BalanceBefore: decimalFromFloat(newPointsBalance + pointsDeducted),
+				BalanceAfter:  decimalFromFloat(newPointsBalance),
+				Metadata: map[string]any{
+					"request_id": cmd.RequestID,
+					"api_key_id": cmd.APIKeyID,
+					"account_id": cmd.AccountID,
+					"total_cost": cmd.BalanceCost,
+				},
+			}); err != nil {
+				return err
+			}
+		}
+		if balanceDeducted > 0 {
+			result.NewBalance = &newBalance
+			result.BalanceDeducted = balanceDeducted
+			if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+				UserID:       cmd.UserID,
+				Direction:    "debit",
+				Amount:       decimalFromFloat(balanceDeducted),
+				Reason:       "usage_charge",
+				RefType:      "usage_log",
+				RefID:        nullablePositiveInt64(usageLogID),
+				BalanceAfter: decimalFromSignedFloat(newBalance),
+				Metadata: map[string]any{
+					"request_id":      cmd.RequestID,
+					"api_key_id":      cmd.APIKeyID,
+					"account_id":      cmd.AccountID,
+					"total_cost":      cmd.BalanceCost,
+					"points_deducted": pointsDeducted,
+				},
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	if cmd.PrivateGroupCommissionCost > 0 {
@@ -152,6 +179,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 			return err
 		}
 		result.NewBalance = &newBalance
+		result.CommissionDeducted = cmd.PrivateGroupCommissionCost
 		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
 			UserID:       cmd.UserID,
 			Direction:    "debit",
@@ -311,6 +339,57 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 	return newBalance, nil
 }
 
+func deductUsageBillingWallet(ctx context.Context, tx *sql.Tx, userID int64, amount float64, preferPoints bool) (newPointsBalance float64, newBalance float64, pointsDeducted float64, balanceDeducted float64, err error) {
+	if amount <= 0 {
+		return 0, 0, 0, 0, nil
+	}
+	if !preferPoints {
+		newBalance, err = deductUsageBillingBalance(ctx, tx, userID, amount)
+		return 0, newBalance, 0, amount, err
+	}
+
+	var currentBalance float64
+	var currentPoints float64
+	err = tx.QueryRowContext(ctx, `
+		SELECT balance, points_balance
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, userID).Scan(&currentBalance, &currentPoints)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, 0, 0, service.ErrUserNotFound
+	}
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+
+	pointsDeducted = amount
+	if currentPoints < pointsDeducted {
+		pointsDeducted = currentPoints
+	}
+	if pointsDeducted < 0 {
+		pointsDeducted = 0
+	}
+	balanceDeducted = amount - pointsDeducted
+	if balanceDeducted < 0 {
+		balanceDeducted = 0
+	}
+
+	newPointsBalance = currentPoints - pointsDeducted
+	newBalance = currentBalance - balanceDeducted
+	_, err = tx.ExecContext(ctx, `
+		UPDATE users
+		SET points_balance = $1::numeric,
+			balance = $2::numeric,
+			updated_at = NOW()
+		WHERE id = $3 AND deleted_at IS NULL
+	`, decimalFromFloat(newPointsBalance).StringFixed(10), decimalFromSignedFloat(newBalance).StringFixed(10), userID)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	return newPointsBalance, newBalance, pointsDeducted, balanceDeducted, nil
+}
+
 func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) (int64, error) {
 	if cmd == nil || cmd.UsageLog == nil {
 		return 0, nil
@@ -433,6 +512,47 @@ func insertUserBalanceLedger(ctx context.Context, tx *sql.Tx, in userBalanceLedg
 		)
 		ON CONFLICT DO NOTHING
 	`, in.UserID, in.Direction, in.Amount.StringFixed(10), in.Reason, in.RefType, in.RefID, in.BalanceAfter.StringFixed(10), string(rawMetadata))
+	return err
+}
+
+type pointsLedgerInput struct {
+	UserID         int64
+	Direction      string
+	Amount         decimal.Decimal
+	Reason         string
+	RefType        string
+	RefID          any
+	BalanceBefore  decimal.Decimal
+	BalanceAfter   decimal.Decimal
+	OperatorUserID any
+	Metadata       map[string]any
+}
+
+func insertPointsLedger(ctx context.Context, tx *sql.Tx, in pointsLedgerInput) error {
+	if in.UserID <= 0 || in.Amount.IsNegative() {
+		return nil
+	}
+	metadata := in.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	rawMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO points_ledger (
+			user_id, direction, amount, reason, ref_type, ref_id,
+			balance_before, balance_after, operator_user_id, metadata
+		) VALUES (
+			$1, $2, $3::numeric, $4, $5, $6,
+			$7::numeric, $8::numeric, $9, $10::jsonb
+		)
+		ON CONFLICT DO NOTHING
+	`,
+		in.UserID, in.Direction, in.Amount.StringFixed(10), in.Reason, in.RefType, in.RefID,
+		in.BalanceBefore.StringFixed(10), in.BalanceAfter.StringFixed(10), in.OperatorUserID, string(rawMetadata),
+	)
 	return err
 }
 
@@ -995,6 +1115,10 @@ func decimalFromFloat(v float64) decimal.Decimal {
 	if v <= 0 {
 		return decimal.Zero
 	}
+	return decimal.NewFromFloat(v).Round(10)
+}
+
+func decimalFromSignedFloat(v float64) decimal.Decimal {
 	return decimal.NewFromFloat(v).Round(10)
 }
 

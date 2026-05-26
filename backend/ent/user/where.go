@@ -90,6 +90,16 @@ func Balance(v float64) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldBalance, v))
 }
 
+// PointsBalance applies equality check predicate on the "points_balance" field. It's identical to PointsBalanceEQ.
+func PointsBalance(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPointsBalance, v))
+}
+
+// PreferPointsBilling applies equality check predicate on the "prefer_points_billing" field. It's identical to PreferPointsBillingEQ.
+func PreferPointsBilling(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPreferPointsBilling, v))
+}
+
 // Concurrency applies equality check predicate on the "concurrency" field. It's identical to ConcurrencyEQ.
 func Concurrency(v int) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldConcurrency, v))
@@ -533,6 +543,56 @@ func BalanceLT(v float64) predicate.User {
 // BalanceLTE applies the LTE predicate on the "balance" field.
 func BalanceLTE(v float64) predicate.User {
 	return predicate.User(sql.FieldLTE(FieldBalance, v))
+}
+
+// PointsBalanceEQ applies the EQ predicate on the "points_balance" field.
+func PointsBalanceEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPointsBalance, v))
+}
+
+// PointsBalanceNEQ applies the NEQ predicate on the "points_balance" field.
+func PointsBalanceNEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldPointsBalance, v))
+}
+
+// PointsBalanceIn applies the In predicate on the "points_balance" field.
+func PointsBalanceIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldIn(FieldPointsBalance, vs...))
+}
+
+// PointsBalanceNotIn applies the NotIn predicate on the "points_balance" field.
+func PointsBalanceNotIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldPointsBalance, vs...))
+}
+
+// PointsBalanceGT applies the GT predicate on the "points_balance" field.
+func PointsBalanceGT(v float64) predicate.User {
+	return predicate.User(sql.FieldGT(FieldPointsBalance, v))
+}
+
+// PointsBalanceGTE applies the GTE predicate on the "points_balance" field.
+func PointsBalanceGTE(v float64) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldPointsBalance, v))
+}
+
+// PointsBalanceLT applies the LT predicate on the "points_balance" field.
+func PointsBalanceLT(v float64) predicate.User {
+	return predicate.User(sql.FieldLT(FieldPointsBalance, v))
+}
+
+// PointsBalanceLTE applies the LTE predicate on the "points_balance" field.
+func PointsBalanceLTE(v float64) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldPointsBalance, v))
+}
+
+// PreferPointsBillingEQ applies the EQ predicate on the "prefer_points_billing" field.
+func PreferPointsBillingEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPreferPointsBilling, v))
+}
+
+// PreferPointsBillingNEQ applies the NEQ predicate on the "prefer_points_billing" field.
+func PreferPointsBillingNEQ(v bool) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldPreferPointsBilling, v))
 }
 
 // ConcurrencyEQ applies the EQ predicate on the "concurrency" field.

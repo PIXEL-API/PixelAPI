@@ -153,6 +153,16 @@
 
         <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <section class="card p-5">
+            <h3 class="mb-4 text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.revenue.sections.usage') }}</h3>
+            <div class="divide-y divide-gray-100 dark:divide-dark-700">
+              <div v-for="row in usageRows" :key="row.key" class="flex items-center justify-between gap-4 py-3">
+                <span class="text-sm text-gray-500 dark:text-gray-400">{{ row.label }}</span>
+                <span class="text-right text-sm font-medium text-gray-900 dark:text-white">{{ row.value }}</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card p-5">
             <h3 class="mb-4 text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.revenue.sections.cash') }}</h3>
             <div class="divide-y divide-gray-100 dark:divide-dark-700">
               <div v-for="row in cashRows" :key="row.key" class="flex items-center justify-between gap-4 py-3">
@@ -384,7 +394,9 @@ const statCards = computed(() => {
       label: t('admin.revenue.cards.consumedRevenue'),
       value: formatAmount(data.usage.consumed_revenue),
       meta: t('admin.revenue.cards.consumedRevenueMeta', {
-        requests: formatInteger(data.usage.requests)
+        requests: formatInteger(data.usage.requests),
+        balance: formatAmount(data.usage.balance_consumed_amount || 0),
+        points: formatAmount(data.usage.points_consumed_amount || 0)
       }),
       borderClass: 'border-sky-500',
       dotClass: 'bg-sky-500'
@@ -451,6 +463,24 @@ const chartData = computed<ChartData<'line'>>(() => {
         data: trend.map(point => point.consumed_revenue),
         borderColor: '#0284c7',
         backgroundColor: 'rgba(2, 132, 199, 0.08)',
+        pointRadius: 2,
+        tension: 0.3,
+        fill: false
+      },
+      {
+        label: t('admin.revenue.chart.balanceConsumed'),
+        data: trend.map(point => point.balance_consumed_amount || 0),
+        borderColor: '#7c3aed',
+        backgroundColor: 'rgba(124, 58, 237, 0.08)',
+        pointRadius: 2,
+        tension: 0.3,
+        fill: false
+      },
+      {
+        label: t('admin.revenue.chart.pointsConsumed'),
+        data: trend.map(point => point.points_consumed_amount || 0),
+        borderColor: '#dc2626',
+        backgroundColor: 'rgba(220, 38, 38, 0.08)',
         pointRadius: 2,
         tension: 0.3,
         fill: false
@@ -530,6 +560,21 @@ const cashRows = computed(() => {
     { key: 'paid-count', label: t('admin.revenue.fields.paidOrders'), value: formatInteger(data.paid_order_count) },
     { key: 'refund-count', label: t('admin.revenue.fields.refundOrders'), value: formatInteger(data.refund_order_count) },
     { key: 'pending-count', label: t('admin.revenue.fields.pendingOrders'), value: formatInteger(data.pending_order_count) }
+  ]
+})
+
+const usageRows = computed(() => {
+  const data = summary.value?.usage
+  if (!data) return []
+  return [
+    { key: 'consumed', label: t('admin.revenue.fields.consumedRevenue'), value: formatAmount(data.consumed_revenue) },
+    { key: 'balance-consumed', label: t('admin.revenue.fields.balanceConsumed'), value: formatAmount(data.balance_consumed_amount || 0) },
+    { key: 'points-consumed', label: t('admin.revenue.fields.pointsConsumed'), value: formatAmount(data.points_consumed_amount || 0) },
+    { key: 'points-issued', label: t('admin.revenue.fields.pointsIssuedCost'), value: formatAmount(data.points_issued_amount || 0) },
+    { key: 'standard-cost', label: t('admin.revenue.fields.standardCost'), value: formatAmount(data.standard_cost) },
+    { key: 'account-cost', label: t('admin.revenue.fields.accountCost'), value: formatAmount(data.account_cost) },
+    { key: 'requests', label: t('admin.revenue.fields.requests'), value: formatInteger(data.requests) },
+    { key: 'tokens', label: t('admin.revenue.fields.tokens'), value: formatInteger(data.total_tokens) }
   ]
 })
 

@@ -1535,7 +1535,7 @@ const accountMatchesCurrentFilters = (account: Account) => {
   if (filters.group) {
     const groupIds = account.group_ids ?? account.groups?.map((group) => group.id) ?? []
     if (filters.group === ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE) {
-      if (groupIds.length > 0) return false
+      if (accountHasNonPrivateGroup(account, groupIds)) return false
     } else if (!groupIds.includes(Number(filters.group))) {
       return false
     }
@@ -1556,6 +1556,16 @@ const accountMatchesCurrentFilters = (account: Account) => {
   const search = String(filters.search || '').trim().toLowerCase()
   if (search && !account.name.toLowerCase().includes(search)) return false
   return true
+}
+const accountHasNonPrivateGroup = (account: Account, groupIds: number[]): boolean => {
+  if (account.groups) {
+    return account.groups.some((group) => group.scope !== 'user_private')
+  }
+  const groupScopeByID = new Map(groups.value.map(group => [group.id, group.scope]))
+  return groupIds.some((groupID) => {
+    const scope = groupScopeByID.get(groupID)
+    return scope !== undefined && scope !== 'user_private'
+  })
 }
 const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Account => ({
   ...updatedAccount,

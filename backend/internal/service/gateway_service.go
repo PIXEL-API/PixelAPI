@@ -7916,6 +7916,10 @@ type apiKeyAuthCacheInvalidator interface {
 	InvalidateAuthCacheByKey(ctx context.Context, key string)
 }
 
+type apiKeyAuthCacheUserInvalidator interface {
+	InvalidateAuthCacheByUserID(ctx context.Context, userID int64)
+}
+
 type usageLogBestEffortWriter interface {
 	CreateBestEffort(ctx context.Context, log *UsageLog) error
 }
@@ -7969,7 +7973,25 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 		}
 	} else {
 		if cost.ActualCost > 0 {
-			if err := deps.userRepo.DeductBalance(billingCtx, p.User.ID, cost.ActualCost); err != nil {
+			if adjuster, ok := deps.userRepo.(usageBillingWalletAdjuster); ok {
+				result, err := adjuster.AdjustUsageBillingWallet(
+					billingCtx,
+					p.User.ID,
+					cost.ActualCost,
+					p.User.PreferPointsBilling,
+					map[string]any{
+						"request_id": p.RequestPayloadHash,
+						"api_key_id": p.APIKey.ID,
+						"account_id": p.Account.ID,
+						"total_cost": cost.ActualCost,
+					},
+				)
+				if err != nil {
+					slog.Error("adjust usage billing wallet failed", "user_id", p.User.ID, "error", err)
+				} else {
+					finalizeLegacyUsageBillingWallet(p, deps, result)
+				}
+			} else if err := deps.userRepo.DeductBalance(billingCtx, p.User.ID, cost.ActualCost); err != nil {
 				slog.Error("deduct balance failed", "user_id", p.User.ID, "error", err)
 			}
 		}
@@ -7998,6 +8020,35 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	// cache updates. The legacy path does DB writes directly; the finalize path
 	// does cache queue + notifications. Notifications are dispatched separately
 	// by the caller after recording the usage log.
+}
+
+func finalizeLegacyUsageBillingWallet(p *postUsageBillingParams, deps *billingDeps, result *UsageBillingApplyResult) {
+	if p == nil || deps == nil || result == nil || p.User == nil {
+		return
+	}
+
+	if result.PointsDeducted > 0 {
+		if invalidator, ok := p.APIKeyService.(apiKeyAuthCacheUserInvalidator); ok {
+			invalidator.InvalidateAuthCacheByUserID(context.Background(), p.User.ID)
+		}
+		if deps.billingCacheService != nil {
+			_ = deps.billingCacheService.InvalidateUserBalance(context.Background(), p.User.ID)
+		}
+		return
+	}
+
+	if result.BalanceDeducted > 0 {
+		if deps.billingCacheService != nil {
+			_ = deps.billingCacheService.InvalidateUserBalance(context.Background(), p.User.ID)
+		}
+		return
+	}
+
+	if result.CommissionDeducted > 0 {
+		if deps.billingCacheService != nil {
+			_ = deps.billingCacheService.InvalidateUserBalance(context.Background(), p.User.ID)
+		}
+	}
 }
 
 func resolveUsageBillingRequestID(ctx context.Context, upstreamRequestID string) string {
@@ -8082,6 +8133,7 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		}
 	} else if p.Cost.ActualCost > 0 {
 		cmd.BalanceCost = p.Cost.ActualCost
+		cmd.PreferPointsBilling = p.User.PreferPointsBilling
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
@@ -8212,11 +8264,20 @@ func finalizePostUsageBilling(p *postUsageBillingParams, deps *billingDeps, resu
 		if p.Cost.ActualCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil {
 			deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost)
 		}
-		if result != nil && result.NewBalance != nil && p.User != nil {
-			deps.billingCacheService.QueueDeductBalance(p.User.ID, calculatePrivateGroupCommissionCost(p))
+		if result != nil && result.CommissionDeducted > 0 && p.User != nil {
+			deps.billingCacheService.QueueDeductBalance(p.User.ID, result.CommissionDeducted)
 		}
 	} else if p.Cost.ActualCost > 0 && p.User != nil {
-		deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)
+		if result != nil && result.PointsDeducted > 0 {
+			if invalidator, ok := p.APIKeyService.(apiKeyAuthCacheUserInvalidator); ok {
+				invalidator.InvalidateAuthCacheByUserID(context.Background(), p.User.ID)
+			}
+			_ = deps.billingCacheService.InvalidateUserBalance(context.Background(), p.User.ID)
+		} else if result != nil && result.BalanceDeducted > 0 {
+			deps.billingCacheService.QueueDeductBalance(p.User.ID, result.BalanceDeducted)
+		} else {
+			deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)
+		}
 	}
 
 	if result != nil {
@@ -8250,7 +8311,13 @@ func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *Usag
 	}()
 	deductedCost := p.Cost.ActualCost
 	if p.IsSubscriptionBill {
-		deductedCost = calculatePrivateGroupCommissionCost(p)
+		if result != nil && result.CommissionDeducted > 0 {
+			deductedCost = result.CommissionDeducted
+		} else {
+			deductedCost = calculatePrivateGroupCommissionCost(p)
+		}
+	} else if result != nil {
+		deductedCost = result.BalanceDeducted
 	}
 	if deductedCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
 		slog.Debug("notifyBalanceLow: skipped",
@@ -8277,8 +8344,11 @@ func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *Usag
 // resolveOldBalance returns the pre-deduction balance.
 // Prefers the DB transaction result (newBalance + cost) over snapshot.
 func resolveOldBalance(p *postUsageBillingParams, result *UsageBillingApplyResult) float64 {
-	if result != nil && result.NewBalance != nil {
-		return *result.NewBalance + p.Cost.ActualCost
+	if result != nil && result.NewBalance != nil && result.BalanceDeducted > 0 {
+		return *result.NewBalance + result.BalanceDeducted
+	}
+	if result != nil && result.NewBalance != nil && result.CommissionDeducted > 0 {
+		return *result.NewBalance + result.CommissionDeducted
 	}
 	// Legacy fallback: snapshot balance from request context
 	return p.User.Balance
@@ -8342,6 +8412,10 @@ type billingDeps struct {
 	billingCacheService    *BillingCacheService
 	deferredService        *DeferredService
 	balanceNotifyService   *BalanceNotifyService
+}
+
+type usageBillingWalletAdjuster interface {
+	AdjustUsageBillingWallet(ctx context.Context, userID int64, amount float64, preferPoints bool, metadata map[string]any) (*UsageBillingApplyResult, error)
 }
 
 func (s *GatewayService) billingDeps() *billingDeps {
