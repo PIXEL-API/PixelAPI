@@ -444,6 +444,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
+			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -852,6 +853,7 @@ routeLoop:
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
+			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			if err != nil {
 				// Beta policy block: return 400 immediately, no failover
 				var betaBlockedErr *service.BetaBlockedError

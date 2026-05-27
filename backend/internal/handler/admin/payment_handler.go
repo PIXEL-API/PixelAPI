@@ -68,7 +68,7 @@ func (h *PaymentHandler) ListOrders(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Paginated(c, sanitizeAdminPaymentOrdersForResponse(orders), int64(total), page, pageSize)
+	response.Paginated(c, orders, int64(total), page, pageSize)
 }
 
 // GetOrderDetail returns detailed information about a single order.
@@ -76,6 +76,20 @@ func (h *PaymentHandler) ListOrders(c *gin.Context) {
 func (h *PaymentHandler) GetOrderDetail(c *gin.Context) {
 	orderID, ok := parseIDParam(c, "id")
 	if !ok {
+		return
+	}
+	if c.Query("source") == "shop_order" {
+		order, err := h.paymentService.GetDirectShopOrderListItem(c.Request.Context(), orderID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		shopOrder, err := h.paymentService.GetShopOrderByIDForAdmin(c.Request.Context(), orderID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, gin.H{"order": order, "auditLogs": []any{}, "shop_order": shopOrder})
 		return
 	}
 	order, err := h.paymentService.GetOrderByID(c.Request.Context(), orderID)
@@ -142,17 +156,6 @@ func (h *PaymentHandler) ManualFulfillOrder(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"message": "manual fulfillment completed"})
-}
-
-func sanitizeAdminPaymentOrdersForResponse(orders []*dbent.PaymentOrder) []*dbent.PaymentOrder {
-	if len(orders) == 0 {
-		return orders
-	}
-	out := make([]*dbent.PaymentOrder, 0, len(orders))
-	for _, order := range orders {
-		out = append(out, sanitizeAdminPaymentOrderForResponse(order))
-	}
-	return out
 }
 
 func sanitizeAdminPaymentOrderForResponse(order *dbent.PaymentOrder) *dbent.PaymentOrder {

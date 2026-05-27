@@ -22,7 +22,7 @@
               <Icon name="key" size="sm" />
               <span>{{ t('payment.orders.viewCards') }}</span>
             </button>
-            <button v-if="row.status === 'PENDING'" @click="handleCancel(row.id)" class="inline-flex min-h-[2.25rem] items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
+            <button v-if="row.status === 'PENDING' && row.source !== 'shop_order'" @click="handleCancel(row.id)" class="inline-flex min-h-[2.25rem] items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
               <Icon name="x" size="sm" />
               <span>{{ t('payment.orders.cancel') }}</span>
             </button>

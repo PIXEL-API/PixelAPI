@@ -135,6 +135,71 @@ func TestAdminCannotUpdateOrDeleteLockedCardKey(t *testing.T) {
 	require.Equal(t, "SHOP_CARD_KEY_ALREADY_ASSIGNED", errorCodeForTest(err))
 }
 
+func TestAdminCanLockUnusedCardKeyAndExcludeItFromStock(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	user := createShopTestUser(t, ctx, client, "manual-lock@example.com")
+	product := createShopTestProduct(t, ctx, client, "Manual lock product")
+	card := createShopTestCard(t, ctx, client, product.ID, "CARD-LOCKED")
+
+	status := ShopCardStatusLocked
+	updated, err := svc.AdminUpdateCardKey(ctx, card.ID, ShopUpdateCardKeyRequest{Status: &status})
+	require.NoError(t, err)
+	require.Equal(t, ShopCardStatusLocked, updated.Status)
+	require.NotNil(t, updated.LockedAt)
+	require.Nil(t, updated.OrderID)
+	require.Nil(t, updated.LockedUntil)
+
+	stock, err := svc.availableStock(ctx, product.ID)
+	require.NoError(t, err)
+	require.Zero(t, stock)
+
+	_, err = svc.CreateOrder(ctx, ShopCreateOrderRequest{
+		UserID:        user.ID,
+		ProductID:     product.ID,
+		Quantity:      1,
+		PaymentMethod: ShopPaymentMethodBalance,
+	})
+	require.Error(t, err)
+	require.Equal(t, "SHOP_INSUFFICIENT_STOCK", errorCodeForTest(err))
+}
+
+func TestAdminBulkUpdateCardKeyStatusSkipsAssignedCards(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	svc := NewShopService(client, nil, nil, nil)
+	user := createShopTestUser(t, ctx, client, "bulk-lock@example.com")
+	product := createShopTestProduct(t, ctx, client, "Bulk lock product")
+	availableCard := createShopTestCard(t, ctx, client, product.ID, "CARD-BULK-A")
+	soldCard := createShopTestCard(t, ctx, client, product.ID, "CARD-BULK-B")
+	order := createShopTestOrder(t, ctx, client, user.ID, product.ID, ShopPaymentMethodBalance, ShopOrderStatusCompleted, 1)
+	soldCard, err := client.ShopCardKey.UpdateOneID(soldCard.ID).
+		SetStatus(ShopCardStatusSold).
+		SetOrderID(order.ID).
+		SetSoldAt(time.Now()).
+		Save(ctx)
+	require.NoError(t, err)
+
+	result, err := svc.AdminBulkUpdateCardKeyStatus(ctx, []int64{soldCard.ID, availableCard.ID, availableCard.ID}, ShopCardStatusLocked)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 1, result.Failed)
+	require.Equal(t, []int64{availableCard.ID}, result.SuccessIDs)
+	require.Equal(t, []int64{soldCard.ID}, result.FailedIDs)
+
+	availableCard, err = client.ShopCardKey.Get(ctx, availableCard.ID)
+	require.NoError(t, err)
+	require.Equal(t, ShopCardStatusLocked, availableCard.Status)
+	require.NotNil(t, availableCard.LockedAt)
+	require.Nil(t, availableCard.OrderID)
+
+	soldCard, err = client.ShopCardKey.Get(ctx, soldCard.ID)
+	require.NoError(t, err)
+	require.Equal(t, ShopCardStatusSold, soldCard.Status)
+	require.NotNil(t, soldCard.OrderID)
+}
+
 func TestShopBalanceDrawCompletesGuaranteedRewardCycle(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)

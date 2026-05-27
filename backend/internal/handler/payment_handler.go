@@ -337,7 +337,7 @@ func (h *PaymentHandler) GetMyOrders(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Paginated(c, sanitizePaymentOrdersForResponse(orders), int64(total), page, pageSize)
+	response.Paginated(c, orders, int64(total), page, pageSize)
 }
 
 // GetOrder returns a single order for the authenticated user.
@@ -563,17 +563,6 @@ func isMobile(c *gin.Context) bool {
 		}
 	}
 	return false
-}
-
-func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder) []*dbent.PaymentOrder {
-	if len(orders) == 0 {
-		return orders
-	}
-	out := make([]*dbent.PaymentOrder, 0, len(orders))
-	for _, order := range orders {
-		out = append(out, sanitizePaymentOrderForResponse(order))
-	}
-	return out
 }
 
 func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *dbent.PaymentOrder {

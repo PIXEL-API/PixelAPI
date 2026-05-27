@@ -122,6 +122,13 @@ export const adminPaymentAPI = {
     return apiClient.get<AdminPaymentOrderDetail>(`/admin/payment/orders/${id}`)
   },
 
+  /** Get a direct store-balance/points order detail from the payment-order detail shell */
+  getDirectShopOrder(id: number) {
+    return apiClient.get<AdminPaymentOrderDetail>(`/admin/payment/orders/${id}`, {
+      params: { source: 'shop_order' },
+    })
+  },
+
   /** Cancel an order (admin) */
   cancelOrder(id: number) {
     return apiClient.post(`/admin/payment/orders/${id}/cancel`)

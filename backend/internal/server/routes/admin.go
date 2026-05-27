@@ -154,6 +154,7 @@ func registerShopRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 			cardKeys.POST("", h.Admin.Shop.CreateCardKey)
 			cardKeys.POST("/import", h.Admin.Shop.ImportCardKeys)
 			cardKeys.POST("/import-files", h.Admin.Shop.ImportFileCardKeys)
+			cardKeys.POST("/bulk-status", h.Admin.Shop.BulkUpdateCardKeyStatus)
 			cardKeys.PUT("/:id", h.Admin.Shop.UpdateCardKey)
 			cardKeys.DELETE("/:id", h.Admin.Shop.DeleteCardKey)
 		}

@@ -3,9 +3,24 @@
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-wrap items-center gap-3">
-          <Select v-model="filters.product_id" :options="productOptionsWithAll" class="w-full sm:w-56" @change="loadCards" />
-          <Select v-model="filters.status" :options="statusOptionsWithAll" class="w-full sm:w-40" @change="loadCards" />
-          <div class="flex flex-1 justify-end gap-2">
+          <Select v-model="filters.product_id" :options="productOptionsWithAll" class="w-full sm:w-56" @change="resetAndLoadCards" />
+          <Select v-model="filters.status" :options="statusOptionsWithAll" class="w-full sm:w-40" @change="resetAndLoadCards" />
+          <input
+            v-model="filters.keyword"
+            type="search"
+            class="input w-full sm:w-72"
+            :placeholder="t('admin.store.searchCards')"
+            @input="debouncedSearch"
+          />
+          <div class="flex flex-1 flex-wrap justify-end gap-2">
+            <template v-if="selectedCount > 0">
+              <span class="inline-flex items-center text-sm font-medium text-gray-600 dark:text-gray-300">
+                {{ t('admin.store.selectedCards', { count: selectedCount }) }}
+              </span>
+              <button class="btn btn-warning btn-sm" :disabled="bulkSaving" @click="bulkUpdateStatus('locked')">{{ t('admin.store.lockCards') }}</button>
+              <button class="btn btn-secondary btn-sm" :disabled="bulkSaving" @click="bulkUpdateStatus('unused')">{{ t('admin.store.unlockCards') }}</button>
+              <button class="btn btn-secondary btn-sm" :disabled="bulkSaving" @click="clearSelection">{{ t('admin.store.clearSelection') }}</button>
+            </template>
             <button class="btn btn-secondary" :disabled="loading" @click="loadCards">{{ t('common.refresh') }}</button>
             <button class="btn btn-primary" :disabled="productOptions.length === 0" @click="openImport">{{ t('admin.store.importCards') }}</button>
           </div>
@@ -13,6 +28,23 @@
       </template>
       <template #table>
         <DataTable :columns="columns" :data="cards" :loading="loading" row-key="id">
+          <template #header-select>
+            <input
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="allVisibleSelected"
+              @click.stop
+              @change="toggleSelectAllVisible($event)"
+            />
+          </template>
+          <template #cell-select="{ row }">
+            <input
+              type="checkbox"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :checked="isSelected(row.id)"
+              @change="toggle(row.id)"
+            />
+          </template>
           <template #cell-product_id="{ value, row }">{{ row.product || productName(value) }}</template>
           <template #cell-card_type="{ value }">
             <span :class="['badge', value === 'file' ? 'badge-primary' : 'badge-gray']">{{ t(`admin.store.cardType.${value || 'text'}`) }}</span>
@@ -25,7 +57,7 @@
             <code v-else class="break-all font-mono text-xs">{{ value }}</code>
           </template>
           <template #cell-status="{ value }">
-            <span :class="['badge', value === 'unused' ? 'badge-success' : value === 'sold' ? 'badge-warning' : 'badge-gray']">{{ t(`admin.store.cardStatus.${value}`) }}</span>
+            <span :class="['badge', cardStatusBadgeClass(value)]">{{ t(`admin.store.cardStatus.${value}`) }}</span>
           </template>
           <template #cell-order_no="{ value }">
             <span v-if="value" class="font-mono text-xs">{{ value }}</span>
@@ -33,7 +65,25 @@
           </template>
           <template #cell-sold_at="{ value }">{{ formatSoldAt(value) }}</template>
           <template #cell-actions="{ row }">
-            <button v-if="row.status === 'unused'" class="btn btn-danger btn-sm" @click="deleteCard(row)">{{ t('common.delete') }}</button>
+            <div v-if="row.status === 'unused' || row.status === 'locked' || row.status === 'disabled'" class="flex items-center gap-2">
+              <button
+                v-if="row.status !== 'locked'"
+                class="btn btn-warning btn-sm"
+                :disabled="bulkSaving"
+                @click="updateCardStatus(row, 'locked')"
+              >
+                {{ t('admin.store.lockCard') }}
+              </button>
+              <button
+                v-if="row.status !== 'unused'"
+                class="btn btn-secondary btn-sm"
+                :disabled="bulkSaving"
+                @click="updateCardStatus(row, 'unused')"
+              >
+                {{ t('admin.store.unlockCard') }}
+              </button>
+              <button class="btn btn-danger btn-sm" :disabled="bulkSaving" @click="deleteCard(row)">{{ t('common.delete') }}</button>
+            </div>
             <span v-else>-</span>
           </template>
         </DataTable>
@@ -89,12 +139,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminStoreAPI } from '@/api/admin/store'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime } from '@/utils/format'
+import { useTableSelection } from '@/composables/useTableSelection'
 import type { StoreCard, StoreProduct } from '@/types/store'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -109,14 +160,31 @@ const cards = ref<StoreCard[]>([])
 const products = ref<StoreProduct[]>([])
 const loading = ref(false)
 const saving = ref(false)
+const bulkSaving = ref(false)
 const dialogOpen = ref(false)
 const importMode = ref<'text' | 'file'>('text')
 const selectedFiles = ref<File[]>([])
 const pagination = reactive({ page: 1, page_size: 20, total: 0 })
-const filters = reactive({ product_id: '', status: '' })
+const filters = reactive({ product_id: '', status: '', keyword: '' })
 const importForm = reactive({ product_id: 0, contents: '' })
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+const {
+  selectedIds,
+  selectedCount,
+  allVisibleSelected,
+  isSelected,
+  toggle,
+  clear: clearSelection,
+  removeMany,
+  toggleVisible
+} = useTableSelection<StoreCard>({
+  rows: cards,
+  getId: (card) => card.id
+})
 
 const columns = computed<Column[]>(() => [
+  { key: 'select', label: '' },
   { key: 'product_id', label: t('admin.store.product') },
   { key: 'card_type', label: t('admin.store.cardTypeLabel') },
   { key: 'content', label: t('admin.store.cardContent') },
@@ -130,9 +198,41 @@ const productOptionsWithAll = computed(() => [{ value: '', label: t('admin.store
 const statusOptionsWithAll = computed(() => [
   { value: '', label: t('common.all') },
   { value: 'unused', label: t('admin.store.cardStatus.unused') },
+  { value: 'locked', label: t('admin.store.cardStatus.locked') },
   { value: 'sold', label: t('admin.store.cardStatus.sold') },
   { value: 'disabled', label: t('admin.store.cardStatus.disabled') },
 ])
+
+function resetAndLoadCards() {
+  clearSelection()
+  pagination.page = 1
+  loadCards()
+}
+
+function debouncedSearch() {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+  }
+  searchTimer = setTimeout(() => {
+    searchTimer = null
+    resetAndLoadCards()
+  }, 300)
+}
+
+function toggleSelectAllVisible(event: Event) {
+  toggleVisible((event.target as HTMLInputElement).checked)
+}
+
+function cardStatusBadgeClass(status: string) {
+  if (status === 'unused') return 'badge-success'
+  if (status === 'locked') return 'badge-warning'
+  if (status === 'sold') return 'badge-primary'
+  return 'badge-gray'
+}
+
+function cardStatusForAPI(status: 'unused' | 'locked') {
+  return status
+}
 
 function productName(id: number) {
   return products.value.find(product => product.id === id)?.name || `#${id}`
@@ -156,6 +256,7 @@ async function loadCards() {
       page_size: pagination.page_size,
       product_id: filters.product_id || undefined,
       status: filters.status || undefined,
+      keyword: filters.keyword.trim() || undefined,
     })
     cards.value = data.items
     pagination.total = data.total
@@ -206,13 +307,59 @@ async function deleteCard(card: StoreCard) {
   if (!window.confirm(t('admin.store.deleteCardConfirm'))) return
   try {
     await adminStoreAPI.deleteCard(card.id)
+    removeMany([card.id])
     appStore.showSuccess(t('common.deleted'))
     await loadCards()
   } catch (err) {
     appStore.showError(extractApiErrorMessage(err, t('common.error')))
   }
 }
-function setPage(page: number) { pagination.page = page; loadCards() }
-function setPageSize(pageSize: number) { pagination.page_size = pageSize; pagination.page = 1; loadCards() }
+async function updateCardStatus(card: StoreCard, status: 'unused' | 'locked') {
+  bulkSaving.value = true
+  try {
+    const { data } = await adminStoreAPI.bulkUpdateCardStatus([card.id], cardStatusForAPI(status))
+    if (data.failed > 0) {
+      appStore.showError(t('admin.store.bulkStatusPartial', { success: data.success, failed: data.failed }))
+      await loadCards()
+      return
+    }
+    removeMany(data.success_ids)
+    appStore.showSuccess(t(status === 'locked' ? 'admin.store.lockSuccess' : 'admin.store.unlockSuccess', { count: 1 }))
+    await loadCards()
+  } catch (err) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  } finally {
+    bulkSaving.value = false
+  }
+}
+async function bulkUpdateStatus(status: 'unused' | 'locked') {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  const confirmKey = status === 'locked' ? 'admin.store.lockCardsConfirm' : 'admin.store.unlockCardsConfirm'
+  if (!window.confirm(t(confirmKey, { count: ids.length }))) return
+  bulkSaving.value = true
+  try {
+    const { data } = await adminStoreAPI.bulkUpdateCardStatus(ids, cardStatusForAPI(status))
+    removeMany(data.success_ids)
+    if (data.failed > 0) {
+      appStore.showError(t('admin.store.bulkStatusPartial', { success: data.success, failed: data.failed }))
+    } else {
+      appStore.showSuccess(t(status === 'locked' ? 'admin.store.lockSuccess' : 'admin.store.unlockSuccess', { count: data.success }))
+    }
+    await loadCards()
+  } catch (err) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  } finally {
+    bulkSaving.value = false
+  }
+}
+function setPage(page: number) { clearSelection(); pagination.page = page; loadCards() }
+function setPageSize(pageSize: number) { clearSelection(); pagination.page_size = pageSize; pagination.page = 1; loadCards() }
 onMounted(async () => { await loadProducts(); await loadCards() })
+onUnmounted(() => {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
+})
 </script>

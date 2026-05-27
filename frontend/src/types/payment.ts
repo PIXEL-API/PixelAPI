@@ -20,7 +20,7 @@ export type OrderStatus =
   | 'REFUNDED'
   | 'REFUND_FAILED'
 
-export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex'
+export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex' | 'balance' | 'points'
 
 export type OrderType = 'balance' | 'subscription' | 'shop'
 
@@ -78,8 +78,12 @@ export interface CheckoutInfoResponse {
 // ==================== Orders ====================
 
 export interface PaymentOrder {
+  source?: 'payment_order' | 'shop_order'
   id: number
   user_id: number
+  user_email?: string
+  user_name?: string
+  user_notes?: string | null
   amount: number
   pay_amount: number
   currency?: string
@@ -89,7 +93,7 @@ export interface PaymentOrder {
   status: OrderStatus
   order_type: OrderType
   created_at: string
-  expires_at: string
+  expires_at?: string | null
   paid_at?: string
   completed_at?: string
   failed_at?: string

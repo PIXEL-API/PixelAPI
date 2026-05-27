@@ -195,6 +195,23 @@ func (h *ShopHandler) UpdateCardKey(c *gin.Context) {
 	response.Success(c, item)
 }
 
+func (h *ShopHandler) BulkUpdateCardKeyStatus(c *gin.Context) {
+	var req struct {
+		IDs    []int64 `json:"ids"`
+		Status string  `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.shopService.AdminBulkUpdateCardKeyStatus(c.Request.Context(), req.IDs, req.Status)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 func (h *ShopHandler) DeleteCardKey(c *gin.Context) {
 	id, ok := parseAdminShopID(c, "id")
 	if !ok {

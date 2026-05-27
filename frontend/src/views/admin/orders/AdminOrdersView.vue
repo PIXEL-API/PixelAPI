@@ -30,7 +30,7 @@
               <Icon name="key" size="sm" />
               {{ t('payment.orders.viewCards') }}
             </button>
-            <button v-if="row.status === 'PENDING'" @click="handleCancelOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
+            <button v-if="row.status === 'PENDING' && row.source !== 'shop_order'" @click="handleCancelOrder(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20">
               <Icon name="x" size="sm" />
               {{ t('payment.orders.cancel') }}
             </button>
@@ -42,18 +42,18 @@
               <Icon name="plus" size="sm" />
               {{ t('payment.admin.manualFulfill') }}
             </button>
-            <template v-if="row.status === 'REFUND_REQUESTED'">
+            <template v-if="row.status === 'REFUND_REQUESTED' && row.source !== 'shop_order'">
               <span v-if="row.refund_amount" class="rounded-full bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">{{ row.order_type === 'balance' ? '$' : '¥' }}{{ row.refund_amount.toFixed(2) }}</span>
               <button @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
                 <Icon name="check" size="sm" />
                 {{ t('payment.admin.approveRefund') }}
               </button>
             </template>
-            <button v-else-if="row.status === 'REFUND_FAILED'" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
+            <button v-else-if="row.status === 'REFUND_FAILED' && row.source !== 'shop_order'" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20">
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retryRefund') }}
             </button>
-            <button v-else-if="row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED'" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+            <button v-else-if="row.source !== 'shop_order' && (row.status === 'COMPLETED' || row.status === 'PARTIALLY_REFUNDED')" @click="openRefundDialog(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
               <Icon name="dollar" size="sm" />
               {{ t('payment.admin.refund') }}
             </button>
@@ -72,10 +72,10 @@
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.status') }}</p><OrderStatusBadge :status="selectedOrder.status" /></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">{{ selectedOrder.order_type === 'balance' ? '$' : '¥' }}{{ selectedOrder.amount.toFixed(2) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</p><p class="text-sm font-medium text-gray-900 dark:text-white">¥{{ selectedOrder.pay_amount.toFixed(2) }}</p></div>
-          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentMethod') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ t('payment.methods.' + selectedOrder.payment_type, selectedOrder.payment_type) }}</p></div>
+          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentMethod') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ paymentMethodLabel(selectedOrder) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.feeRate') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ selectedOrder.fee_rate }}%</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.createdAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.created_at) }}</p></div>
-          <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.expiresAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.expires_at) }}</p></div>
+          <div v-if="selectedOrder.expires_at"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.expiresAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.expires_at) }}</p></div>
           <div v-if="selectedOrder.paid_at"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.paidAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.paid_at) }}</p></div>
           <div v-if="selectedOrder.completed_at"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.completedAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.completed_at) }}</p></div>
           <div v-if="selectedOrder.failed_reason" class="col-span-2"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.failedReason') }}</p><p class="text-sm text-red-600 dark:text-red-400">{{ selectedOrder.failed_reason }}</p></div>
@@ -292,6 +292,8 @@ const statusFilterOptions = computed(() => [
 
 const paymentTypeFilterOptions = computed(() => [
   { value: '', label: t('payment.admin.allPaymentTypes') },
+  { value: 'balance', label: t('payment.methods.balance') },
+  { value: 'points', label: t('payment.methods.points') },
   { value: 'alipay', label: t('payment.methods.alipay') },
   { value: 'wxpay', label: t('payment.methods.wxpay') },
   { value: 'stripe', label: t('payment.methods.stripe') },
@@ -310,7 +312,7 @@ async function showOrderDetail(order: PaymentOrder) {
   orderAuditLogs.value = []
   showDetailDialog.value = true
   try {
-    const res = await adminPaymentAPI.getOrder(order.id)
+    const res = await (order.source === 'shop_order' ? adminPaymentAPI.getDirectShopOrder(order.id) : adminPaymentAPI.getOrder(order.id))
     const data = res.data as AdminPaymentOrderDetail
     if (data.order) selectedOrder.value = data.order
     selectedShopOrder.value = data.shop_order || null
@@ -329,10 +331,12 @@ async function handleRetryOrder(order: PaymentOrder) {
 }
 
 function canRetryFulfillment(order: PaymentOrder): boolean {
+  if (order.source === 'shop_order') return false
   return order.status === 'PAID' || (order.status === 'FAILED' && !!order.paid_at)
 }
 
 function canManualFulfill(order: PaymentOrder): boolean {
+  if (order.source === 'shop_order') return false
   return ['PENDING', 'EXPIRED', 'CANCELLED', 'FAILED', 'RECHARGING'].includes(order.status)
 }
 
@@ -394,7 +398,11 @@ async function downloadAdminStoreFilesZip(orderId: number): Promise<void> {
   await adminStoreAPI.downloadOrderFilesZip(orderId)
 }
 
-function openRefundDialog(order: PaymentOrder) { selectedOrder.value = order; showRefundDialog.value = true }
+function openRefundDialog(order: PaymentOrder) {
+  if (order.source === 'shop_order') return
+  selectedOrder.value = order
+  showRefundDialog.value = true
+}
 
 async function handleRefund(data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }) {
   if (!selectedOrder.value) return
@@ -407,6 +415,12 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
 }
 
 function formatDateTime(dateStr: string): string { return formatOrderDateTime(dateStr) }
+
+function paymentMethodLabel(order: PaymentOrder): string {
+  if (order.source === 'shop_order' && order.payment_type === 'balance') return t('payment.methods.balance')
+  if (order.source === 'shop_order' && order.payment_type === 'points') return t('payment.methods.points')
+  return t('payment.methods.' + order.payment_type, order.payment_type)
+}
 
 onMounted(() => loadOrders())
 </script>

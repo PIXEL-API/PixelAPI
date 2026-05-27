@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -28,6 +29,14 @@ func makeAccWithLoad(id int64, priority int, loadRate int, lastUsed *time.Time, 
 			CurrentConcurrency: 0,
 			LoadRate:           loadRate,
 		},
+	}
+}
+
+func makeSlowForwardResult(ttftMs int, duration time.Duration, usage ClaudeUsage) *ForwardResult {
+	return &ForwardResult{
+		Usage:        usage,
+		Duration:     duration,
+		FirstTokenMs: &ttftMs,
 	}
 }
 
@@ -149,6 +158,76 @@ func TestFilterByMinLoadRate_SelectsMinLoadRate(t *testing.T) {
 	require.Len(t, result, 2)
 	require.Equal(t, int64(2), result[0].account.ID)
 	require.Equal(t, int64(3), result[1].account.ID)
+}
+
+func TestFilterByMinLoadRate_UsesRuntimePenalty(t *testing.T) {
+	accounts := []accountWithLoad{
+		makeAccWithLoad(1, 1, 0, nil, AccountTypeAPIKey),
+		makeAccWithLoad(2, 1, 30, nil, AccountTypeAPIKey),
+	}
+	accounts[0].runtimePenalty = 180
+
+	result := filterByMinLoadRate(accounts)
+
+	require.Len(t, result, 1)
+	require.Equal(t, int64(2), result[0].account.ID)
+}
+
+func TestAccountRuntimeStickyDecision_ProtectsRecentCacheBenefit(t *testing.T) {
+	stats := newAccountRuntimeStats()
+	stats.report(1, makeSlowForwardResult(16000, 20*time.Second, ClaudeUsage{CacheReadInputTokens: 256}), nil)
+
+	decision := stats.stickyDecision(1)
+
+	require.True(t, decision.CacheProtected)
+	require.True(t, decision.LimitWait)
+	require.False(t, decision.Bypass)
+	require.GreaterOrEqual(t, decision.Penalty, accountRuntimeStickySeverePenalty)
+	require.Less(t, decision.SlowStrike, int64(accountRuntimeStickyExtremeStrike))
+}
+
+func TestAccountRuntimeStickyDecision_BypassesSevereSlowWithoutCacheBenefit(t *testing.T) {
+	stats := newAccountRuntimeStats()
+	stats.report(1, makeSlowForwardResult(16000, 20*time.Second, ClaudeUsage{}), nil)
+
+	decision := stats.stickyDecision(1)
+
+	require.False(t, decision.CacheProtected)
+	require.True(t, decision.LimitWait)
+	require.True(t, decision.Bypass)
+}
+
+func TestAccountRuntimeStickyDecision_BypassesRepeatedSevereSlowEvenWithCacheBenefit(t *testing.T) {
+	stats := newAccountRuntimeStats()
+	for i := 0; i < 2; i++ {
+		stats.report(1, makeSlowForwardResult(16000, 20*time.Second, ClaudeUsage{CacheReadInputTokens: 256}), nil)
+	}
+
+	decision := stats.stickyDecision(1)
+
+	require.True(t, decision.CacheProtected)
+	require.True(t, decision.LimitWait)
+	require.True(t, decision.Bypass)
+	require.GreaterOrEqual(t, decision.SlowStrike, int64(accountRuntimeStickyExtremeStrike))
+}
+
+func TestAccountRuntimeStickyDecision_LimitsStickyWaitForCacheProtectedSlowAccount(t *testing.T) {
+	decision := accountRuntimeStickyDecision{LimitWait: true}
+
+	require.Equal(t, 1, maxWaitingForStickyDecision(3, decision))
+	require.Equal(t, 8*time.Second, waitTimeoutForStickyDecision(8*time.Second, decision))
+	require.Equal(t, 10*time.Second, waitTimeoutForStickyDecision(30*time.Second, decision))
+}
+
+func TestAccountRuntimeFirstResponseTimeoutCountsAsSevereSlow(t *testing.T) {
+	stats := newAccountRuntimeStats()
+	stats.report(1, nil, upstreamFirstResponseFailoverError(&upstreamFirstResponseTimeoutError{err: context.DeadlineExceeded}))
+
+	decision := stats.stickyDecision(1)
+
+	require.True(t, decision.LimitWait)
+	require.True(t, decision.Bypass)
+	require.GreaterOrEqual(t, decision.SlowStrike, int64(2))
 }
 
 // --- selectByLRU ---

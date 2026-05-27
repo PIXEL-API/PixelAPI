@@ -2,6 +2,7 @@ import { apiClient } from '../client'
 import type {
   ImportStoreCardsRequest,
   StoreCard,
+  StoreCardBulkStatusResult,
   StoreFileCardStorageConfig,
   StoreCardStatus,
   StoreCategory,
@@ -196,6 +197,13 @@ export const adminStoreAPI = {
     return apiClient.put<StoreCard>(`/admin/shop/card-keys/${id}`, { ...data, status: cardStatusToAPI(data.status) }).then((response) => {
       response.data = cardToView(response.data)
       return response
+    })
+  },
+
+  bulkUpdateCardStatus(ids: number[], status: string) {
+    return apiClient.post<StoreCardBulkStatusResult>('/admin/shop/card-keys/bulk-status', {
+      ids,
+      status: cardStatusToAPI(status),
     })
   },
 

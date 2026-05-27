@@ -185,6 +185,13 @@ export interface ImportStoreCardsRequest {
   contents: string[]
 }
 
+export interface StoreCardBulkStatusResult {
+  success: number
+  failed: number
+  success_ids: number[]
+  failed_ids: number[]
+}
+
 export interface StoreFileCardStorageConfig {
   enabled: boolean
   endpoint: string

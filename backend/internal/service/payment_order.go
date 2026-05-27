@@ -7,12 +7,16 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
+	"github.com/Wei-Shaw/sub2api/ent/shoporder"
+	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -844,7 +848,21 @@ func (s *PaymentService) GetShopOrderForPaymentOrder(ctx context.Context, order 
 	return reader.GetOrderForAdmin(ctx, *order.ShopOrderID)
 }
 
-func (s *PaymentService) GetUserOrders(ctx context.Context, userID int64, p OrderListParams) ([]*dbent.PaymentOrder, int, error) {
+func (s *PaymentService) GetShopOrderByIDForAdmin(ctx context.Context, shopOrderID int64) (*ShopOrderDTO, error) {
+	if shopOrderID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_ORDER", "shop order id is required")
+	}
+	reader, ok := s.shopFulfillment.(ShopPaymentDeliveryReader)
+	if !ok || reader == nil {
+		return nil, infraerrors.ServiceUnavailable("SHOP_FULFILLMENT_NOT_CONFIGURED", "shop fulfillment service is not configured")
+	}
+	return reader.GetOrderForAdmin(ctx, shopOrderID)
+}
+
+func (s *PaymentService) GetUserOrders(ctx context.Context, userID int64, p OrderListParams) ([]PaymentOrderListItem, int, error) {
+	if shouldIncludeDirectShopOrders(p) {
+		return s.listOrdersWithDirectShopOrders(ctx, userID, p)
+	}
 	q := s.entClient.PaymentOrder.Query().Where(paymentorder.UserIDEQ(userID))
 	if p.Status != "" {
 		q = q.Where(paymentorder.StatusEQ(p.Status))
@@ -864,11 +882,18 @@ func (s *PaymentService) GetUserOrders(ctx context.Context, userID int64, p Orde
 	if err != nil {
 		return nil, 0, fmt.Errorf("query user orders: %w", err)
 	}
-	return orders, total, nil
+	out := make([]PaymentOrderListItem, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, mapPaymentOrderListItem(order))
+	}
+	return out, total, nil
 }
 
 // AdminListOrders returns a paginated list of orders. If userID > 0, filters by user.
-func (s *PaymentService) AdminListOrders(ctx context.Context, userID int64, p OrderListParams) ([]*dbent.PaymentOrder, int, error) {
+func (s *PaymentService) AdminListOrders(ctx context.Context, userID int64, p OrderListParams) ([]PaymentOrderListItem, int, error) {
+	if shouldIncludeDirectShopOrders(p) {
+		return s.listOrdersWithDirectShopOrders(ctx, userID, p)
+	}
 	q := s.entClient.PaymentOrder.Query()
 	if userID > 0 {
 		q = q.Where(paymentorder.UserIDEQ(userID))
@@ -898,5 +923,277 @@ func (s *PaymentService) AdminListOrders(ctx context.Context, userID int64, p Or
 	if err != nil {
 		return nil, 0, fmt.Errorf("query admin orders: %w", err)
 	}
-	return orders, total, nil
+	out := make([]PaymentOrderListItem, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, mapPaymentOrderListItem(order))
+	}
+	return out, total, nil
+}
+
+func (s *PaymentService) listOrdersWithDirectShopOrders(ctx context.Context, userID int64, p OrderListParams) ([]PaymentOrderListItem, int, error) {
+	ps, pg := applyPagination(p.PageSize, p.Page)
+	queryLimit := pg * ps
+	paymentOrders, paymentTotal, err := s.listPaymentOrderItems(ctx, userID, p, queryLimit)
+	if err != nil {
+		return nil, 0, err
+	}
+	shopOrders, shopTotal, err := s.listDirectShopOrderItems(ctx, userID, p, queryLimit)
+	if err != nil {
+		return nil, 0, err
+	}
+	items := make([]PaymentOrderListItem, 0, len(paymentOrders)+len(shopOrders))
+	items = append(items, paymentOrders...)
+	items = append(items, shopOrders...)
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			if items[i].Source == items[j].Source {
+				return items[i].ID > items[j].ID
+			}
+			return items[i].Source < items[j].Source
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	offset := (pg - 1) * ps
+	if offset >= len(items) {
+		return []PaymentOrderListItem{}, paymentTotal + shopTotal, nil
+	}
+	end := offset + ps
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], paymentTotal + shopTotal, nil
+}
+
+func (s *PaymentService) listPaymentOrderItems(ctx context.Context, userID int64, p OrderListParams, limit int) ([]PaymentOrderListItem, int, error) {
+	q := s.entClient.PaymentOrder.Query()
+	if userID > 0 {
+		q = q.Where(paymentorder.UserIDEQ(userID))
+	}
+	if p.Status != "" {
+		q = q.Where(paymentorder.StatusEQ(p.Status))
+	}
+	if p.OrderType != "" {
+		q = q.Where(paymentorder.OrderTypeEQ(p.OrderType))
+	}
+	if p.PaymentType != "" {
+		q = q.Where(paymentorder.PaymentTypeEQ(p.PaymentType))
+	}
+	if keyword := strings.TrimSpace(p.Keyword); keyword != "" {
+		q = q.Where(paymentorder.Or(
+			paymentorder.OutTradeNoContainsFold(keyword),
+			paymentorder.UserEmailContainsFold(keyword),
+			paymentorder.UserNameContainsFold(keyword),
+		))
+	}
+	total, err := q.Clone().Count(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count payment orders: %w", err)
+	}
+	orders, err := q.Order(dbent.Desc(paymentorder.FieldCreatedAt)).Limit(limit).All(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query payment orders: %w", err)
+	}
+	out := make([]PaymentOrderListItem, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, mapPaymentOrderListItem(order))
+	}
+	return out, total, nil
+}
+
+func (s *PaymentService) listDirectShopOrderItems(ctx context.Context, userID int64, p OrderListParams, limit int) ([]PaymentOrderListItem, int, error) {
+	q := s.directShopOrderQuery(userID, p).WithUser()
+	total, err := q.Clone().Count(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count direct shop orders: %w", err)
+	}
+	orders, err := q.Order(dbent.Desc(shoporder.FieldCreatedAt)).Limit(limit).All(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query direct shop orders: %w", err)
+	}
+	out := make([]PaymentOrderListItem, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, mapDirectShopOrderListItem(order))
+	}
+	return out, total, nil
+}
+
+func (s *PaymentService) GetDirectShopOrderListItem(ctx context.Context, shopOrderID int64) (*PaymentOrderListItem, error) {
+	if shopOrderID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_ORDER", "shop order id is required")
+	}
+	order, err := s.entClient.ShopOrder.Query().
+		Where(
+			shoporder.IDEQ(shopOrderID),
+			shoporder.PaymentOrderIDIsNil(),
+			shoporder.PaymentMethodIn(ShopPaymentMethodBalance, ShopPaymentMethodPoints),
+		).
+		WithUser().
+		Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, infraerrors.NotFound("NOT_FOUND", "shop order not found")
+		}
+		return nil, fmt.Errorf("get direct shop order: %w", err)
+	}
+	item := mapDirectShopOrderListItem(order)
+	return &item, nil
+}
+
+func shouldIncludeDirectShopOrders(p OrderListParams) bool {
+	if p.OrderType != "" && p.OrderType != payment.OrderTypeShop {
+		return false
+	}
+	if p.PaymentType != "" && p.PaymentType != ShopPaymentMethodBalance && p.PaymentType != ShopPaymentMethodPoints {
+		return false
+	}
+	return true
+}
+
+func (s *PaymentService) directShopOrderQuery(userID int64, p OrderListParams) *dbent.ShopOrderQuery {
+	q := s.entClient.ShopOrder.Query().
+		Where(
+			shoporder.PaymentOrderIDIsNil(),
+			shoporder.PaymentMethodIn(ShopPaymentMethodBalance, ShopPaymentMethodPoints),
+		)
+	if userID > 0 {
+		q = q.Where(shoporder.UserIDEQ(userID))
+	}
+	if p.Status != "" {
+		if status, ok := paymentStatusToShopOrderStatus(p.Status); ok {
+			q = q.Where(shoporder.StatusEQ(status))
+		} else {
+			q = q.Where(shoporder.IDEQ(0))
+		}
+	}
+	if p.PaymentType != "" {
+		q = q.Where(shoporder.PaymentMethodEQ(p.PaymentType))
+	}
+	if keyword := strings.TrimSpace(p.Keyword); keyword != "" {
+		q = q.Where(shoporder.Or(
+			shoporder.OrderNoContainsFold(keyword),
+			shoporder.ProductNameContainsFold(keyword),
+			shoporder.HasProductWith(shopproduct.NameContainsFold(keyword)),
+			shoporder.HasUserWith(
+				user.Or(
+					user.EmailContainsFold(keyword),
+					user.UsernameContainsFold(keyword),
+				),
+			),
+		))
+	}
+	return q
+}
+
+func mapPaymentOrderListItem(order *dbent.PaymentOrder) PaymentOrderListItem {
+	if order == nil {
+		return PaymentOrderListItem{}
+	}
+	return PaymentOrderListItem{
+		Source:              "payment_order",
+		ID:                  order.ID,
+		UserID:              order.UserID,
+		UserEmail:           order.UserEmail,
+		UserName:            order.UserName,
+		UserNotes:           order.UserNotes,
+		Amount:              order.Amount,
+		PayAmount:           order.PayAmount,
+		FeeRate:             order.FeeRate,
+		RechargeCode:        order.RechargeCode,
+		OutTradeNo:          order.OutTradeNo,
+		PaymentType:         order.PaymentType,
+		OrderType:           order.OrderType,
+		PlanID:              order.PlanID,
+		SubscriptionGroupID: order.SubscriptionGroupID,
+		SubscriptionDays:    order.SubscriptionDays,
+		ShopOrderID:         order.ShopOrderID,
+		ProviderInstanceID:  order.ProviderInstanceID,
+		ProviderKey:         order.ProviderKey,
+		Status:              order.Status,
+		RefundAmount:        order.RefundAmount,
+		RefundReason:        order.RefundReason,
+		RefundAt:            order.RefundAt,
+		RefundRequestedAt:   order.RefundRequestedAt,
+		RefundRequestReason: order.RefundRequestReason,
+		RefundRequestedBy:   order.RefundRequestedBy,
+		ExpiresAt:           &order.ExpiresAt,
+		PaidAt:              order.PaidAt,
+		CompletedAt:         order.CompletedAt,
+		FailedAt:            order.FailedAt,
+		FailedReason:        order.FailedReason,
+		CreatedAt:           order.CreatedAt,
+		UpdatedAt:           order.UpdatedAt,
+	}
+}
+
+func mapDirectShopOrderListItem(order *dbent.ShopOrder) PaymentOrderListItem {
+	if order == nil {
+		return PaymentOrderListItem{}
+	}
+	shopOrderID := order.ID
+	userEmail := ""
+	userName := ""
+	var userNotes *string
+	if u, err := order.Edges.UserOrErr(); err == nil && u != nil {
+		userEmail = u.Email
+		userName = u.Username
+		userNotes = psNilIfEmpty(u.Notes)
+	}
+	return PaymentOrderListItem{
+		Source:       "shop_order",
+		ID:           order.ID,
+		UserID:       order.UserID,
+		UserEmail:    userEmail,
+		UserName:     userName,
+		UserNotes:    userNotes,
+		Amount:       normalizeShopAmount(order.TotalAmount),
+		PayAmount:    normalizeShopAmount(order.TotalAmount),
+		OutTradeNo:   order.OrderNo,
+		PaymentType:  order.PaymentMethod,
+		OrderType:    payment.OrderTypeShop,
+		ShopOrderID:  &shopOrderID,
+		Status:       shopOrderStatusToPaymentStatus(order.Status),
+		RefundAmount: 0,
+		PaidAt:       order.PaidAt,
+		CompletedAt:  order.CompletedAt,
+		FailedReason: order.FailedReason,
+		CreatedAt:    order.CreatedAt,
+		UpdatedAt:    order.UpdatedAt,
+		RechargeCode: "",
+		ProviderKey:  nil,
+		ExpiresAt:    nil,
+	}
+}
+
+func shopOrderStatusToPaymentStatus(status string) string {
+	switch status {
+	case ShopOrderStatusPending:
+		return OrderStatusPending
+	case ShopOrderStatusPaid:
+		return OrderStatusPaid
+	case ShopOrderStatusCompleted:
+		return OrderStatusCompleted
+	case ShopOrderStatusCancelled:
+		return OrderStatusCancelled
+	case ShopOrderStatusFailed:
+		return OrderStatusFailed
+	default:
+		return status
+	}
+}
+
+func paymentStatusToShopOrderStatus(status string) (string, bool) {
+	switch status {
+	case OrderStatusPending:
+		return ShopOrderStatusPending, true
+	case OrderStatusPaid:
+		return ShopOrderStatusPaid, true
+	case OrderStatusCompleted:
+		return ShopOrderStatusCompleted, true
+	case OrderStatusCancelled:
+		return ShopOrderStatusCancelled, true
+	case OrderStatusFailed:
+		return ShopOrderStatusFailed, true
+	default:
+		return "", false
+	}
 }

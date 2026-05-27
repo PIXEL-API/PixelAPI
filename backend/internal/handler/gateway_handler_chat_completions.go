@@ -251,6 +251,7 @@ routeLoop:
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
+			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError

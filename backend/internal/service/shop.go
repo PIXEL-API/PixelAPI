@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	mathrand "math/rand"
+	"sort"
 	"strings"
 	"time"
 
@@ -366,6 +367,13 @@ type ShopUpdateCardKeyRequest struct {
 	ProductID *int64  `json:"product_id"`
 	Content   *string `json:"content"`
 	Status    *string `json:"status"`
+}
+
+type ShopBulkUpdateCardKeyStatusResult struct {
+	Success    int     `json:"success"`
+	Failed     int     `json:"failed"`
+	SuccessIDs []int64 `json:"success_ids"`
+	FailedIDs  []int64 `json:"failed_ids"`
 }
 
 func (s *ShopService) ListCategories(ctx context.Context, admin bool) ([]ShopCategoryDTO, error) {
@@ -2075,17 +2083,20 @@ func (s *ShopService) AdminCreateCardKey(ctx context.Context, req ShopCreateCard
 		return nil, ErrShopInvalidInput
 	}
 	status := normalizeCardKeyStatus(req.Status)
-	if status == "" || status == ShopCardStatusSold || status == ShopCardStatusLocked {
+	if status == "" || !isAdminAssignableCardKeyStatus(status) {
 		return nil, ErrShopInvalidInput
 	}
 	if err := s.ensureProductExists(ctx, req.ProductID); err != nil {
 		return nil, err
 	}
-	item, err := s.entClient.ShopCardKey.Create().
+	create := s.entClient.ShopCardKey.Create().
 		SetProductID(req.ProductID).
 		SetContent(content).
-		SetStatus(status).
-		Save(ctx)
+		SetStatus(status)
+	if status == ShopCardStatusLocked {
+		create.SetLockedAt(time.Now())
+	}
+	item, err := create.Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create shop card key: %w", err)
 	}
@@ -2153,7 +2164,7 @@ func (s *ShopService) AdminUpdateCardKey(ctx context.Context, id int64, req Shop
 		}
 		return nil, fmt.Errorf("lock shop card key: %w", err)
 	}
-	if current.Status == ShopCardStatusSold || current.Status == ShopCardStatusLocked || current.OrderID != nil {
+	if current.Status == ShopCardStatusSold || current.OrderID != nil {
 		return nil, ErrShopCardKeyAlreadyAssigned
 	}
 	if req.ProductID != nil {
@@ -2174,10 +2185,16 @@ func (s *ShopService) AdminUpdateCardKey(ctx context.Context, id int64, req Shop
 	}
 	if req.Status != nil {
 		status := normalizeCardKeyStatus(*req.Status)
-		if status == "" || status == ShopCardStatusSold || status == ShopCardStatusLocked {
+		if status == "" || !isAdminAssignableCardKeyStatus(status) {
 			return nil, ErrShopInvalidInput
 		}
 		up.SetStatus(status)
+		if status == ShopCardStatusLocked {
+			now := time.Now()
+			up.SetLockedAt(now).ClearLockedUntil().ClearOrderID().ClearSoldAt()
+		} else {
+			up.ClearLockedAt().ClearLockedUntil().ClearOrderID().ClearSoldAt()
+		}
 	}
 	item, err := up.Save(ctx)
 	if err != nil {
@@ -2194,6 +2211,64 @@ func (s *ShopService) AdminUpdateCardKey(ctx context.Context, id int64, req Shop
 		return nil, err
 	}
 	return &dto, nil
+}
+
+func (s *ShopService) AdminBulkUpdateCardKeyStatus(ctx context.Context, ids []int64, rawStatus string) (*ShopBulkUpdateCardKeyStatusResult, error) {
+	cardIDs := normalizeShopCardKeyIDs(ids)
+	if len(cardIDs) == 0 {
+		return nil, ErrShopInvalidInput
+	}
+	status := normalizeCardKeyStatus(rawStatus)
+	if status == "" || !isAdminAssignableCardKeyStatus(status) {
+		return nil, ErrShopInvalidInput
+	}
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin shop card bulk status transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	query := tx.ShopCardKey.Query().Where(shopcardkey.IDIn(cardIDs...))
+	if shopTxSupportsRowLock(tx) {
+		query.ForUpdate()
+	}
+	items, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("lock shop card keys for bulk status: %w", err)
+	}
+	itemByID := make(map[int64]*dbent.ShopCardKey, len(items))
+	for _, item := range items {
+		itemByID[item.ID] = item
+	}
+
+	result := &ShopBulkUpdateCardKeyStatusResult{
+		SuccessIDs: make([]int64, 0, len(cardIDs)),
+		FailedIDs:  make([]int64, 0),
+	}
+	now := time.Now()
+	for _, id := range cardIDs {
+		item := itemByID[id]
+		if item == nil || item.Status == ShopCardStatusSold || item.OrderID != nil {
+			result.FailedIDs = append(result.FailedIDs, id)
+			continue
+		}
+		update := tx.ShopCardKey.UpdateOneID(id).SetStatus(status)
+		if status == ShopCardStatusLocked {
+			update.SetLockedAt(now).ClearLockedUntil().ClearOrderID().ClearSoldAt()
+		} else {
+			update.ClearLockedAt().ClearLockedUntil().ClearOrderID().ClearSoldAt()
+		}
+		if _, err := update.Save(ctx); err != nil {
+			return nil, fmt.Errorf("bulk update shop card key status: %w", err)
+		}
+		result.SuccessIDs = append(result.SuccessIDs, id)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit shop card bulk status transaction: %w", err)
+	}
+	result.Success = len(result.SuccessIDs)
+	result.Failed = len(result.FailedIDs)
+	return result, nil
 }
 
 func (s *ShopService) AdminDeleteCardKey(ctx context.Context, id int64) error {
@@ -2214,7 +2289,7 @@ func (s *ShopService) AdminDeleteCardKey(ctx context.Context, id int64) error {
 		}
 		return fmt.Errorf("lock shop card key: %w", err)
 	}
-	if current.Status == ShopCardStatusSold || current.Status == ShopCardStatusLocked || current.OrderID != nil {
+	if current.Status == ShopCardStatusSold || current.OrderID != nil {
 		return ErrShopCardKeyAlreadyAssigned
 	}
 	var meta map[int64]shopFileCardMeta
@@ -2544,11 +2619,35 @@ func normalizeCardKeyStatus(status string) string {
 		return ShopCardStatusAvailable
 	}
 	switch status {
-	case ShopCardStatusAvailable, ShopCardStatusDisabled:
+	case ShopCardStatusAvailable, ShopCardStatusLocked, ShopCardStatusDisabled:
 		return status
 	default:
 		return ""
 	}
+}
+
+func isAdminAssignableCardKeyStatus(status string) bool {
+	return status == ShopCardStatusAvailable || status == ShopCardStatusLocked || status == ShopCardStatusDisabled
+}
+
+func normalizeShopCardKeyIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func mapShopCategory(item *dbent.ShopCategory) ShopCategoryDTO {

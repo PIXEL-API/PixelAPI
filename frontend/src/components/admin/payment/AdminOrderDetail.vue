@@ -53,7 +53,7 @@
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.createdAt') }}</p>
           <p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(order.created_at) }}</p>
         </div>
-        <div>
+        <div v-if="order.expires_at">
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.expiresAt') }}</p>
           <p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(order.expires_at) }}</p>
         </div>
@@ -88,14 +88,14 @@
 
       <div class="flex items-center justify-end gap-2 border-t border-gray-200 pt-4 dark:border-dark-700">
         <button
-          v-if="order.status === 'PENDING'"
+          v-if="order.status === 'PENDING' && order.source !== 'shop_order'"
           @click="emit('cancel', order)"
           class="btn btn-sm rounded-md bg-yellow-50 px-3 py-1.5 text-sm text-yellow-600 hover:bg-yellow-100 dark:bg-yellow-900/20 dark:text-yellow-400 dark:hover:bg-yellow-900/30"
         >
           {{ t('payment.orders.cancel') }}
         </button>
         <button
-          v-if="order.status === 'FAILED'"
+          v-if="order.status === 'FAILED' && order.source !== 'shop_order'"
           @click="emit('retry', order)"
           class="btn btn-sm btn-secondary"
         >
@@ -148,6 +148,7 @@ const emit = defineEmits<{
 }>()
 
 function canRefund(order: PaymentOrder): boolean {
+  if (order.source === 'shop_order') return false
   return canRefundStatus(order.status)
 }
 

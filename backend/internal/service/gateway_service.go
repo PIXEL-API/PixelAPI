@@ -73,8 +73,9 @@ type forceCacheBillingKeyType struct{}
 
 // accountWithLoad 账号与负载信息的组合，用于负载感知调度
 type accountWithLoad struct {
-	account  *Account
-	loadInfo *AccountLoadInfo
+	account        *Account
+	loadInfo       *AccountLoadInfo
+	runtimePenalty int
 }
 
 var ForceCacheBillingContextKey = forceCacheBillingKeyType{}
@@ -577,6 +578,7 @@ type GatewayService struct {
 	debugGatewayBodyFile   atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
 	tlsFPProfileService    *TLSFingerprintProfileService
 	balanceNotifyService   *BalanceNotifyService
+	accountRuntimeStats    *accountRuntimeStats
 }
 
 // NewGatewayService creates a new GatewayService
@@ -644,6 +646,7 @@ func NewGatewayService(
 		channelService:         channelService,
 		resolver:               resolver,
 		balanceNotifyService:   balanceNotifyService,
+		accountRuntimeStats:    newAccountRuntimeStats(),
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -750,6 +753,13 @@ func (s *GatewayService) BindStickySession(ctx context.Context, groupID *int64, 
 		return nil
 	}
 	return s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, accountID, stickySessionTTL)
+}
+
+func (s *GatewayService) ReportAccountForwardResult(accountID int64, result *ForwardResult, err error) {
+	if s == nil || s.accountRuntimeStats == nil || accountID <= 0 {
+		return
+	}
+	s.accountRuntimeStats.report(accountID, result, err)
 }
 
 // GetCachedSessionAccountID retrieves the account ID bound to a sticky session.
@@ -1505,13 +1515,20 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 
 			if stickyAccountID > 0 && stickyAccountID == account.ID && s.concurrencyService != nil {
+				stickyRuntime := s.stickyRuntimeDecision(account.ID)
+				if stickyRuntime.Bypass {
+					logStickyRuntimeDecision(account.ID, sessionHash, stickyRuntime, "legacy_wait_bypass")
+					localExcluded[account.ID] = struct{}{}
+					continue
+				}
 				waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, account.ID)
-				if waitingCount < cfg.StickySessionMaxWaiting {
+				maxWaiting := maxWaitingForStickyDecision(cfg.StickySessionMaxWaiting, stickyRuntime)
+				if waitingCount < maxWaiting {
 					return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
 						AccountID:      account.ID,
 						MaxConcurrency: account.Concurrency,
-						Timeout:        cfg.StickySessionWaitTimeout,
-						MaxWaiting:     cfg.StickySessionMaxWaiting,
+						Timeout:        waitTimeoutForStickyDecision(cfg.StickySessionWaitTimeout, stickyRuntime),
+						MaxWaiting:     maxWaiting,
 					})
 				}
 			}
@@ -1651,6 +1668,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					// 粘性账号在路由列表中，优先使用
 					if stickyAccount, ok := accountByID[stickyAccountID]; ok {
 						var stickyCacheMissReason string
+						stickyRuntime := s.stickyRuntimeDecision(stickyAccountID)
 
 						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
 							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
@@ -1661,7 +1679,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 						rpmPass := gatePass && s.isAccountSchedulableForRPM(ctx, stickyAccount, true)
 
-						if rpmPass { // 粘性会话窗口费用+RPM 检查
+						if rpmPass && stickyRuntime.Bypass {
+							logStickyRuntimeDecision(stickyAccountID, sessionHash, stickyRuntime, "routed_sticky_bypass")
+							stickyCacheMissReason = "runtime_slow"
+						}
+
+						if rpmPass && !stickyRuntime.Bypass { // 粘性会话窗口费用+RPM 检查
 							result, err := s.tryAcquireAccountSlot(ctx, stickyAccountID, stickyAccount.Concurrency)
 							if err == nil && result.Acquired {
 								// 会话数量限制检查
@@ -1684,7 +1707,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 							if stickyCacheMissReason == "" {
 								waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, stickyAccountID)
-								if waitingCount < cfg.StickySessionMaxWaiting {
+								maxWaiting := maxWaitingForStickyDecision(cfg.StickySessionMaxWaiting, stickyRuntime)
+								if waitingCount < maxWaiting {
 									// 会话数量限制检查（等待计划也需要占用会话配额）
 									if !s.checkAndRegisterSession(ctx, stickyAccount, sessionHash) {
 										stickyCacheMissReason = "session_limit"
@@ -1695,8 +1719,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 											WaitPlan: &AccountWaitPlan{
 												AccountID:      stickyAccountID,
 												MaxConcurrency: stickyAccount.Concurrency,
-												Timeout:        cfg.StickySessionWaitTimeout,
-												MaxWaiting:     cfg.StickySessionMaxWaiting,
+												Timeout:        waitTimeoutForStickyDecision(cfg.StickySessionWaitTimeout, stickyRuntime),
+												MaxWaiting:     maxWaiting,
 											},
 										}, nil
 									}
@@ -1747,7 +1771,11 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					loadInfo = &AccountLoadInfo{AccountID: acc.ID}
 				}
 				if loadInfo.LoadRate < 100 {
-					routingAvailable = append(routingAvailable, accountWithLoad{account: acc, loadInfo: loadInfo})
+					routingAvailable = append(routingAvailable, accountWithLoad{
+						account:        acc,
+						loadInfo:       loadInfo,
+						runtimePenalty: s.accountRuntimePenalty(acc.ID),
+					})
 				}
 			}
 
@@ -1758,8 +1786,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					if a.account.Priority != b.account.Priority {
 						return a.account.Priority < b.account.Priority
 					}
-					if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
-						return a.loadInfo.LoadRate < b.loadInfo.LoadRate
+					if effectiveLoadRate(a) != effectiveLoadRate(b) {
+						return effectiveLoadRate(a) < effectiveLoadRate(b)
 					}
 					switch {
 					case a.account.LastUsedAt == nil && b.account.LastUsedAt != nil:
@@ -1843,6 +1871,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				windowCostOK := s.isAccountSchedulableForWindowCost(ctx, account, true)
 				rpmOK := s.isAccountSchedulableForRPM(ctx, account, true)
 				schedulable := s.isAccountSchedulableForSelection(account)
+				stickyRuntime := s.stickyRuntimeDecision(accountID)
 
 				slog.Debug("sticky.layer1_5_no_routing_checks",
 					"account_id", accountID,
@@ -1857,7 +1886,11 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					"rpm_ok", rpmOK,
 				)
 
-				if !clearSticky && platformOK && modelSupported && modelSchedulable && quotaOK && windowCostOK && rpmOK && schedulable {
+				if !clearSticky && platformOK && modelSupported && modelSchedulable && quotaOK && windowCostOK && rpmOK && schedulable && stickyRuntime.Bypass {
+					logStickyRuntimeDecision(accountID, sessionHash, stickyRuntime, "sticky_bypass")
+				}
+
+				if !clearSticky && platformOK && modelSupported && modelSchedulable && quotaOK && windowCostOK && rpmOK && schedulable && !stickyRuntime.Bypass {
 					result, err := s.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 					if err == nil && result.Acquired {
 						// 会话数量限制检查
@@ -1887,7 +1920,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					}
 
 					waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, accountID)
-					if waitingCount < cfg.StickySessionMaxWaiting {
+					maxWaiting := maxWaitingForStickyDecision(cfg.StickySessionMaxWaiting, stickyRuntime)
+					if waitingCount < maxWaiting {
 						// 会话数量限制检查（等待计划也需要占用会话配额）
 						if !s.checkAndRegisterSession(ctx, account, sessionHash) {
 							// 会话限制已满，继续到 Layer 2
@@ -1900,8 +1934,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 							return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
 								AccountID:      accountID,
 								MaxConcurrency: account.Concurrency,
-								Timeout:        cfg.StickySessionWaitTimeout,
-								MaxWaiting:     cfg.StickySessionMaxWaiting,
+								Timeout:        waitTimeoutForStickyDecision(cfg.StickySessionWaitTimeout, stickyRuntime),
+								MaxWaiting:     maxWaiting,
 							})
 						}
 					}
@@ -2005,8 +2039,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 			if loadInfo.LoadRate < 100 {
 				available = append(available, accountWithLoad{
-					account:  acc,
-					loadInfo: loadInfo,
+					account:        acc,
+					loadInfo:       loadInfo,
+					runtimePenalty: s.accountRuntimePenalty(acc.ID),
 				})
 			}
 		}
@@ -2067,7 +2102,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
 	ordered := append([]*Account(nil), candidates...)
-	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
+	s.sortAccountsByPriorityRuntimeAndLastUsed(ordered, preferOAuth)
 
 	for _, acc := range ordered {
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
@@ -2776,20 +2811,77 @@ func filterByMinPriority(accounts []accountWithLoad) []accountWithLoad {
 	return result
 }
 
-// filterByMinLoadRate 过滤出负载率最低的账号集合
+func maxWaitingForStickyDecision(defaultMax int, decision accountRuntimeStickyDecision) int {
+	if !decision.LimitWait {
+		return defaultMax
+	}
+	if defaultMax <= 0 {
+		return defaultMax
+	}
+	if defaultMax < accountRuntimeStickySlowMaxWait {
+		return defaultMax
+	}
+	return accountRuntimeStickySlowMaxWait
+}
+
+func waitTimeoutForStickyDecision(defaultTimeout time.Duration, decision accountRuntimeStickyDecision) time.Duration {
+	if !decision.LimitWait || defaultTimeout <= 0 || defaultTimeout <= accountRuntimeStickySlowWaitCap {
+		return defaultTimeout
+	}
+	return accountRuntimeStickySlowWaitCap
+}
+
+func logStickyRuntimeDecision(accountID int64, sessionHash string, decision accountRuntimeStickyDecision, action string) {
+	slog.Info("sticky.runtime_slow_account",
+		"account_id", accountID,
+		"session", shortSessionHash(sessionHash),
+		"action", action,
+		"penalty", decision.Penalty,
+		"slow_score", decision.SlowScore,
+		"slow_strike", decision.SlowStrike,
+		"cache_protected", decision.CacheProtected,
+	)
+}
+
+func (s *GatewayService) accountRuntimePenalty(accountID int64) int {
+	if s == nil || s.accountRuntimeStats == nil {
+		return 0
+	}
+	return s.accountRuntimeStats.loadPenalty(accountID)
+}
+
+func (s *GatewayService) stickyRuntimeDecision(accountID int64) accountRuntimeStickyDecision {
+	if s == nil || s.accountRuntimeStats == nil {
+		return accountRuntimeStickyDecision{}
+	}
+	return s.accountRuntimeStats.stickyDecision(accountID)
+}
+
+func effectiveLoadRate(acc accountWithLoad) int {
+	if acc.loadInfo == nil {
+		return acc.runtimePenalty
+	}
+	loadRate := acc.loadInfo.LoadRate
+	if loadRate < 0 {
+		loadRate = 0
+	}
+	return loadRate + acc.runtimePenalty
+}
+
+// filterByMinLoadRate 过滤出有效负载率最低的账号集合
 func filterByMinLoadRate(accounts []accountWithLoad) []accountWithLoad {
 	if len(accounts) == 0 {
 		return accounts
 	}
-	minLoadRate := accounts[0].loadInfo.LoadRate
+	minLoadRate := effectiveLoadRate(accounts[0])
 	for _, acc := range accounts[1:] {
-		if acc.loadInfo.LoadRate < minLoadRate {
-			minLoadRate = acc.loadInfo.LoadRate
+		if effectiveLoadRate(acc) < minLoadRate {
+			minLoadRate = effectiveLoadRate(acc)
 		}
 	}
 	result := make([]accountWithLoad, 0, len(accounts))
 	for _, acc := range accounts {
-		if acc.loadInfo.LoadRate == minLoadRate {
+		if effectiveLoadRate(acc) == minLoadRate {
 			result = append(result, acc)
 		}
 	}
@@ -2879,7 +2971,7 @@ func sortAccountsByPriorityAndLastUsed(accounts []*Account, preferOAuth bool) {
 	shuffleWithinPriorityAndLastUsed(accounts, preferOAuth)
 }
 
-// shuffleWithinSortGroups 对排序后的 accountWithLoad 切片，按 (Priority, LoadRate, LastUsedAt) 分组后组内随机打乱。
+// shuffleWithinSortGroups 对排序后的 accountWithLoad 切片，按 (Priority, EffectiveLoadRate, LastUsedAt) 分组后组内随机打乱。
 // 防止并发请求读取同一快照时，确定性排序导致所有请求命中相同账号。
 func shuffleWithinSortGroups(accounts []accountWithLoad) {
 	if len(accounts) <= 1 {
@@ -2905,7 +2997,7 @@ func sameAccountWithLoadGroup(a, b accountWithLoad) bool {
 	if a.account.Priority != b.account.Priority {
 		return false
 	}
-	if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
+	if effectiveLoadRate(a) != effectiveLoadRate(b) {
 		return false
 	}
 	return sameLastUsedAt(a.account.LastUsedAt, b.account.LastUsedAt)
@@ -2918,13 +3010,23 @@ func sameAccountWithLoadGroup(a, b accountWithLoad) bool {
 // - 先把同组账号按 (OAuth / 非 OAuth) 拆成两段，保持 OAuth 段在前；
 // - 再分别在各段内随机打散，避免热点。
 func shuffleWithinPriorityAndLastUsed(accounts []*Account, preferOAuth bool) {
+	shuffleWithinPriorityAndLastUsedByGroup(accounts, preferOAuth, sameAccountGroup)
+}
+
+func shuffleWithinPriorityRuntimeAndLastUsed(accounts []*Account, preferOAuth bool, svc *GatewayService) {
+	shuffleWithinPriorityAndLastUsedByGroup(accounts, preferOAuth, func(a, b *Account) bool {
+		return sameAccountRuntimeGroup(a, b, svc)
+	})
+}
+
+func shuffleWithinPriorityAndLastUsedByGroup(accounts []*Account, preferOAuth bool, sameGroup func(a, b *Account) bool) {
 	if len(accounts) <= 1 {
 		return
 	}
 	i := 0
 	for i < len(accounts) {
 		j := i + 1
-		for j < len(accounts) && sameAccountGroup(accounts[i], accounts[j]) {
+		for j < len(accounts) && sameGroup(accounts[i], accounts[j]) {
 			j++
 		}
 		if j-i > 1 {
@@ -2964,6 +3066,16 @@ func sameAccountGroup(a, b *Account) bool {
 	return sameLastUsedAt(a.LastUsedAt, b.LastUsedAt)
 }
 
+func sameAccountRuntimeGroup(a, b *Account, svc *GatewayService) bool {
+	if a.Priority != b.Priority {
+		return false
+	}
+	if svc != nil && svc.accountRuntimePenalty(a.ID) != svc.accountRuntimePenalty(b.ID) {
+		return false
+	}
+	return sameLastUsedAt(a.LastUsedAt, b.LastUsedAt)
+}
+
 // sameLastUsedAt 判断两个 LastUsedAt 是否相同（精度到秒）
 func sameLastUsedAt(a, b *time.Time) bool {
 	switch {
@@ -2981,11 +3093,63 @@ func sameLastUsedAt(a, b *time.Time) bool {
 func (s *GatewayService) sortCandidatesForFallback(accounts []*Account, preferOAuth bool, mode string) {
 	if mode == "random" {
 		// 先按优先级排序，然后在同优先级内随机打乱
-		sortAccountsByPriorityOnly(accounts, preferOAuth)
-		shuffleWithinPriority(accounts)
+		s.sortAccountsByPriorityRuntimeOnly(accounts, preferOAuth)
+		shuffleWithinPriorityRuntime(accounts, s)
 	} else {
 		// 默认按最后使用时间排序
-		sortAccountsByPriorityAndLastUsed(accounts, preferOAuth)
+		s.sortAccountsByPriorityRuntimeAndLastUsed(accounts, preferOAuth)
+	}
+}
+
+func (s *GatewayService) sortAccountsByPriorityRuntimeOnly(accounts []*Account, preferOAuth bool) {
+	sort.SliceStable(accounts, func(i, j int) bool {
+		a, b := accounts[i], accounts[j]
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
+		}
+		if penaltyA, penaltyB := s.accountRuntimePenalty(a.ID), s.accountRuntimePenalty(b.ID); penaltyA != penaltyB {
+			return penaltyA < penaltyB
+		}
+		if preferOAuth && a.Type != b.Type {
+			return a.Type == AccountTypeOAuth
+		}
+		return false
+	})
+}
+
+func (s *GatewayService) sortAccountsByPriorityRuntimeAndLastUsed(accounts []*Account, preferOAuth bool) {
+	sort.SliceStable(accounts, func(i, j int) bool {
+		a, b := accounts[i], accounts[j]
+		return s.isBetterRuntimeAccount(a, b, preferOAuth)
+	})
+	shuffleWithinPriorityRuntimeAndLastUsed(accounts, preferOAuth, s)
+}
+
+func (s *GatewayService) isBetterRuntimeAccount(candidate, current *Account, preferOAuth bool) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	if candidate.Priority != current.Priority {
+		return candidate.Priority < current.Priority
+	}
+	if penaltyCandidate, penaltyCurrent := s.accountRuntimePenalty(candidate.ID), s.accountRuntimePenalty(current.ID); penaltyCandidate != penaltyCurrent {
+		return penaltyCandidate < penaltyCurrent
+	}
+	switch {
+	case candidate.LastUsedAt == nil && current.LastUsedAt != nil:
+		return true
+	case candidate.LastUsedAt != nil && current.LastUsedAt == nil:
+		return false
+	case candidate.LastUsedAt == nil && current.LastUsedAt == nil:
+		if preferOAuth && candidate.Type != current.Type {
+			return candidate.Type == AccountTypeOAuth
+		}
+		return false
+	default:
+		return candidate.LastUsedAt.Before(*current.LastUsedAt)
 	}
 }
 
@@ -3017,6 +3181,34 @@ func shuffleWithinPriority(accounts []*Account) {
 			end++
 		}
 		// 对 [start, end) 范围内的账户随机打乱
+		if end-start > 1 {
+			r.Shuffle(end-start, func(i, j int) {
+				accounts[start+i], accounts[start+j] = accounts[start+j], accounts[start+i]
+			})
+		}
+		start = end
+	}
+}
+
+func shuffleWithinPriorityRuntime(accounts []*Account, svc *GatewayService) {
+	if len(accounts) <= 1 {
+		return
+	}
+	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+	start := 0
+	for start < len(accounts) {
+		priority := accounts[start].Priority
+		penalty := 0
+		if svc != nil {
+			penalty = svc.accountRuntimePenalty(accounts[start].ID)
+		}
+		end := start + 1
+		for end < len(accounts) && accounts[end].Priority == priority {
+			if svc != nil && svc.accountRuntimePenalty(accounts[end].ID) != penalty {
+				break
+			}
+			end++
+		}
 		if end-start > 1 {
 			r.Shuffle(end-start, func(i, j int) {
 				accounts[start+i], accounts[start+j] = accounts[start+j], accounts[start+i]
@@ -3060,7 +3252,11 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
-						if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
+						stickyRuntime := s.stickyRuntimeDecision(accountID)
+						if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) && stickyRuntime.Bypass {
+							logStickyRuntimeDecision(accountID, sessionHash, stickyRuntime, "legacy_routed_sticky_bypass")
+						}
+						if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) && !stickyRuntime.Bypass {
 							if s.debugModelRoutingEnabled() {
 								logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 							}
@@ -3129,27 +3325,8 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 				continue
 			}
-			if selected == nil {
+			if s.isBetterRuntimeAccount(acc, selected, preferOAuth) {
 				selected = acc
-				continue
-			}
-			if acc.Priority < selected.Priority {
-				selected = acc
-			} else if acc.Priority == selected.Priority {
-				switch {
-				case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-					selected = acc
-				case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-					// keep selected (never used is preferred)
-				case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-					if preferOAuth && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-						selected = acc
-					}
-				default:
-					if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-						selected = acc
-					}
-				}
 			}
 		}
 
@@ -3179,7 +3356,11 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
-					if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
+					stickyRuntime := s.stickyRuntimeDecision(accountID)
+					if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && stickyRuntime.Bypass {
+						logStickyRuntimeDecision(accountID, sessionHash, stickyRuntime, "legacy_sticky_bypass")
+					}
+					if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !stickyRuntime.Bypass {
 						return account, nil
 					}
 				}
@@ -3204,7 +3385,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
 
-	// 3. 按优先级+最久未用选择（考虑模型支持）
+	// 3. 按优先级+慢账号惩罚+最久未用选择（考虑模型支持）
 	// needsUpstreamCheck 仅在主选择循环中使用；粘性会话命中时跳过此检查，
 	// 因为粘性会话优先保持连接一致性，且 upstream 计费基准极少使用。
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
@@ -3243,27 +3424,8 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 			continue
 		}
-		if selected == nil {
+		if s.isBetterRuntimeAccount(acc, selected, preferOAuth) {
 			selected = acc
-			continue
-		}
-		if acc.Priority < selected.Priority {
-			selected = acc
-		} else if acc.Priority == selected.Priority {
-			switch {
-			case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-				selected = acc
-			case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-				// keep selected (never used is preferred)
-			case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-				if preferOAuth && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-					selected = acc
-				}
-			default:
-				if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-					selected = acc
-				}
-			}
 		}
 	}
 
@@ -3318,7 +3480,11 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
-						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
+						stickyRuntime := s.stickyRuntimeDecision(accountID)
+						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && stickyRuntime.Bypass {
+							logStickyRuntimeDecision(accountID, sessionHash, stickyRuntime, "legacy_mixed_routed_sticky_bypass")
+						}
+						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !stickyRuntime.Bypass {
 							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
@@ -3389,27 +3555,8 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 				continue
 			}
-			if selected == nil {
+			if s.isBetterRuntimeAccount(acc, selected, preferOAuth) {
 				selected = acc
-				continue
-			}
-			if acc.Priority < selected.Priority {
-				selected = acc
-			} else if acc.Priority == selected.Priority {
-				switch {
-				case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-					selected = acc
-				case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-					// keep selected (never used is preferred)
-				case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-					if preferOAuth && acc.Platform == PlatformGemini && selected.Platform == PlatformGemini && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-						selected = acc
-					}
-				default:
-					if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-						selected = acc
-					}
-				}
 			}
 		}
 
@@ -3439,7 +3586,11 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
-					if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
+					stickyRuntime := s.stickyRuntimeDecision(accountID)
+					if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) && stickyRuntime.Bypass {
+						logStickyRuntimeDecision(accountID, sessionHash, stickyRuntime, "legacy_mixed_sticky_bypass")
+					}
+					if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) && !stickyRuntime.Bypass {
 						if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
 							return account, nil
 						}
@@ -3504,27 +3655,8 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 			continue
 		}
-		if selected == nil {
+		if s.isBetterRuntimeAccount(acc, selected, preferOAuth) {
 			selected = acc
-			continue
-		}
-		if acc.Priority < selected.Priority {
-			selected = acc
-		} else if acc.Priority == selected.Priority {
-			switch {
-			case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-				selected = acc
-			case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-				// keep selected (never used is preferred)
-			case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-				if preferOAuth && acc.Platform == PlatformGemini && selected.Platform == PlatformGemini && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-					selected = acc
-				}
-			default:
-				if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-					selected = acc
-				}
-			}
 		}
 	}
 
@@ -3833,6 +3965,9 @@ const (
 	// 最大重试耗时（包含请求本身耗时 + 退避等待时间）。
 	// 用于防止极端情况下 goroutine 长时间堆积导致资源耗尽。
 	maxRetryElapsed = 10 * time.Second
+
+	// 首响应保护：上游长时间不返回响应头时，若尚未写客户端，则尽快切换账号。
+	upstreamFirstResponseFailoverTimeout = 12 * time.Second
 )
 
 func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
@@ -3865,6 +4000,127 @@ func retryBackoffDelay(attempt int) time.Duration {
 		return retryMaxDelay
 	}
 	return delay
+}
+
+type upstreamFirstResponseTimeoutError struct {
+	err error
+}
+
+func (e *upstreamFirstResponseTimeoutError) Error() string {
+	if e == nil || e.err == nil {
+		return "upstream first response timeout"
+	}
+	return e.err.Error()
+}
+
+func (e *upstreamFirstResponseTimeoutError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func upstreamFirstResponseFailoverError(err error) *UpstreamFailoverError {
+	var timeoutErr *upstreamFirstResponseTimeoutError
+	if err == nil || !errors.As(err, &timeoutErr) {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]string{
+			"type":    "upstream_timeout",
+			"message": "upstream did not return a response in time",
+		},
+	})
+	return &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           body,
+		RetryableOnSameAccount: false,
+	}
+}
+
+type upstreamDoFunc func(req *http.Request) (*http.Response, error)
+
+func doWithFirstResponseFailover(ctx context.Context, req *http.Request, do upstreamDoFunc) (*http.Response, error) {
+	if req == nil || do == nil || upstreamFirstResponseFailoverTimeout <= 0 {
+		if do == nil {
+			return nil, errors.New("nil upstream do function")
+		}
+		return do(req)
+	}
+	baseCtx := req.Context()
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+
+	upstreamReqCtx, cancelUpstreamReq := context.WithCancel(baseCtx)
+	upstreamReq := req.WithContext(upstreamReqCtx)
+	var timedOut atomic.Bool
+	resultCh := make(chan struct {
+		resp *http.Response
+		err  error
+	}, 1)
+
+	go func() {
+		resp, err := do(upstreamReq)
+		if timedOut.Load() {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return
+		}
+		resultCh <- struct {
+			resp *http.Response
+			err  error
+		}{resp: resp, err: err}
+	}()
+
+	timer := time.NewTimer(upstreamFirstResponseFailoverTimeout)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			cancelUpstreamReq()
+			return result.resp, result.err
+		}
+		if result.resp == nil || result.resp.Body == nil {
+			cancelUpstreamReq()
+			return result.resp, result.err
+		}
+		result.resp.Body = cancelOnCloseReadCloser{
+			ReadCloser: result.resp.Body,
+			cancel:     cancelUpstreamReq,
+		}
+		return result.resp, result.err
+	case <-baseCtx.Done():
+		cancelUpstreamReq()
+		return nil, baseCtx.Err()
+	case <-timer.C:
+		timedOut.Store(true)
+		cancelUpstreamReq()
+		return nil, &upstreamFirstResponseTimeoutError{err: context.DeadlineExceeded}
+	}
+}
+
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (r cancelOnCloseReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	if r.cancel != nil {
+		r.cancel()
+	}
+	return err
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {
@@ -4549,10 +4805,16 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 
 		// 发送请求
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		resp, err = doWithFirstResponseFailover(ctx, upstreamReq, func(req *http.Request) (*http.Response, error) {
+			return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		})
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
+			}
+			if failoverErr := upstreamFirstResponseFailoverError(err); failoverErr != nil && !c.Writer.Written() {
+				logger.LegacyPrintf("service.gateway", "Account %d: upstream first response timeout, failing over: %v", account.ID, err)
+				return nil, failoverErr
 			}
 			// Ensure the client receives an error response (handlers assume Forward writes on non-failover errors).
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -5039,10 +5301,16 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			return nil, err
 		}
 
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+		resp, err = doWithFirstResponseFailover(ctx, upstreamReq, func(req *http.Request) (*http.Response, error) {
+			return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+		})
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
+			}
+			if failoverErr := upstreamFirstResponseFailoverError(err); failoverErr != nil && !c.Writer.Written() {
+				logger.LegacyPrintf("service.gateway", "Anthropic passthrough account %d: upstream first response timeout, failing over: %v", account.ID, err)
+				return nil, failoverErr
 			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
