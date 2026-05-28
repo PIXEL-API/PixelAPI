@@ -245,7 +245,7 @@ func (s *ownedAccountDuplicateRepoStub) List(context.Context, pagination.Paginat
 	panic("unexpected List call")
 }
 
-func (s *ownedAccountDuplicateRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, int64, string) ([]Account, *pagination.PaginationResult, error) {
+func (s *ownedAccountDuplicateRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, string, int64, int64, string) ([]Account, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
 }
 

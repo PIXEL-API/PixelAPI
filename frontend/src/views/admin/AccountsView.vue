@@ -439,6 +439,7 @@ type AccountBulkEditTarget =
         group?: string
         proxy_id?: number | string
         search?: string
+        owner_search?: string
         privacy_mode?: string
         sort_by?: string
         sort_order?: AccountSortOrder
@@ -748,6 +749,7 @@ const {
     proxy_id: '',
     group: '',
     search: '',
+    owner_search: '',
     sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
   }
@@ -957,6 +959,7 @@ const refreshAccountsIncrementally = async () => {
         proxy_id?: number | string
         group?: string
         search?: string
+        owner_search?: string
         sort_by?: string
         sort_order?: AccountSortOrder
 
@@ -1429,6 +1432,7 @@ const buildBulkEditFilterSnapshot = () => {
     status: typeof rawParams.status === 'string' ? rawParams.status : '',
     group: typeof rawParams.group === 'string' ? rawParams.group : '',
     search: typeof rawParams.search === 'string' ? rawParams.search : '',
+    owner_search: typeof rawParams.owner_search === 'string' ? rawParams.owner_search : '',
     privacy_mode: typeof rawParams.privacy_mode === 'string' ? rawParams.privacy_mode : '',
     sort_by: typeof rawParams.sort_by === 'string' ? rawParams.sort_by : '',
     sort_order: sortOrder
@@ -1506,6 +1510,7 @@ const buildAccountQueryFilters = () => ({
   proxy_id: normalizeAccountFilterProxyID(params.proxy_id) || '',
   privacy_mode: params.privacy_mode || '',
   search: params.search || '',
+  owner_search: params.owner_search || '',
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })

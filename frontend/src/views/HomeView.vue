@@ -47,6 +47,18 @@
       </nav>
 
       <div class="home-actions">
+        <a
+          v-if="docUrl"
+          :href="docUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="doc-action"
+          :title="t('home.viewDocs')"
+        >
+          <Icon name="book" size="sm" />
+          <span>{{ t('home.docs') }}</span>
+        </a>
+
         <LocaleSwitcher />
 
         <button
@@ -354,6 +366,7 @@ const appStore = useAppStore()
 // Site settings - directly from appStore (already initialized from injected config)
 const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API')
 const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '')
+const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 
 // Check if homeContent is a URL (for iframe display)
@@ -609,6 +622,39 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.doc-action {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(107, 155, 240, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--muted);
+  padding: 0 14px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+  backdrop-filter: blur(14px);
+}
+
+:global(html.dark .home-page .doc-action) {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.7);
+  color: #c7d2fe;
+}
+
+.doc-action:hover {
+  transform: translateY(-1px);
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.78);
 }
 
 .icon-action {

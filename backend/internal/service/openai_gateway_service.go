@@ -202,11 +202,13 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 
 // OpenAIUsage represents OpenAI API response usage
 type OpenAIUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
-	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens,omitempty"`
+	ImageOutputTokens        int    `json:"image_output_tokens,omitempty"`
+	ImageCount               int    `json:"image_count,omitempty"`
+	ResponseServiceTier      string `json:"-"`
 }
 
 // OpenAIForwardResult represents the result of forwarding
@@ -224,6 +226,9 @@ type OpenAIForwardResult struct {
 	// ServiceTier records the OpenAI Responses API service tier, e.g. "priority" / "flex".
 	// Nil means the request did not specify a recognized tier.
 	ServiceTier *string
+	// ResponseServiceTier is kept in memory only so billing can prefer the
+	// tier echoed by the upstream response when it is available.
+	ResponseServiceTier string
 	// ReasoningEffort is extracted from request body (reasoning.effort) or derived from model suffix.
 	// Stored for usage records display; nil means not provided / not applicable.
 	ReasoningEffort *string
@@ -234,6 +239,73 @@ type OpenAIForwardResult struct {
 	FirstTokenMs    *int
 	ImageCount      int
 	ImageSize       string
+}
+
+type openAIResponseImageBillingConfig struct {
+	Intent bool
+	Model  string
+	Size   string
+}
+
+func resolveOpenAIResponseImageBillingConfig(endpoint, requestedModel string, reqBody map[string]any) openAIResponseImageBillingConfig {
+	intent := IsImageGenerationIntentMap(endpoint, requestedModel, reqBody)
+	imageModel, imageSize, err := resolveOpenAIResponsesImageBillingConfig(reqBody, requestedModel)
+	if err != nil {
+		return openAIResponseImageBillingConfig{Intent: intent}
+	}
+	if intent && strings.TrimSpace(imageModel) == "" {
+		imageModel = "gpt-image-2"
+	}
+	return openAIResponseImageBillingConfig{
+		Intent: intent,
+		Model:  strings.TrimSpace(imageModel),
+		Size:   strings.TrimSpace(imageSize),
+	}
+}
+
+func resolveOpenAIResponseImageBillingConfigFromBody(endpoint, requestedModel string, body []byte) openAIResponseImageBillingConfig {
+	reqBody := cloneRequestMapForImageIntent(body)
+	return resolveOpenAIResponseImageBillingConfig(endpoint, requestedModel, reqBody)
+}
+
+func applyOpenAIResponseImageAccounting(result *OpenAIForwardResult, cfg openAIResponseImageBillingConfig) {
+	if result == nil {
+		return
+	}
+	imageCount := result.ImageCount
+	if imageCount <= 0 {
+		imageCount = result.Usage.ImageCount
+	}
+	if imageCount <= 0 {
+		return
+	}
+	imageModel := ""
+	if isOpenAIImageBillingModelAlias(cfg.Model) {
+		imageModel = strings.TrimSpace(cfg.Model)
+	}
+	if imageModel == "" && isOpenAIImageBillingModelAlias(result.BillingModel) {
+		imageModel = strings.TrimSpace(result.BillingModel)
+	}
+	if imageModel == "" && isOpenAIImageBillingModelAlias(result.Model) {
+		imageModel = strings.TrimSpace(result.Model)
+	}
+	if imageModel == "" && cfg.Intent {
+		imageModel = "gpt-image-2"
+	}
+	if imageModel == "" {
+		imageModel = "gpt-image-2"
+	}
+	imageSize := strings.TrimSpace(result.ImageSize)
+	if imageSize == "" {
+		imageSize = strings.TrimSpace(cfg.Size)
+	}
+	if imageSize == "" {
+		imageSize = NormalizeImageBillingTierOrDefault("")
+	}
+	result.ImageCount = imageCount
+	result.ImageSize = imageSize
+	result.BillingModel = imageModel
+	result.Model = imageModel
 }
 
 type OpenAIWSRetryMetricsSnapshot struct {
@@ -2453,6 +2525,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
+	responseEndpoint := openAIResponsesEndpoint + openAIResponsesRequestPathSuffix(c)
+	imageBillingConfig := resolveOpenAIResponseImageBillingConfig(responseEndpoint, originalModel, reqBody)
+
 	// Re-serialize body only if modified
 	if bodyModified {
 		serializedByPatch := false
@@ -2803,10 +2878,20 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			usage = streamResult.usage
 			firstTokenMs = streamResult.firstTokenMs
+			if streamResult != nil {
+				if serviceTier := extractOpenAIServiceTierFromResponses(streamResult.responseServiceTier); serviceTier != nil {
+					reqBody["service_tier"] = *serviceTier
+				}
+			}
 		} else {
 			usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 			if err != nil {
 				return nil, err
+			}
+			if usage != nil {
+				if serviceTier := extractOpenAIServiceTierFromResponses(usage.ResponseServiceTier); serviceTier != nil {
+					reqBody["service_tier"] = *serviceTier
+				}
 			}
 		}
 
@@ -2824,7 +2909,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		reasoningEffort := extractOpenAIReasoningEffort(reqBody, originalModel)
 		serviceTier := extractOpenAIServiceTier(reqBody)
 
-		return &OpenAIForwardResult{
+		result := &OpenAIForwardResult{
 			RequestID:       resp.Header.Get("x-request-id"),
 			Usage:           *usage,
 			Model:           originalModel,
@@ -2835,7 +2920,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			OpenAIWSMode:    false,
 			Duration:        time.Since(startTime),
 			FirstTokenMs:    firstTokenMs,
-		}, nil
+		}
+		applyOpenAIResponseImageAccounting(result, imageBillingConfig)
+		return result, nil
 	}
 }
 
@@ -2920,6 +3007,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		return nil, policyErr
 	}
 	body = updatedBody
+	responseEndpoint := openAIResponsesEndpoint + openAIResponsesRequestPathSuffix(c)
+	imageBillingConfig := resolveOpenAIResponseImageBillingConfigFromBody(responseEndpoint, reqModel, body)
 
 	logger.LegacyPrintf("service.openai_gateway",
 		"[OpenAI passthrough] matched passthrough branch: account=%d name=%s type=%s model=%s stream=%v",
@@ -3016,10 +3105,24 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		usage = result.usage
 		firstTokenMs = result.firstTokenMs
+		if result != nil {
+			if serviceTier := extractOpenAIServiceTierFromResponses(result.responseServiceTier); serviceTier != nil {
+				if updated, serr := sjson.SetBytes(body, "service_tier", *serviceTier); serr == nil {
+					body = updated
+				}
+			}
+		}
 	} else {
 		usage, err = s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
 		if err != nil {
 			return nil, err
+		}
+		if usage != nil {
+			if serviceTier := extractOpenAIServiceTierFromResponses(usage.ResponseServiceTier); serviceTier != nil {
+				if updated, serr := sjson.SetBytes(body, "service_tier", *serviceTier); serr == nil {
+					body = updated
+				}
+			}
 		}
 	}
 
@@ -3031,7 +3134,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		usage = &OpenAIUsage{}
 	}
 
-	return &OpenAIForwardResult{
+	result := &OpenAIForwardResult{
 		RequestID:       resp.Header.Get("x-request-id"),
 		Usage:           *usage,
 		Model:           reqModel,
@@ -3042,7 +3145,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		OpenAIWSMode:    false,
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
-	}, nil
+	}
+	applyOpenAIResponseImageAccounting(result, imageBillingConfig)
+	return result, nil
 }
 
 func logOpenAIPassthroughInstructionsRejected(
@@ -3335,8 +3440,9 @@ func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
 }
 
 type openaiStreamingResultPassthrough struct {
-	usage        *OpenAIUsage
-	firstTokenMs *int
+	usage               *OpenAIUsage
+	firstTokenMs        *int
+	responseServiceTier string
 }
 
 func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
@@ -3514,7 +3620,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	failedMessage := ""
 	clientOutputStarted := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
+	imageCounter := newOpenAIImageOutputCounter()
 	pendingLines := make([]string, 0, 8)
+	resultWithUsage := func() *openaiStreamingResultPassthrough {
+		usage.ImageCount = imageCounter.Count()
+		return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs, responseServiceTier: usage.ResponseServiceTier}
+	}
 	writePendingLines := func() bool {
 		for _, pending := range pendingLines {
 			if _, err := fmt.Fprintln(w, pending); err != nil {
@@ -3559,7 +3670,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusBadGateway, resp.Header, dataBytes, failedMessage)
 				}
 				if !openAIStreamClientOutputStarted(c, clientOutputStarted) && openAIStreamFailedEventShouldFailover(dataBytes, failedMessage) {
-					return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs},
+					return resultWithUsage(),
 						s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, dataBytes, failedMessage)
 				}
 				forceFlushFailedEvent = true
@@ -3577,6 +3688,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				firstTokenMs = &ms
 			}
 			s.parseSSEUsageBytes(dataBytes, usage)
+			imageCounter.AddSSEData(dataBytes)
 		}
 
 		if !clientDisconnected {
@@ -3600,28 +3712,28 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	}
 	if err := scanner.Err(); err != nil {
 		if sawTerminalEvent && !sawFailedEvent {
-			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, nil
+			return resultWithUsage(), nil
 		}
 		if sawFailedEvent {
-			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("upstream response failed: %s", failedMessage)
+			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream usage incomplete: %w", err)
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 		}
 		if errors.Is(err, bufio.ErrTooLong) {
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, err)
-			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, err
+			return resultWithUsage(), err
 		}
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 			msg := "OpenAI stream disconnected before completion"
 			if errText := strings.TrimSpace(err.Error()); errText != "" {
 				msg += ": " + errText
 			}
-			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs},
+			return resultWithUsage(),
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, msg)
 		}
 		if clientDisconnected {
-			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream usage incomplete after disconnect: %w", err)
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", err)
 		}
 		logger.LegacyPrintf("service.openai_gateway",
 			"[OpenAI passthrough] 娴佽鍙栧紓甯镐腑鏂? account=%d request_id=%s err=%v",
@@ -3629,10 +3741,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			upstreamRequestID,
 			err,
 		)
-		return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream read error: %w", err)
+		return resultWithUsage(), fmt.Errorf("stream read error: %w", err)
 	}
 	if sawFailedEvent {
-		return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("upstream response failed: %s", failedMessage)
+		return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 	}
 	if !clientDisconnected && !sawDone && !sawTerminalEvent && ctx.Err() == nil {
 		logger.FromContext(ctx).With(
@@ -3641,13 +3753,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			zap.String("upstream_request_id", upstreamRequestID),
 		).Info("OpenAI passthrough upstream stream ended before [DONE], suspected truncated stream")
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
-			return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs},
+			return resultWithUsage(),
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event")
 		}
-		return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, errors.New("stream usage incomplete: missing terminal event")
+		return resultWithUsage(), errors.New("stream usage incomplete: missing terminal event")
 	}
 
-	return &openaiStreamingResultPassthrough{usage: usage, firstTokenMs: firstTokenMs}, nil
+	return resultWithUsage(), nil
 }
 
 func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
@@ -3683,6 +3795,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		// 鍏滃簳锛氬皾璇曚粠 SSE 鏂囨湰涓В鏋?usage
 		usage = s.parseSSEUsageFromBody(string(body))
 	}
+	if usage != nil {
+		if count := countOpenAIResponseImageOutputsFromJSONBytes(body); count > 0 {
+			usage.ImageCount = count
+		} else if count := countOpenAIImageOutputsFromSSEBody(string(body)); count > 0 {
+			usage.ImageCount = count
+		}
+	}
 
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
@@ -3706,9 +3825,11 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(ctx context.Context, r
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
 	usage := &OpenAIUsage{}
+	usage.ImageCount = countOpenAIImageOutputsFromSSEBody(bodyText)
 	if ok {
 		if parsedUsage, parsed := extractOpenAIUsageFromJSONBytes(finalResponse); parsed {
 			*usage = parsedUsage
+			usage.ImageCount = countOpenAIImageOutputsFromSSEBody(bodyText)
 		}
 		// When the terminal event has an empty output array, reconstruct
 		// output from accumulated delta events so the client gets full content.
@@ -3738,6 +3859,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(ctx context.Context, r
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
 		usage = s.parseSSEUsageFromBody(bodyText)
+		usage.ImageCount = countOpenAIImageOutputsFromSSEBody(bodyText)
 		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, originalModel)
 		}
@@ -4163,8 +4285,9 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 
 // openaiStreamingResult streaming response result
 type openaiStreamingResult struct {
-	usage        *OpenAIUsage
-	firstTokenMs *int
+	usage               *OpenAIUsage
+	firstTokenMs        *int
+	responseServiceTier string
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
@@ -4273,8 +4396,10 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	}
 
 	needModelReplace := originalModel != mappedModel
+	imageCounter := newOpenAIImageOutputCounter()
 	resultWithUsage := func() *openaiStreamingResult {
-		return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}
+		usage.ImageCount = imageCounter.Count()
+		return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs, responseServiceTier: usage.ResponseServiceTier}
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
 		if !sawTerminalEvent {
@@ -4411,6 +4536,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				firstTokenMs = &ms
 			}
 			s.parseSSEUsageBytes(dataBytes, usage)
+			imageCounter.AddSSEData(dataBytes)
 			return
 		}
 
@@ -4614,6 +4740,9 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 	usage.OutputTokens = int(gjson.GetBytes(data, "response.usage.output_tokens").Int())
 	usage.CacheReadInputTokens = int(gjson.GetBytes(data, "response.usage.input_tokens_details.cached_tokens").Int())
 	usage.ImageOutputTokens = int(gjson.GetBytes(data, "response.usage.output_tokens_details.image_tokens").Int())
+	if responseServiceTier := strings.TrimSpace(gjson.GetBytes(data, "response.service_tier").String()); responseServiceTier != "" {
+		usage.ResponseServiceTier = responseServiceTier
+	}
 }
 
 func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
@@ -4632,6 +4761,7 @@ func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 		OutputTokens:         int(values[1].Int()),
 		CacheReadInputTokens: int(values[2].Int()),
 		ImageOutputTokens:    int(values[3].Int()),
+		ResponseServiceTier:  strings.TrimSpace(gjson.GetBytes(body, "service_tier").String()),
 	}, true
 }
 
@@ -4663,6 +4793,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if !usageOK {
 		return nil, fmt.Errorf("parse response: invalid json response")
 	}
+	usageValue.ImageCount = countOpenAIResponseImageOutputsFromJSONBytes(body)
 	usage := &usageValue
 
 	// Replace model in response if needed
@@ -4694,9 +4825,11 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
 	usage := &OpenAIUsage{}
+	usage.ImageCount = countOpenAIImageOutputsFromSSEBody(bodyText)
 	if ok {
 		if parsedUsage, parsed := extractOpenAIUsageFromJSONBytes(finalResponse); parsed {
 			*usage = parsedUsage
+			usage.ImageCount = countOpenAIImageOutputsFromSSEBody(bodyText)
 		}
 		// When the terminal event has an empty output array, reconstruct
 		// output from accumulated delta events so the client gets full content.
@@ -4727,6 +4860,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
 		usage = s.parseSSEUsageFromBody(bodyText)
+		usage.ImageCount = countOpenAIImageOutputsFromSSEBody(bodyText)
 		if originalModel != mappedModel {
 			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, originalModel)
 		}
@@ -5228,14 +5362,18 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	var cost *CostBreakdown
 	var err error
 	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
-	if result.BillingModel != "" {
-		billingModel = strings.TrimSpace(result.BillingModel)
+	resultImageBillingModel := strings.TrimSpace(result.BillingModel)
+	if resultImageBillingModel != "" {
+		billingModel = resultImageBillingModel
 	}
-	if input.BillingModelSource == BillingModelSourceChannelMapped && input.ChannelMappedModel != "" && input.ChannelMappedModel != input.OriginalModel {
-		billingModel = input.ChannelMappedModel
-	}
-	if input.BillingModelSource == BillingModelSourceRequested && input.OriginalModel != "" {
-		billingModel = input.OriginalModel
+	imageBillingModelPinned := result.ImageCount > 0 && isOpenAIImageGenerationModel(resultImageBillingModel)
+	if !imageBillingModelPinned {
+		if input.BillingModelSource == BillingModelSourceChannelMapped && input.ChannelMappedModel != "" && input.ChannelMappedModel != input.OriginalModel {
+			billingModel = input.ChannelMappedModel
+		}
+		if input.BillingModelSource == BillingModelSourceRequested && input.OriginalModel != "" {
+			billingModel = input.OriginalModel
+		}
 	}
 	serviceTier := ""
 	if result.ServiceTier != nil {

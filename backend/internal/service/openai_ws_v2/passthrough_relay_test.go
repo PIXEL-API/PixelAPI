@@ -199,6 +199,41 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`, string(clientWrites[0].payload))
 }
 
+func TestRelay_CountsImageGenerationOutput(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.output_item.done","item":{"id":"ig_ws","type":"image_generation_call","result":"ZmluYWw="}}`),
+		},
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.completed","response":{"id":"resp_img","usage":{"input_tokens":7,"output_tokens":3,"output_tokens_details":{"image_tokens":2}},"output":[{"id":"ig_ws","type":"image_generation_call","result":"ZmluYWw="}]}}`),
+		},
+	}, true)
+
+	firstPayload := []byte(`{"type":"response.create","model":"gpt-5.4","tools":[{"type":"image_generation","model":"gpt-image-2"}],"input":"draw"}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var turn RelayTurnResult
+	result, relayExit := Relay(ctx, clientConn, upstreamConn, firstPayload, RelayOptions{
+		OnTurnComplete: func(current RelayTurnResult) {
+			turn = current
+		},
+	})
+	require.Nil(t, relayExit)
+	require.Equal(t, "resp_img", result.RequestID)
+	require.Equal(t, 1, result.Usage.ImageCount)
+	require.Equal(t, 2, result.Usage.ImageOutputTokens)
+	require.Equal(t, "resp_img", turn.RequestID)
+	require.Equal(t, 1, turn.Usage.ImageCount)
+	require.Equal(t, 2, turn.Usage.ImageOutputTokens)
+	require.Len(t, clientConn.Writes(), 2)
+}
+
 func TestRelay_FunctionCallOutputBytesPreserved(t *testing.T) {
 	t.Parallel()
 

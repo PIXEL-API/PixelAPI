@@ -400,10 +400,12 @@ func parseOpenAIWSResponseUsageFromCompletedEvent(message []byte, usage *OpenAIU
 		"response.usage.input_tokens",
 		"response.usage.output_tokens",
 		"response.usage.input_tokens_details.cached_tokens",
+		"response.usage.output_tokens_details.image_tokens",
 	)
 	usage.InputTokens = int(values[0].Int())
 	usage.OutputTokens = int(values[1].Int())
 	usage.CacheReadInputTokens = int(values[2].Int())
+	usage.ImageOutputTokens = int(values[3].Int())
 }
 
 func parseOpenAIWSErrorEventFields(message []byte) (code string, errType string, errMessage string) {
@@ -1920,6 +1922,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
+	imageBillingConfig := resolveOpenAIResponseImageBillingConfig(openAIResponsesEndpoint, originalModel, payload)
 	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
 	previousResponseID := openAIWSPayloadString(payload, "previous_response_id")
 	previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
@@ -2180,6 +2183,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	usage := &OpenAIUsage{}
+	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	responseID := ""
 	var finalResponse []byte
@@ -2321,6 +2325,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
 		}
+		imageCounter.AddSSEData(message)
 
 		isTokenEvent := isOpenAIWSTokenEvent(eventType)
 		if isTokenEvent {
@@ -2501,6 +2506,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		finalResponse = s.correctToolCallsInResponseBody(finalResponse)
 		populateOpenAIUsageFromResponseJSON(finalResponse, usage)
+		imageCounter.AddJSONResponse(finalResponse)
 		if responseID == "" {
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
@@ -2544,7 +2550,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		clientDisconnected,
 	)
 
-	return &OpenAIForwardResult{
+	usage.ImageCount = imageCounter.Count()
+	result := &OpenAIForwardResult{
 		RequestID:       responseID,
 		Usage:           *usage,
 		Model:           originalModel,
@@ -2556,7 +2563,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		ResponseHeaders: lease.HandshakeHeaders(),
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
-	}, nil
+	}
+	applyOpenAIResponseImageAccounting(result, imageBillingConfig)
+	return result, nil
 }
 
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。
@@ -2655,6 +2664,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		promptCacheKey     string
 		previousResponseID string
 		originalModel      string
+		imageBillingConfig openAIResponseImageBillingConfig
 		payloadBytes       int
 	}
 
@@ -2797,6 +2807,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			promptCacheKey:     promptCacheKey,
 			previousResponseID: previousResponseID,
 			originalModel:      originalModel,
+			imageBillingConfig: resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, originalModel, normalized),
 			payloadBytes:       len(normalized),
 		}, nil
 	}
@@ -3022,7 +3033,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return payload, nil
 	}
 
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingConfig openAIResponseImageBillingConfig) (*OpenAIForwardResult, error) {
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
@@ -3047,6 +3058,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		responseID := ""
 		usage := OpenAIUsage{}
+		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
 		turnPreviousResponseID := openAIWSPayloadStringFromRaw(payload, "previous_response_id")
@@ -3085,6 +3097,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}
+			imageCounter.AddSSEData(upstreamMessage)
 			if eventType != "" {
 				eventCount++
 				if firstEventType == "" {
@@ -3239,7 +3252,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						clientDisconnected,
 					)
 				}
-				return &OpenAIForwardResult{
+				usage.ImageCount = imageCounter.Count()
+				result := &OpenAIForwardResult{
 					RequestID:       responseID,
 					Usage:           usage,
 					Model:           originalModel,
@@ -3251,13 +3265,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					ResponseHeaders: lease.HandshakeHeaders(),
 					Duration:        time.Since(turnStart),
 					FirstTokenMs:    firstTokenMs,
-				}, nil
+				}
+				applyOpenAIResponseImageAccounting(result, imageBillingConfig)
+				return result, nil
 			}
 		}
 	}
 
 	currentPayload := firstPayload.payloadRaw
 	currentOriginalModel := firstPayload.originalModel
+	currentImageBillingConfig := firstPayload.imageBillingConfig
 	currentPayloadBytes := firstPayload.payloadBytes
 	isStrictAffinityTurn := func(payload []byte) bool {
 		if !storeDisabled {
@@ -3721,7 +3738,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
-		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel)
+		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingConfig)
 		if relayErr != nil {
 			lastTurnClean = false
 			if recoverIngressPrevResponseNotFound(relayErr, turn, connID) {
@@ -3866,6 +3883,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		currentPayload = nextPayload.payloadRaw
 		currentOriginalModel = nextPayload.originalModel
+		currentImageBillingConfig = nextPayload.imageBillingConfig
 		currentPayloadBytes = nextPayload.payloadBytes
 		storeDisabled = s.isOpenAIWSStoreDisabledInRequestRaw(currentPayload, account)
 		if !storeDisabled {

@@ -139,6 +139,7 @@ export interface StoreListParams {
   page?: number
   page_size?: number
   status?: string
+  hide_disabled?: boolean
   keyword?: string
   category_id?: number | string
   product_id?: number | string

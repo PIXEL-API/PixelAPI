@@ -39,6 +39,7 @@ export async function list(
     group?: string
     proxy_id?: number | string
     search?: string
+    owner_search?: string
     privacy_mode?: string
     lite?: string
     sort_by?: string
@@ -75,6 +76,7 @@ export async function listWithEtag(
     group?: string
     proxy_id?: number | string
     search?: string
+    owner_search?: string
     privacy_mode?: string
     lite?: string
     sort_by?: string
@@ -525,6 +527,7 @@ export async function exportData(options?: {
     proxy_id?: number | string
     privacy_mode?: string
     search?: string
+    owner_search?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   }
@@ -534,7 +537,7 @@ export async function exportData(options?: {
   if (options?.ids && options.ids.length > 0) {
     params.ids = options.ids.join(',')
   } else if (options?.filters) {
-    const { platform, type, status, group, proxy_id, privacy_mode, search, sort_by, sort_order } = options.filters
+    const { platform, type, status, group, proxy_id, privacy_mode, search, owner_search, sort_by, sort_order } = options.filters
     if (platform) params.platform = platform
     if (type) params.type = type
     if (status) params.status = status
@@ -542,6 +545,7 @@ export async function exportData(options?: {
     if (proxy_id) params.proxy_id = String(proxy_id)
     if (privacy_mode) params.privacy_mode = privacy_mode
     if (search) params.search = search
+    if (owner_search) params.owner_search = owner_search
     if (sort_by) params.sort_by = sort_by
     if (sort_order) params.sort_order = sort_order
   }

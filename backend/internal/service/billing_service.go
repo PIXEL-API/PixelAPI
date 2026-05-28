@@ -63,6 +63,8 @@ const (
 	openAIGPT54LongContextInputThreshold   = 272000
 	openAIGPT54LongContextInputMultiplier  = 2.0
 	openAIGPT54LongContextOutputMultiplier = 1.5
+	openAIGPT54FastMultiplier              = 2.0
+	openAIGPT55FastMultiplier              = 2.5
 )
 
 func normalizeBillingServiceTier(serviceTier string) string {
@@ -76,15 +78,22 @@ func usePriorityServiceTierPricing(serviceTier string, pricing *ModelPricing) bo
 	return pricing.InputPricePerTokenPriority > 0 || pricing.OutputPricePerTokenPriority > 0 || pricing.CacheReadPricePerTokenPriority > 0
 }
 
-func serviceTierCostMultiplier(serviceTier string) float64 {
+func serviceTierCostMultiplierForModel(model, serviceTier string) float64 {
 	switch normalizeBillingServiceTier(serviceTier) {
 	case "priority":
-		return 2.0
+		if isOpenAIGPT55Model(model) {
+			return openAIGPT55FastMultiplier
+		}
+		return openAIGPT54FastMultiplier
 	case "flex":
 		return 0.5
 	default:
 		return 1.0
 	}
+}
+
+func serviceTierCostMultiplier(serviceTier string) float64 {
+	return serviceTierCostMultiplierForModel("", serviceTier)
 }
 
 // UsageTokens 使用的token数量
@@ -205,20 +214,32 @@ func (s *BillingService) initFallbackPricing() {
 
 	// OpenAI GPT-5.4（业务指定价格）
 	s.fallbackPrices["gpt-5.4"] = &ModelPricing{
-		InputPricePerToken:             2.5e-6,  // $2.5 per MTok
-		InputPricePerTokenPriority:     5e-6,    // $5 per MTok
-		OutputPricePerToken:            15e-6,   // $15 per MTok
-		OutputPricePerTokenPriority:    30e-6,   // $30 per MTok
-		CacheCreationPricePerToken:     2.5e-6,  // $2.5 per MTok
-		CacheReadPricePerToken:         0.25e-6, // $0.25 per MTok
-		CacheReadPricePerTokenPriority: 0.5e-6,  // $0.5 per MTok
+		InputPricePerToken:             62.5e-6,
+		InputPricePerTokenPriority:     125e-6,
+		OutputPricePerToken:            375e-6,
+		OutputPricePerTokenPriority:    750e-6,
+		CacheCreationPricePerToken:     62.5e-6,
+		CacheReadPricePerToken:         6.25e-6,
+		CacheReadPricePerTokenPriority: 12.5e-6,
 		SupportsCacheBreakdown:         false,
 		LongContextInputThreshold:      openAIGPT54LongContextInputThreshold,
 		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
 		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
 	}
-	// GPT-5.5 暂无独立定价，回退到 GPT-5.4
-	s.fallbackPrices["gpt-5.5"] = s.fallbackPrices["gpt-5.4"]
+	// OpenAI GPT-5.5（Codex rate card）
+	s.fallbackPrices["gpt-5.5"] = &ModelPricing{
+		InputPricePerToken:             125e-6,
+		InputPricePerTokenPriority:     312.5e-6,
+		OutputPricePerToken:            750e-6,
+		OutputPricePerTokenPriority:    1875e-6,
+		CacheCreationPricePerToken:     125e-6,
+		CacheReadPricePerToken:         12.5e-6,
+		CacheReadPricePerTokenPriority: 31.25e-6,
+		SupportsCacheBreakdown:         false,
+		LongContextInputThreshold:      openAIGPT54LongContextInputThreshold,
+		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
+		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
+	}
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,
@@ -453,13 +474,13 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 	// 长上下文定价仅在无区间定价时应用（区间定价已包含上下文分层）
 	applyLongCtx := len(resolved.Intervals) == 0
 
-	return s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx), nil
+	return s.computeTokenBreakdown(input.Model, pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx), nil
 }
 
 // computeTokenBreakdown 是 token 计费的核心逻辑，由 calculateTokenCost 和 calculateCostInternal 共用。
 // applyLongCtx 控制是否检查长上下文定价（区间定价已自含上下文分层，不需要额外应用）。
 func (s *BillingService) computeTokenBreakdown(
-	pricing *ModelPricing, tokens UsageTokens,
+	model string, pricing *ModelPricing, tokens UsageTokens,
 	rateMultiplier float64, serviceTier string,
 	applyLongCtx bool,
 ) *CostBreakdown {
@@ -479,23 +500,24 @@ func (s *BillingService) computeTokenBreakdown(
 
 	switch normalizeBillingServiceTier(serviceTier) {
 	case "priority":
+		tierMultiplier := serviceTierCostMultiplierForModel(model, serviceTier)
 		if pricing.InputPricePerTokenPriority > 0 {
 			inputPrice = pricing.InputPricePerTokenPriority
 		} else {
-			inputTierMultiplier = serviceTierCostMultiplier(serviceTier)
+			inputTierMultiplier = tierMultiplier
 		}
 		if pricing.OutputPricePerTokenPriority > 0 {
 			outputPrice = pricing.OutputPricePerTokenPriority
 		} else {
-			outputTierMultiplier = serviceTierCostMultiplier(serviceTier)
+			outputTierMultiplier = tierMultiplier
 		}
 		if pricing.CacheReadPricePerTokenPriority > 0 {
 			cacheReadPrice = pricing.CacheReadPricePerTokenPriority
 		} else {
-			cacheReadTierMultiplier = serviceTierCostMultiplier(serviceTier)
+			cacheReadTierMultiplier = tierMultiplier
 		}
-		cacheCreationTierMultiplier = serviceTierCostMultiplier(serviceTier)
-		imageOutputTierMultiplier = serviceTierCostMultiplier(serviceTier)
+		cacheCreationTierMultiplier = tierMultiplier
+		imageOutputTierMultiplier = tierMultiplier
 	case "flex":
 		tierMultiplier := serviceTierCostMultiplier(serviceTier)
 		inputTierMultiplier = tierMultiplier
@@ -608,7 +630,7 @@ func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens,
 	}
 
 	// 旧路径始终检查长上下文定价（无区间定价概念）
-	return s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, true), nil
+	return s.computeTokenBreakdown(model, pricing, tokens, rateMultiplier, serviceTier, true), nil
 }
 
 func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *ModelPricing) *ModelPricing {
@@ -654,6 +676,14 @@ func isOpenAIGPT54Model(model string) bool {
 	}
 	normalized := normalizeCodexModel(trimmed)
 	return normalized == "gpt-5.4" || normalized == "gpt-5.5"
+}
+
+func isOpenAIGPT55Model(model string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(model))
+	if !strings.Contains(trimmed, "gpt-5") {
+		return false
+	}
+	return normalizeCodexModel(trimmed) == "gpt-5.5"
 }
 
 // CalculateCostWithConfig 使用配置中的默认倍率计算费用

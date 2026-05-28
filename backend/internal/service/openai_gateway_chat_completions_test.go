@@ -1,9 +1,18 @@
 package service
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -72,4 +81,91 @@ func TestNormalizeResponsesBodyServiceTier(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tier)
 	require.False(t, gjson.GetBytes(body, "service_tier").Exists())
+}
+
+func TestForwardAsChatCompletions_FilteredFastTierBillsAsStandardWhenUpstreamOmitsTier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(nil))
+
+	upstreamSSE := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_chat_filter","model":"gpt-5.5","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_filter"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		cfg:            &config.Config{},
+		httpUpstream:   upstream,
+		settingService: newOpenAIFastPolicySettingServiceForTest(t, DefaultOpenAIFastPolicySettings()),
+	}
+	account := &Account{
+		ID:          1,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://api.openai.com"},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, []byte(`{"model":"gpt-5.5","stream":false,"service_tier":"fast","messages":[{"role":"user","content":"hi"}]}`), "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Nil(t, result.ServiceTier, "上游未回显 service_tier 时，应按策略过滤后的请求体 fallback，而不是原始 fast 请求计费")
+	require.False(t, gjson.GetBytes(upstream.lastBody, "service_tier").Exists())
+}
+
+func TestForwardAsChatCompletions_UpstreamTierOverridesRequestFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(nil))
+
+	upstreamSSE := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_chat_tier","model":"gpt-5.5","service_tier":"priority","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_tier"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		cfg:            &config.Config{},
+		httpUpstream:   upstream,
+		settingService: newOpenAIFastPolicySettingServiceForTest(t, &OpenAIFastPolicySettings{Rules: nil}),
+	}
+	account := &Account{
+		ID:          1,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://api.openai.com"},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, []byte(`{"model":"gpt-5.5","stream":false,"service_tier":"flex","messages":[{"role":"user","content":"hi"}]}`), "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.ServiceTier)
+	require.Equal(t, "priority", *result.ServiceTier)
+}
+
+func newOpenAIFastPolicySettingServiceForTest(t *testing.T, settings *OpenAIFastPolicySettings) *SettingService {
+	t.Helper()
+	repo := &openAIFastPolicyRepoStub{values: map[string]string{}}
+	if settings != nil {
+		raw, err := json.Marshal(settings)
+		require.NoError(t, err)
+		repo.values[SettingKeyOpenAIFastPolicySettings] = string(raw)
+	}
+	return NewSettingService(repo, &config.Config{})
 }

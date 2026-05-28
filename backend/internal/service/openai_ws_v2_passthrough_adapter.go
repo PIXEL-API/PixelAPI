@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -126,6 +127,30 @@ func openAIWSPassthroughPolicyModelFromSessionFrame(account *Account, payload []
 
 const openaiWSV2PassthroughModeFields = "ws_mode=passthrough ws_router=v2"
 
+type openAIResponseImageBillingConfigStore struct {
+	mu  sync.RWMutex
+	cfg openAIResponseImageBillingConfig
+}
+
+func (s *openAIResponseImageBillingConfigStore) Store(cfg openAIResponseImageBillingConfig) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.cfg = cfg
+	s.mu.Unlock()
+}
+
+func (s *openAIResponseImageBillingConfigStore) Load() openAIResponseImageBillingConfig {
+	if s == nil {
+		return openAIResponseImageBillingConfig{}
+	}
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+	return cfg
+}
+
 var _ openaiwsv2.FrameConn = (*openAIWSClientFrameConn)(nil)
 
 func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
@@ -242,6 +267,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// 可直接 Store/Load 而无需额外封装。
 	var requestServiceTierPtr atomic.Pointer[string]
 	requestServiceTierPtr.Store(extractOpenAIServiceTierFromBody(firstClientMessage))
+	imageBillingConfigStore := &openAIResponseImageBillingConfigStore{}
+	imageBillingConfigStore.Store(resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, requestModel, firstClientMessage))
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
 	if err != nil {
@@ -354,6 +381,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if policyErr == nil && blocked == nil &&
 				strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
 				requestServiceTierPtr.Store(extractOpenAIServiceTierFromBody(out))
+				frameModel := strings.TrimSpace(gjson.GetBytes(out, "model").String())
+				if frameModel == "" {
+					frameModel = requestModel
+				}
+				imageBillingConfigStore.Store(resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, frameModel, out))
 			}
 			return out, blocked, policyErr
 		},
@@ -395,6 +427,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						OutputTokens:             turn.Usage.OutputTokens,
 						CacheCreationInputTokens: turn.Usage.CacheCreationInputTokens,
 						CacheReadInputTokens:     turn.Usage.CacheReadInputTokens,
+						ImageOutputTokens:        turn.Usage.ImageOutputTokens,
+						ImageCount:               turn.Usage.ImageCount,
 					},
 					Model:           turn.RequestModel,
 					ServiceTier:     requestServiceTierPtr.Load(),
@@ -404,6 +438,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					Duration:        turn.Duration,
 					FirstTokenMs:    turn.FirstTokenMs,
 				}
+				applyOpenAIResponseImageAccounting(turnResult, imageBillingConfigStore.Load())
 				logOpenAIWSV2Passthrough(
 					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
 					account.ID,
@@ -443,6 +478,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			OutputTokens:             relayResult.Usage.OutputTokens,
 			CacheCreationInputTokens: relayResult.Usage.CacheCreationInputTokens,
 			CacheReadInputTokens:     relayResult.Usage.CacheReadInputTokens,
+			ImageOutputTokens:        relayResult.Usage.ImageOutputTokens,
+			ImageCount:               relayResult.Usage.ImageCount,
 		},
 		Model:           relayResult.RequestModel,
 		ServiceTier:     requestServiceTierPtr.Load(),
@@ -452,6 +489,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		Duration:        relayResult.Duration,
 		FirstTokenMs:    relayResult.FirstTokenMs,
 	}
+	applyOpenAIResponseImageAccounting(result, imageBillingConfigStore.Load())
 
 	turnCount := int(completedTurns.Load())
 	if relayExit == nil {

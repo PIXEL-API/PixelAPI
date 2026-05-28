@@ -155,6 +155,18 @@ func TestListAccountsPassesLegacyProxyFilterAlias(t *testing.T) {
 	require.Equal(t, int64(35), adminSvc.lastListAccounts.proxyID)
 }
 
+func TestListAccountsPassesOwnerSearchFilter(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?owner_search=owner%40example.com", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Equal(t, 1, adminSvc.lastListAccounts.calls)
+	require.Equal(t, "owner@example.com", adminSvc.lastListAccounts.ownerSearch)
+}
+
 func TestExportDataIncludesSecrets(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 
@@ -264,7 +276,7 @@ func TestExportDataPassesAccountFiltersAndSort(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/v1/admin/accounts/data?platform=openai&type=oauth&status=active&group=12&proxy_id=34&privacy_mode=blocked&search=keyword&sort_by=priority&sort_order=desc",
+		"/api/v1/admin/accounts/data?platform=openai&type=oauth&status=active&group=12&proxy_id=34&privacy_mode=blocked&search=keyword&owner_search=owner%40example.com&sort_by=priority&sort_order=desc",
 		nil,
 	)
 	router.ServeHTTP(rec, req)
@@ -278,6 +290,7 @@ func TestExportDataPassesAccountFiltersAndSort(t *testing.T) {
 	require.Equal(t, int64(34), adminSvc.lastListAccounts.proxyID)
 	require.Equal(t, "blocked", adminSvc.lastListAccounts.privacyMode)
 	require.Equal(t, "keyword", adminSvc.lastListAccounts.search)
+	require.Equal(t, "owner@example.com", adminSvc.lastListAccounts.ownerSearch)
 	require.Equal(t, "priority", adminSvc.lastListAccounts.sortBy)
 	require.Equal(t, "desc", adminSvc.lastListAccounts.sortOrder)
 }

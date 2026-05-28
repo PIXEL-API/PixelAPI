@@ -41,6 +41,7 @@ type accountRepoStubForBulkUpdate struct {
 		accountType string
 		status      string
 		search      string
+		ownerSearch string
 		groupID     int64
 		proxyID     int64
 		privacyMode string
@@ -103,13 +104,14 @@ func (s *accountRepoStubForBulkUpdate) ListByGroup(_ context.Context, groupID in
 	return nil, nil
 }
 
-func (s *accountRepoStubForBulkUpdate) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+func (s *accountRepoStubForBulkUpdate) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search, ownerSearch string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
 	s.listCalled = true
 	s.lastListParams = params
 	s.lastListFilters.platform = platform
 	s.lastListFilters.accountType = accountType
 	s.lastListFilters.status = status
 	s.lastListFilters.search = search
+	s.lastListFilters.ownerSearch = ownerSearch
 	s.lastListFilters.groupID = groupID
 	s.lastListFilters.proxyID = proxyID
 	s.lastListFilters.privacyMode = privacyMode
@@ -432,6 +434,7 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	filtersValue.Elem().FieldByName("ProxyID").SetInt(34)
 	filtersValue.Elem().FieldByName("PrivacyMode").SetString(PrivacyModeCFBlocked)
 	filtersValue.Elem().FieldByName("Search").SetString("bulk-target")
+	filtersValue.Elem().FieldByName("OwnerSearch").SetString("owner@example.com")
 	filtersField.Set(filtersValue)
 
 	result, err := svc.BulkUpdateAccounts(context.Background(), input)
@@ -441,6 +444,7 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	require.Equal(t, AccountTypeOAuth, repo.lastListFilters.accountType)
 	require.Equal(t, StatusActive, repo.lastListFilters.status)
 	require.Equal(t, "bulk-target", repo.lastListFilters.search)
+	require.Equal(t, "owner@example.com", repo.lastListFilters.ownerSearch)
 	require.Equal(t, int64(12), repo.lastListFilters.groupID)
 	require.Equal(t, int64(34), repo.lastListFilters.proxyID)
 	require.Equal(t, PrivacyModeCFBlocked, repo.lastListFilters.privacyMode)

@@ -84,7 +84,7 @@ func (s *userAccountBatchRepoStub) Delete(context.Context, int64) error {
 func (s *userAccountBatchRepoStub) List(context.Context, pagination.PaginationParams) ([]service.Account, *pagination.PaginationResult, error) {
 	panic("unexpected List call")
 }
-func (s *userAccountBatchRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, int64, int64, string) ([]service.Account, *pagination.PaginationResult, error) {
+func (s *userAccountBatchRepoStub) ListWithFilters(context.Context, pagination.PaginationParams, string, string, string, string, string, int64, int64, string) ([]service.Account, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFilters call")
 }
 func (s *userAccountBatchRepoStub) ListByGroup(context.Context, int64) ([]service.Account, error) {

@@ -328,6 +328,14 @@
                 <Icon name="upload" size="sm" />
                 <span class="text-xs">{{ t('keys.importToCcSwitch') }}</span>
               </button>
+              <!-- Open Image Playground Button -->
+              <button
+                @click="openImagePlayground(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-purple-50 hover:text-purple-600 dark:hover:bg-purple-900/20 dark:hover:text-purple-400"
+              >
+                <Icon name="sparkles" size="sm" />
+                <span class="text-xs">{{ t('keys.openImagePlayground') }}</span>
+              </button>
               <!-- Toggle Status Button -->
               <button
                 @click="toggleKeyStatus(row)"
@@ -1209,6 +1217,7 @@ import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
+import { buildImagePlaygroundImportUrl } from '@/utils/imagePlaygroundImport'
 
 // Helper to format date for datetime-local input
 const formatDateTimeLocal = (isoDate: string): string => {
@@ -2014,6 +2023,24 @@ const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
     }, 100)
   } catch (error) {
     appStore.showError(t('keys.ccSwitchNotInstalled'))
+  }
+}
+
+const openImagePlayground = (row: ApiKey) => {
+  try {
+    const baseUrl = publicSettings.value?.api_base_url || window.location.origin
+    const siteName = (publicSettings.value?.site_name || 'Pixel API').trim() || 'Pixel API'
+    const url = buildImagePlaygroundImportUrl({
+      apiBaseUrl: baseUrl,
+      apiKey: row.key,
+      keyId: row.id,
+      keyName: row.name,
+      sourceName: siteName
+    })
+
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } catch {
+    appStore.showError(t('keys.openImagePlaygroundFailed'))
   }
 }
 

@@ -11,13 +11,13 @@ func TestParsePricingData_ParsesPriorityAndServiceTierFields(t *testing.T) {
 	svc := &PricingService{}
 	body := []byte(`{
 		"gpt-5.4": {
-			"input_cost_per_token": 0.0000025,
-			"input_cost_per_token_priority": 0.000005,
-			"output_cost_per_token": 0.000015,
-			"output_cost_per_token_priority": 0.00003,
-			"cache_creation_input_token_cost": 0.0000025,
-			"cache_read_input_token_cost": 0.00000025,
-			"cache_read_input_token_cost_priority": 0.0000005,
+			"input_cost_per_token": 0.0000625,
+			"input_cost_per_token_priority": 0.000125,
+			"output_cost_per_token": 0.000375,
+			"output_cost_per_token_priority": 0.00075,
+			"cache_creation_input_token_cost": 0.0000625,
+			"cache_read_input_token_cost": 0.00000625,
+			"cache_read_input_token_cost_priority": 0.0000125,
 			"supports_service_tier": true,
 			"supports_prompt_caching": true,
 			"litellm_provider": "openai",
@@ -29,9 +29,9 @@ func TestParsePricingData_ParsesPriorityAndServiceTierFields(t *testing.T) {
 	require.NoError(t, err)
 	pricing := data["gpt-5.4"]
 	require.NotNil(t, pricing)
-	require.InDelta(t, 5e-6, pricing.InputCostPerTokenPriority, 1e-12)
-	require.InDelta(t, 3e-5, pricing.OutputCostPerTokenPriority, 1e-12)
-	require.InDelta(t, 5e-7, pricing.CacheReadInputTokenCostPriority, 1e-12)
+	require.InDelta(t, 125e-6, pricing.InputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 750e-6, pricing.OutputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 12.5e-6, pricing.CacheReadInputTokenCostPriority, 1e-12)
 	require.True(t, pricing.SupportsServiceTier)
 }
 
@@ -105,12 +105,35 @@ func TestGetModelPricing_Gpt54UsesStaticFallbackWhenRemoteMissing(t *testing.T) 
 
 	got := svc.GetModelPricing("gpt-5.4")
 	require.NotNil(t, got)
-	require.InDelta(t, 2.5e-6, got.InputCostPerToken, 1e-12)
-	require.InDelta(t, 1.5e-5, got.OutputCostPerToken, 1e-12)
-	require.InDelta(t, 2.5e-7, got.CacheReadInputTokenCost, 1e-12)
+	require.InDelta(t, 62.5e-6, got.InputCostPerToken, 1e-12)
+	require.InDelta(t, 125e-6, got.InputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 375e-6, got.OutputCostPerToken, 1e-12)
+	require.InDelta(t, 750e-6, got.OutputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 6.25e-6, got.CacheReadInputTokenCost, 1e-12)
+	require.InDelta(t, 12.5e-6, got.CacheReadInputTokenCostPriority, 1e-12)
+	require.InDelta(t, 62.5e-6, got.CacheCreationInputTokenCost, 1e-12)
 	require.Equal(t, 272000, got.LongContextInputTokenThreshold)
 	require.InDelta(t, 2.0, got.LongContextInputCostMultiplier, 1e-12)
 	require.InDelta(t, 1.5, got.LongContextOutputCostMultiplier, 1e-12)
+}
+
+func TestGetModelPricing_Gpt55UsesStaticFallbackWhenRemoteMissing(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"gpt-5.1-codex": &LiteLLMModelPricing{InputCostPerToken: 1.25e-6},
+		},
+	}
+
+	got := svc.GetModelPricing("gpt-5.5")
+	require.NotNil(t, got)
+	require.InDelta(t, 125e-6, got.InputCostPerToken, 1e-12)
+	require.InDelta(t, 312.5e-6, got.InputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 750e-6, got.OutputCostPerToken, 1e-12)
+	require.InDelta(t, 1875e-6, got.OutputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 12.5e-6, got.CacheReadInputTokenCost, 1e-12)
+	require.InDelta(t, 31.25e-6, got.CacheReadInputTokenCostPriority, 1e-12)
+	require.InDelta(t, 125e-6, got.CacheCreationInputTokenCost, 1e-12)
+	require.Equal(t, 272000, got.LongContextInputTokenThreshold)
 }
 
 func TestGetModelPricing_Gpt54MiniUsesDedicatedStaticFallbackWhenRemoteMissing(t *testing.T) {
@@ -162,12 +185,12 @@ func TestGetModelPricing_ImageModelDoesNotFallbackToTextModel(t *testing.T) {
 func TestParsePricingData_PreservesPriorityAndServiceTierFields(t *testing.T) {
 	raw := map[string]any{
 		"gpt-5.4": map[string]any{
-			"input_cost_per_token":                 2.5e-6,
-			"input_cost_per_token_priority":        5e-6,
-			"output_cost_per_token":                15e-6,
-			"output_cost_per_token_priority":       30e-6,
-			"cache_read_input_token_cost":          0.25e-6,
-			"cache_read_input_token_cost_priority": 0.5e-6,
+			"input_cost_per_token":                 62.5e-6,
+			"input_cost_per_token_priority":        125e-6,
+			"output_cost_per_token":                375e-6,
+			"output_cost_per_token_priority":       750e-6,
+			"cache_read_input_token_cost":          6.25e-6,
+			"cache_read_input_token_cost_priority": 12.5e-6,
 			"supports_service_tier":                true,
 			"supports_prompt_caching":              true,
 			"litellm_provider":                     "openai",
@@ -183,12 +206,12 @@ func TestParsePricingData_PreservesPriorityAndServiceTierFields(t *testing.T) {
 
 	pricing := pricingMap["gpt-5.4"]
 	require.NotNil(t, pricing)
-	require.InDelta(t, 2.5e-6, pricing.InputCostPerToken, 1e-12)
-	require.InDelta(t, 5e-6, pricing.InputCostPerTokenPriority, 1e-12)
-	require.InDelta(t, 15e-6, pricing.OutputCostPerToken, 1e-12)
-	require.InDelta(t, 30e-6, pricing.OutputCostPerTokenPriority, 1e-12)
-	require.InDelta(t, 0.25e-6, pricing.CacheReadInputTokenCost, 1e-12)
-	require.InDelta(t, 0.5e-6, pricing.CacheReadInputTokenCostPriority, 1e-12)
+	require.InDelta(t, 62.5e-6, pricing.InputCostPerToken, 1e-12)
+	require.InDelta(t, 125e-6, pricing.InputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 375e-6, pricing.OutputCostPerToken, 1e-12)
+	require.InDelta(t, 750e-6, pricing.OutputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 6.25e-6, pricing.CacheReadInputTokenCost, 1e-12)
+	require.InDelta(t, 12.5e-6, pricing.CacheReadInputTokenCostPriority, 1e-12)
 	require.True(t, pricing.SupportsServiceTier)
 }
 
@@ -196,12 +219,12 @@ func TestParsePricingData_PreservesServiceTierPriorityFields(t *testing.T) {
 	svc := &PricingService{}
 	pricingData, err := svc.parsePricingData([]byte(`{
 		"gpt-5.4": {
-			"input_cost_per_token": 0.0000025,
-			"input_cost_per_token_priority": 0.000005,
-			"output_cost_per_token": 0.000015,
-			"output_cost_per_token_priority": 0.00003,
-			"cache_read_input_token_cost": 0.00000025,
-			"cache_read_input_token_cost_priority": 0.0000005,
+			"input_cost_per_token": 0.0000625,
+			"input_cost_per_token_priority": 0.000125,
+			"output_cost_per_token": 0.000375,
+			"output_cost_per_token_priority": 0.00075,
+			"cache_read_input_token_cost": 0.00000625,
+			"cache_read_input_token_cost_priority": 0.0000125,
 			"supports_service_tier": true,
 			"litellm_provider": "openai",
 			"mode": "chat"
@@ -211,11 +234,11 @@ func TestParsePricingData_PreservesServiceTierPriorityFields(t *testing.T) {
 
 	pricing := pricingData["gpt-5.4"]
 	require.NotNil(t, pricing)
-	require.InDelta(t, 0.0000025, pricing.InputCostPerToken, 1e-12)
-	require.InDelta(t, 0.000005, pricing.InputCostPerTokenPriority, 1e-12)
-	require.InDelta(t, 0.000015, pricing.OutputCostPerToken, 1e-12)
-	require.InDelta(t, 0.00003, pricing.OutputCostPerTokenPriority, 1e-12)
-	require.InDelta(t, 0.00000025, pricing.CacheReadInputTokenCost, 1e-12)
-	require.InDelta(t, 0.0000005, pricing.CacheReadInputTokenCostPriority, 1e-12)
+	require.InDelta(t, 0.0000625, pricing.InputCostPerToken, 1e-12)
+	require.InDelta(t, 0.000125, pricing.InputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 0.000375, pricing.OutputCostPerToken, 1e-12)
+	require.InDelta(t, 0.00075, pricing.OutputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 0.00000625, pricing.CacheReadInputTokenCost, 1e-12)
+	require.InDelta(t, 0.0000125, pricing.CacheReadInputTokenCostPriority, 1e-12)
 	require.True(t, pricing.SupportsServiceTier)
 }

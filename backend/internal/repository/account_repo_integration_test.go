@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -218,6 +219,7 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 		accType     string
 		status      string
 		search      string
+		ownerSearch string
 		groupID     int64
 		privacyMode string
 		wantCount   int
@@ -367,6 +369,37 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			},
 		},
 		{
+			name: "filter_by_owner_email",
+			setup: func(client *dbent.Client) {
+				owner := mustCreateUser(s.T(), client, &service.User{Email: "Owner.Search@Example.com", Username: "owner-search"})
+				otherOwner := mustCreateUser(s.T(), client, &service.User{Email: "other-owner@example.com", Username: "other-owner"})
+				mustCreateAccount(s.T(), client, &service.Account{Name: "owner-account-1", OwnerUserID: &owner.ID})
+				mustCreateAccount(s.T(), client, &service.Account{Name: "owner-account-2", OwnerUserID: &owner.ID})
+				mustCreateAccount(s.T(), client, &service.Account{Name: "other-owner-account", OwnerUserID: &otherOwner.ID})
+				mustCreateAccount(s.T(), client, &service.Account{Name: "platform-account"})
+			},
+			ownerSearch: "owner.search@example.com",
+			wantCount:   2,
+			validate: func(accounts []service.Account) {
+				names := []string{accounts[0].Name, accounts[1].Name}
+				s.Require().ElementsMatch([]string{"owner-account-1", "owner-account-2"}, names)
+			},
+		},
+		{
+			name: "filter_by_owner_username",
+			setup: func(client *dbent.Client) {
+				owner := mustCreateUser(s.T(), client, &service.User{Email: "username-owner@example.com", Username: "needle-owner"})
+				otherOwner := mustCreateUser(s.T(), client, &service.User{Email: "username-other@example.com", Username: "other"})
+				mustCreateAccount(s.T(), client, &service.Account{Name: "username-owner-account", OwnerUserID: &owner.ID})
+				mustCreateAccount(s.T(), client, &service.Account{Name: "username-other-account", OwnerUserID: &otherOwner.ID})
+			},
+			ownerSearch: "needle",
+			wantCount:   1,
+			validate: func(accounts []service.Account) {
+				s.Require().Equal("username-owner-account", accounts[0].Name)
+			},
+		},
+		{
 			name: "filter_by_ungrouped",
 			setup: func(client *dbent.Client) {
 				publicGroup := mustCreateGroup(s.T(), client, &service.Group{Name: "g-public", Scope: service.GroupScopePublic})
@@ -424,8 +457,7 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			ctx := context.Background()
 
 			tt.setup(client)
-
-			accounts, _, err := repo.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, tt.platform, tt.accType, tt.status, tt.search, tt.groupID, 0, tt.privacyMode)
+			accounts, _, err := repo.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, tt.platform, tt.accType, tt.status, tt.search, tt.ownerSearch, tt.groupID, 0, tt.privacyMode)
 			s.Require().NoError(err)
 			s.Require().Len(accounts, tt.wantCount)
 			if tt.validate != nil {
@@ -433,6 +465,30 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			}
 		})
 	}
+}
+
+func (s *AccountRepoSuite) TestListWithFilters_OwnerSearchByID() {
+	owner := mustCreateUser(s.T(), s.client, &service.User{Email: "id-owner@example.com", Username: "id-owner"})
+	otherOwner := mustCreateUser(s.T(), s.client, &service.User{Email: "id-other@example.com", Username: "id-other"})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "id-owner-account", OwnerUserID: &owner.ID})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "id-other-account", OwnerUserID: &otherOwner.ID})
+
+	accounts, page, err := s.repo.ListWithFilters(
+		s.ctx,
+		pagination.PaginationParams{Page: 1, PageSize: 10},
+		"",
+		"",
+		"",
+		"",
+		strconv.FormatInt(owner.ID, 10),
+		0,
+		0,
+		"",
+	)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(accounts, 1)
+	s.Require().Equal("id-owner-account", accounts[0].Name)
 }
 
 // --- ListByGroup / ListActive / ListByPlatform ---
@@ -492,7 +548,7 @@ func (s *AccountRepoSuite) TestPreload_And_VirtualFields() {
 	s.Require().Len(got.Groups, 1, "expected Groups to be populated")
 	s.Require().Equal(group.ID, got.Groups[0].ID)
 
-	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "acc", 0, 0, "")
+	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "acc", "", 0, 0, "")
 	s.Require().NoError(err, "ListWithFilters")
 	s.Require().Equal(int64(1), page.Total)
 	s.Require().Len(accounts, 1)
@@ -509,7 +565,7 @@ func (s *AccountRepoSuite) TestListWithFilters_ProxyID() {
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "other-proxy", ProxyID: &otherProxy.ID})
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "no-proxy"})
 
-	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "", 0, proxy.ID, "")
+	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "", "", 0, proxy.ID, "")
 	s.Require().NoError(err)
 	s.Require().Equal(int64(1), page.Total)
 	s.Require().Len(accounts, 1)
@@ -524,7 +580,7 @@ func (s *AccountRepoSuite) TestListWithFilters_UnassignedProxy() {
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "no-proxy-1"})
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "no-proxy-2"})
 
-	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "", 0, service.AccountListProxyUnassigned, "")
+	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "", "", 0, service.AccountListProxyUnassigned, "")
 	s.Require().NoError(err)
 	s.Require().Equal(int64(2), page.Total)
 	s.Require().Len(accounts, 2)

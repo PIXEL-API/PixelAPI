@@ -13,26 +13,28 @@ import (
 type accountRepoStubForAdminList struct {
 	accountRepoStub
 
-	listWithFiltersCalls    int
-	listWithFiltersParams   pagination.PaginationParams
-	listWithFiltersPlatform string
-	listWithFiltersType     string
-	listWithFiltersStatus   string
-	listWithFiltersSearch   string
-	listWithFiltersProxyID  int64
-	listWithFiltersPrivacy  string
-	listWithFiltersAccounts []Account
-	listWithFiltersResult   *pagination.PaginationResult
-	listWithFiltersErr      error
+	listWithFiltersCalls       int
+	listWithFiltersParams      pagination.PaginationParams
+	listWithFiltersPlatform    string
+	listWithFiltersType        string
+	listWithFiltersStatus      string
+	listWithFiltersSearch      string
+	listWithFiltersOwnerSearch string
+	listWithFiltersProxyID     int64
+	listWithFiltersPrivacy     string
+	listWithFiltersAccounts    []Account
+	listWithFiltersResult      *pagination.PaginationResult
+	listWithFiltersErr         error
 }
 
-func (s *accountRepoStubForAdminList) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+func (s *accountRepoStubForAdminList) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search, ownerSearch string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
 	s.listWithFiltersCalls++
 	s.listWithFiltersParams = params
 	s.listWithFiltersPlatform = platform
 	s.listWithFiltersType = accountType
 	s.listWithFiltersStatus = status
 	s.listWithFiltersSearch = search
+	s.listWithFiltersOwnerSearch = ownerSearch
 	s.listWithFiltersProxyID = proxyID
 	s.listWithFiltersPrivacy = privacyMode
 
@@ -172,7 +174,7 @@ func TestAdminService_ListAccounts_WithSearch(t *testing.T) {
 		}
 		svc := &adminServiceImpl{accountRepo: repo}
 
-		accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, PlatformGemini, AccountTypeOAuth, StatusActive, "acc", 0, 0, "", "name", "ASC")
+		accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, PlatformGemini, AccountTypeOAuth, StatusActive, "acc", "", 0, 0, "", "name", "ASC")
 		require.NoError(t, err)
 		require.Equal(t, int64(10), total)
 		require.Equal(t, []Account{{ID: 1, Name: "acc"}}, accounts)
@@ -186,6 +188,20 @@ func TestAdminService_ListAccounts_WithSearch(t *testing.T) {
 	})
 }
 
+func TestAdminService_ListAccounts_WithOwnerSearch(t *testing.T) {
+	repo := &accountRepoStubForAdminList{
+		listWithFiltersAccounts: []Account{{ID: 4, Name: "owned"}},
+		listWithFiltersResult:   &pagination.PaginationResult{Total: 1},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, "", "", "", "", "owner@example.com", 0, 0, "", "", "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Equal(t, []Account{{ID: 4, Name: "owned"}}, accounts)
+	require.Equal(t, "owner@example.com", repo.listWithFiltersOwnerSearch)
+}
+
 func TestAdminService_ListAccounts_WithPrivacyMode(t *testing.T) {
 	t.Run("privacy_mode 参数正常传递到 repository 层", func(t *testing.T) {
 		repo := &accountRepoStubForAdminList{
@@ -194,7 +210,7 @@ func TestAdminService_ListAccounts_WithPrivacyMode(t *testing.T) {
 		}
 		svc := &adminServiceImpl{accountRepo: repo}
 
-		accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, PlatformOpenAI, AccountTypeOAuth, StatusActive, "acc2", 0, 0, PrivacyModeCFBlocked, "", "")
+		accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, PlatformOpenAI, AccountTypeOAuth, StatusActive, "acc2", "", 0, 0, PrivacyModeCFBlocked, "", "")
 		require.NoError(t, err)
 		require.Equal(t, int64(1), total)
 		require.Equal(t, []Account{{ID: 2, Name: "acc2"}}, accounts)
@@ -209,7 +225,7 @@ func TestAdminService_ListAccounts_WithProxyID(t *testing.T) {
 	}
 	svc := &adminServiceImpl{accountRepo: repo}
 
-	accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, "", "", "", "", 0, 34, "", "", "")
+	accounts, total, err := svc.ListAccounts(context.Background(), 1, 20, "", "", "", "", "", 0, 34, "", "", "")
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Equal(t, []Account{{ID: 3, Name: "proxied"}}, accounts)

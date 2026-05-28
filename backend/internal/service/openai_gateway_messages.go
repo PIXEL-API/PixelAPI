@@ -174,6 +174,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	forwardedServiceTier := extractOpenAIServiceTierFromBody(responsesBody)
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -269,9 +270,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
-		if responsesReq.ServiceTier != "" {
-			st := responsesReq.ServiceTier
-			result.ServiceTier = &st
+		if upstreamServiceTier := extractOpenAIServiceTierFromResponses(result.ResponseServiceTier); upstreamServiceTier != nil {
+			result.ServiceTier = upstreamServiceTier
+		} else if forwardedServiceTier != nil {
+			result.ServiceTier = forwardedServiceTier
 		}
 		if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {
 			re := responsesReq.Reasoning.Effort
@@ -389,13 +391,14 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	c.JSON(http.StatusOK, anthropicResp)
 
 	return &OpenAIForwardResult{
-		RequestID:     requestID,
-		Usage:         usage,
-		Model:         originalModel,
-		BillingModel:  billingModel,
-		UpstreamModel: upstreamModel,
-		Stream:        false,
-		Duration:      time.Since(startTime),
+		RequestID:           requestID,
+		Usage:               usage,
+		Model:               originalModel,
+		BillingModel:        billingModel,
+		UpstreamModel:       upstreamModel,
+		ResponseServiceTier: finalResponse.ServiceTier,
+		Stream:              false,
+		Duration:            time.Since(startTime),
 	}, nil
 }
 
@@ -427,6 +430,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	state.Model = originalModel
 	var usage OpenAIUsage
 	var firstTokenMs *int
+	var responseServiceTier string
 	firstChunk := true
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -439,14 +443,15 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	// resultWithUsage builds the final result snapshot.
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
-			RequestID:     requestID,
-			Usage:         usage,
-			Model:         originalModel,
-			BillingModel:  billingModel,
-			UpstreamModel: upstreamModel,
-			Stream:        true,
-			Duration:      time.Since(startTime),
-			FirstTokenMs:  firstTokenMs,
+			RequestID:           requestID,
+			Usage:               usage,
+			Model:               originalModel,
+			BillingModel:        billingModel,
+			UpstreamModel:       upstreamModel,
+			ResponseServiceTier: responseServiceTier,
+			Stream:              true,
+			Duration:            time.Since(startTime),
+			FirstTokenMs:        firstTokenMs,
 		}
 	}
 
@@ -471,6 +476,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		// Extract usage from completion events
 		if (event.Type == "response.completed" || event.Type == "response.incomplete" || event.Type == "response.failed") &&
 			event.Response != nil && event.Response.Usage != nil {
+			if event.Response.ServiceTier != "" {
+				responseServiceTier = event.Response.ServiceTier
+			}
 			usage = OpenAIUsage{
 				InputTokens:  event.Response.Usage.InputTokens,
 				OutputTokens: event.Response.Usage.OutputTokens,

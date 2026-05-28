@@ -26,6 +26,7 @@ import (
 	dbgroup "github.com/Wei-Shaw/sub2api/ent/group"
 	dbpredicate "github.com/Wei-Shaw/sub2api/ent/predicate"
 	dbproxy "github.com/Wei-Shaw/sub2api/ent/proxy"
+	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -491,18 +492,18 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *accountRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Account, *pagination.PaginationResult, error) {
-	return r.ListWithFilters(ctx, params, "", "", "", "", 0, 0, "")
+	return r.ListWithFilters(ctx, params, "", "", "", "", "", 0, 0, "")
 }
 
-func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
-	return r.listWithFilters(ctx, params, nil, platform, accountType, status, search, groupID, proxyID, privacyMode)
+func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search, ownerSearch string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+	return r.listWithFilters(ctx, params, nil, platform, accountType, status, search, ownerSearch, groupID, proxyID, privacyMode)
 }
 
 func (r *accountRepository) ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	if ownerUserID <= 0 {
 		return nil, nil, service.ErrUserNotFound
 	}
-	return r.listWithFilters(ctx, params, &ownerUserID, platform, accountType, status, search, groupID, proxyID, privacyMode)
+	return r.listWithFilters(ctx, params, &ownerUserID, platform, accountType, status, search, "", groupID, proxyID, privacyMode)
 }
 
 func (r *accountRepository) ListQuotaPoolAccounts(ctx context.Context, ownerUserID int64) ([]service.Account, error) {
@@ -773,7 +774,7 @@ func setNullStringExtra(extra map[string]any, key string, value sql.NullString) 
 	extra[key] = value.String
 }
 
-func (r *accountRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, ownerUserID *int64, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+func (r *accountRepository) listWithFilters(ctx context.Context, params pagination.PaginationParams, ownerUserID *int64, platform, accountType, status, search, ownerSearch string, groupID, proxyID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	q := r.client.Account.Query()
 
 	if ownerUserID != nil {
@@ -848,6 +849,20 @@ func (r *accountRepository) listWithFilters(ctx context.Context, params paginati
 	}
 	if search != "" {
 		q = q.Where(dbaccount.NameContainsFold(search))
+	}
+	ownerSearch = strings.TrimSpace(ownerSearch)
+	if ownerSearch != "" {
+		ownerMatches := []dbpredicate.User{
+			dbuser.EmailContainsFold(ownerSearch),
+			dbuser.UsernameContainsFold(ownerSearch),
+		}
+		if ownerID, err := strconv.ParseInt(ownerSearch, 10, 64); err == nil && ownerID > 0 {
+			ownerMatches = append(ownerMatches, dbuser.IDEQ(ownerID))
+		}
+		q = q.Where(dbaccount.HasOwnerWith(
+			dbuser.DeletedAtIsNil(),
+			dbuser.Or(ownerMatches...),
+		))
 	}
 	if groupID == service.AccountListGroupUngrouped {
 		q = q.Where(accountHasNoNonPrivateGroups())

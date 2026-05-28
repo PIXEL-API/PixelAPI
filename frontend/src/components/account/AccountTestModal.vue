@@ -302,7 +302,7 @@ const loadAvailableModels = async () => {
 const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
   switch (account.platform) {
     case 'openai':
-      return [{ id: 'gpt-4o-mini', type: 'model', display_name: 'gpt-4o-mini', created_at: '' }]
+      return [{ id: 'gpt-5.5', type: 'model', display_name: 'gpt-5.5', created_at: '' }]
     case 'gemini':
     case 'antigravity':
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]

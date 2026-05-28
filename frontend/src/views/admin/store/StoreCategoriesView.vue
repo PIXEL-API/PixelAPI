@@ -4,7 +4,11 @@
       <template #filters>
         <div class="flex flex-wrap items-center gap-3">
           <input v-model="keyword" class="input flex-1 sm:max-w-72" :placeholder="t('admin.store.searchCategories')" @input="handleSearch" />
-          <div class="flex flex-1 justify-end gap-2">
+          <label class="inline-flex min-h-11 items-center gap-2 rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 shadow-sm dark:border-dark-700 dark:bg-dark-900 dark:text-dark-200">
+            <input v-model="hideDisabled" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" type="checkbox" @change="handleHideDisabledChange" />
+            <span>{{ t('admin.store.hideDisabledItems') }}</span>
+          </label>
+          <div class="flex flex-1 flex-wrap justify-end gap-2">
             <button class="btn btn-secondary" :disabled="loading" @click="loadCategories">{{ t('common.refresh') }}</button>
             <button class="btn btn-primary" @click="openCreate">{{ t('admin.store.createCategory') }}</button>
           </div>
@@ -20,7 +24,7 @@
           <template #cell-actions="{ row }">
             <div class="flex justify-end gap-2">
               <button class="btn btn-secondary btn-sm" @click="openEdit(row)">{{ t('common.edit') }}</button>
-              <button class="btn btn-danger btn-sm" @click="deleteCategory(row)">{{ t('common.delete') }}</button>
+              <button class="btn btn-danger btn-sm" @click="deleteCategory(row)">{{ t('admin.store.disableCategory') }}</button>
             </div>
           </template>
         </DataTable>
@@ -87,6 +91,7 @@ const categories = ref<StoreCategory[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const keyword = ref('')
+const hideDisabled = ref(false)
 const dialogOpen = ref(false)
 const editingCategory = ref<StoreCategory | null>(null)
 const pagination = reactive({ page: 1, page_size: 20, total: 0 })
@@ -140,8 +145,9 @@ async function loadCategories() {
     const filtered = keywordText
       ? data.filter(category => category.name.toLowerCase().includes(keywordText) || (category.description || '').toLowerCase().includes(keywordText))
       : data
-    pagination.total = filtered.length
-    categories.value = filtered.slice((pagination.page - 1) * pagination.page_size, pagination.page * pagination.page_size)
+    const visibleCategories = hideDisabled.value ? filtered.filter(category => category.enabled) : filtered
+    pagination.total = visibleCategories.length
+    categories.value = visibleCategories.slice((pagination.page - 1) * pagination.page_size, pagination.page * pagination.page_size)
   } catch (err) {
     appStore.showError(extractApiErrorMessage(err, t('admin.store.loadFailed')))
   } finally {
@@ -166,14 +172,19 @@ async function submitForm() {
 }
 
 async function deleteCategory(category: StoreCategory) {
-  if (!window.confirm(t('admin.store.deleteCategoryConfirm'))) return
+  if (!window.confirm(t('admin.store.disableCategoryConfirm'))) return
   try {
     await adminStoreAPI.deleteCategory(category.id)
-    appStore.showSuccess(t('common.deleted'))
+    appStore.showSuccess(t('admin.store.categoryDisabled'))
     await loadCategories()
   } catch (err) {
     appStore.showError(extractApiErrorMessage(err, t('common.error')))
   }
+}
+
+function handleHideDisabledChange() {
+  pagination.page = 1
+  loadCategories()
 }
 
 function handleSearch() {

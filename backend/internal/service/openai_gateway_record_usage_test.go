@@ -836,8 +836,8 @@ func TestOpenAIGatewayServiceRecordUsage_Gpt54LongContextBillsWholeSession(t *te
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 
-	expectedInput := 300000 * 2.5e-6 * 2.0
-	expectedOutput := 2000 * 15e-6 * 1.5
+	expectedInput := 300000 * 62.5e-6 * 2.0
+	expectedOutput := 2000 * 375e-6 * 1.5
 	require.InDelta(t, expectedInput, usageRepo.lastLog.InputCost, 1e-10)
 	require.InDelta(t, expectedOutput, usageRepo.lastLog.OutputCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, usageRepo.lastLog.TotalCost, 1e-10)
@@ -1244,4 +1244,60 @@ func TestOpenAIGatewayServiceRecordUsage_ImageUsesPerImageBillingEvenWithUsageTo
 	require.InDelta(t, 0.0, usageRepo.lastLog.InputCost, 1e-12)
 	require.InDelta(t, 0.0, usageRepo.lastLog.OutputCost, 1e-12)
 	require.InDelta(t, 0.0, usageRepo.lastLog.ImageOutputCost, 1e-12)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_ResponseImageBillingModelNotOverriddenByRequestedModel(t *testing.T) {
+	imagePrice := 0.03
+	groupID := int64(19)
+
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:     "resp_image_requested_source",
+			Model:         "gpt-image-2",
+			UpstreamModel: "gpt-5.4-mini",
+			BillingModel:  "gpt-image-2",
+			Usage: OpenAIUsage{
+				InputTokens:          111,
+				OutputTokens:         222,
+				ImageOutputTokens:    222,
+				ImageCount:           1,
+				CacheReadInputTokens: 11,
+			},
+			ImageCount: 1,
+			ImageSize:  "1K",
+			Duration:   time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      1009,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:             groupID,
+				RateMultiplier: 1.0,
+				ImagePrice1K:   &imagePrice,
+			},
+		},
+		User:    &User{ID: 2009},
+		Account: &Account{ID: 3009},
+		ChannelUsageFields: ChannelUsageFields{
+			OriginalModel:      "gpt-5.4",
+			ChannelMappedModel: "gpt-5.4",
+			BillingModelSource: BillingModelSourceRequested,
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, "gpt-image-2", usageRepo.lastLog.Model)
+	require.Equal(t, "gpt-5.4", usageRepo.lastLog.RequestedModel)
+	require.NotNil(t, usageRepo.lastLog.BillingMode)
+	require.Equal(t, string(BillingModeImage), *usageRepo.lastLog.BillingMode)
+	require.Equal(t, 1, usageRepo.lastLog.ImageCount)
+	require.InDelta(t, 0.03, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, 0.0, usageRepo.lastLog.InputCost, 1e-12)
+	require.InDelta(t, 0.0, usageRepo.lastLog.OutputCost, 1e-12)
 }

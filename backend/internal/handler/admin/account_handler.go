@@ -208,6 +208,7 @@ type BulkUpdateAccountFilters struct {
 	Group       string `json:"group"`
 	ProxyID     int64  `json:"proxy_id"`
 	Search      string `json:"search"`
+	OwnerSearch string `json:"owner_search"`
 	PrivacyMode string `json:"privacy_mode"`
 }
 
@@ -229,6 +230,15 @@ type AccountWithConcurrency struct {
 }
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
+
+func normalizeAccountTextFilter(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) > 100 {
+		return string(runes[:100])
+	}
+	return value
+}
 
 func parseAccountProxyFilter(c *gin.Context) (int64, error) {
 	raw := strings.TrimSpace(c.Query("proxy_id"))
@@ -427,14 +437,12 @@ func (h *AccountHandler) List(c *gin.Context) {
 	accountType := c.Query("type")
 	status := c.Query("status")
 	search := c.Query("search")
+	ownerSearch := c.Query("owner_search")
 	privacyMode := strings.TrimSpace(c.Query("privacy_mode"))
 	sortBy := c.DefaultQuery("sort_by", "name")
 	sortOrder := c.DefaultQuery("sort_order", "asc")
-	// 标准化和验证 search 参数
-	search = strings.TrimSpace(search)
-	if len(search) > 100 {
-		search = search[:100]
-	}
+	search = normalizeAccountTextFilter(search)
+	ownerSearch = normalizeAccountTextFilter(ownerSearch)
 	lite := parseBoolQueryWithDefault(c.Query("lite"), false)
 
 	var groupID int64
@@ -461,7 +469,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 		return
 	}
 
-	accounts, total, err := h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, proxyID, privacyMode, sortBy, sortOrder)
+	accounts, total, err := h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, ownerSearch, groupID, proxyID, privacyMode, sortBy, sortOrder)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1826,7 +1834,8 @@ func toServiceBulkUpdateAccountFilters(filters *BulkUpdateAccountFilters) *servi
 		Status:      filters.Status,
 		Group:       filters.Group,
 		ProxyID:     filters.ProxyID,
-		Search:      filters.Search,
+		Search:      normalizeAccountTextFilter(filters.Search),
+		OwnerSearch: normalizeAccountTextFilter(filters.OwnerSearch),
 		PrivacyMode: filters.PrivacyMode,
 	}
 }
@@ -2440,7 +2449,7 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 	accounts := make([]*service.Account, 0)
 
 	if len(req.AccountIDs) == 0 {
-		allAccounts, _, err := h.adminService.ListAccounts(ctx, 1, 10000, "gemini", "oauth", "", "", 0, 0, "", "name", "asc")
+		allAccounts, _, err := h.adminService.ListAccounts(ctx, 1, 10000, "gemini", "oauth", "", "", "", 0, 0, "", "name", "asc")
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return

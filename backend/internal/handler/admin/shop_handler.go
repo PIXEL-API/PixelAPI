@@ -77,10 +77,12 @@ func (h *ShopHandler) DeleteCategory(c *gin.Context) {
 func (h *ShopHandler) ListProducts(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
 	items, total, err := h.shopService.AdminListProducts(c.Request.Context(), service.ShopListProductsParams{
-		CategoryID: parseAdminOptionalInt64Query(c, "category_id"),
-		Keyword:    c.Query("keyword"),
-		Page:       page,
-		PageSize:   pageSize,
+		CategoryID:   parseAdminOptionalInt64Query(c, "category_id"),
+		Keyword:      c.Query("keyword"),
+		Status:       c.Query("status"),
+		HideDisabled: c.Query("hide_disabled") == "true",
+		Page:         page,
+		PageSize:     pageSize,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

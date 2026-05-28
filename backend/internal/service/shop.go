@@ -255,12 +255,14 @@ type ShopCardKeyDTO struct {
 }
 
 type ShopListProductsParams struct {
-	CategoryID int64
-	Keyword    string
-	Page       int
-	PageSize   int
-	Admin      bool
-	UserID     int64
+	CategoryID   int64
+	Keyword      string
+	Status       string
+	HideDisabled bool
+	Page         int
+	PageSize     int
+	Admin        bool
+	UserID       int64
 }
 
 type ShopListCardKeysParams struct {
@@ -402,6 +404,10 @@ func (s *ShopService) ListProducts(ctx context.Context, params ShopListProductsP
 				shopproduct.HasCategoryWith(shopcategory.EnabledEQ(true)),
 			),
 		)
+	} else if params.HideDisabled || strings.EqualFold(strings.TrimSpace(params.Status), "active") {
+		q = q.Where(shopproduct.EnabledEQ(true))
+	} else if strings.EqualFold(strings.TrimSpace(params.Status), "inactive") {
+		q = q.Where(shopproduct.EnabledEQ(false))
 	}
 	if params.CategoryID > 0 {
 		q = q.Where(shopproduct.CategoryIDEQ(params.CategoryID))

@@ -1368,6 +1368,40 @@ func TestOpenAIStreamingClientDisconnectDrainsUpstreamUsage(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamingResponseCountsImageGenerationOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0,
+			StreamKeepaliveInterval:   0,
+			MaxLineSize:               defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.output_item.done","item":{"id":"ig_stream","type":"image_generation_call","result":"ZmluYWw="}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_img_stream","usage":{"input_tokens":3,"output_tokens":5,"output_tokens_details":{"image_tokens":4}},"output":[{"id":"ig_stream","type":"image_generation_call","result":"ZmluYWw="}]}}`,
+			`data: [DONE]`,
+		}, "\n\n"))),
+		Header: http.Header{},
+	}
+
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.usage)
+	require.Equal(t, 1, result.usage.ImageCount)
+	require.Equal(t, 4, result.usage.ImageOutputTokens)
+	require.Contains(t, rec.Body.String(), "response.output_item.done")
+}
+
 func TestOpenAIStreamingMissingTerminalEventReturnsIncompleteError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
@@ -1549,6 +1583,38 @@ func TestOpenAIStreamingPassthroughResponseDoneWithoutDoneMarkerStillSucceeds(t 
 	require.Equal(t, 2, result.usage.InputTokens)
 	require.Equal(t, 3, result.usage.OutputTokens)
 	require.Equal(t, 1, result.usage.CacheReadInputTokens)
+}
+
+func TestOpenAIStreamingPassthroughCountsImageGenerationOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.output_item.done","item":{"id":"ig_pt","type":"image_generation_call","result":"ZmluYWw="}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_pt_img","usage":{"input_tokens":2,"output_tokens":3,"output_tokens_details":{"image_tokens":2}},"output":[{"id":"ig_pt","type":"image_generation_call","result":"ZmluYWw="}]}}`,
+			`data: [DONE]`,
+		}, "\n\n"))),
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	result, err := svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.usage)
+	require.Equal(t, 1, result.usage.ImageCount)
+	require.Equal(t, 2, result.usage.ImageOutputTokens)
+	require.Contains(t, rec.Body.String(), "response.output_item.done")
 }
 
 func TestOpenAIStreamingPassthroughResponseIncompleteWithoutDoneMarkerStillSucceeds(t *testing.T) {
@@ -2406,6 +2472,7 @@ func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, 4, usage.ImageOutputTokens)
+	require.Equal(t, 1, usage.ImageCount)
 	require.NotContains(t, rec.Body.String(), "data:")
 	require.Equal(t, "image_generation_call", gjson.Get(rec.Body.String(), "output.0.type").String())
 	require.Equal(t, "aGVsbG8=", gjson.Get(rec.Body.String(), "output.0.result").String())

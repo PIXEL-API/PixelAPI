@@ -22,13 +22,13 @@ func newTestBillingServiceForResolver() *BillingService {
 		SupportsCacheBreakdown:     false,
 	}
 	bs.fallbackPrices["gpt-5.5"] = &ModelPricing{
-		InputPricePerToken:             2.5e-6,
-		InputPricePerTokenPriority:     5e-6,
-		OutputPricePerToken:            15e-6,
-		OutputPricePerTokenPriority:    30e-6,
-		CacheCreationPricePerToken:     2.5e-6,
-		CacheReadPricePerToken:         0.25e-6,
-		CacheReadPricePerTokenPriority: 0.5e-6,
+		InputPricePerToken:             125e-6,
+		InputPricePerTokenPriority:     312.5e-6,
+		OutputPricePerToken:            750e-6,
+		OutputPricePerTokenPriority:    1875e-6,
+		CacheCreationPricePerToken:     125e-6,
+		CacheReadPricePerToken:         12.5e-6,
+		CacheReadPricePerTokenPriority: 31.25e-6,
 		SupportsCacheBreakdown:         false,
 	}
 	return bs
@@ -257,11 +257,11 @@ func TestResolve_WithChannelOverride_PriorityUsesTierMultiplierOnChannelPrice(t 
 	})
 
 	require.NoError(t, err)
-	require.InDelta(t, 1, cost.InputCost, 1e-12)
-	require.InDelta(t, 6, cost.OutputCost, 1e-12)
-	require.InDelta(t, 0.01, cost.CacheReadCost, 1e-12)
-	require.InDelta(t, 7.01, cost.TotalCost, 1e-12)
-	require.InDelta(t, 0.4206, cost.ActualCost, 1e-12)
+	require.InDelta(t, 1.25, cost.InputCost, 1e-12)
+	require.InDelta(t, 7.5, cost.OutputCost, 1e-12)
+	require.InDelta(t, 0.0125, cost.CacheReadCost, 1e-12)
+	require.InDelta(t, 8.7625, cost.TotalCost, 1e-12)
+	require.InDelta(t, 0.52575, cost.ActualCost, 1e-12)
 }
 
 func TestResolve_WithChannelOverride_TokenPartialOverride(t *testing.T) {

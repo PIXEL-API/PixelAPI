@@ -2,6 +2,8 @@ package openai_ws_v2
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -25,6 +27,8 @@ type Usage struct {
 	OutputTokens             int
 	CacheCreationInputTokens int
 	CacheReadInputTokens     int
+	ImageOutputTokens        int
+	ImageCount               int
 }
 
 type RelayResult struct {
@@ -83,6 +87,7 @@ type relayState struct {
 	terminalEventType string
 	firstTokenMs      *int
 	turnTimingByID    map[string]*relayTurnTiming
+	imageCounter      *imageOutputCounter
 }
 
 type relayExitSignal struct {
@@ -104,6 +109,94 @@ type observedUpstreamEvent struct {
 type relayTurnTiming struct {
 	startAt      time.Time
 	firstTokenMs *int
+}
+
+type imageOutputCounter struct {
+	seen  map[string]struct{}
+	count int
+}
+
+func newImageOutputCounter() *imageOutputCounter {
+	return &imageOutputCounter{seen: make(map[string]struct{}, 4)}
+}
+
+func (c *imageOutputCounter) Count() int {
+	if c == nil {
+		return 0
+	}
+	return c.count
+}
+
+func (c *imageOutputCounter) AddMessage(message []byte) {
+	if c == nil || len(message) == 0 || !gjson.ValidBytes(message) {
+		return
+	}
+	root := gjson.ParseBytes(message)
+	switch strings.TrimSpace(root.Get("type").String()) {
+	case "response.output_item.done":
+		c.addItem(root.Get("item"))
+	case "response.completed", "response.done":
+		c.addOutputArray(root.Get("response.output"))
+	case "image_generation.completed":
+		if item := root.Get("item"); item.Exists() {
+			c.addItem(item)
+			return
+		}
+		if output := root.Get("output"); output.Exists() {
+			c.addItem(output)
+			return
+		}
+		c.addItem(root)
+	}
+}
+
+func (c *imageOutputCounter) addOutputArray(output gjson.Result) {
+	if c == nil || !output.IsArray() {
+		return
+	}
+	output.ForEach(func(_, item gjson.Result) bool {
+		c.addItem(item)
+		return true
+	})
+}
+
+func (c *imageOutputCounter) addItem(item gjson.Result) {
+	if c == nil || !item.Exists() || !item.IsObject() {
+		return
+	}
+	itemType := strings.TrimSpace(item.Get("type").String())
+	if itemType != "" && itemType != "image_generation_call" && itemType != "image_generation.completed" {
+		return
+	}
+	if strings.Contains(strings.ToLower(item.Raw), "partial_image") {
+		return
+	}
+	result := strings.TrimSpace(item.Get("result").String())
+	if result == "" {
+		result = strings.TrimSpace(item.Get("b64_json").String())
+	}
+	if result == "" {
+		result = strings.TrimSpace(item.Get("url").String())
+	}
+	if result == "" && itemType != "image_generation.completed" {
+		return
+	}
+	key := strings.TrimSpace(item.Get("id").String())
+	if key == "" {
+		key = strings.TrimSpace(item.Get("call_id").String())
+	}
+	if key == "" && result != "" {
+		sum := sha256.Sum256([]byte(result))
+		key = hex.EncodeToString(sum[:])
+	}
+	if key == "" {
+		return
+	}
+	if _, exists := c.seen[key]; exists {
+		return
+	}
+	c.seen[key] = struct{}{}
+	c.count++
 }
 
 func Relay(
@@ -138,7 +231,7 @@ func Relay(
 		firstMessageType = coderws.MessageText
 	}
 	startAt := nowFn()
-	state := &relayState{requestModel: result.RequestModel}
+	state := &relayState{requestModel: result.RequestModel, imageCounter: newImageOutputCounter()}
 	onTrace := options.OnTrace
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
@@ -579,6 +672,10 @@ func observeUpstreamMessage(
 			state.firstTokenMs = &ms
 		}
 	}
+	if state.imageCounter == nil {
+		state.imageCounter = newImageOutputCounter()
+	}
+	state.imageCounter.AddMessage(message)
 	parsedUsage := parseUsageAndAccumulate(state, message, eventType, onUsageParseFailure)
 	observed := observedUpstreamEvent{
 		eventType:  eventType,
@@ -700,11 +797,13 @@ func parseUsageAndAccumulate(
 	inputResult := gjson.GetBytes(message, "response.usage.input_tokens")
 	outputResult := gjson.GetBytes(message, "response.usage.output_tokens")
 	cachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_tokens")
+	imageTokensResult := gjson.GetBytes(message, "response.usage.output_tokens_details.image_tokens")
 
 	inputTokens, inputOK := parseUsageIntField(inputResult, true)
 	outputTokens, outputOK := parseUsageIntField(outputResult, true)
 	cachedTokens, cachedOK := parseUsageIntField(cachedResult, false)
-	if !inputOK || !outputOK || !cachedOK {
+	imageTokens, imageTokensOK := parseUsageIntField(imageTokensResult, false)
+	if !inputOK || !outputOK || !cachedOK || !imageTokensOK {
 		recordUsageParseFailure()
 		if onParseFailure != nil {
 			onParseFailure(eventType, usageRaw)
@@ -716,11 +815,17 @@ func parseUsageAndAccumulate(
 		InputTokens:          inputTokens,
 		OutputTokens:         outputTokens,
 		CacheReadInputTokens: cachedTokens,
+		ImageOutputTokens:    imageTokens,
+	}
+	if state.imageCounter != nil {
+		parsedUsage.ImageCount = state.imageCounter.Count()
 	}
 
 	state.usage.InputTokens += parsedUsage.InputTokens
 	state.usage.OutputTokens += parsedUsage.OutputTokens
 	state.usage.CacheReadInputTokens += parsedUsage.CacheReadInputTokens
+	state.usage.ImageOutputTokens += parsedUsage.ImageOutputTokens
+	state.usage.ImageCount = parsedUsage.ImageCount
 	return parsedUsage
 }
 
@@ -744,6 +849,9 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 	}
 	result.RequestModel = state.requestModel
 	result.Usage = state.usage
+	if state.imageCounter != nil {
+		result.Usage.ImageCount = state.imageCounter.Count()
+	}
 	result.RequestID = state.lastResponseID
 	result.TerminalEventType = state.terminalEventType
 	result.FirstTokenMs = state.firstTokenMs

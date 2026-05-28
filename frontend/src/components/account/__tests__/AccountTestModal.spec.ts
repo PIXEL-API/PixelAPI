@@ -166,7 +166,7 @@ describe('AccountTestModal', () => {
     })
 
     await flushPromises()
-    ;(wrapper.vm as any).selectedModelId = 'gpt-4o-mini'
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.5'
     await (wrapper.vm as any).startTest()
     await flushPromises()
 
@@ -175,7 +175,7 @@ describe('AccountTestModal', () => {
     const [url, options] = (global.fetch as any).mock.calls[0]
     expect(url).toBe('/api/v1/accounts/1/test')
     expect(JSON.parse(options.body)).toMatchObject({
-      model_id: 'gpt-4o-mini',
+      model_id: 'gpt-5.5',
       mode: 'default'
     })
   })
