@@ -149,6 +149,15 @@ func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, 
 			auditAction = "ORDER_EXPIRED"
 		}
 		s.writeAuditLog(ctx, o.ID, auditAction, op, map[string]any{"detail": ad})
+		if cancelledOrder, err := s.entClient.PaymentOrder.Get(ctx, o.ID); err == nil {
+			event := "cancelled"
+			if fs == OrderStatusExpired {
+				event = "expired"
+			}
+			s.notifyPaymentOrder(ctx, event, cancelledOrder)
+		} else {
+			slog.Warn("payment.system_notice_cancel_reload_failed", "order_id", o.ID, "error", err)
+		}
 		return checkPaidResultCancelled, nil
 	}
 	if err := tx.Commit(); err != nil {
@@ -408,6 +417,11 @@ func (s *PaymentService) failStaleRechargingOrders(ctx context.Context, now time
 			"timeout_minutes": int(timeout.Minutes()),
 			"updated_at":      o.UpdatedAt,
 		})
+		if failedOrder, err := s.entClient.PaymentOrder.Get(ctx, o.ID); err == nil {
+			s.notifyPaymentOrder(ctx, "fulfillment_failed", failedOrder)
+		} else {
+			slog.Warn("payment.system_notice_timeout_reload_failed", "order_id", o.ID, "error", err)
+		}
 	}
 	return failed, nil
 }

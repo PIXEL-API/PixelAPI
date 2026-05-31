@@ -35,8 +35,13 @@ func DefaultModelIDs() []string {
 	return ids
 }
 
-// DefaultTestModel default model for testing OpenAI accounts
+// DefaultTestModel is the default model for ordinary OpenAI connection tests,
+// public-share validation, and scheduled background tests.
 const DefaultTestModel = "gpt-5.5"
+
+// DefaultPlusVerificationModel is used only to verify that a user-owned OpenAI
+// OAuth account can access Plus-only capability before upgrading it to Plus.
+const DefaultPlusVerificationModel = "gpt-5.4"
 
 // DefaultInstructions default instructions for non-Codex CLI requests
 // Content loaded from instructions.txt at compile time

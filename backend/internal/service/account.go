@@ -85,6 +85,14 @@ const (
 	OAuthAccountDefaultConcurrency = 3
 	OpenAIPlusDefaultConcurrency   = 3
 	AccountMaxLoadFactor           = 10000
+	CodexQuotaDefaultLimitPercent  = 100.0
+	CodexQuotaMinLimitPercent      = 1.0
+	CodexQuotaMaxLimitPercent      = 100.0
+)
+
+const (
+	CodexQuotaWindow5h = "5h"
+	CodexQuotaWindow7d = "7d"
 )
 
 func NormalizeAccountLevel(level string) string {
@@ -349,6 +357,14 @@ func (a *Account) IsSchedulable() bool {
 }
 
 func (a *Account) IsSchedulableAt(now time.Time) bool {
+	return a.isSchedulableAt(now, true)
+}
+
+func (a *Account) IsSchedulableWithoutCodexQuotaProtection() bool {
+	return a.isSchedulableAt(time.Now(), false)
+}
+
+func (a *Account) isSchedulableAt(now time.Time, includeCodexQuotaProtection bool) bool {
 	if !a.IsActive() || !a.Schedulable {
 		return false
 	}
@@ -359,6 +375,9 @@ func (a *Account) IsSchedulableAt(now time.Time) bool {
 		return false
 	}
 	if a.RateLimitResetAt != nil && now.Before(*a.RateLimitResetAt) {
+		return false
+	}
+	if includeCodexQuotaProtection && a.IsCodexQuotaProtectionActiveAt(now) {
 		return false
 	}
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
@@ -1236,6 +1255,108 @@ func (a *Account) IsAnthropic() bool {
 
 func (a *Account) IsOpenAIOAuth() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeOAuth
+}
+
+func (a *Account) GetCodex5hLimitPercent() float64 {
+	return a.getCodexQuotaLimitPercent("codex_5h_limit_percent")
+}
+
+func (a *Account) GetCodex7dLimitPercent() float64 {
+	return a.getCodexQuotaLimitPercent("codex_7d_limit_percent")
+}
+
+func (a *Account) getCodexQuotaLimitPercent(key string) float64 {
+	if a == nil || a.Extra == nil {
+		return CodexQuotaDefaultLimitPercent
+	}
+	raw, ok := a.Extra[key]
+	if !ok || raw == nil {
+		return CodexQuotaDefaultLimitPercent
+	}
+	limit := parseExtraFloat64(raw)
+	if limit < CodexQuotaMinLimitPercent || limit > CodexQuotaMaxLimitPercent {
+		return CodexQuotaDefaultLimitPercent
+	}
+	return limit
+}
+
+func (a *Account) IsCodexQuotaProtectionActiveAt(now time.Time) bool {
+	return a.CodexQuotaProtectionReasonAt(now) != ""
+}
+
+func (a *Account) CodexQuotaProtectionReasonAt(now time.Time) string {
+	reason, _ := a.codexQuotaProtectionWindowAt(now)
+	return reason
+}
+
+func (a *Account) CodexQuotaProtectionResetAt(now time.Time) *time.Time {
+	_, resetAt := a.codexQuotaProtectionWindowAt(now)
+	return resetAt
+}
+
+func (a *Account) codexQuotaProtectionWindowAt(now time.Time) (string, *time.Time) {
+	if a == nil || !a.IsOpenAIOAuth() || a.Extra == nil {
+		return "", nil
+	}
+	reason, resetAt := "", time.Time{}
+	if windowResetAt, ok := codexQuotaProtectedWindowResetAt(a.Extra, "codex_5h_used_percent", "codex_5h_reset_at", a.GetCodex5hLimitPercent(), now); ok {
+		reason = CodexQuotaWindow5h
+		resetAt = windowResetAt
+	}
+	if windowResetAt, ok := codexQuotaProtectedWindowResetAt(a.Extra, "codex_7d_used_percent", "codex_7d_reset_at", a.GetCodex7dLimitPercent(), now); ok {
+		if reason == "" || windowResetAt.After(resetAt) {
+			reason = CodexQuotaWindow7d
+			resetAt = windowResetAt
+		}
+	}
+	if reason == "" {
+		return "", nil
+	}
+	return reason, &resetAt
+}
+
+func isCodexQuotaWindowProtected(extra map[string]any, usedPercentKey, resetAtKey string, limitPercent float64, now time.Time) bool {
+	_, ok := codexQuotaProtectedWindowResetAt(extra, usedPercentKey, resetAtKey, limitPercent, now)
+	return ok
+}
+
+func codexQuotaProtectedWindowResetAt(extra map[string]any, usedPercentKey, resetAtKey string, limitPercent float64, now time.Time) (time.Time, bool) {
+	if limitPercent < CodexQuotaMinLimitPercent || limitPercent > CodexQuotaMaxLimitPercent {
+		limitPercent = CodexQuotaDefaultLimitPercent
+	}
+	usedRaw, ok := extra[usedPercentKey]
+	if !ok || parseExtraFloat64(usedRaw) < limitPercent {
+		return time.Time{}, false
+	}
+	resetAt, ok := codexQuotaResetAtFromExtra(extra, resetAtKey)
+	if !ok {
+		return time.Time{}, false
+	}
+	if !now.Before(resetAt) {
+		return time.Time{}, false
+	}
+	return resetAt, true
+}
+
+func codexQuotaResetAtFromExtra(extra map[string]any, key string) (time.Time, bool) {
+	if extra == nil {
+		return time.Time{}, false
+	}
+	raw, ok := extra[key]
+	if !ok || raw == nil {
+		return time.Time{}, false
+	}
+	value := strings.TrimSpace(fmt.Sprint(raw))
+	if value == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
 }
 
 func (a *Account) IsOpenAIApiKey() bool {

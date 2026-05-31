@@ -115,6 +115,7 @@
           :resets-at="usageInfo.five_hour.resets_at"
           :window-stats="usageInfo.five_hour.window_stats"
           :show-now-when-idle="true"
+          :limit-percent="openAICodex5hLimitPercent"
           color="indigo"
         />
         <UsageProgressBar
@@ -124,6 +125,7 @@
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
           :show-now-when-idle="true"
+          :limit-percent="openAICodex7dLimitPercent"
           color="emerald"
         />
       </div>
@@ -558,6 +560,16 @@ const geminiUsageAvailable = computed(() => {
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+})
+
+const openAICodex5hLimitPercent = computed(() => {
+  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return null
+  return props.account.codex_5h_limit_percent ?? props.account.extra?.codex_5h_limit_percent ?? 100
+})
+
+const openAICodex7dLimitPercent = computed(() => {
+  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return null
+  return props.account.codex_7d_limit_percent ?? props.account.extra?.codex_7d_limit_percent ?? 100
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))

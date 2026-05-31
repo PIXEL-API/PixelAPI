@@ -47,6 +47,10 @@
         {{ displayPercent }}
       </span>
 
+      <span v-if="limitPercent != null && limitPercent < 100" class="shrink-0 text-[10px] text-amber-500">
+        /{{ formatLimitPercent }}
+      </span>
+
       <!-- Reset time -->
       <span v-if="shouldShowResetTime" class="shrink-0 text-[10px] text-gray-400">
         {{ formatResetTime }}
@@ -69,6 +73,7 @@ const props = defineProps<{
   color: 'indigo' | 'emerald' | 'purple' | 'amber'
   windowStats?: WindowStats | null
   showNowWhenIdle?: boolean
+  limitPercent?: number | null
 }>()
 
 const { t } = useI18n()
@@ -138,6 +143,11 @@ const barWidth = computed(() => {
 const displayPercent = computed(() => {
   const percent = Math.round(props.utilization)
   return percent > 999 ? '>999%' : `${percent}%`
+})
+
+const formatLimitPercent = computed(() => {
+  if (props.limitPercent == null) return ''
+  return `${Math.round(props.limitPercent)}%`
 })
 
 const hasWindowStats = computed(() => {

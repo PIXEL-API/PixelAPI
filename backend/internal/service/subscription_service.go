@@ -45,6 +45,7 @@ type SubscriptionService struct {
 	userSubRepo         UserSubscriptionRepository
 	billingCacheService *BillingCacheService
 	entClient           *dbent.Client
+	systemNoticeService *SystemNoticeService
 
 	// L1 缓存：加速中间件热路径的订阅查询
 	subCacheL1     *ristretto.Cache
@@ -66,6 +67,13 @@ func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscript
 	svc.initSubCache(cfg)
 	svc.initMaintenanceQueue(cfg)
 	return svc
+}
+
+func (s *SubscriptionService) SetSystemNoticeService(noticeService *SystemNoticeService) {
+	if s == nil {
+		return
+	}
+	s.systemNoticeService = noticeService
 }
 
 func (s *SubscriptionService) initMaintenanceQueue(cfg *config.Config) {
@@ -153,9 +161,12 @@ type AssignSubscriptionInput struct {
 
 // AssignSubscription 分配订阅给用户（不允许重复分配）
 func (s *SubscriptionService) AssignSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, error) {
-	sub, _, err := s.assignSubscriptionWithReuse(ctx, input)
+	sub, reused, err := s.assignSubscriptionWithReuse(ctx, input)
 	if err != nil {
 		return nil, err
+	}
+	if !reused {
+		s.notifySubscription(ctx, "created", sub, normalizeAssignValidityDays(input.ValidityDays))
 	}
 	return sub, nil
 }
@@ -261,7 +272,11 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 
 		// 返回更新后的订阅
 		sub, err := s.userSubRepo.GetByID(ctx, existingSub.ID)
-		return sub, true, err // true 表示是续期
+		if err != nil {
+			return nil, false, err
+		}
+		s.notifySubscription(ctx, "extended", sub, validityDays)
+		return sub, true, nil // true 表示是续期
 	}
 
 	// 没有订阅，创建新订阅
@@ -281,6 +296,7 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 		}()
 	}
 
+	s.notifySubscription(ctx, "created", sub, validityDays)
 	return sub, false, nil // false 表示是新建
 }
 
@@ -373,6 +389,7 @@ func (s *SubscriptionService) BulkAssignSubscription(ctx context.Context, input 
 			} else {
 				result.CreatedCount++
 				result.Statuses[userID] = "created"
+				s.notifySubscription(ctx, "created", sub, normalizeAssignValidityDays(input.ValidityDays))
 			}
 		}
 	}
@@ -485,6 +502,7 @@ func (s *SubscriptionService) RevokeSubscription(ctx context.Context, subscripti
 		}()
 	}
 
+	s.notifySubscription(ctx, "revoked", sub, 0)
 	return nil
 }
 
@@ -552,7 +570,12 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 		}()
 	}
 
-	return s.userSubRepo.GetByID(ctx, subscriptionID)
+	updated, err := s.userSubRepo.GetByID(ctx, subscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	s.notifySubscription(ctx, "adjusted", updated, days)
+	return updated, nil
 }
 
 // GetByID 根据ID获取订阅
@@ -733,7 +756,19 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 		_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, sub.GroupID)
 	}
 	// Return the refreshed subscription from DB
-	return s.userSubRepo.GetByID(ctx, subscriptionID)
+	updated, err := s.userSubRepo.GetByID(ctx, subscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	s.notifySubscription(ctx, "quota_reset", updated, 0)
+	return updated, nil
+}
+
+func (s *SubscriptionService) notifySubscription(ctx context.Context, event string, sub *UserSubscription, days int) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifySubscription(ctx, event, sub, days)
 }
 
 // CheckAndResetWindows 检查并重置过期的窗口

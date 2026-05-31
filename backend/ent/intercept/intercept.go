@@ -20,6 +20,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitordailyrollup"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorhistory"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
+	"github.com/Wei-Shaw/sub2api/ent/conversation"
+	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
@@ -42,6 +44,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
+	"github.com/Wei-Shaw/sub2api/ent/supportmessage"
+	"github.com/Wei-Shaw/sub2api/ent/supportthread"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
@@ -430,6 +434,60 @@ func (f TraverseChannelMonitorRequestTemplate) Traverse(ctx context.Context, q e
 		return f(ctx, q)
 	}
 	return fmt.Errorf("unexpected query type %T. expect *ent.ChannelMonitorRequestTemplateQuery", q)
+}
+
+// The ConversationFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ConversationFunc func(context.Context, *ent.ConversationQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ConversationFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ConversationQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ConversationQuery", q)
+}
+
+// The TraverseConversation type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseConversation func(context.Context, *ent.ConversationQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseConversation) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseConversation) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ConversationQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ConversationQuery", q)
+}
+
+// The ConversationMessageFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ConversationMessageFunc func(context.Context, *ent.ConversationMessageQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ConversationMessageFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ConversationMessageQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ConversationMessageQuery", q)
+}
+
+// The TraverseConversationMessage type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseConversationMessage func(context.Context, *ent.ConversationMessageQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseConversationMessage) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseConversationMessage) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ConversationMessageQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ConversationMessageQuery", q)
 }
 
 // The ErrorPassthroughRuleFunc type is an adapter to allow the use of ordinary function as a Querier.
@@ -999,6 +1057,60 @@ func (f TraverseSubscriptionPlan) Traverse(ctx context.Context, q ent.Query) err
 	return fmt.Errorf("unexpected query type %T. expect *ent.SubscriptionPlanQuery", q)
 }
 
+// The SupportMessageFunc type is an adapter to allow the use of ordinary function as a Querier.
+type SupportMessageFunc func(context.Context, *ent.SupportMessageQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f SupportMessageFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.SupportMessageQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.SupportMessageQuery", q)
+}
+
+// The TraverseSupportMessage type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseSupportMessage func(context.Context, *ent.SupportMessageQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseSupportMessage) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseSupportMessage) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.SupportMessageQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.SupportMessageQuery", q)
+}
+
+// The SupportThreadFunc type is an adapter to allow the use of ordinary function as a Querier.
+type SupportThreadFunc func(context.Context, *ent.SupportThreadQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f SupportThreadFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.SupportThreadQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.SupportThreadQuery", q)
+}
+
+// The TraverseSupportThread type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseSupportThread func(context.Context, *ent.SupportThreadQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseSupportThread) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseSupportThread) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.SupportThreadQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.SupportThreadQuery", q)
+}
+
 // The TLSFingerprintProfileFunc type is an adapter to allow the use of ordinary function as a Querier.
 type TLSFingerprintProfileFunc func(context.Context, *ent.TLSFingerprintProfileQuery) (ent.Value, error)
 
@@ -1242,6 +1354,10 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.ChannelMonitorHistoryQuery, predicate.ChannelMonitorHistory, channelmonitorhistory.OrderOption]{typ: ent.TypeChannelMonitorHistory, tq: q}, nil
 	case *ent.ChannelMonitorRequestTemplateQuery:
 		return &query[*ent.ChannelMonitorRequestTemplateQuery, predicate.ChannelMonitorRequestTemplate, channelmonitorrequesttemplate.OrderOption]{typ: ent.TypeChannelMonitorRequestTemplate, tq: q}, nil
+	case *ent.ConversationQuery:
+		return &query[*ent.ConversationQuery, predicate.Conversation, conversation.OrderOption]{typ: ent.TypeConversation, tq: q}, nil
+	case *ent.ConversationMessageQuery:
+		return &query[*ent.ConversationMessageQuery, predicate.ConversationMessage, conversationmessage.OrderOption]{typ: ent.TypeConversationMessage, tq: q}, nil
 	case *ent.ErrorPassthroughRuleQuery:
 		return &query[*ent.ErrorPassthroughRuleQuery, predicate.ErrorPassthroughRule, errorpassthroughrule.OrderOption]{typ: ent.TypeErrorPassthroughRule, tq: q}, nil
 	case *ent.GroupQuery:
@@ -1284,6 +1400,10 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.ShopProductQuery, predicate.ShopProduct, shopproduct.OrderOption]{typ: ent.TypeShopProduct, tq: q}, nil
 	case *ent.SubscriptionPlanQuery:
 		return &query[*ent.SubscriptionPlanQuery, predicate.SubscriptionPlan, subscriptionplan.OrderOption]{typ: ent.TypeSubscriptionPlan, tq: q}, nil
+	case *ent.SupportMessageQuery:
+		return &query[*ent.SupportMessageQuery, predicate.SupportMessage, supportmessage.OrderOption]{typ: ent.TypeSupportMessage, tq: q}, nil
+	case *ent.SupportThreadQuery:
+		return &query[*ent.SupportThreadQuery, predicate.SupportThread, supportthread.OrderOption]{typ: ent.TypeSupportThread, tq: q}, nil
 	case *ent.TLSFingerprintProfileQuery:
 		return &query[*ent.TLSFingerprintProfileQuery, predicate.TLSFingerprintProfile, tlsfingerprintprofile.OrderOption]{typ: ent.TypeTLSFingerprintProfile, tq: q}, nil
 	case *ent.UsageCleanupTaskQuery:

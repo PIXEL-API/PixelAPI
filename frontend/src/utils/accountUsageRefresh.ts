@@ -18,10 +18,12 @@ export const buildOpenAIUsageRefreshKey = (account: Pick<Account, 'id' | 'platfo
     account.rate_limit_reset_at,
     extra.codex_usage_updated_at,
     extra.codex_5h_used_percent,
+    extra.codex_5h_limit_percent,
     extra.codex_5h_reset_at,
     extra.codex_5h_reset_after_seconds,
     extra.codex_5h_window_minutes,
     extra.codex_7d_used_percent,
+    extra.codex_7d_limit_percent,
     extra.codex_7d_reset_at,
     extra.codex_7d_reset_after_seconds,
     extra.codex_7d_window_minutes

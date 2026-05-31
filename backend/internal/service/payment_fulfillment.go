@@ -178,6 +178,11 @@ func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, trad
 		})
 	}
 	s.writeAuditLog(ctx, o.ID, "ORDER_PAID", pk, map[string]any{"tradeNo": tradeNo, "paidAmount": paid})
+	if paidOrder, err := s.entClient.PaymentOrder.Get(ctx, o.ID); err == nil {
+		s.notifyPaymentOrder(ctx, "paid", paidOrder)
+	} else {
+		slog.Warn("payment.system_notice_paid_reload_failed", "order_id", o.ID, "error", err)
+	}
 	return s.executeFulfillment(ctx, o.ID)
 }
 
@@ -230,7 +235,17 @@ func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) erro
 		if s.shopFulfillment == nil {
 			return infraerrors.ServiceUnavailable("SHOP_FULFILLMENT_NOT_CONFIGURED", "shop fulfillment service is not configured")
 		}
-		return s.shopFulfillment.ConfirmPaidAndDeliver(ctx, oid)
+		if err := s.shopFulfillment.ConfirmPaidAndDeliver(ctx, oid); err != nil {
+			return err
+		}
+		if completedOrder, err := s.entClient.PaymentOrder.Get(ctx, oid); err == nil {
+			if completedOrder.Status == OrderStatusCompleted {
+				s.notifyPaymentOrder(ctx, "completed", completedOrder)
+			}
+		} else {
+			slog.Warn("payment.system_notice_shop_completed_reload_failed", "order_id", oid, "error", err)
+		}
+		return nil
 	}
 	return s.ExecuteBalanceFulfillment(ctx, oid)
 }
@@ -321,6 +336,11 @@ func (s *PaymentService) markCompleted(ctx context.Context, o *dbent.PaymentOrde
 		"creditedAmount": o.Amount,
 		"payAmount":      o.PayAmount,
 	})
+	if completedOrder, err := s.entClient.PaymentOrder.Get(ctx, o.ID); err == nil {
+		s.notifyPaymentOrder(ctx, "completed", completedOrder)
+	} else {
+		slog.Warn("payment.system_notice_completed_reload_failed", "order_id", o.ID, "error", err)
+	}
 	return nil
 }
 
@@ -397,7 +417,19 @@ func (s *PaymentService) markFailed(ctx context.Context, oid int64, cause error)
 	}
 	if c > 0 {
 		s.writeAuditLog(ctx, oid, "FULFILLMENT_FAILED", "system", map[string]any{"reason": r})
+		if failedOrder, err := s.entClient.PaymentOrder.Get(ctx, oid); err == nil {
+			s.notifyPaymentOrder(ctx, "fulfillment_failed", failedOrder)
+		} else {
+			slog.Warn("payment.system_notice_failed_reload_failed", "order_id", oid, "error", err)
+		}
 	}
+}
+
+func (s *PaymentService) notifyPaymentOrder(ctx context.Context, event string, order *dbent.PaymentOrder) {
+	if s == nil || s.systemNotice == nil {
+		return
+	}
+	s.systemNotice.NotifyPaymentOrder(ctx, event, order)
 }
 
 func (s *PaymentService) RetryFulfillment(ctx context.Context, oid int64) error {

@@ -797,7 +797,7 @@ func (s *RevenueService) fillRevenueUsageStatsFromSnapshots(ctx context.Context,
 	query := fmt.Sprintf(`
 		WITH snapshot_days AS (
 			SELECT DISTINCT bucket_date
-			FROM revenue_daily_dimension_snapshots
+			FROM revenue_daily_dimension_snapshots s
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
 				%s
 		),
@@ -858,7 +858,7 @@ func (s *RevenueService) fillRevenueUsageStatsFromSnapshots(ctx context.Context,
 	trendQuery := fmt.Sprintf(`
 		WITH snapshot_days AS (
 			SELECT DISTINCT bucket_date
-			FROM revenue_daily_dimension_snapshots
+			FROM revenue_daily_dimension_snapshots s
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
 				%s
 		),
@@ -1174,7 +1174,7 @@ func (s *RevenueService) fillRevenueShareStatsFromSnapshots(ctx context.Context,
 	query := fmt.Sprintf(`
 		WITH snapshot_days AS (
 			SELECT DISTINCT bucket_date
-			FROM revenue_daily_dimension_snapshots
+			FROM revenue_daily_dimension_snapshots s
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
 				%s
 		),
@@ -1238,7 +1238,7 @@ func (s *RevenueService) fillRevenueShareStatsFromSnapshots(ctx context.Context,
 	trendQuery := fmt.Sprintf(`
 		WITH snapshot_days AS (
 			SELECT DISTINCT bucket_date
-			FROM revenue_daily_dimension_snapshots
+			FROM revenue_daily_dimension_snapshots s
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
 				%s
 		),
@@ -1573,7 +1573,7 @@ func (s *RevenueService) queryRevenueBreakdownFromSnapshots(ctx context.Context,
 		query = fmt.Sprintf(`
 			WITH snapshot_days AS (
 				SELECT DISTINCT bucket_date
-				FROM revenue_daily_dimension_snapshots
+				FROM revenue_daily_dimension_snapshots s
 				WHERE bucket_date >= $1::date AND bucket_date < $2::date
 					%s
 			),
@@ -1632,7 +1632,7 @@ func (s *RevenueService) queryRevenueBreakdownFromSnapshots(ctx context.Context,
 		query = fmt.Sprintf(`
 			WITH snapshot_days AS (
 				SELECT DISTINCT bucket_date
-				FROM revenue_daily_dimension_snapshots
+				FROM revenue_daily_dimension_snapshots s
 				WHERE bucket_date >= $1::date AND bucket_date < $2::date
 					%s
 			),
@@ -1836,7 +1836,7 @@ func (s *RevenueService) queryRevenueShareOwnerBreakdownFromSnapshots(ctx contex
 	query := fmt.Sprintf(`
 		WITH snapshot_days AS (
 			SELECT DISTINCT bucket_date
-			FROM revenue_daily_dimension_snapshots
+			FROM revenue_daily_dimension_snapshots s
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
 				%s
 		),

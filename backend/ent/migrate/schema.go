@@ -654,6 +654,137 @@ var (
 			},
 		},
 	}
+	// ConversationsColumns holds the columns for the "conversations" table.
+	ConversationsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "subject", Type: field.TypeString, Size: 200},
+		{Name: "status", Type: field.TypeString, Size: 30, Default: "pending_admin"},
+		{Name: "kind", Type: field.TypeString, Size: 30, Default: "ticket"},
+		{Name: "priority", Type: field.TypeString, Size: 20, Default: "normal"},
+		{Name: "type", Type: field.TypeString, Size: 40, Default: "support"},
+		{Name: "source", Type: field.TypeString, Size: 80, Default: ""},
+		{Name: "source_id", Type: field.TypeString, Size: 120, Default: ""},
+		{Name: "last_message_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "last_message_sender_type", Type: field.TypeString, Size: 20, Default: ""},
+		{Name: "last_message_excerpt", Type: field.TypeString, Size: 240, Default: ""},
+		{Name: "last_message_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "user_last_read_message_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "user_last_read_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "admin_last_read_message_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "admin_last_read_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "referenced_notice_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "assigned_admin_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// ConversationsTable holds the schema information for the "conversations" table.
+	ConversationsTable = &schema.Table{
+		Name:       "conversations",
+		Columns:    ConversationsColumns,
+		PrimaryKey: []*schema.Column{ConversationsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "conversations_conversations_referenced_by_conversations",
+				Columns:    []*schema.Column{ConversationsColumns[18]},
+				RefColumns: []*schema.Column{ConversationsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "conversations_users_conversations",
+				Columns:    []*schema.Column{ConversationsColumns[19]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "conversations_users_assigned_conversations",
+				Columns:    []*schema.Column{ConversationsColumns[20]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "conversation_user_id_last_message_at",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationsColumns[19], ConversationsColumns[13]},
+			},
+			{
+				Name:    "conversation_status_last_message_at",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationsColumns[4], ConversationsColumns[13]},
+			},
+			{
+				Name:    "conversation_kind_last_message_at",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationsColumns[5], ConversationsColumns[13]},
+			},
+			{
+				Name:    "conversation_assigned_admin_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationsColumns[20], ConversationsColumns[4]},
+			},
+			{
+				Name:    "conversation_source_source_id",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationsColumns[8], ConversationsColumns[9]},
+			},
+			{
+				Name:    "conversation_referenced_notice_id",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationsColumns[18]},
+			},
+		},
+	}
+	// ConversationMessagesColumns holds the columns for the "conversation_messages" table.
+	ConversationMessagesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "sender_type", Type: field.TypeString, Size: 20},
+		{Name: "message_type", Type: field.TypeString, Size: 30, Default: "text"},
+		{Name: "content_format", Type: field.TypeString, Size: 20, Default: "plain"},
+		{Name: "content", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "metadata", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "conversation_id", Type: field.TypeInt64},
+		{Name: "sender_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// ConversationMessagesTable holds the schema information for the "conversation_messages" table.
+	ConversationMessagesTable = &schema.Table{
+		Name:       "conversation_messages",
+		Columns:    ConversationMessagesColumns,
+		PrimaryKey: []*schema.Column{ConversationMessagesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "conversation_messages_conversations_messages",
+				Columns:    []*schema.Column{ConversationMessagesColumns[7]},
+				RefColumns: []*schema.Column{ConversationsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "conversation_messages_users_sent_conversation_messages",
+				Columns:    []*schema.Column{ConversationMessagesColumns[8]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "conversationmessage_conversation_id_id",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationMessagesColumns[7], ConversationMessagesColumns[0]},
+			},
+			{
+				Name:    "conversationmessage_conversation_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationMessagesColumns[7], ConversationMessagesColumns[6]},
+			},
+			{
+				Name:    "conversationmessage_sender_type_sender_id",
+				Unique:  false,
+				Columns: []*schema.Column{ConversationMessagesColumns[1], ConversationMessagesColumns[8]},
+			},
+		},
+	}
 	// ErrorPassthroughRulesColumns holds the columns for the "error_passthrough_rules" table.
 	ErrorPassthroughRulesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1653,6 +1784,125 @@ var (
 			},
 		},
 	}
+	// SupportMessagesColumns holds the columns for the "support_messages" table.
+	SupportMessagesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "sender_type", Type: field.TypeString, Size: 20},
+		{Name: "message_type", Type: field.TypeString, Size: 30, Default: "text"},
+		{Name: "content_format", Type: field.TypeString, Size: 20, Default: "plain"},
+		{Name: "title", Type: field.TypeString, Size: 200, Default: ""},
+		{Name: "content", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "source", Type: field.TypeString, Size: 80, Default: ""},
+		{Name: "source_id", Type: field.TypeString, Size: 120, Default: ""},
+		{Name: "metadata", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "thread_id", Type: field.TypeInt64},
+		{Name: "sender_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// SupportMessagesTable holds the schema information for the "support_messages" table.
+	SupportMessagesTable = &schema.Table{
+		Name:       "support_messages",
+		Columns:    SupportMessagesColumns,
+		PrimaryKey: []*schema.Column{SupportMessagesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "support_messages_support_threads_messages",
+				Columns:    []*schema.Column{SupportMessagesColumns[10]},
+				RefColumns: []*schema.Column{SupportThreadsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "support_messages_users_sent_support_messages",
+				Columns:    []*schema.Column{SupportMessagesColumns[11]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "supportmessage_thread_id_id",
+				Unique:  false,
+				Columns: []*schema.Column{SupportMessagesColumns[10], SupportMessagesColumns[0]},
+			},
+			{
+				Name:    "supportmessage_thread_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{SupportMessagesColumns[10], SupportMessagesColumns[9]},
+			},
+			{
+				Name:    "supportmessage_sender_type_sender_id",
+				Unique:  false,
+				Columns: []*schema.Column{SupportMessagesColumns[1], SupportMessagesColumns[11]},
+			},
+			{
+				Name:    "supportmessage_source_source_id",
+				Unique:  false,
+				Columns: []*schema.Column{SupportMessagesColumns[6], SupportMessagesColumns[7]},
+			},
+		},
+	}
+	// SupportThreadsColumns holds the columns for the "support_threads" table.
+	SupportThreadsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "subject", Type: field.TypeString, Size: 200, Default: "工单服务"},
+		{Name: "status", Type: field.TypeString, Size: 30, Default: "open"},
+		{Name: "priority", Type: field.TypeString, Size: 20, Default: "normal"},
+		{Name: "type", Type: field.TypeString, Size: 40, Default: "support"},
+		{Name: "last_message_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "last_message_sender_type", Type: field.TypeString, Size: 20, Default: ""},
+		{Name: "last_message_excerpt", Type: field.TypeString, Size: 240, Default: ""},
+		{Name: "last_message_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "user_last_read_message_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "user_last_read_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "admin_last_read_message_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "admin_last_read_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "assigned_admin_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// SupportThreadsTable holds the schema information for the "support_threads" table.
+	SupportThreadsTable = &schema.Table{
+		Name:       "support_threads",
+		Columns:    SupportThreadsColumns,
+		PrimaryKey: []*schema.Column{SupportThreadsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "support_threads_users_support_threads",
+				Columns:    []*schema.Column{SupportThreadsColumns[15]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "support_threads_users_assigned_support_threads",
+				Columns:    []*schema.Column{SupportThreadsColumns[16]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "supportthread_user_id",
+				Unique:  true,
+				Columns: []*schema.Column{SupportThreadsColumns[15]},
+			},
+			{
+				Name:    "supportthread_status_last_message_at",
+				Unique:  false,
+				Columns: []*schema.Column{SupportThreadsColumns[4], SupportThreadsColumns[10]},
+			},
+			{
+				Name:    "supportthread_assigned_admin_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{SupportThreadsColumns[16], SupportThreadsColumns[4]},
+			},
+			{
+				Name:    "supportthread_last_message_at",
+				Unique:  false,
+				Columns: []*schema.Column{SupportThreadsColumns[10]},
+			},
+		},
+	}
 	// TLSFingerprintProfilesColumns holds the columns for the "tls_fingerprint_profiles" table.
 	TLSFingerprintProfilesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -2126,6 +2376,8 @@ var (
 		ChannelMonitorDailyRollupsTable,
 		ChannelMonitorHistoriesTable,
 		ChannelMonitorRequestTemplatesTable,
+		ConversationsTable,
+		ConversationMessagesTable,
 		ErrorPassthroughRulesTable,
 		GroupsTable,
 		IdempotencyRecordsTable,
@@ -2147,6 +2399,8 @@ var (
 		ShopOrdersTable,
 		ShopProductsTable,
 		SubscriptionPlansTable,
+		SupportMessagesTable,
+		SupportThreadsTable,
 		TLSFingerprintProfilesTable,
 		UsageCleanupTasksTable,
 		UsageLogsTable,
@@ -2209,6 +2463,17 @@ func init() {
 	}
 	ChannelMonitorRequestTemplatesTable.Annotation = &entsql.Annotation{
 		Table: "channel_monitor_request_templates",
+	}
+	ConversationsTable.ForeignKeys[0].RefTable = ConversationsTable
+	ConversationsTable.ForeignKeys[1].RefTable = UsersTable
+	ConversationsTable.ForeignKeys[2].RefTable = UsersTable
+	ConversationsTable.Annotation = &entsql.Annotation{
+		Table: "conversations",
+	}
+	ConversationMessagesTable.ForeignKeys[0].RefTable = ConversationsTable
+	ConversationMessagesTable.ForeignKeys[1].RefTable = UsersTable
+	ConversationMessagesTable.Annotation = &entsql.Annotation{
+		Table: "conversation_messages",
 	}
 	ErrorPassthroughRulesTable.Annotation = &entsql.Annotation{
 		Table: "error_passthrough_rules",
@@ -2294,6 +2559,16 @@ func init() {
 	}
 	SubscriptionPlansTable.Annotation = &entsql.Annotation{
 		Table: "subscription_plans",
+	}
+	SupportMessagesTable.ForeignKeys[0].RefTable = SupportThreadsTable
+	SupportMessagesTable.ForeignKeys[1].RefTable = UsersTable
+	SupportMessagesTable.Annotation = &entsql.Annotation{
+		Table: "support_messages",
+	}
+	SupportThreadsTable.ForeignKeys[0].RefTable = UsersTable
+	SupportThreadsTable.ForeignKeys[1].RefTable = UsersTable
+	SupportThreadsTable.Annotation = &entsql.Annotation{
+		Table: "support_threads",
 	}
 	TLSFingerprintProfilesTable.Annotation = &entsql.Annotation{
 		Table: "tls_fingerprint_profiles",

@@ -6,6 +6,11 @@
       <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ rateLimitResumeText }}</span>
     </div>
 
+    <div v-else-if="isCodexQuotaProtected" class="flex flex-col items-center gap-1">
+      <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.codexQuotaProtected') }}</span>
+      <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ codexQuotaResumeText }}</span>
+    </div>
+
     <!-- Overload Display (529) - Two-line layout -->
     <div v-else-if="isOverloaded" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-danger">{{ t('admin.accounts.status.overloaded') }}</span>
@@ -70,6 +75,23 @@
         class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 whitespace-normal rounded bg-gray-900 px-3 py-2 text-center text-xs leading-relaxed text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
       >
         {{ t('admin.accounts.status.rateLimitedUntil', { time: formatDateTime(account.rate_limit_reset_at) }) }}
+        <div
+          class="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"
+        ></div>
+      </div>
+    </div>
+
+    <div v-if="isCodexQuotaProtected" class="group relative">
+      <span
+        class="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+      >
+        <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
+        {{ codexQuotaReasonText }}
+      </span>
+      <div
+        class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 whitespace-normal rounded bg-gray-900 px-3 py-2 text-center text-xs leading-relaxed text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
+      >
+        {{ t('admin.accounts.status.codexQuotaProtectedUntil', { window: codexQuotaReasonText, time: formatDateTime(codexQuotaResetAt) }) }}
         <div
           class="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"
         ></div>
@@ -176,6 +198,19 @@ const isRateLimited = computed(() => {
   if (hasError.value) return false
   if (!props.account.rate_limit_reset_at) return false
   return new Date(props.account.rate_limit_reset_at) > new Date()
+})
+
+const codexQuotaResetAt = computed(() => props.account.codex_quota_protection_reset_at || null)
+
+const isCodexQuotaProtected = computed(() => {
+  if (hasError.value) return false
+  if (!codexQuotaResetAt.value) return false
+  return new Date(codexQuotaResetAt.value) > new Date()
+})
+
+const codexQuotaReasonText = computed(() => {
+  const reason = props.account.codex_quota_protection_reason
+  return reason === '7d' ? '7d' : '5h'
 })
 
 type AccountModelStatusItem = {
@@ -302,6 +337,15 @@ const rateLimitResumeText = computed(() => {
   return t('admin.accounts.status.rateLimitedAutoResume', { time: rateLimitCountdown.value })
 })
 
+const codexQuotaCountdown = computed(() => {
+  return formatCountdown(codexQuotaResetAt.value)
+})
+
+const codexQuotaResumeText = computed(() => {
+  if (!codexQuotaCountdown.value) return ''
+  return t('admin.accounts.status.rateLimitedAutoResume', { time: codexQuotaCountdown.value })
+})
+
 // Computed: countdown text for overload (529)
 const overloadCountdown = computed(() => {
   return formatCountdownWithSuffix(props.account.overload_until)
@@ -313,6 +357,9 @@ const statusClass = computed(() => {
     return 'badge-danger'
   }
   if (isTempUnschedulable.value) {
+    return 'badge-warning'
+  }
+  if (isCodexQuotaProtected.value) {
     return 'badge-warning'
   }
   if (props.account.status !== 'active') {
@@ -334,6 +381,9 @@ const statusText = computed(() => {
   }
   if (isTempUnschedulable.value) {
     return t('admin.accounts.status.tempUnschedulable')
+  }
+  if (isCodexQuotaProtected.value) {
+    return t('admin.accounts.status.codexQuotaProtected')
   }
   if (props.account.status !== 'active') {
     return t(`admin.accounts.status.${props.account.status}`)

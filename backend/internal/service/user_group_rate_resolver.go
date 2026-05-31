@@ -3,12 +3,17 @@ package service
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	gocache "github.com/patrickmn/go-cache"
 	"golang.org/x/sync/singleflight"
 )
+
+var userGroupRateCacheRegistry sync.Map
 
 type userGroupRateResolver struct {
 	repo         UserGroupRateRepository
@@ -30,6 +35,9 @@ func newUserGroupRateResolver(repo UserGroupRateRepository, cache *gocache.Cache
 	}
 	if sf == nil {
 		sf = &singleflight.Group{}
+	}
+	if cache != nil {
+		userGroupRateCacheRegistry.Store(cache, struct{}{})
 	}
 
 	return &userGroupRateResolver{
@@ -100,4 +108,42 @@ func (r *userGroupRateResolver) Resolve(ctx context.Context, userID, groupID int
 		return groupDefaultMultiplier
 	}
 	return multiplier
+}
+
+func invalidateUserGroupRateCacheByUserID(userID int64) {
+	if userID <= 0 {
+		return
+	}
+	prefix := strconv.FormatInt(userID, 10) + ":"
+	invalidateUserGroupRateCacheEntries(func(key string) bool {
+		return strings.HasPrefix(key, prefix)
+	})
+}
+
+func invalidateUserGroupRateCacheByGroupID(groupID int64) {
+	if groupID <= 0 {
+		return
+	}
+	suffix := ":" + strconv.FormatInt(groupID, 10)
+	invalidateUserGroupRateCacheEntries(func(key string) bool {
+		return strings.HasSuffix(key, suffix)
+	})
+}
+
+func invalidateUserGroupRateCacheEntries(match func(string) bool) {
+	if match == nil {
+		return
+	}
+	userGroupRateCacheRegistry.Range(func(cacheKey, _ any) bool {
+		cache, ok := cacheKey.(*gocache.Cache)
+		if !ok || cache == nil {
+			return true
+		}
+		for key := range cache.Items() {
+			if match(key) {
+				cache.Delete(key)
+			}
+		}
+		return true
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 var (
 	ErrAccountNotFound                        = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	ErrAccountNilInput                        = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrCodexQuotaLimitPercentInvalid          = infraerrors.BadRequest("CODEX_QUOTA_LIMIT_PERCENT_INVALID", "Codex quota limit percent must be between 1 and 100")
 	ErrOwnedAccountAlreadyExists              = infraerrors.Conflict("OWNED_ACCOUNT_ALREADY_EXISTS", "account already exists")
 	ErrOwnedAccountTypeNotAllowed             = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
 	ErrOwnedAccountCredentialsInvalid         = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
@@ -175,6 +177,7 @@ type AccountService struct {
 	userSubRepo             accountSubscriptionLookupRepository
 	accountSharePolicyRepo  AccountSharePolicyRepository
 	privateGroupProvisioner UserPrivateGroupProvisioner
+	systemNoticeService     *SystemNoticeService
 	quotaPoolDashboardCache accountQuotaPoolDashboardCache
 }
 
@@ -263,8 +266,21 @@ func (s *AccountService) SetAccountSharePolicyRepository(repo AccountSharePolicy
 	s.accountSharePolicyRepo = repo
 }
 
+func (s *AccountService) SetSystemNoticeService(noticeService *SystemNoticeService) {
+	if s == nil {
+		return
+	}
+	s.systemNoticeService = noticeService
+}
+
 // Create 创建账号
 func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (*Account, error) {
+	extra, err := NormalizeCodexQuotaLimitExtra(req.Platform, req.Type, req.Extra)
+	if err != nil {
+		return nil, err
+	}
+	req.Extra = extra
+
 	// 验证分组是否存在（如果指定了分组）
 	if len(req.GroupIDs) > 0 {
 		if err := s.validateGroupIDsExist(ctx, req.GroupIDs); err != nil {
@@ -325,8 +341,10 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		if err := s.accountRepo.BindGroups(ctx, account.ID, req.GroupIDs); err != nil {
 			return nil, fmt.Errorf("bind groups: %w", err)
 		}
+		account.GroupIDs = append([]int64(nil), req.GroupIDs...)
 	}
 
+	s.notifyAccountCreated(ctx, account)
 	return account, nil
 }
 
@@ -396,6 +414,11 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if err := validateOwnedAccountSource(req.Type, req.Credentials, req.Extra); err != nil {
 		return nil, err
 	}
+	extra, err := NormalizeCodexQuotaLimitExtra(req.Platform, req.Type, req.Extra)
+	if err != nil {
+		return nil, err
+	}
+	req.Extra = extra
 	shareMode := NormalizeAccountShareMode(req.ShareMode)
 	groupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, req.Platform, req.Type, shareMode, req.GroupIDs)
 	if err != nil {
@@ -451,6 +474,7 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		}
 		account.GroupIDs = append([]int64(nil), groupIDs...)
 	}
+	s.notifyAccountCreated(ctx, account)
 	return account, nil
 }
 
@@ -610,6 +634,83 @@ func applyOwnedPersonalAccountTemplateToUpdate(account *Account, req *UpdateAcco
 	req.Extra = &nextExtra
 }
 
+func NormalizeCodexQuotaLimitExtra(platform, accountType string, extra map[string]any) (map[string]any, error) {
+	if len(extra) == 0 {
+		return extra, nil
+	}
+	next := extra
+	if platform != PlatformOpenAI || accountType != AccountTypeOAuth {
+		delete(next, "codex_5h_limit_percent")
+		delete(next, "codex_7d_limit_percent")
+		return next, nil
+	}
+	for _, key := range []string{"codex_5h_limit_percent", "codex_7d_limit_percent"} {
+		value, ok, err := normalizeCodexQuotaLimitPercentValue(next[key])
+		if err != nil {
+			return nil, err
+		}
+		if !ok || value == CodexQuotaDefaultLimitPercent {
+			delete(next, key)
+			continue
+		}
+		next[key] = value
+	}
+	return next, nil
+}
+
+func normalizeCodexQuotaLimitPercentValue(raw any) (float64, bool, error) {
+	if raw == nil {
+		return 0, false, nil
+	}
+	if s, ok := raw.(string); ok && strings.TrimSpace(s) == "" {
+		return 0, false, nil
+	}
+	value := parseExtraFloat64(raw)
+	if value < CodexQuotaMinLimitPercent || value > CodexQuotaMaxLimitPercent {
+		return 0, false, ErrCodexQuotaLimitPercentInvalid
+	}
+	return value, true, nil
+}
+
+func NormalizeCodexQuotaLimitBulkExtra(accounts []*Account, extra map[string]any) error {
+	if !hasCodexQuotaLimitExtraKeys(extra) {
+		return nil
+	}
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		if !account.IsOpenAIOAuth() {
+			return ErrCodexQuotaLimitPercentInvalid
+		}
+	}
+	for _, key := range []string{"codex_5h_limit_percent", "codex_7d_limit_percent"} {
+		raw, ok := extra[key]
+		if !ok {
+			continue
+		}
+		value, exists, err := normalizeCodexQuotaLimitPercentValue(raw)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			extra[key] = CodexQuotaDefaultLimitPercent
+			continue
+		}
+		extra[key] = value
+	}
+	return nil
+}
+
+func hasCodexQuotaLimitExtraKeys(extra map[string]any) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	_, has5h := extra["codex_5h_limit_percent"]
+	_, has7d := extra["codex_7d_limit_percent"]
+	return has5h || has7d
+}
+
 // ListByPlatform 根据平台获取账号列表
 func (s *AccountService) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	accounts, err := s.accountRepo.ListByPlatform(ctx, platform)
@@ -634,6 +735,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	if err != nil {
 		return nil, fmt.Errorf("get account: %w", err)
 	}
+	before := cloneAccountForNotice(account)
 
 	// 更新字段
 	if req.Name != nil {
@@ -648,7 +750,11 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	if req.Extra != nil {
-		account.Extra = *req.Extra
+		extra, err := NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, *req.Extra)
+		if err != nil {
+			return nil, err
+		}
+		account.Extra = extra
 	}
 	if req.AccountLevel != nil {
 		account.AccountLevel = NormalizeAccountLevel(*req.AccountLevel)
@@ -725,8 +831,10 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		if err := s.accountRepo.BindGroups(ctx, account.ID, *req.GroupIDs); err != nil {
 			return nil, fmt.Errorf("bind groups: %w", err)
 		}
+		account.GroupIDs = append([]int64(nil), *req.GroupIDs...)
 	}
 
+	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
 }
 
@@ -738,6 +846,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 	if err != nil {
 		return nil, err
 	}
+	before := cloneAccountForNotice(account)
 	applyOwnedPersonalAccountTemplateToUpdate(account, &req)
 
 	if req.Name != nil {
@@ -750,7 +859,11 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		account.Credentials = *req.Credentials
 	}
 	if req.Extra != nil {
-		account.Extra = *req.Extra
+		extra, err := NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, *req.Extra)
+		if err != nil {
+			return nil, err
+		}
+		account.Extra = extra
 	}
 	if req.ProxyID != nil {
 		account.ProxyID = req.ProxyID
@@ -843,16 +956,88 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		}
 		account.GroupIDs = append([]int64(nil), groupIDs...)
 	}
+	s.notifyAccountChanged(ctx, before, account)
+	return account, nil
+}
+
+func (s *AccountService) SetOwnedOpenAIAccountLevel(ctx context.Context, ownerUserID, accountID int64, accountLevel, reason string) (*Account, error) {
+	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_UNSUPPORTED", "account level verification only supports OpenAI OAuth accounts")
+	}
+
+	level := NormalizeAccountLevel(accountLevel)
+	if level != AccountLevelFree && level != AccountLevelPlus {
+		return nil, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_INVALID", "user accounts can only set free or plus levels")
+	}
+	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+		return nil, err
+	}
+
+	before := cloneAccountForNotice(account)
+	account.AccountLevel = level
+	if level == AccountLevelPlus {
+		concurrency, err := NormalizeOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency)
+		if err != nil {
+			return nil, err
+		}
+		account.Concurrency = concurrency
+	}
+	if err := ValidateOpenAIPlusConcurrency(account.Platform, account.AccountLevel, account.Concurrency); err != nil {
+		return nil, err
+	}
+
+	shouldBindGroups := false
+	var groupIDs []int64
+	if account.IsPublicShareApproved() {
+		publicGroup, err := s.resolveOwnedPublicShareGroup(ctx, account)
+		if err == nil {
+			groupIDs, err = s.publicOwnedAccountGroupIDs(ctx, ownerUserID, account, publicGroup)
+			if err != nil {
+				return nil, err
+			}
+			shouldBindGroups = true
+		} else if level == AccountLevelFree {
+			groupIDs, err = s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, account.ShareMode, nil)
+			if err != nil {
+				return nil, err
+			}
+			account.ShareStatus = AccountShareStatusSuspended
+			account.ErrorMessage = strings.TrimSpace(reason)
+			if account.ErrorMessage == "" {
+				account.ErrorMessage = "OpenAI account level was changed to free and no compatible public sharing pool is available"
+			}
+			shouldBindGroups = true
+		} else {
+			return nil, err
+		}
+	}
+
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return nil, fmt.Errorf("update owned OpenAI account level: %w", err)
+	}
+	if shouldBindGroups {
+		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
+			return nil, fmt.Errorf("bind account groups after level update: %w", err)
+		}
+		account.GroupIDs = append([]int64(nil), groupIDs...)
+	}
+	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
 }
 
 func (s *AccountService) DeleteOwned(ctx context.Context, ownerUserID, accountID int64) error {
-	if _, err := s.GetOwnedByID(ctx, ownerUserID, accountID); err != nil {
+	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
 		return err
 	}
 	if err := s.accountRepo.Delete(ctx, accountID); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
+	s.notifyAccountDeleted(ctx, account)
 	return nil
 }
 
@@ -1154,6 +1339,10 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		nextCredentials := mergeAccountMap(account.Credentials, input.Credentials)
 		nextExtra := mergeAccountMap(account.Extra, input.Extra)
 		nextCredentials, nextExtra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, nextCredentials, nextExtra)
+		nextExtra, err = NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, nextExtra)
+		if err != nil {
+			return nil, err
+		}
 		nextAccount := *account
 		nextAccount.Credentials = nextCredentials
 		nextAccount.Extra = nextExtra
@@ -1209,6 +1398,14 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 			if len(input.Extra) > 0 {
 				extra := mergeAccountMap(account.Extra, input.Extra)
 				_, extra = applyOwnedPersonalAccountTemplateToMaps(account.Platform, account.Credentials, extra)
+				extra, err = NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, extra)
+				if err != nil {
+					entry.Error = err.Error()
+					result.Failed++
+					result.FailedIDs = append(result.FailedIDs, accountID)
+					result.Results = append(result.Results, entry)
+					continue
+				}
 				updateReq.Extra = &extra
 			}
 			if _, err := s.UpdateOwned(ctx, ownerUserID, accountID, updateReq); err != nil {
@@ -1255,18 +1452,22 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)
 	}
+	s.notifyBulkOwnedAccountsChanged(ctx, accountsByID, accountIDs)
 
 	return result, nil
 }
 
 func (s *AccountService) Delete(ctx context.Context, id int64) error {
-	// 使用轻量级的存在性检查，而非加载完整账号对象
-	exists, err := s.accountRepo.ExistsByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("check account: %w", err)
-	}
-	// 明确返回账号不存在错误，便于调用方区分错误类型
-	if !exists {
+	account, getErr := s.accountRepo.GetByID(ctx, id)
+	if getErr != nil {
+		exists, err := s.accountRepo.ExistsByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("check account: %w", err)
+		}
+		if !exists {
+			return ErrAccountNotFound
+		}
+	} else if account == nil {
 		return ErrAccountNotFound
 	}
 
@@ -1274,6 +1475,7 @@ func (s *AccountService) Delete(ctx context.Context, id int64) error {
 		return fmt.Errorf("delete account: %w", err)
 	}
 
+	s.notifyAccountDeleted(ctx, account)
 	return nil
 }
 
@@ -1362,6 +1564,7 @@ func (s *AccountService) ApproveOwnedPublicShareWithOptions(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	before := cloneAccountForNotice(account)
 	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
@@ -1393,6 +1596,7 @@ func (s *AccountService) ApproveOwnedPublicShareWithOptions(ctx context.Context,
 		return nil, fmt.Errorf("bind public account groups: %w", err)
 	}
 	account.GroupIDs = append([]int64(nil), groupIDs...)
+	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
 }
 
@@ -1417,6 +1621,7 @@ func (s *AccountService) MarkOwnedPublicSharePending(ctx context.Context, ownerU
 	if err != nil {
 		return nil, err
 	}
+	before := cloneAccountForNotice(account)
 	groupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, AccountShareModePublic, nil)
 	if err != nil {
 		return nil, err
@@ -1431,6 +1636,7 @@ func (s *AccountService) MarkOwnedPublicSharePending(ctx context.Context, ownerU
 		return nil, fmt.Errorf("bind pending account groups: %w", err)
 	}
 	account.GroupIDs = append([]int64(nil), groupIDs...)
+	s.notifyAccountChanged(ctx, before, account)
 	return account, nil
 }
 
@@ -1445,6 +1651,7 @@ func (s *AccountService) AutoRepairSuspectedOpenAIFreeAccount(ctx context.Contex
 	if !ShouldRepairSuspectedOpenAIFreeAccount(account, maxWeeklyLimitUSD, time.Now()) {
 		return account, false, nil
 	}
+	before := cloneAccountForNotice(account)
 
 	account.AccountLevel = AccountLevelFree
 	if account.ShareMode == AccountShareModePublic {
@@ -1472,7 +1679,59 @@ func (s *AccountService) AutoRepairSuspectedOpenAIFreeAccount(ctx context.Contex
 		}
 		account.GroupIDs = append([]int64(nil), groupIDs...)
 	}
+	s.notifyAccountChanged(ctx, before, account)
 	return account, true, nil
+}
+
+func (s *AccountService) notifyAccountCreated(ctx context.Context, account *Account) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyAccountCreated(ctx, account)
+}
+
+func (s *AccountService) notifyAccountDeleted(ctx context.Context, account *Account) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyAccountDeleted(ctx, account)
+}
+
+func (s *AccountService) notifyAccountChanged(ctx context.Context, before, after *Account) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyAccountChanged(ctx, before, after)
+}
+
+func (s *AccountService) notifyBulkOwnedAccountsChanged(ctx context.Context, beforeByID map[int64]*Account, accountIDs []int64) {
+	if s == nil || s.systemNoticeService == nil || len(accountIDs) == 0 {
+		return
+	}
+	afterAccounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
+	if err != nil {
+		slog.Warn("account.system_notice_bulk_reload_failed", "error", err)
+		return
+	}
+	for _, after := range afterAccounts {
+		if after == nil {
+			continue
+		}
+		s.notifyAccountChanged(ctx, beforeByID[after.ID], after)
+	}
+}
+
+func cloneAccountForNotice(account *Account) *Account {
+	if account == nil {
+		return nil
+	}
+	clone := *account
+	if account.OwnerUserID != nil {
+		ownerID := *account.OwnerUserID
+		clone.OwnerUserID = &ownerID
+	}
+	clone.GroupIDs = append([]int64(nil), account.GroupIDs...)
+	return &clone
 }
 
 func (s *AccountService) repairedOpenAIAccountGroupIDs(ctx context.Context, account *Account) ([]int64, error) {

@@ -426,6 +426,7 @@ type ContentModerationService struct {
 	userRepo                 UserRepository
 	authCacheInvalidator     APIKeyAuthCacheInvalidator
 	emailService             *EmailService
+	systemNoticeService      *SystemNoticeService
 	httpClient               *http.Client
 	asyncQueue               chan contentModerationTask
 	workerCount              int
@@ -491,6 +492,13 @@ func NewContentModerationService(
 		go svc.cleanupWorker()
 	}
 	return svc
+}
+
+func (s *ContentModerationService) SetSystemNoticeService(noticeService *SystemNoticeService) {
+	if s == nil {
+		return
+	}
+	s.systemNoticeService = noticeService
 }
 
 func (s *ContentModerationService) GetConfig(ctx context.Context) (*ContentModerationConfigView, error) {
@@ -891,7 +899,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		_ = s.repo.CreateLog(ctx, log)
 	}
 	if blocked {
-		return &ContentModerationDecision{
+		decision := &ContentModerationDecision{
 			Allowed:         false,
 			Blocked:         true,
 			Flagged:         true,
@@ -902,6 +910,8 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 			CategoryScores:  result.CategoryScores,
 			Action:          action,
 		}
+		s.notifyRiskControlBlocked(ctx, input, decision)
+		return decision
 	}
 	return &ContentModerationDecision{
 		Allowed:         true,
@@ -1034,6 +1044,7 @@ func (s *ContentModerationService) UnbanUser(ctx context.Context, userID int64) 
 	if s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
+	s.notifyRiskControlUnbanned(ctx, userID)
 	return &ContentModerationUnbanUserResult{
 		UserID: userID,
 		Status: StatusActive,
@@ -1377,6 +1388,7 @@ func (s *ContentModerationService) applyFlaggedSideEffects(ctx context.Context, 
 				s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, *log.UserID)
 			}
 			autoBanJustApplied = true
+			s.notifyRiskControlAutoBanned(ctx, *log.UserID)
 		}
 		log.AutoBanned = true
 	}
@@ -1400,6 +1412,27 @@ func (s *ContentModerationService) applyFlaggedSideEffects(ctx context.Context, 
 		}
 	}
 	log.EmailSent = emailSent
+}
+
+func (s *ContentModerationService) notifyRiskControlBlocked(ctx context.Context, input ContentModerationCheckInput, decision *ContentModerationDecision) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyRiskControlBlocked(ctx, input, decision)
+}
+
+func (s *ContentModerationService) notifyRiskControlAutoBanned(ctx context.Context, userID int64) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyRiskControlAutoBanned(ctx, userID)
+}
+
+func (s *ContentModerationService) notifyRiskControlUnbanned(ctx context.Context, userID int64) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyRiskControlUnbanned(ctx, userID)
 }
 
 func (s *ContentModerationService) sendViolationEmail(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog) error {

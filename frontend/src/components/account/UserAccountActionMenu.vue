@@ -30,6 +30,16 @@
             <Icon name="shield" size="sm" />
             {{ t('admin.accounts.setPrivacy') }}
           </button>
+          <template v-if="supportsOpenAILevelVerification">
+            <button class="menu-item text-gray-700 dark:text-dark-100" @click="emitVerifyLevel('free')">
+              <Icon name="check" size="sm" class="text-gray-500" :stroke-width="2" />
+              {{ t('userAccounts.setFreeLevel') }}
+            </button>
+            <button class="menu-item text-amber-600" @click="emitVerifyLevel('plus')">
+              <Icon name="badge" size="sm" />
+              {{ t('userAccounts.verifyPlus') }}
+            </button>
+          </template>
         </div>
       </div>
     </div>
@@ -55,6 +65,7 @@ const emit = defineEmits<{
   (e: 'reauth', account: Account): void
   (e: 'refresh-token', account: Account): void
   (e: 'set-privacy', account: Account): void
+  (e: 'verify-level', account: Account, targetLevel: 'free' | 'plus'): void
 }>()
 
 const { t } = useI18n()
@@ -64,6 +75,10 @@ const supportsPrivacy = computed(() => {
     props.account?.type === 'oauth' &&
     (props.account.platform === 'openai' || props.account.platform === 'antigravity')
   )
+})
+
+const supportsOpenAILevelVerification = computed(() => {
+  return props.account?.platform === 'openai' && props.account.type === 'oauth'
 })
 
 function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-privacy'): void {
@@ -85,6 +100,12 @@ function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-
       emit('set-privacy', props.account)
       break
   }
+  emit('close')
+}
+
+function emitVerifyLevel(targetLevel: 'free' | 'plus'): void {
+  if (!props.account) return
+  emit('verify-level', props.account, targetLevel)
   emit('close')
 }
 

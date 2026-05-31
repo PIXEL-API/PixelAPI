@@ -15,6 +15,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/conversation"
+	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -24,6 +26,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
+	"github.com/Wei-Shaw/sub2api/ent/supportmessage"
+	"github.com/Wei-Shaw/sub2api/ent/supportthread"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
@@ -524,6 +528,96 @@ func (_u *UserUpdate) AddAnnouncementReads(v ...*AnnouncementRead) *UserUpdate {
 	return _u.AddAnnouncementReadIDs(ids...)
 }
 
+// AddConversationIDs adds the "conversations" edge to the Conversation entity by IDs.
+func (_u *UserUpdate) AddConversationIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddConversationIDs(ids...)
+	return _u
+}
+
+// AddConversations adds the "conversations" edges to the Conversation entity.
+func (_u *UserUpdate) AddConversations(v ...*Conversation) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddConversationIDs(ids...)
+}
+
+// AddAssignedConversationIDs adds the "assigned_conversations" edge to the Conversation entity by IDs.
+func (_u *UserUpdate) AddAssignedConversationIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddAssignedConversationIDs(ids...)
+	return _u
+}
+
+// AddAssignedConversations adds the "assigned_conversations" edges to the Conversation entity.
+func (_u *UserUpdate) AddAssignedConversations(v ...*Conversation) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAssignedConversationIDs(ids...)
+}
+
+// AddSentConversationMessageIDs adds the "sent_conversation_messages" edge to the ConversationMessage entity by IDs.
+func (_u *UserUpdate) AddSentConversationMessageIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddSentConversationMessageIDs(ids...)
+	return _u
+}
+
+// AddSentConversationMessages adds the "sent_conversation_messages" edges to the ConversationMessage entity.
+func (_u *UserUpdate) AddSentConversationMessages(v ...*ConversationMessage) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSentConversationMessageIDs(ids...)
+}
+
+// AddSupportThreadIDs adds the "support_threads" edge to the SupportThread entity by IDs.
+func (_u *UserUpdate) AddSupportThreadIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddSupportThreadIDs(ids...)
+	return _u
+}
+
+// AddSupportThreads adds the "support_threads" edges to the SupportThread entity.
+func (_u *UserUpdate) AddSupportThreads(v ...*SupportThread) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSupportThreadIDs(ids...)
+}
+
+// AddAssignedSupportThreadIDs adds the "assigned_support_threads" edge to the SupportThread entity by IDs.
+func (_u *UserUpdate) AddAssignedSupportThreadIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddAssignedSupportThreadIDs(ids...)
+	return _u
+}
+
+// AddAssignedSupportThreads adds the "assigned_support_threads" edges to the SupportThread entity.
+func (_u *UserUpdate) AddAssignedSupportThreads(v ...*SupportThread) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAssignedSupportThreadIDs(ids...)
+}
+
+// AddSentSupportMessageIDs adds the "sent_support_messages" edge to the SupportMessage entity by IDs.
+func (_u *UserUpdate) AddSentSupportMessageIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddSentSupportMessageIDs(ids...)
+	return _u
+}
+
+// AddSentSupportMessages adds the "sent_support_messages" edges to the SupportMessage entity.
+func (_u *UserUpdate) AddSentSupportMessages(v ...*SupportMessage) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSentSupportMessageIDs(ids...)
+}
+
 // AddAllowedGroupIDs adds the "allowed_groups" edge to the Group entity by IDs.
 func (_u *UserUpdate) AddAllowedGroupIDs(ids ...int64) *UserUpdate {
 	_u.mutation.AddAllowedGroupIDs(ids...)
@@ -797,6 +891,132 @@ func (_u *UserUpdate) RemoveAnnouncementReads(v ...*AnnouncementRead) *UserUpdat
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAnnouncementReadIDs(ids...)
+}
+
+// ClearConversations clears all "conversations" edges to the Conversation entity.
+func (_u *UserUpdate) ClearConversations() *UserUpdate {
+	_u.mutation.ClearConversations()
+	return _u
+}
+
+// RemoveConversationIDs removes the "conversations" edge to Conversation entities by IDs.
+func (_u *UserUpdate) RemoveConversationIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveConversationIDs(ids...)
+	return _u
+}
+
+// RemoveConversations removes "conversations" edges to Conversation entities.
+func (_u *UserUpdate) RemoveConversations(v ...*Conversation) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveConversationIDs(ids...)
+}
+
+// ClearAssignedConversations clears all "assigned_conversations" edges to the Conversation entity.
+func (_u *UserUpdate) ClearAssignedConversations() *UserUpdate {
+	_u.mutation.ClearAssignedConversations()
+	return _u
+}
+
+// RemoveAssignedConversationIDs removes the "assigned_conversations" edge to Conversation entities by IDs.
+func (_u *UserUpdate) RemoveAssignedConversationIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveAssignedConversationIDs(ids...)
+	return _u
+}
+
+// RemoveAssignedConversations removes "assigned_conversations" edges to Conversation entities.
+func (_u *UserUpdate) RemoveAssignedConversations(v ...*Conversation) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAssignedConversationIDs(ids...)
+}
+
+// ClearSentConversationMessages clears all "sent_conversation_messages" edges to the ConversationMessage entity.
+func (_u *UserUpdate) ClearSentConversationMessages() *UserUpdate {
+	_u.mutation.ClearSentConversationMessages()
+	return _u
+}
+
+// RemoveSentConversationMessageIDs removes the "sent_conversation_messages" edge to ConversationMessage entities by IDs.
+func (_u *UserUpdate) RemoveSentConversationMessageIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveSentConversationMessageIDs(ids...)
+	return _u
+}
+
+// RemoveSentConversationMessages removes "sent_conversation_messages" edges to ConversationMessage entities.
+func (_u *UserUpdate) RemoveSentConversationMessages(v ...*ConversationMessage) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSentConversationMessageIDs(ids...)
+}
+
+// ClearSupportThreads clears all "support_threads" edges to the SupportThread entity.
+func (_u *UserUpdate) ClearSupportThreads() *UserUpdate {
+	_u.mutation.ClearSupportThreads()
+	return _u
+}
+
+// RemoveSupportThreadIDs removes the "support_threads" edge to SupportThread entities by IDs.
+func (_u *UserUpdate) RemoveSupportThreadIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveSupportThreadIDs(ids...)
+	return _u
+}
+
+// RemoveSupportThreads removes "support_threads" edges to SupportThread entities.
+func (_u *UserUpdate) RemoveSupportThreads(v ...*SupportThread) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSupportThreadIDs(ids...)
+}
+
+// ClearAssignedSupportThreads clears all "assigned_support_threads" edges to the SupportThread entity.
+func (_u *UserUpdate) ClearAssignedSupportThreads() *UserUpdate {
+	_u.mutation.ClearAssignedSupportThreads()
+	return _u
+}
+
+// RemoveAssignedSupportThreadIDs removes the "assigned_support_threads" edge to SupportThread entities by IDs.
+func (_u *UserUpdate) RemoveAssignedSupportThreadIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveAssignedSupportThreadIDs(ids...)
+	return _u
+}
+
+// RemoveAssignedSupportThreads removes "assigned_support_threads" edges to SupportThread entities.
+func (_u *UserUpdate) RemoveAssignedSupportThreads(v ...*SupportThread) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAssignedSupportThreadIDs(ids...)
+}
+
+// ClearSentSupportMessages clears all "sent_support_messages" edges to the SupportMessage entity.
+func (_u *UserUpdate) ClearSentSupportMessages() *UserUpdate {
+	_u.mutation.ClearSentSupportMessages()
+	return _u
+}
+
+// RemoveSentSupportMessageIDs removes the "sent_support_messages" edge to SupportMessage entities by IDs.
+func (_u *UserUpdate) RemoveSentSupportMessageIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveSentSupportMessageIDs(ids...)
+	return _u
+}
+
+// RemoveSentSupportMessages removes "sent_support_messages" edges to SupportMessage entities.
+func (_u *UserUpdate) RemoveSentSupportMessages(v ...*SupportMessage) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSentSupportMessageIDs(ids...)
 }
 
 // ClearAllowedGroups clears all "allowed_groups" edges to the Group entity.
@@ -1445,6 +1665,276 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(announcementread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ConversationsTable,
+			Columns: []string{user.ConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedConversationsIDs(); len(nodes) > 0 && !_u.mutation.ConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ConversationsTable,
+			Columns: []string{user.ConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ConversationsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ConversationsTable,
+			Columns: []string{user.ConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.AssignedConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedConversationsTable,
+			Columns: []string{user.AssignedConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAssignedConversationsIDs(); len(nodes) > 0 && !_u.mutation.AssignedConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedConversationsTable,
+			Columns: []string{user.AssignedConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.AssignedConversationsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedConversationsTable,
+			Columns: []string{user.AssignedConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SentConversationMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentConversationMessagesTable,
+			Columns: []string{user.SentConversationMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversationmessage.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSentConversationMessagesIDs(); len(nodes) > 0 && !_u.mutation.SentConversationMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentConversationMessagesTable,
+			Columns: []string{user.SentConversationMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversationmessage.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SentConversationMessagesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentConversationMessagesTable,
+			Columns: []string{user.SentConversationMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversationmessage.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SupportThreadsTable,
+			Columns: []string{user.SupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSupportThreadsIDs(); len(nodes) > 0 && !_u.mutation.SupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SupportThreadsTable,
+			Columns: []string{user.SupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SupportThreadsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SupportThreadsTable,
+			Columns: []string{user.SupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.AssignedSupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedSupportThreadsTable,
+			Columns: []string{user.AssignedSupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAssignedSupportThreadsIDs(); len(nodes) > 0 && !_u.mutation.AssignedSupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedSupportThreadsTable,
+			Columns: []string{user.AssignedSupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.AssignedSupportThreadsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedSupportThreadsTable,
+			Columns: []string{user.AssignedSupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SentSupportMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentSupportMessagesTable,
+			Columns: []string{user.SentSupportMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportmessage.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSentSupportMessagesIDs(); len(nodes) > 0 && !_u.mutation.SentSupportMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentSupportMessagesTable,
+			Columns: []string{user.SentSupportMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportmessage.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SentSupportMessagesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentSupportMessagesTable,
+			Columns: []string{user.SentSupportMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportmessage.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -2460,6 +2950,96 @@ func (_u *UserUpdateOne) AddAnnouncementReads(v ...*AnnouncementRead) *UserUpdat
 	return _u.AddAnnouncementReadIDs(ids...)
 }
 
+// AddConversationIDs adds the "conversations" edge to the Conversation entity by IDs.
+func (_u *UserUpdateOne) AddConversationIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddConversationIDs(ids...)
+	return _u
+}
+
+// AddConversations adds the "conversations" edges to the Conversation entity.
+func (_u *UserUpdateOne) AddConversations(v ...*Conversation) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddConversationIDs(ids...)
+}
+
+// AddAssignedConversationIDs adds the "assigned_conversations" edge to the Conversation entity by IDs.
+func (_u *UserUpdateOne) AddAssignedConversationIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddAssignedConversationIDs(ids...)
+	return _u
+}
+
+// AddAssignedConversations adds the "assigned_conversations" edges to the Conversation entity.
+func (_u *UserUpdateOne) AddAssignedConversations(v ...*Conversation) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAssignedConversationIDs(ids...)
+}
+
+// AddSentConversationMessageIDs adds the "sent_conversation_messages" edge to the ConversationMessage entity by IDs.
+func (_u *UserUpdateOne) AddSentConversationMessageIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddSentConversationMessageIDs(ids...)
+	return _u
+}
+
+// AddSentConversationMessages adds the "sent_conversation_messages" edges to the ConversationMessage entity.
+func (_u *UserUpdateOne) AddSentConversationMessages(v ...*ConversationMessage) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSentConversationMessageIDs(ids...)
+}
+
+// AddSupportThreadIDs adds the "support_threads" edge to the SupportThread entity by IDs.
+func (_u *UserUpdateOne) AddSupportThreadIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddSupportThreadIDs(ids...)
+	return _u
+}
+
+// AddSupportThreads adds the "support_threads" edges to the SupportThread entity.
+func (_u *UserUpdateOne) AddSupportThreads(v ...*SupportThread) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSupportThreadIDs(ids...)
+}
+
+// AddAssignedSupportThreadIDs adds the "assigned_support_threads" edge to the SupportThread entity by IDs.
+func (_u *UserUpdateOne) AddAssignedSupportThreadIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddAssignedSupportThreadIDs(ids...)
+	return _u
+}
+
+// AddAssignedSupportThreads adds the "assigned_support_threads" edges to the SupportThread entity.
+func (_u *UserUpdateOne) AddAssignedSupportThreads(v ...*SupportThread) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAssignedSupportThreadIDs(ids...)
+}
+
+// AddSentSupportMessageIDs adds the "sent_support_messages" edge to the SupportMessage entity by IDs.
+func (_u *UserUpdateOne) AddSentSupportMessageIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddSentSupportMessageIDs(ids...)
+	return _u
+}
+
+// AddSentSupportMessages adds the "sent_support_messages" edges to the SupportMessage entity.
+func (_u *UserUpdateOne) AddSentSupportMessages(v ...*SupportMessage) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSentSupportMessageIDs(ids...)
+}
+
 // AddAllowedGroupIDs adds the "allowed_groups" edge to the Group entity by IDs.
 func (_u *UserUpdateOne) AddAllowedGroupIDs(ids ...int64) *UserUpdateOne {
 	_u.mutation.AddAllowedGroupIDs(ids...)
@@ -2733,6 +3313,132 @@ func (_u *UserUpdateOne) RemoveAnnouncementReads(v ...*AnnouncementRead) *UserUp
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAnnouncementReadIDs(ids...)
+}
+
+// ClearConversations clears all "conversations" edges to the Conversation entity.
+func (_u *UserUpdateOne) ClearConversations() *UserUpdateOne {
+	_u.mutation.ClearConversations()
+	return _u
+}
+
+// RemoveConversationIDs removes the "conversations" edge to Conversation entities by IDs.
+func (_u *UserUpdateOne) RemoveConversationIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveConversationIDs(ids...)
+	return _u
+}
+
+// RemoveConversations removes "conversations" edges to Conversation entities.
+func (_u *UserUpdateOne) RemoveConversations(v ...*Conversation) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveConversationIDs(ids...)
+}
+
+// ClearAssignedConversations clears all "assigned_conversations" edges to the Conversation entity.
+func (_u *UserUpdateOne) ClearAssignedConversations() *UserUpdateOne {
+	_u.mutation.ClearAssignedConversations()
+	return _u
+}
+
+// RemoveAssignedConversationIDs removes the "assigned_conversations" edge to Conversation entities by IDs.
+func (_u *UserUpdateOne) RemoveAssignedConversationIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveAssignedConversationIDs(ids...)
+	return _u
+}
+
+// RemoveAssignedConversations removes "assigned_conversations" edges to Conversation entities.
+func (_u *UserUpdateOne) RemoveAssignedConversations(v ...*Conversation) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAssignedConversationIDs(ids...)
+}
+
+// ClearSentConversationMessages clears all "sent_conversation_messages" edges to the ConversationMessage entity.
+func (_u *UserUpdateOne) ClearSentConversationMessages() *UserUpdateOne {
+	_u.mutation.ClearSentConversationMessages()
+	return _u
+}
+
+// RemoveSentConversationMessageIDs removes the "sent_conversation_messages" edge to ConversationMessage entities by IDs.
+func (_u *UserUpdateOne) RemoveSentConversationMessageIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveSentConversationMessageIDs(ids...)
+	return _u
+}
+
+// RemoveSentConversationMessages removes "sent_conversation_messages" edges to ConversationMessage entities.
+func (_u *UserUpdateOne) RemoveSentConversationMessages(v ...*ConversationMessage) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSentConversationMessageIDs(ids...)
+}
+
+// ClearSupportThreads clears all "support_threads" edges to the SupportThread entity.
+func (_u *UserUpdateOne) ClearSupportThreads() *UserUpdateOne {
+	_u.mutation.ClearSupportThreads()
+	return _u
+}
+
+// RemoveSupportThreadIDs removes the "support_threads" edge to SupportThread entities by IDs.
+func (_u *UserUpdateOne) RemoveSupportThreadIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveSupportThreadIDs(ids...)
+	return _u
+}
+
+// RemoveSupportThreads removes "support_threads" edges to SupportThread entities.
+func (_u *UserUpdateOne) RemoveSupportThreads(v ...*SupportThread) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSupportThreadIDs(ids...)
+}
+
+// ClearAssignedSupportThreads clears all "assigned_support_threads" edges to the SupportThread entity.
+func (_u *UserUpdateOne) ClearAssignedSupportThreads() *UserUpdateOne {
+	_u.mutation.ClearAssignedSupportThreads()
+	return _u
+}
+
+// RemoveAssignedSupportThreadIDs removes the "assigned_support_threads" edge to SupportThread entities by IDs.
+func (_u *UserUpdateOne) RemoveAssignedSupportThreadIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveAssignedSupportThreadIDs(ids...)
+	return _u
+}
+
+// RemoveAssignedSupportThreads removes "assigned_support_threads" edges to SupportThread entities.
+func (_u *UserUpdateOne) RemoveAssignedSupportThreads(v ...*SupportThread) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAssignedSupportThreadIDs(ids...)
+}
+
+// ClearSentSupportMessages clears all "sent_support_messages" edges to the SupportMessage entity.
+func (_u *UserUpdateOne) ClearSentSupportMessages() *UserUpdateOne {
+	_u.mutation.ClearSentSupportMessages()
+	return _u
+}
+
+// RemoveSentSupportMessageIDs removes the "sent_support_messages" edge to SupportMessage entities by IDs.
+func (_u *UserUpdateOne) RemoveSentSupportMessageIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveSentSupportMessageIDs(ids...)
+	return _u
+}
+
+// RemoveSentSupportMessages removes "sent_support_messages" edges to SupportMessage entities.
+func (_u *UserUpdateOne) RemoveSentSupportMessages(v ...*SupportMessage) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSentSupportMessageIDs(ids...)
 }
 
 // ClearAllowedGroups clears all "allowed_groups" edges to the Group entity.
@@ -3411,6 +4117,276 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(announcementread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ConversationsTable,
+			Columns: []string{user.ConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedConversationsIDs(); len(nodes) > 0 && !_u.mutation.ConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ConversationsTable,
+			Columns: []string{user.ConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ConversationsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ConversationsTable,
+			Columns: []string{user.ConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.AssignedConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedConversationsTable,
+			Columns: []string{user.AssignedConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAssignedConversationsIDs(); len(nodes) > 0 && !_u.mutation.AssignedConversationsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedConversationsTable,
+			Columns: []string{user.AssignedConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.AssignedConversationsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedConversationsTable,
+			Columns: []string{user.AssignedConversationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SentConversationMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentConversationMessagesTable,
+			Columns: []string{user.SentConversationMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversationmessage.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSentConversationMessagesIDs(); len(nodes) > 0 && !_u.mutation.SentConversationMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentConversationMessagesTable,
+			Columns: []string{user.SentConversationMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversationmessage.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SentConversationMessagesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentConversationMessagesTable,
+			Columns: []string{user.SentConversationMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(conversationmessage.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SupportThreadsTable,
+			Columns: []string{user.SupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSupportThreadsIDs(); len(nodes) > 0 && !_u.mutation.SupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SupportThreadsTable,
+			Columns: []string{user.SupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SupportThreadsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SupportThreadsTable,
+			Columns: []string{user.SupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.AssignedSupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedSupportThreadsTable,
+			Columns: []string{user.AssignedSupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAssignedSupportThreadsIDs(); len(nodes) > 0 && !_u.mutation.AssignedSupportThreadsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedSupportThreadsTable,
+			Columns: []string{user.AssignedSupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.AssignedSupportThreadsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.AssignedSupportThreadsTable,
+			Columns: []string{user.AssignedSupportThreadsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportthread.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SentSupportMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentSupportMessagesTable,
+			Columns: []string{user.SentSupportMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportmessage.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSentSupportMessagesIDs(); len(nodes) > 0 && !_u.mutation.SentSupportMessagesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentSupportMessagesTable,
+			Columns: []string{user.SentSupportMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportmessage.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SentSupportMessagesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SentSupportMessagesTable,
+			Columns: []string{user.SentSupportMessagesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(supportmessage.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

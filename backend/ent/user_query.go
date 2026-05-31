@@ -17,6 +17,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
+	"github.com/Wei-Shaw/sub2api/ent/conversation"
+	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -26,6 +28,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
+	"github.com/Wei-Shaw/sub2api/ent/supportmessage"
+	"github.com/Wei-Shaw/sub2api/ent/supportthread"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
@@ -36,28 +40,34 @@ import (
 // UserQuery is the builder for querying User entities.
 type UserQuery struct {
 	config
-	ctx                       *QueryContext
-	order                     []user.OrderOption
-	inters                    []Interceptor
-	predicates                []predicate.User
-	withAPIKeys               *APIKeyQuery
-	withRedeemCodes           *RedeemCodeQuery
-	withSubscriptions         *UserSubscriptionQuery
-	withAssignedSubscriptions *UserSubscriptionQuery
-	withAnnouncementReads     *AnnouncementReadQuery
-	withAllowedGroups         *GroupQuery
-	withUsageLogs             *UsageLogQuery
-	withAttributeValues       *UserAttributeValueQuery
-	withPromoCodeUsages       *PromoCodeUsageQuery
-	withPaymentOrders         *PaymentOrderQuery
-	withShopOrders            *ShopOrderQuery
-	withShopDrawCycles        *ShopDrawCycleQuery
-	withShopBalanceLedger     *ShopBalanceLedgerQuery
-	withOwnedAccounts         *AccountQuery
-	withAuthIdentities        *AuthIdentityQuery
-	withPendingAuthSessions   *PendingAuthSessionQuery
-	withUserAllowedGroups     *UserAllowedGroupQuery
-	modifiers                 []func(*sql.Selector)
+	ctx                          *QueryContext
+	order                        []user.OrderOption
+	inters                       []Interceptor
+	predicates                   []predicate.User
+	withAPIKeys                  *APIKeyQuery
+	withRedeemCodes              *RedeemCodeQuery
+	withSubscriptions            *UserSubscriptionQuery
+	withAssignedSubscriptions    *UserSubscriptionQuery
+	withAnnouncementReads        *AnnouncementReadQuery
+	withConversations            *ConversationQuery
+	withAssignedConversations    *ConversationQuery
+	withSentConversationMessages *ConversationMessageQuery
+	withSupportThreads           *SupportThreadQuery
+	withAssignedSupportThreads   *SupportThreadQuery
+	withSentSupportMessages      *SupportMessageQuery
+	withAllowedGroups            *GroupQuery
+	withUsageLogs                *UsageLogQuery
+	withAttributeValues          *UserAttributeValueQuery
+	withPromoCodeUsages          *PromoCodeUsageQuery
+	withPaymentOrders            *PaymentOrderQuery
+	withShopOrders               *ShopOrderQuery
+	withShopDrawCycles           *ShopDrawCycleQuery
+	withShopBalanceLedger        *ShopBalanceLedgerQuery
+	withOwnedAccounts            *AccountQuery
+	withAuthIdentities           *AuthIdentityQuery
+	withPendingAuthSessions      *PendingAuthSessionQuery
+	withUserAllowedGroups        *UserAllowedGroupQuery
+	modifiers                    []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -197,6 +207,138 @@ func (_q *UserQuery) QueryAnnouncementReads() *AnnouncementReadQuery {
 			sqlgraph.From(user.Table, user.FieldID, selector),
 			sqlgraph.To(announcementread.Table, announcementread.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.AnnouncementReadsTable, user.AnnouncementReadsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryConversations chains the current query on the "conversations" edge.
+func (_q *UserQuery) QueryConversations() *ConversationQuery {
+	query := (&ConversationClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(conversation.Table, conversation.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ConversationsTable, user.ConversationsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryAssignedConversations chains the current query on the "assigned_conversations" edge.
+func (_q *UserQuery) QueryAssignedConversations() *ConversationQuery {
+	query := (&ConversationClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(conversation.Table, conversation.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.AssignedConversationsTable, user.AssignedConversationsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QuerySentConversationMessages chains the current query on the "sent_conversation_messages" edge.
+func (_q *UserQuery) QuerySentConversationMessages() *ConversationMessageQuery {
+	query := (&ConversationMessageClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(conversationmessage.Table, conversationmessage.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SentConversationMessagesTable, user.SentConversationMessagesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QuerySupportThreads chains the current query on the "support_threads" edge.
+func (_q *UserQuery) QuerySupportThreads() *SupportThreadQuery {
+	query := (&SupportThreadClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(supportthread.Table, supportthread.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SupportThreadsTable, user.SupportThreadsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryAssignedSupportThreads chains the current query on the "assigned_support_threads" edge.
+func (_q *UserQuery) QueryAssignedSupportThreads() *SupportThreadQuery {
+	query := (&SupportThreadClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(supportthread.Table, supportthread.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.AssignedSupportThreadsTable, user.AssignedSupportThreadsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QuerySentSupportMessages chains the current query on the "sent_support_messages" edge.
+func (_q *UserQuery) QuerySentSupportMessages() *SupportMessageQuery {
+	query := (&SupportMessageClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(supportmessage.Table, supportmessage.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SentSupportMessagesTable, user.SentSupportMessagesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -655,28 +797,34 @@ func (_q *UserQuery) Clone() *UserQuery {
 		return nil
 	}
 	return &UserQuery{
-		config:                    _q.config,
-		ctx:                       _q.ctx.Clone(),
-		order:                     append([]user.OrderOption{}, _q.order...),
-		inters:                    append([]Interceptor{}, _q.inters...),
-		predicates:                append([]predicate.User{}, _q.predicates...),
-		withAPIKeys:               _q.withAPIKeys.Clone(),
-		withRedeemCodes:           _q.withRedeemCodes.Clone(),
-		withSubscriptions:         _q.withSubscriptions.Clone(),
-		withAssignedSubscriptions: _q.withAssignedSubscriptions.Clone(),
-		withAnnouncementReads:     _q.withAnnouncementReads.Clone(),
-		withAllowedGroups:         _q.withAllowedGroups.Clone(),
-		withUsageLogs:             _q.withUsageLogs.Clone(),
-		withAttributeValues:       _q.withAttributeValues.Clone(),
-		withPromoCodeUsages:       _q.withPromoCodeUsages.Clone(),
-		withPaymentOrders:         _q.withPaymentOrders.Clone(),
-		withShopOrders:            _q.withShopOrders.Clone(),
-		withShopDrawCycles:        _q.withShopDrawCycles.Clone(),
-		withShopBalanceLedger:     _q.withShopBalanceLedger.Clone(),
-		withOwnedAccounts:         _q.withOwnedAccounts.Clone(),
-		withAuthIdentities:        _q.withAuthIdentities.Clone(),
-		withPendingAuthSessions:   _q.withPendingAuthSessions.Clone(),
-		withUserAllowedGroups:     _q.withUserAllowedGroups.Clone(),
+		config:                       _q.config,
+		ctx:                          _q.ctx.Clone(),
+		order:                        append([]user.OrderOption{}, _q.order...),
+		inters:                       append([]Interceptor{}, _q.inters...),
+		predicates:                   append([]predicate.User{}, _q.predicates...),
+		withAPIKeys:                  _q.withAPIKeys.Clone(),
+		withRedeemCodes:              _q.withRedeemCodes.Clone(),
+		withSubscriptions:            _q.withSubscriptions.Clone(),
+		withAssignedSubscriptions:    _q.withAssignedSubscriptions.Clone(),
+		withAnnouncementReads:        _q.withAnnouncementReads.Clone(),
+		withConversations:            _q.withConversations.Clone(),
+		withAssignedConversations:    _q.withAssignedConversations.Clone(),
+		withSentConversationMessages: _q.withSentConversationMessages.Clone(),
+		withSupportThreads:           _q.withSupportThreads.Clone(),
+		withAssignedSupportThreads:   _q.withAssignedSupportThreads.Clone(),
+		withSentSupportMessages:      _q.withSentSupportMessages.Clone(),
+		withAllowedGroups:            _q.withAllowedGroups.Clone(),
+		withUsageLogs:                _q.withUsageLogs.Clone(),
+		withAttributeValues:          _q.withAttributeValues.Clone(),
+		withPromoCodeUsages:          _q.withPromoCodeUsages.Clone(),
+		withPaymentOrders:            _q.withPaymentOrders.Clone(),
+		withShopOrders:               _q.withShopOrders.Clone(),
+		withShopDrawCycles:           _q.withShopDrawCycles.Clone(),
+		withShopBalanceLedger:        _q.withShopBalanceLedger.Clone(),
+		withOwnedAccounts:            _q.withOwnedAccounts.Clone(),
+		withAuthIdentities:           _q.withAuthIdentities.Clone(),
+		withPendingAuthSessions:      _q.withPendingAuthSessions.Clone(),
+		withUserAllowedGroups:        _q.withUserAllowedGroups.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -735,6 +883,72 @@ func (_q *UserQuery) WithAnnouncementReads(opts ...func(*AnnouncementReadQuery))
 		opt(query)
 	}
 	_q.withAnnouncementReads = query
+	return _q
+}
+
+// WithConversations tells the query-builder to eager-load the nodes that are connected to
+// the "conversations" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithConversations(opts ...func(*ConversationQuery)) *UserQuery {
+	query := (&ConversationClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withConversations = query
+	return _q
+}
+
+// WithAssignedConversations tells the query-builder to eager-load the nodes that are connected to
+// the "assigned_conversations" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithAssignedConversations(opts ...func(*ConversationQuery)) *UserQuery {
+	query := (&ConversationClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withAssignedConversations = query
+	return _q
+}
+
+// WithSentConversationMessages tells the query-builder to eager-load the nodes that are connected to
+// the "sent_conversation_messages" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithSentConversationMessages(opts ...func(*ConversationMessageQuery)) *UserQuery {
+	query := (&ConversationMessageClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withSentConversationMessages = query
+	return _q
+}
+
+// WithSupportThreads tells the query-builder to eager-load the nodes that are connected to
+// the "support_threads" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithSupportThreads(opts ...func(*SupportThreadQuery)) *UserQuery {
+	query := (&SupportThreadClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withSupportThreads = query
+	return _q
+}
+
+// WithAssignedSupportThreads tells the query-builder to eager-load the nodes that are connected to
+// the "assigned_support_threads" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithAssignedSupportThreads(opts ...func(*SupportThreadQuery)) *UserQuery {
+	query := (&SupportThreadClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withAssignedSupportThreads = query
+	return _q
+}
+
+// WithSentSupportMessages tells the query-builder to eager-load the nodes that are connected to
+// the "sent_support_messages" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithSentSupportMessages(opts ...func(*SupportMessageQuery)) *UserQuery {
+	query := (&SupportMessageClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withSentSupportMessages = query
 	return _q
 }
 
@@ -948,12 +1162,18 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = _q.querySpec()
-		loadedTypes = [17]bool{
+		loadedTypes = [23]bool{
 			_q.withAPIKeys != nil,
 			_q.withRedeemCodes != nil,
 			_q.withSubscriptions != nil,
 			_q.withAssignedSubscriptions != nil,
 			_q.withAnnouncementReads != nil,
+			_q.withConversations != nil,
+			_q.withAssignedConversations != nil,
+			_q.withSentConversationMessages != nil,
+			_q.withSupportThreads != nil,
+			_q.withAssignedSupportThreads != nil,
+			_q.withSentSupportMessages != nil,
 			_q.withAllowedGroups != nil,
 			_q.withUsageLogs != nil,
 			_q.withAttributeValues != nil,
@@ -1023,6 +1243,54 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := _q.loadAnnouncementReads(ctx, query, nodes,
 			func(n *User) { n.Edges.AnnouncementReads = []*AnnouncementRead{} },
 			func(n *User, e *AnnouncementRead) { n.Edges.AnnouncementReads = append(n.Edges.AnnouncementReads, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withConversations; query != nil {
+		if err := _q.loadConversations(ctx, query, nodes,
+			func(n *User) { n.Edges.Conversations = []*Conversation{} },
+			func(n *User, e *Conversation) { n.Edges.Conversations = append(n.Edges.Conversations, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withAssignedConversations; query != nil {
+		if err := _q.loadAssignedConversations(ctx, query, nodes,
+			func(n *User) { n.Edges.AssignedConversations = []*Conversation{} },
+			func(n *User, e *Conversation) {
+				n.Edges.AssignedConversations = append(n.Edges.AssignedConversations, e)
+			}); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withSentConversationMessages; query != nil {
+		if err := _q.loadSentConversationMessages(ctx, query, nodes,
+			func(n *User) { n.Edges.SentConversationMessages = []*ConversationMessage{} },
+			func(n *User, e *ConversationMessage) {
+				n.Edges.SentConversationMessages = append(n.Edges.SentConversationMessages, e)
+			}); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withSupportThreads; query != nil {
+		if err := _q.loadSupportThreads(ctx, query, nodes,
+			func(n *User) { n.Edges.SupportThreads = []*SupportThread{} },
+			func(n *User, e *SupportThread) { n.Edges.SupportThreads = append(n.Edges.SupportThreads, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withAssignedSupportThreads; query != nil {
+		if err := _q.loadAssignedSupportThreads(ctx, query, nodes,
+			func(n *User) { n.Edges.AssignedSupportThreads = []*SupportThread{} },
+			func(n *User, e *SupportThread) {
+				n.Edges.AssignedSupportThreads = append(n.Edges.AssignedSupportThreads, e)
+			}); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withSentSupportMessages; query != nil {
+		if err := _q.loadSentSupportMessages(ctx, query, nodes,
+			func(n *User) { n.Edges.SentSupportMessages = []*SupportMessage{} },
+			func(n *User, e *SupportMessage) { n.Edges.SentSupportMessages = append(n.Edges.SentSupportMessages, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -1266,6 +1534,198 @@ func (_q *UserQuery) loadAnnouncementReads(ctx context.Context, query *Announcem
 		node, ok := nodeids[fk]
 		if !ok {
 			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadConversations(ctx context.Context, query *ConversationQuery, nodes []*User, init func(*User), assign func(*User, *Conversation)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(conversation.FieldUserID)
+	}
+	query.Where(predicate.Conversation(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.ConversationsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadAssignedConversations(ctx context.Context, query *ConversationQuery, nodes []*User, init func(*User), assign func(*User, *Conversation)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(conversation.FieldAssignedAdminID)
+	}
+	query.Where(predicate.Conversation(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.AssignedConversationsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.AssignedAdminID
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "assigned_admin_id" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "assigned_admin_id" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadSentConversationMessages(ctx context.Context, query *ConversationMessageQuery, nodes []*User, init func(*User), assign func(*User, *ConversationMessage)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(conversationmessage.FieldSenderID)
+	}
+	query.Where(predicate.ConversationMessage(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.SentConversationMessagesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.SenderID
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "sender_id" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "sender_id" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadSupportThreads(ctx context.Context, query *SupportThreadQuery, nodes []*User, init func(*User), assign func(*User, *SupportThread)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(supportthread.FieldUserID)
+	}
+	query.Where(predicate.SupportThread(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.SupportThreadsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadAssignedSupportThreads(ctx context.Context, query *SupportThreadQuery, nodes []*User, init func(*User), assign func(*User, *SupportThread)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(supportthread.FieldAssignedAdminID)
+	}
+	query.Where(predicate.SupportThread(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.AssignedSupportThreadsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.AssignedAdminID
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "assigned_admin_id" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "assigned_admin_id" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadSentSupportMessages(ctx context.Context, query *SupportMessageQuery, nodes []*User, init func(*User), assign func(*User, *SupportMessage)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(supportmessage.FieldSenderID)
+	}
+	query.Where(predicate.SupportMessage(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.SentSupportMessagesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.SenderID
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "sender_id" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "sender_id" returned %v for node %v`, *fk, n.ID)
 		}
 		assign(node, n)
 	}

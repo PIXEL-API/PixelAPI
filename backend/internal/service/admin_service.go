@@ -546,6 +546,7 @@ type adminServiceImpl struct {
 	userSubRepo             UserSubscriptionRepository
 	privacyClientFactory    PrivacyClientFactory
 	privateGroupProvisioner UserPrivateGroupProvisioner
+	systemNoticeService     *SystemNoticeService
 }
 
 type userGroupRateBatchReader interface {
@@ -596,6 +597,13 @@ func NewAdminService(
 func SetAdminUserPrivateGroupProvisioner(svc AdminService, provisioner UserPrivateGroupProvisioner) AdminService {
 	if impl, ok := svc.(*adminServiceImpl); ok {
 		impl.privateGroupProvisioner = provisioner
+	}
+	return svc
+}
+
+func SetAdminSystemNoticeService(svc AdminService, noticeService *SystemNoticeService) AdminService {
+	if impl, ok := svc.(*adminServiceImpl); ok {
+		impl.systemNoticeService = noticeService
 	}
 	return svc
 }
@@ -758,6 +766,16 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	oldStatus := user.Status
 	oldRole := user.Role
 	oldRPMLimit := user.RPMLimit
+	var beforeGroupRates map[int64]float64
+	beforeGroupRatesLoaded := false
+	if input.GroupRates != nil && s.userGroupRateRepo != nil {
+		beforeGroupRates, err = s.userGroupRateRepo.GetByUserID(ctx, user.ID)
+		if err != nil {
+			logger.LegacyPrintf("service.admin", "failed to load user group rates before sync: user_id=%d err=%v", user.ID, err)
+		} else {
+			beforeGroupRatesLoaded = true
+		}
+	}
 
 	if input.Email != "" {
 		user.Email = input.Email
@@ -804,6 +822,9 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if input.GroupRates != nil && s.userGroupRateRepo != nil {
 		if err := s.userGroupRateRepo.SyncUserGroupRates(ctx, user.ID, input.GroupRates); err != nil {
 			logger.LegacyPrintf("service.admin", "failed to sync user group rates: user_id=%d err=%v", user.ID, err)
+			invalidateUserGroupRateCacheByUserID(user.ID)
+		} else if beforeGroupRatesLoaded {
+			s.notifyUserGroupRateChanges(ctx, user.ID, beforeGroupRates, input.GroupRates)
 		}
 	}
 
@@ -811,6 +832,9 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		// RPMLimit 直接参与 billing_cache_service.checkRPM 的三级级联，
 		// 不失效缓存会让修改在一个 L2 TTL 内失去效果。
 		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole || user.RPMLimit != oldRPMLimit {
+			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, user.ID)
+		}
+		if input.GroupRates != nil {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, user.ID)
 		}
 	}
@@ -1750,6 +1774,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	previousRateMultiplier := group.RateMultiplier
 
 	if input.Name != "" {
 		group.Name = input.Name
@@ -1934,6 +1959,10 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 	}
 
+	if input.RateMultiplier != nil && groupRateMultiplierChanged(previousRateMultiplier, group.RateMultiplier) {
+		s.notifyGroupRateMultiplierChanged(ctx, group, previousRateMultiplier, group.RateMultiplier, "rate_changed")
+	}
+
 	return group, nil
 }
 
@@ -1994,7 +2023,19 @@ func (s *adminServiceImpl) ClearGroupRateMultipliers(ctx context.Context, groupI
 	if s.userGroupRateRepo == nil {
 		return nil
 	}
-	return s.userGroupRateRepo.DeleteByGroupID(ctx, groupID)
+	group := s.groupForRateNotice(ctx, groupID)
+	beforeRates, err := s.userGroupRateRepo.GetRateMultipliersByGroupID(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if err := s.userGroupRateRepo.DeleteByGroupID(ctx, groupID); err != nil {
+		return err
+	}
+	s.notifyClearedGroupRateMultipliers(ctx, group, beforeRates)
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+	}
+	return nil
 }
 
 func (s *adminServiceImpl) BatchSetGroupRateMultipliers(ctx context.Context, groupID int64, entries []GroupRateMultiplierInput) error {
@@ -2006,7 +2047,19 @@ func (s *adminServiceImpl) BatchSetGroupRateMultipliers(ctx context.Context, gro
 			return fmt.Errorf("rate_multiplier must be > 0 (user_id=%d)", e.UserID)
 		}
 	}
-	return s.userGroupRateRepo.SyncGroupRateMultipliers(ctx, groupID, entries)
+	group := s.groupForRateNotice(ctx, groupID)
+	beforeRates, err := s.userGroupRateRepo.GetRateMultipliersByGroupID(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if err := s.userGroupRateRepo.SyncGroupRateMultipliers(ctx, groupID, entries); err != nil {
+		return err
+	}
+	s.notifySyncedGroupRateMultipliers(ctx, group, beforeRates, entries)
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+	}
+	return nil
 }
 
 func (s *adminServiceImpl) ClearGroupRPMOverrides(ctx context.Context, groupID int64) error {
@@ -2277,6 +2330,12 @@ func (s *adminServiceImpl) GetAccountsByIDs(ctx context.Context, ids []int64) ([
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	extra, err := NormalizeCodexQuotaLimitExtra(input.Platform, input.Type, input.Extra)
+	if err != nil {
+		return nil, err
+	}
+	input.Extra = extra
+
 	// 绑定分组
 	groupIDs := input.GroupIDs
 	// 如果没有指定分组,自动绑定对应平台的默认分组
@@ -2374,6 +2433,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
 			return nil, err
 		}
+		account.GroupIDs = append([]int64(nil), groupIDs...)
 	}
 
 	// OAuth 账号：创建后异步设置隐私。
@@ -2401,6 +2461,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
+	s.notifyAccountCreated(ctx, account)
 	return account, nil
 }
 
@@ -2409,6 +2470,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	before := cloneAccountForNotice(account)
 	wasOveragesEnabled := account.IsOveragesEnabled()
 
 	if input.Name != "" {
@@ -2435,6 +2497,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				input.Extra[key] = v
 			}
 		}
+		extra, err := NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, input.Extra)
+		if err != nil {
+			return nil, err
+		}
+		input.Extra = extra
 		account.Extra = input.Extra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
 			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
@@ -2576,6 +2643,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	s.notifyAccountChanged(ctx, before, updated)
 	return updated, nil
 }
 
@@ -2686,6 +2754,15 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", "rate_multiplier must be >= 0")
 		}
 	}
+	if len(input.Extra) > 0 {
+		accounts, err := loadPreflightAccounts()
+		if err != nil {
+			return nil, err
+		}
+		if err := NormalizeCodexQuotaLimitBulkExtra(accounts, input.Extra); err != nil {
+			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", err.Error())
+		}
+	}
 	if input.Concurrency != nil || input.LoadFactor != nil || input.AccountLevel != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 {
 		accounts, err := loadPreflightAccounts()
 		if err != nil {
@@ -2762,6 +2839,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		repoUpdates.AccountLevel = &level
 	}
 
+	beforeByID := make(map[int64]*Account, len(input.AccountIDs))
+	if accounts, err := loadPreflightAccounts(); err == nil {
+		for _, account := range accounts {
+			if account != nil {
+				beforeByID[account.ID] = cloneAccountForNotice(account)
+			}
+		}
+	} else {
+		slog.Warn("admin.account.system_notice_preload_failed", "error", err)
+	}
+
 	// Run bulk update for column/jsonb fields first.
 	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
 		return nil, err
@@ -2788,6 +2876,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		result.Results = append(result.Results, entry)
 	}
 
+	s.notifyBulkAccountsChanged(ctx, beforeByID, result.SuccessIDs)
 	return result, nil
 }
 
@@ -2843,10 +2932,228 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return err
 	}
+	s.notifyAccountDeleted(ctx, account)
 	return nil
+}
+
+func (s *adminServiceImpl) notifyAccountCreated(ctx context.Context, account *Account) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyAccountCreated(ctx, account)
+}
+
+func (s *adminServiceImpl) notifyAccountDeleted(ctx context.Context, account *Account) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyAccountDeleted(ctx, account)
+}
+
+func (s *adminServiceImpl) notifyAccountChanged(ctx context.Context, before, after *Account) {
+	if s == nil || s.systemNoticeService == nil {
+		return
+	}
+	s.systemNoticeService.NotifyAccountChanged(ctx, before, after)
+}
+
+func (s *adminServiceImpl) notifyGroupRateMultiplierChanged(ctx context.Context, group *Group, before, after float64, event string) {
+	if s == nil || s.systemNoticeService == nil || group == nil {
+		return
+	}
+	invalidateUserGroupRateCacheByGroupID(group.ID)
+	userIDs := collectGroupNoticeUserIDs(ctx, group, s.apiKeyRepo, s.userSubRepo, s.userGroupRateRepo)
+	s.systemNoticeService.NotifyGroupRateMultiplierChanged(ctx, userIDs, group, before, after, event)
+}
+
+func (s *adminServiceImpl) groupForRateNotice(ctx context.Context, groupID int64) *Group {
+	if s == nil || s.groupRepo == nil || groupID <= 0 {
+		return &Group{ID: groupID}
+	}
+	group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+	if err != nil {
+		logger.LegacyPrintf("service.admin", "failed to load group for rate notice: group_id=%d err=%v", groupID, err)
+		return &Group{ID: groupID}
+	}
+	return group
+}
+
+func (s *adminServiceImpl) notifyUserGroupRateChanges(ctx context.Context, userID int64, beforeRates map[int64]float64, changedRates map[int64]*float64) {
+	if s == nil || s.systemNoticeService == nil || s.groupRepo == nil || userID <= 0 || changedRates == nil {
+		return
+	}
+	invalidateUserGroupRateCacheByUserID(userID)
+	if len(changedRates) == 0 {
+		for groupID, before := range beforeRates {
+			group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+			if err != nil {
+				logger.LegacyPrintf("service.admin", "failed to load group for user group rate notice: group_id=%d err=%v", groupID, err)
+				continue
+			}
+			beforeRate := before
+			s.systemNoticeService.NotifyUserGroupRateChanged(ctx, userID, group, &beforeRate, nil)
+		}
+		return
+	}
+	for groupID, afterRate := range changedRates {
+		var beforePtr *float64
+		if before, ok := beforeRates[groupID]; ok {
+			beforeRate := before
+			beforePtr = &beforeRate
+		}
+		if !noticeOptionalRatesChanged(beforePtr, afterRate) {
+			continue
+		}
+		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+		if err != nil {
+			logger.LegacyPrintf("service.admin", "failed to load group for user group rate notice: group_id=%d err=%v", groupID, err)
+			continue
+		}
+		s.systemNoticeService.NotifyUserGroupRateChanged(ctx, userID, group, beforePtr, afterRate)
+	}
+}
+
+func (s *adminServiceImpl) notifyClearedGroupRateMultipliers(ctx context.Context, group *Group, beforeRates map[int64]float64) {
+	if s == nil || s.systemNoticeService == nil || group == nil {
+		return
+	}
+	invalidateUserGroupRateCacheByGroupID(group.ID)
+	for userID, before := range beforeRates {
+		beforeRate := before
+		s.systemNoticeService.NotifyUserGroupRateChanged(ctx, userID, group, &beforeRate, nil)
+	}
+}
+
+func (s *adminServiceImpl) notifySyncedGroupRateMultipliers(ctx context.Context, group *Group, beforeRates map[int64]float64, entries []GroupRateMultiplierInput) {
+	if s == nil || s.systemNoticeService == nil || group == nil {
+		return
+	}
+	invalidateUserGroupRateCacheByGroupID(group.ID)
+	afterRates := make(map[int64]float64, len(entries))
+	for _, entry := range entries {
+		if entry.UserID > 0 {
+			afterRates[entry.UserID] = entry.RateMultiplier
+		}
+	}
+	userIDs := make(map[int64]struct{}, len(beforeRates)+len(afterRates))
+	for userID := range beforeRates {
+		userIDs[userID] = struct{}{}
+	}
+	for userID := range afterRates {
+		userIDs[userID] = struct{}{}
+	}
+	for userID := range userIDs {
+		var beforePtr *float64
+		if before, ok := beforeRates[userID]; ok {
+			beforeRate := before
+			beforePtr = &beforeRate
+		}
+		var afterPtr *float64
+		if after, ok := afterRates[userID]; ok {
+			afterRate := after
+			afterPtr = &afterRate
+		}
+		if !noticeOptionalRatesChanged(beforePtr, afterPtr) {
+			continue
+		}
+		s.systemNoticeService.NotifyUserGroupRateChanged(ctx, userID, group, beforePtr, afterPtr)
+	}
+}
+
+func collectGroupNoticeUserIDs(ctx context.Context, group *Group, apiKeyRepo APIKeyRepository, userSubRepo UserSubscriptionRepository, userGroupRateRepo UserGroupRateRepository) []int64 {
+	if group == nil || group.ID <= 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{})
+	customRateUserIDs := make(map[int64]struct{})
+	if userGroupRateRepo != nil {
+		rates, err := userGroupRateRepo.GetRateMultipliersByGroupID(ctx, group.ID)
+		if err != nil {
+			logger.LegacyPrintf("service.admin", "failed to list custom group rates for notice: group_id=%d err=%v", group.ID, err)
+		} else {
+			for userID := range rates {
+				customRateUserIDs[userID] = struct{}{}
+			}
+		}
+	}
+	add := func(userID int64) {
+		if userID <= 0 {
+			return
+		}
+		if _, ok := customRateUserIDs[userID]; ok {
+			return
+		}
+		seen[userID] = struct{}{}
+	}
+	if group.OwnerUserID != nil {
+		add(*group.OwnerUserID)
+	}
+	if apiKeyRepo != nil {
+		params := pagination.PaginationParams{Page: 1, PageSize: 100}
+		for {
+			keys, page, err := apiKeyRepo.ListByGroupID(ctx, group.ID, params)
+			if err != nil {
+				logger.LegacyPrintf("service.admin", "failed to list api keys for group notice: group_id=%d err=%v", group.ID, err)
+				break
+			}
+			for i := range keys {
+				add(keys[i].UserID)
+			}
+			if page == nil || len(keys) == 0 || int64(params.Page*params.PageSize) >= page.Total {
+				break
+			}
+			params.Page++
+		}
+	}
+	if userSubRepo != nil {
+		params := pagination.PaginationParams{Page: 1, PageSize: 100}
+		for {
+			subs, page, err := userSubRepo.ListByGroupID(ctx, group.ID, params)
+			if err != nil {
+				logger.LegacyPrintf("service.admin", "failed to list subscriptions for group notice: group_id=%d err=%v", group.ID, err)
+				break
+			}
+			for i := range subs {
+				if subs[i].IsActive() {
+					add(subs[i].UserID)
+				}
+			}
+			if page == nil || len(subs) == 0 || int64(params.Page*params.PageSize) >= page.Total {
+				break
+			}
+			params.Page++
+		}
+	}
+	userIDs := make([]int64, 0, len(seen))
+	for userID := range seen {
+		userIDs = append(userIDs, userID)
+	}
+	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
+	return userIDs
+}
+
+func (s *adminServiceImpl) notifyBulkAccountsChanged(ctx context.Context, beforeByID map[int64]*Account, accountIDs []int64) {
+	if s == nil || s.systemNoticeService == nil || len(accountIDs) == 0 {
+		return
+	}
+	afterAccounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
+	if err != nil {
+		slog.Warn("admin.account.system_notice_bulk_reload_failed", "error", err)
+		return
+	}
+	for _, after := range afterAccounts {
+		if after == nil {
+			continue
+		}
+		s.notifyAccountChanged(ctx, beforeByID[after.ID], after)
+	}
 }
 
 func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error) {

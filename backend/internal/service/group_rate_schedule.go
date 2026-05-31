@@ -49,6 +49,10 @@ type GroupRateScheduleService struct {
 	repo                 GroupRateScheduleRepository
 	groupRepo            GroupRepository
 	authCacheInvalidator APIKeyAuthCacheInvalidator
+	apiKeyRepo           APIKeyRepository
+	userSubRepo          UserSubscriptionRepository
+	userGroupRateRepo    UserGroupRateRepository
+	systemNoticeService  *SystemNoticeService
 	interval             time.Duration
 	applyMu              sync.Mutex
 	startOnce            sync.Once
@@ -74,6 +78,16 @@ func NewGroupRateScheduleService(
 		stopCh:               make(chan struct{}),
 		doneCh:               make(chan struct{}),
 	}
+}
+
+func (s *GroupRateScheduleService) SetNotificationDependencies(apiKeyRepo APIKeyRepository, userSubRepo UserSubscriptionRepository, userGroupRateRepo UserGroupRateRepository, systemNoticeService *SystemNoticeService) {
+	if s == nil {
+		return
+	}
+	s.apiKeyRepo = apiKeyRepo
+	s.userSubRepo = userSubRepo
+	s.userGroupRateRepo = userGroupRateRepo
+	s.systemNoticeService = systemNoticeService
 }
 
 func (s *GroupRateScheduleService) Start() {
@@ -202,9 +216,12 @@ func (s *GroupRateScheduleService) ApplyGroup(ctx context.Context, groupID int64
 }
 
 func (s *GroupRateScheduleService) applyGroupLocked(ctx context.Context, groupID int64, schedules []GroupRateSchedule, currentMinute int) error {
+	beforeGroup, err := s.groupRepo.GetByIDLite(ctx, groupID)
+	if err != nil {
+		return err
+	}
 	active := findActiveGroupRateSchedule(schedules, currentMinute)
 	var changed bool
-	var err error
 	if active == nil {
 		changed, err = s.repo.RestoreBaseMultiplier(ctx, groupID)
 	} else {
@@ -216,7 +233,28 @@ func (s *GroupRateScheduleService) applyGroupLocked(ctx context.Context, groupID
 	if changed && s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
 	}
+	if changed {
+		invalidateUserGroupRateCacheByGroupID(groupID)
+		afterGroup, reloadErr := s.groupRepo.GetByIDLite(ctx, groupID)
+		if reloadErr != nil {
+			logger.LegacyPrintf("service.group_rate_schedule", "reload group for system notice failed: group=%d err=%v", groupID, reloadErr)
+			return nil
+		}
+		s.notifyGroupRateChanged(ctx, afterGroup, beforeGroup.RateMultiplier, afterGroup.RateMultiplier, active)
+	}
 	return nil
+}
+
+func (s *GroupRateScheduleService) notifyGroupRateChanged(ctx context.Context, group *Group, before, after float64, active *GroupRateSchedule) {
+	if s == nil || s.systemNoticeService == nil || group == nil || !groupRateMultiplierChanged(before, after) {
+		return
+	}
+	event := "rate_schedule_restored"
+	if active != nil {
+		event = "rate_schedule_applied"
+	}
+	userIDs := collectGroupNoticeUserIDs(ctx, group, s.apiKeyRepo, s.userSubRepo, s.userGroupRateRepo)
+	s.systemNoticeService.NotifyGroupRateMultiplierChanged(ctx, userIDs, group, before, after, event)
 }
 
 func validateGroupRateSchedules(schedules []GroupRateScheduleInput) error {

@@ -133,6 +133,33 @@ func (r *userGroupRateRepository) GetByGroupID(ctx context.Context, groupID int6
 	return result, nil
 }
 
+// GetRateMultipliersByGroupID 获取指定分组下所有非 NULL 用户专属 rate_multiplier。
+func (r *userGroupRateRepository) GetRateMultipliersByGroupID(ctx context.Context, groupID int64) (map[int64]float64, error) {
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT user_id, rate_multiplier
+		FROM user_group_rate_multipliers
+		WHERE group_id = $1 AND rate_multiplier IS NOT NULL
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[int64]float64)
+	for rows.Next() {
+		var userID int64
+		var rate float64
+		if err := rows.Scan(&userID, &rate); err != nil {
+			return nil, err
+		}
+		result[userID] = rate
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetByUserAndGroup 获取用户在特定分组的专属 rate_multiplier（NULL 返回 nil）
 func (r *userGroupRateRepository) GetByUserAndGroup(ctx context.Context, userID, groupID int64) (*float64, error) {
 	query := `SELECT rate_multiplier FROM user_group_rate_multipliers WHERE user_id = $1 AND group_id = $2`

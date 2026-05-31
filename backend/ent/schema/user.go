@@ -127,6 +127,12 @@ func (User) Edges() []ent.Edge {
 		edge.To("subscriptions", UserSubscription.Type),
 		edge.To("assigned_subscriptions", UserSubscription.Type),
 		edge.To("announcement_reads", AnnouncementRead.Type),
+		edge.To("conversations", Conversation.Type),
+		edge.To("assigned_conversations", Conversation.Type),
+		edge.To("sent_conversation_messages", ConversationMessage.Type),
+		edge.To("support_threads", SupportThread.Type),
+		edge.To("assigned_support_threads", SupportThread.Type),
+		edge.To("sent_support_messages", SupportMessage.Type),
 		edge.To("allowed_groups", Group.Type).
 			Through("user_allowed_groups", UserAllowedGroup.Type),
 		edge.To("usage_logs", UsageLog.Type),

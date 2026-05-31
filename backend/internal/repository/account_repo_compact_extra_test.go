@@ -12,3 +12,13 @@ func TestShouldEnqueueSchedulerOutboxForExtraUpdates_CompactCapabilityKeysAreRel
 		t.Fatalf("expected compact capability updates to enqueue scheduler outbox")
 	}
 }
+
+func TestShouldEnqueueSchedulerOutboxForExtraUpdates_CodexLimitKeysAreRelevant(t *testing.T) {
+	updates := map[string]any{
+		"codex_5h_limit_percent": 80.0,
+	}
+
+	if !shouldEnqueueSchedulerOutboxForExtraUpdates(updates) {
+		t.Fatalf("expected codex limit updates to enqueue scheduler outbox")
+	}
+}

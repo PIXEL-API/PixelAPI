@@ -513,8 +513,35 @@
         </div>
       </div>
 
-      <!-- Concurrency & Priority -->
+      <!-- Scheduling and account settings -->
       <div class="grid grid-cols-2 gap-4 border-t border-gray-200 pt-4 dark:border-dark-600 lg:grid-cols-4">
+        <div v-if="canManageAccountLevel">
+          <div class="mb-3 flex items-center justify-between">
+            <label
+              id="bulk-edit-account-level-label"
+              class="input-label mb-0"
+              for="bulk-edit-account-level-enabled"
+            >
+              {{ t('admin.accounts.accountLevel.label') }}
+            </label>
+            <input
+              v-model="enableAccountLevel"
+              id="bulk-edit-account-level-enabled"
+              type="checkbox"
+              aria-controls="bulk-edit-account-level"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+          </div>
+          <Select
+            v-model="accountLevel"
+            id="bulk-edit-account-level"
+            :options="accountLevelOptions"
+            :disabled="!enableAccountLevel"
+            :class="!enableAccountLevel && 'cursor-not-allowed opacity-50'"
+            aria-labelledby="bulk-edit-account-level-label"
+          />
+          <p class="input-hint">{{ t('admin.accounts.accountLevel.manualHint') }}</p>
+        </div>
         <div>
           <div class="mb-3 flex items-center justify-between">
             <label
@@ -772,6 +799,57 @@
         </div>
       </div>
 
+      <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <label
+            id="bulk-edit-openai-codex-quota-limit-label"
+            class="input-label mb-0"
+            for="bulk-edit-openai-codex-quota-limit-enabled"
+          >
+            {{ t('admin.accounts.openai.codexQuotaLimit') }}
+          </label>
+          <input
+            v-model="enableCodexQuotaLimit"
+            id="bulk-edit-openai-codex-quota-limit-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-codex-quota-limit"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-codex-quota-limit"
+          :class="!enableCodexQuotaLimit && 'pointer-events-none opacity-50'"
+        >
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.codexQuotaLimitDesc') }}
+          </p>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label class="input-label text-xs">{{ t('admin.accounts.openai.codex5hLimitPercent') }}</label>
+              <input
+                v-model.number="bulkCodex5hLimitPercent"
+                type="number"
+                min="1"
+                max="100"
+                step="0.1"
+                class="input"
+              />
+            </div>
+            <div>
+              <label class="input-label text-xs">{{ t('admin.accounts.openai.codex7dLimitPercent') }}</label>
+              <input
+                v-model.number="bulkCodex7dLimitPercent"
+                type="number"
+                min="1"
+                max="100"
+                step="0.1"
+                class="input"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI API Key WS mode -->
       <div v-if="!isUserScope && allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1021,7 +1099,7 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
 import type { AccountBatchTask } from '@/api/accounts'
-import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType, GroupPlatform } from '@/types'
+import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType, AccountLevel, GroupPlatform } from '@/types'
 import type { AccountApiScope } from '@/composables/useAccountOAuth'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -1091,6 +1169,15 @@ const targetPreviewCount = computed(() => props.target?.previewCount ?? props.ac
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
 const isMixedPlatform = computed(() => targetSelectedPlatforms.value.length > 1)
+const targetFilterPlatform = computed(() => {
+  const platform = props.target?.filters?.platform
+  return typeof platform === 'string' ? platform : ''
+})
+const targetIsKnownOpenAIOnly = computed(() =>
+  targetMode.value === 'filtered'
+    ? targetFilterPlatform.value === 'openai'
+    : targetSelectedPlatforms.value.length === 1 && targetSelectedPlatforms.value[0] === 'openai'
+)
 const bulkGroupPlatform = computed<GroupPlatform | undefined>(() => {
   if (targetSelectedPlatforms.value.length !== 1) return undefined
   return targetSelectedPlatforms.value[0] as GroupPlatform
@@ -1123,6 +1210,7 @@ const canManageModelRestriction = computed(
       targetSelectedTypes.value.every(type => type === 'oauth' || type === 'setup-token'))
 )
 const canManageCustomErrorCodes = computed(() => !isUserScope.value)
+const canManageAccountLevel = computed(() => !isUserScope.value && targetIsKnownOpenAIOnly.value)
 
 const allOpenAIPassthroughCapable = computed(() => {
   return (
@@ -1191,6 +1279,7 @@ const enableProxy = ref(false)
 const enableConcurrency = ref(false)
 const enableLoadFactor = ref(false)
 const enablePriority = ref(false)
+const enableAccountLevel = ref(false)
 const enableRateMultiplier = ref(false)
 const enableShareMode = ref(false)
 const enableStatus = ref(false)
@@ -1199,6 +1288,7 @@ const enableOpenAIPassthrough = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
 const enableCodexCLIOnly = ref(false)
+const enableCodexQuotaLimit = ref(false)
 const enableRpmLimit = ref(false)
 
 // State - field values
@@ -1217,6 +1307,7 @@ const proxyId = ref<number | null>(null)
 const concurrency = ref(1)
 const loadFactor = ref<number | null>(null)
 const priority = ref(1)
+const accountLevel = ref<AccountLevel>('unknown')
 const rateMultiplier = ref(1)
 const shareMode = ref<'private' | 'public'>('private')
 const status = ref<'active' | 'inactive' | 'disabled'>('active')
@@ -1225,6 +1316,9 @@ const openaiPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+const CODEX_QUOTA_DEFAULT_LIMIT_PERCENT = 100
+const bulkCodex5hLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
+const bulkCodex7dLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const rpmLimitEnabled = ref(false)
 const bulkBaseRpm = ref<number | null>(null)
 const bulkRpmStrategy = ref<'tiered' | 'sticky_exempt'>('tiered')
@@ -1250,6 +1344,13 @@ const commonErrorCodes = [
 const statusOptions = computed(() => [
   { value: 'active', label: t('common.active') },
   { value: isUserScope.value ? 'disabled' : 'inactive', label: t('common.inactive') }
+])
+const accountLevelOptions = computed(() => [
+  { value: 'unknown', label: t('admin.accounts.accountLevel.unknown') },
+  { value: 'free', label: t('admin.accounts.accountLevel.free') },
+  { value: 'plus', label: t('admin.accounts.accountLevel.plus') },
+  { value: 'pro', label: t('admin.accounts.accountLevel.pro') },
+  { value: 'team', label: t('admin.accounts.accountLevel.team') }
 ])
 const shareModeOptions = computed(() => [
   { value: 'private', label: t('userAccounts.privateMode') },
@@ -1351,6 +1452,11 @@ const buildModelMappingObject = (): Record<string, string> | null => {
   )
 }
 
+const normalizeCodexQuotaLimitInput = (value: number) => {
+  if (!Number.isFinite(value)) return CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
+  return Math.min(100, Math.max(1, value))
+}
+
 const buildUpdatePayload = (): Record<string, unknown> | null => {
   const updates: Record<string, unknown> = {}
   const credentials: Record<string, unknown> = {}
@@ -1379,6 +1485,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enablePriority.value) {
     updates.priority = priority.value
+  }
+
+  if (canManageAccountLevel.value && enableAccountLevel.value) {
+    updates.account_level = accountLevel.value
   }
 
   if (isUserScope.value) {
@@ -1473,6 +1583,14 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.codex_cli_only = codexCLIOnlyEnabled.value
   }
 
+  if (enableCodexQuotaLimit.value) {
+    const extra = ensureExtra()
+    bulkCodex5hLimitPercent.value = normalizeCodexQuotaLimitInput(Number(bulkCodex5hLimitPercent.value))
+    bulkCodex7dLimitPercent.value = normalizeCodexQuotaLimitInput(Number(bulkCodex7dLimitPercent.value))
+    extra.codex_5h_limit_percent = bulkCodex5hLimitPercent.value
+    extra.codex_7d_limit_percent = bulkCodex7dLimitPercent.value
+  }
+
   // RPM limit settings (写入 extra 字段)
   if (enableRpmLimit.value) {
     const extra = ensureExtra()
@@ -1536,10 +1654,14 @@ const sanitizeBulkUpdatePayload = (payload: Record<string, unknown>) => {
   if (!canManageGroups.value) {
     delete next.group_ids
   }
+  if (!canManageAccountLevel.value) {
+    delete next.account_level
+  }
   if (isUserScope.value) {
     delete next.status
     delete next.concurrency
     delete next.load_factor
+    delete next.account_level
     if ('priority' in next) {
       next.priority = typeof next.priority === 'number' && Number(next.priority) > 0
         ? next.priority
@@ -1608,6 +1730,7 @@ const handleSubmit = async () => {
     enableConcurrency.value ||
     enableLoadFactor.value ||
     enablePriority.value ||
+    (canManageAccountLevel.value && enableAccountLevel.value) ||
     (canManageBillingRate.value && enableRateMultiplier.value) ||
     (isUserScope.value && enableShareMode.value) ||
     enableStatus.value ||
@@ -1615,6 +1738,7 @@ const handleSubmit = async () => {
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
     enableCodexCLIOnly.value ||
+    enableCodexQuotaLimit.value ||
     enableRpmLimit.value ||
     userMsgQueueMode.value !== null
 
@@ -1717,6 +1841,7 @@ watch(
       enableConcurrency.value = false
       enableLoadFactor.value = false
       enablePriority.value = false
+      enableAccountLevel.value = false
       enableRateMultiplier.value = false
       enableShareMode.value = false
       enableStatus.value = false
@@ -1725,6 +1850,7 @@ watch(
       enableOpenAIWSMode.value = false
       enableOpenAIAPIKeyWSMode.value = false
       enableCodexCLIOnly.value = false
+      enableCodexQuotaLimit.value = false
       enableRpmLimit.value = false
 
       // Reset all values
@@ -1740,6 +1866,7 @@ watch(
       concurrency.value = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : 1
       loadFactor.value = null
       priority.value = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+      accountLevel.value = 'unknown'
       rateMultiplier.value = 1
       shareMode.value = 'private'
       status.value = 'active'
@@ -1747,6 +1874,8 @@ watch(
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       codexCLIOnlyEnabled.value = false
+      bulkCodex5hLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
+      bulkCodex7dLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
       rpmLimitEnabled.value = false
       bulkBaseRpm.value = null
       bulkRpmStrategy.value = 'tiered'

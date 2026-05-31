@@ -412,6 +412,93 @@ export interface AnnouncementUserReadStatus {
   read_at?: string
 }
 
+// ==================== Conversation Types ====================
+
+export type ConversationStatus = 'open' | 'pending_user' | 'pending_admin' | 'resolved' | 'closed'
+export type ConversationPriority = 'low' | 'normal' | 'high' | 'urgent'
+export type ConversationType = 'support' | 'notice' | 'billing' | 'subscription' | 'account' | 'security'
+export type ConversationKind = 'ticket' | 'system_notice'
+export type ConversationSenderType = 'user' | 'admin' | 'system'
+export type ConversationMessageType = 'text' | 'notice' | 'operation_log' | 'system_event'
+export type ConversationContentFormat = 'plain' | 'markdown'
+
+export interface Conversation {
+  id: number
+  user_id: number
+  user_email?: string
+  user_name?: string
+  subject: string
+  kind: ConversationKind
+  referenced_notice_id?: number | null
+  status: ConversationStatus
+  priority: ConversationPriority
+  type: ConversationType
+  source?: string
+  source_id?: string
+  assigned_admin_id?: number | null
+  last_message_id?: number | null
+  last_message_sender_type: ConversationSenderType | ''
+  last_message_excerpt: string
+  last_message_at: string
+  user_last_read_message_id?: number | null
+  user_last_read_at?: string | null
+  admin_last_read_message_id?: number | null
+  admin_last_read_at?: string | null
+  user_unread: boolean
+  admin_unread?: boolean
+  created_at: string
+  updated_at: string
+  messages?: ConversationMessage[]
+}
+
+export interface ConversationMessage {
+  id: number
+  conversation_id: number
+  sender_type: ConversationSenderType
+  sender_id?: number | null
+  message_type: ConversationMessageType
+  content_format: ConversationContentFormat
+  content: string
+  metadata?: Record<string, unknown>
+  created_at: string
+}
+
+export interface ConversationListFilters {
+  kind?: ConversationKind | ''
+  status?: ConversationStatus | ''
+  priority?: ConversationPriority | ''
+  type?: ConversationType | ''
+  search?: string
+  unread_only?: boolean
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+}
+
+export interface AdminConversationListFilters extends ConversationListFilters {
+  user_id?: number | null
+  assigned_admin_id?: number | null
+}
+
+export interface CreateConversationRequest {
+  subject: string
+  content: string
+  priority?: ConversationPriority
+  type?: ConversationType
+  referenced_notice_id?: number | null
+}
+
+export interface CreateAdminConversationRequest extends CreateConversationRequest {
+  user_id: number
+  kind?: ConversationKind
+  source?: string
+  source_id?: string
+  content_format?: ConversationContentFormat
+}
+
+export interface AddConversationMessageRequest {
+  content: string
+}
+
 // ==================== Proxy Node Types ====================
 
 export interface ProxyNode {
@@ -897,6 +984,10 @@ export interface Account {
   rate_limited_at: string | null
   rate_limit_reset_at: string | null
   overload_until: string | null
+  codex_5h_limit_percent?: number | null
+  codex_7d_limit_percent?: number | null
+  codex_quota_protection_reason?: '5h' | '7d' | string | null
+  codex_quota_protection_reset_at?: string | null
   temp_unschedulable_until: string | null
   temp_unschedulable_reason: string | null
 
@@ -1101,10 +1192,12 @@ export interface CodexUsageSnapshot {
 
   // Canonical fields (normalized by backend, use these preferentially)
   codex_5h_used_percent?: number // 5-hour window usage percentage
+  codex_5h_limit_percent?: number // User configured 5-hour protection threshold percentage
   codex_5h_reset_after_seconds?: number // Seconds until 5h window reset
   codex_5h_reset_at?: string // 5-hour window absolute reset time (RFC3339)
   codex_5h_window_minutes?: number // 5h window in minutes (should be ~300)
   codex_7d_used_percent?: number // 7-day window usage percentage
+  codex_7d_limit_percent?: number // User configured 7-day protection threshold percentage
   codex_7d_reset_after_seconds?: number // Seconds until 7d window reset
   codex_7d_reset_at?: string // 7-day window absolute reset time (RFC3339)
   codex_7d_window_minutes?: number // 7d window in minutes (should be ~10080)

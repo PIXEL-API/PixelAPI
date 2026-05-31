@@ -8,10 +8,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -30,6 +32,8 @@ type UserAccountHandler struct {
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
 	accountBatchTaskService *service.AccountBatchTaskService
+	levelVerifyMu           sync.Mutex
+	levelVerifyWindows      map[int64]levelVerifyWindow
 }
 
 func NewUserAccountHandler(
@@ -55,6 +59,7 @@ func NewUserAccountHandler(
 		geminiOAuthService:      geminiOAuthService,
 		antigravityOAuthService: antigravityOAuthService,
 		accountBatchTaskService: accountBatchTaskService,
+		levelVerifyWindows:      make(map[int64]levelVerifyWindow),
 	}
 	h.registerAccountBatchExecutors()
 	return h
@@ -132,12 +137,26 @@ type bulkDeleteUserAccountsRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
 
+type verifyUserAccountLevelRequest struct {
+	TargetLevel string `json:"target_level" binding:"required,oneof=free plus"`
+}
+
+type verifyUserAccountLevelResponse struct {
+	Account      *dto.Account `json:"account"`
+	Verified     bool         `json:"verified"`
+	TargetLevel  string       `json:"target_level"`
+	AppliedLevel string       `json:"applied_level"`
+	Reason       string       `json:"reason,omitempty"`
+	ErrorMessage string       `json:"error_message,omitempty"`
+}
+
 type userAccountBatchTaskRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
 
 const userOwnedDefaultConcurrency = 3
 const userOwnedDefaultPriority = 1
+const userAccountLevelVerifyLimitPerMinute = 5
 
 type userOAuthProxyRequest struct {
 	ProxyID *int64 `json:"proxy_id"`
@@ -200,6 +219,12 @@ type userTestAccountRequest struct {
 }
 
 const userPublicShareValidationTimeout = 30 * time.Second
+const userAccountLevelVerificationTimeout = 75 * time.Second
+
+type levelVerifyWindow struct {
+	start time.Time
+	count int
+}
 
 func bindOptionalJSON(c *gin.Context, req any) bool {
 	if err := c.ShouldBindJSON(req); err != nil {
@@ -308,6 +333,94 @@ func publicShareValidationErrorMessage(err error) string {
 		return strings.TrimSpace(appErr.Message)
 	}
 	return strings.TrimSpace(err.Error())
+}
+
+func accountLevelVerificationMessage(err error, result *service.ScheduledTestResult) string {
+	if result != nil && strings.TrimSpace(result.ErrorMessage) != "" {
+		return strings.TrimSpace(result.ErrorMessage)
+	}
+	return publicShareValidationErrorMessage(err)
+}
+
+func isOpenAIPlusAccessFailure(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+
+	accessTerms := []string{
+		"403",
+		"404",
+		"forbidden",
+		"permission",
+		"does not have access",
+		"do not have access",
+		"not available",
+		"not found",
+		"unsupported model",
+		"model_not_found",
+		"model not found",
+		"unknown model",
+	}
+	for _, term := range accessTerms {
+		if strings.Contains(normalized, term) {
+			return true
+		}
+	}
+	return strings.Contains(normalized, "model") &&
+		(strings.Contains(normalized, "not") || strings.Contains(normalized, "access") || strings.Contains(normalized, "available"))
+}
+
+func isOpenAIPlusTransientFailure(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	for _, term := range []string{
+		"429",
+		"rate limit",
+		"timeout",
+		"deadline exceeded",
+		"temporarily",
+		"temporary",
+		"try again",
+		"connection",
+		"network",
+		"proxy",
+		"cloudflare",
+		"502",
+		"503",
+		"504",
+		"529",
+	} {
+		if strings.Contains(normalized, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *UserAccountHandler) allowAccountLevelVerification(accountID int64, now time.Time) bool {
+	if h == nil {
+		return false
+	}
+	h.levelVerifyMu.Lock()
+	defer h.levelVerifyMu.Unlock()
+
+	if h.levelVerifyWindows == nil {
+		h.levelVerifyWindows = make(map[int64]levelVerifyWindow)
+	}
+	window := h.levelVerifyWindows[accountID]
+	if window.start.IsZero() || now.Sub(window.start) >= time.Minute {
+		h.levelVerifyWindows[accountID] = levelVerifyWindow{start: now, count: 1}
+		return true
+	}
+	if window.count >= userAccountLevelVerifyLimitPerMinute {
+		return false
+	}
+	window.count++
+	h.levelVerifyWindows[accountID] = window
+	return true
 }
 
 func isOpenAIUsageLimitReachedValidationError(message string) bool {
@@ -1262,6 +1375,131 @@ func (h *UserAccountHandler) Test(c *gin.Context) {
 	if err := h.accountTestService.TestAccountConnection(c, accountID, req.ModelID, req.Prompt, req.Mode); err != nil {
 		return
 	}
+}
+
+func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	var req verifyUserAccountLevelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	targetLevel := service.NormalizeAccountLevel(req.TargetLevel)
+	if targetLevel != service.AccountLevelFree && targetLevel != service.AccountLevelPlus {
+		response.BadRequest(c, "target_level must be free or plus")
+		return
+	}
+
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeOAuth {
+		response.ErrorFrom(c, infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_UNSUPPORTED", "account level verification only supports OpenAI OAuth accounts"))
+		return
+	}
+
+	currentLevel := service.NormalizeAccountLevel(account.AccountLevel)
+	if targetLevel == service.AccountLevelPlus {
+		switch currentLevel {
+		case service.AccountLevelPlus, service.AccountLevelPro, service.AccountLevelTeam:
+			response.Success(c, verifyUserAccountLevelResponse{
+				Account:      dto.AccountFromService(account),
+				Verified:     true,
+				TargetLevel:  targetLevel,
+				AppliedLevel: currentLevel,
+				Reason:       "already_has_plus_access",
+			})
+			return
+		}
+	}
+
+	if targetLevel == service.AccountLevelFree {
+		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(c.Request.Context(), subject.UserID, accountID, service.AccountLevelFree, "")
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, verifyUserAccountLevelResponse{
+			Account:      dto.AccountFromService(updated),
+			Verified:     true,
+			TargetLevel:  targetLevel,
+			AppliedLevel: updated.AccountLevel,
+		})
+		return
+	}
+
+	if !h.allowAccountLevelVerification(accountID, time.Now()) {
+		response.ErrorFrom(c, infraerrors.TooManyRequests("ACCOUNT_LEVEL_VERIFY_RATE_LIMITED", "too many account level verifications, please try again later"))
+		return
+	}
+	if h.accountTestService == nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("ACCOUNT_TEST_SERVICE_UNAVAILABLE", "account test service is unavailable"))
+		return
+	}
+	testCtx, cancel := context.WithTimeout(c.Request.Context(), userAccountLevelVerificationTimeout)
+	defer cancel()
+	result, testErr := h.accountTestService.RunTestBackground(testCtx, accountID, openaipkg.DefaultPlusVerificationModel)
+	if testErr == nil && result != nil && strings.TrimSpace(result.Status) == "success" {
+		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(c.Request.Context(), subject.UserID, accountID, service.AccountLevelPlus, "")
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, verifyUserAccountLevelResponse{
+			Account:      dto.AccountFromService(updated),
+			Verified:     true,
+			TargetLevel:  targetLevel,
+			AppliedLevel: updated.AccountLevel,
+		})
+		return
+	}
+
+	message := accountLevelVerificationMessage(testErr, result)
+	if message == "" {
+		message = "OpenAI plus verification failed"
+	}
+	if isOpenAIPlusAccessFailure(message) && !isOpenAIPlusTransientFailure(message) {
+		updated, err := h.accountService.SetOwnedOpenAIAccountLevel(c.Request.Context(), subject.UserID, accountID, service.AccountLevelFree, message)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, verifyUserAccountLevelResponse{
+			Account:      dto.AccountFromService(updated),
+			Verified:     false,
+			TargetLevel:  targetLevel,
+			AppliedLevel: updated.AccountLevel,
+			Reason:       "plus_access_unavailable",
+			ErrorMessage: message,
+		})
+		return
+	}
+
+	current, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, verifyUserAccountLevelResponse{
+		Account:      dto.AccountFromService(current),
+		Verified:     false,
+		TargetLevel:  targetLevel,
+		AppliedLevel: current.AccountLevel,
+		Reason:       "plus_verification_unavailable",
+		ErrorMessage: message,
+	})
 }
 
 func (h *UserAccountHandler) refreshOwnedAccount(ctx context.Context, ownerUserID int64, account *service.Account) (*service.Account, string, error) {

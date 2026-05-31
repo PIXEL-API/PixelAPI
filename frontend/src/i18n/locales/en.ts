@@ -344,6 +344,7 @@ export default {
   nav: {
     dashboard: 'Dashboard',
     announcements: 'Announcements',
+    conversations: 'Messages',
     apiKeys: 'API Keys',
     usage: 'Usage',
     redeem: 'Redeem',
@@ -756,6 +757,16 @@ export default {
     shareValidationApproved: 'Public sharing validation passed',
     shareValidationStillPending: 'Revalidation finished, but the account is still pending. Check the validation hint for the reason.',
     shareValidationFailedToRun: 'Failed to revalidate public sharing',
+    setFreeLevel: 'Mark as Free',
+    verifyPlus: 'Verify Plus',
+    levelUpdatingFree: 'Updating account level...',
+    levelVerifyingPlus: 'Verifying Plus access with gpt-5.4...',
+    levelFreeUpdated: 'Account level updated to Free',
+    levelPlusVerified: 'Plus verification passed and account level was updated',
+    levelPlusRejected: 'Plus verification did not pass. The account was kept or changed back to Free.',
+    levelPlusRejectedWithReason: 'Plus verification did not pass: {reason}',
+    levelVerifyFailed: 'Failed to verify account level',
+    levelVerifyInProgress: 'An account level verification is already running. Please try again later.',
     noGroups: 'No groups',
     privateDefaultGroupOnly: 'Private default group only',
     allPlatforms: 'All Platforms',
@@ -3339,8 +3350,10 @@ export default {
         overloaded: 'Overloaded',
         tempUnschedulable: 'Temp Unschedulable',
         quotaExceeded: 'Quota Exceeded',
+        codexQuotaProtected: 'Quota Protected',
         unschedulable: 'Unschedulable',
         rateLimitedUntil: 'Rate limited and removed from scheduling. Auto resumes at {time}',
+        codexQuotaProtectedUntil: 'Codex {window} usage reached the configured limit and was removed from scheduling. Auto resumes at {time}',
         rateLimitedAutoResume: 'Auto resumes in {time}',
         modelRateLimitedUntil: '{model} rate limited until {time}',
         modelCreditOveragesUntil: '{model} using AI Credits until {time}',
@@ -3629,6 +3642,11 @@ export default {
         codexCLIOnly: 'Codex official clients only',
         codexCLIOnlyDesc:
           'Only applies to OpenAI OAuth. When enabled, only Codex official client families are allowed; when disabled, the gateway bypasses this restriction and keeps existing behavior.',
+        codexQuotaLimit: 'Codex quota protection',
+        codexQuotaLimitDesc:
+          'Only applies to OpenAI OAuth. When 5h or 7d usage reaches this percentage, the account is paused from scheduling until the window resets. 100% keeps the original quota behavior.',
+        codex5hLimitPercent: '5h limit percent',
+        codex7dLimitPercent: '7d limit percent',
         compactMode: 'Compact mode',
         compactModeDesc:
           'Controls how this account participates in /responses/compact routing. Auto follows probe results, Force On always allows, Force Off always excludes.',
@@ -4615,6 +4633,48 @@ export default {
       failedToDelete: 'Failed to delete announcement',
       failedToLoadReadStatus: 'Failed to load read status',
       deleteConfirm: 'Are you sure you want to delete this announcement? This action cannot be undone.'
+    },
+
+    conversations: {
+      title: 'Support Tickets',
+      description: 'Handle user tickets, reply to users, and track unread messages',
+      createConversation: 'Message User',
+      searchPlaceholder: 'Search subject, user, or messages...',
+      unreadCount: '{count} unread',
+      allPriority: 'All Priority',
+      allType: 'All Type',
+      userId: 'User ID',
+      assignedAdminId: 'Assignee ID',
+      source: 'Source',
+      assign: 'Assign',
+      unassign: 'Unassign',
+      assigneeValue: 'Assignee: {id}',
+      userIdValue: 'User #{id}',
+      replyPlaceholder: 'Write an admin reply...',
+      empty: 'No tickets',
+      emptyDescription: 'Message a user or wait for user-created tickets.',
+      noSelection: 'Select a ticket',
+      noSelectionDescription: 'Select a ticket on the left to view messages and update status.',
+      loadFailed: 'Failed to load tickets',
+      loadMessagesFailed: 'Failed to load messages',
+      createFailed: 'Failed to send message',
+      createSuccess: 'Message sent',
+      statusUpdated: 'Status updated',
+      statusUpdateFailed: 'Failed to update status',
+      assigneeUpdated: 'Assignee updated',
+      assigneeUpdateFailed: 'Failed to update assignee',
+      statusLabels: {
+        open: 'Open',
+        pending_user: 'Waiting for user',
+        pending_admin: 'Needs my reply',
+        resolved: 'Resolved',
+        closed: 'Closed'
+      },
+      senderLabels: {
+        user: 'User',
+        admin: 'Admin',
+        system: 'System'
+      }
     },
 
     // Promo Codes
@@ -6728,6 +6788,83 @@ export default {
     emptyDescription: 'There are no system announcements at this time',
     readStatus: 'You have read this announcement',
     markReadHint: 'Click "Mark as read" to mark this announcement'
+  },
+
+  conversations: {
+    title: 'Support Tickets',
+    description: 'Talk with administrators, receive notices, and track progress',
+    newConversation: 'New Ticket',
+    startTicket: 'Start Ticket',
+    defaultSubject: 'Support Ticket',
+    searchPlaceholder: 'Search subject or messages...',
+    allKind: 'All Tickets',
+    allStatus: 'All Status',
+    allMessages: 'All Messages',
+    unreadOnly: 'Unread Only',
+    unread: 'Unread',
+    markRead: 'Mark Read',
+    close: 'Close Ticket',
+    closed: 'Ticket closed',
+    closedPlaceholder: 'This ticket is closed and cannot be replied to',
+    reopenPlaceholder: 'Write a new issue to reopen this ticket...',
+    replyPlaceholder: 'Write a reply...',
+    send: 'Send',
+    sent: 'Message sent',
+    empty: 'No ticket yet',
+    emptyDescription: 'Start a ticket to follow up with administrators and receive notices here.',
+    noSelection: 'No ticket yet',
+    noSelectionDescription: 'Start a ticket and all messages will stay in this single thread.',
+    noMessages: 'No messages yet',
+    subject: 'Subject',
+    content: 'Content',
+    priority: 'Priority',
+    type: 'Type',
+    kind: 'Message Type',
+    referencedNoticeId: 'Referenced Notice ID',
+    referencedNoticeIdPlaceholder: 'Optional, tickets only',
+    referenceNoticeValue: 'Referenced notice #{id}',
+    createTicketFromNotice: 'Start Ticket',
+    clearReferencedNotice: 'Clear Reference',
+    systemNoticeReadOnly: 'System notices appear in the current ticket. You can reply here directly.',
+    referenceSubject: 'About: {subject}',
+    createdAt: 'Created at {time}',
+    loadFailed: 'Failed to load tickets',
+    loadMessagesFailed: 'Failed to load messages',
+    createFailed: 'Failed to start ticket',
+    createSuccess: 'Ticket started',
+    sendFailed: 'Failed to send message',
+    markReadFailed: 'Failed to mark read',
+    closeFailed: 'Failed to close conversation',
+    statusLabels: {
+      open: 'Open',
+      pending_user: 'Waiting for me',
+      pending_admin: 'Waiting for admin',
+      resolved: 'Resolved',
+      closed: 'Closed'
+    },
+    priorityLabels: {
+      low: 'Low',
+      normal: 'Normal',
+      high: 'High',
+      urgent: 'Urgent'
+    },
+    typeLabels: {
+      support: 'Support',
+      notice: 'Notice',
+      billing: 'Billing',
+      subscription: 'Subscription',
+      account: 'Account',
+      security: 'Security'
+    },
+    kindLabels: {
+      ticket: 'Support Tickets',
+      system_notice: 'System Notice'
+    },
+    senderLabels: {
+      user: 'Me',
+      admin: 'Admin',
+      system: 'System'
+    }
   },
 
   // User Subscriptions Page

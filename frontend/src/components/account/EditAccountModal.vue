@@ -1544,10 +1544,10 @@
 
       <!-- OpenAI OAuth Codex 官方客户端限制开关 -->
       <div
-        v-if="!isUserScope && account?.platform === 'openai' && account?.type === 'oauth'"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
-        <div class="flex items-center justify-between">
+        <div v-if="!isUserScope" class="flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.openai.codexCLIOnly') }}</label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -1569,6 +1569,34 @@
               ]"
             />
           </button>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.openai.codexQuotaLimit') }}</label>
+          <p class="input-hint">{{ t('admin.accounts.openai.codexQuotaLimitDesc') }}</p>
+          <div class="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label class="input-label text-xs">{{ t('admin.accounts.openai.codex5hLimitPercent') }}</label>
+              <input
+                v-model.number="codex5hLimitPercent"
+                type="number"
+                min="1"
+                max="100"
+                step="0.1"
+                class="input"
+              />
+            </div>
+            <div>
+              <label class="input-label text-xs">{{ t('admin.accounts.openai.codex7dLimitPercent') }}</label>
+              <input
+                v-model.number="codex7dLimitPercent"
+                type="number"
+                min="1"
+                max="100"
+                step="0.1"
+                class="input"
+              />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2343,6 +2371,9 @@ const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+const CODEX_QUOTA_DEFAULT_LIMIT_PERCENT = 100
+const codex5hLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
+const codex7dLimitPercent = ref(CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
@@ -2536,6 +2567,33 @@ const expiresAtInput = computed({
 })
 
 // Watchers
+const normalizeCodexQuotaLimitInput = (value: number) => {
+  if (!Number.isFinite(value)) return CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
+  return Math.min(100, Math.max(1, value))
+}
+
+const applyCodexQuotaLimitExtra = (extra: Record<string, unknown>) => {
+  if (props.account?.platform !== 'openai' || props.account?.type !== 'oauth') {
+    delete extra.codex_5h_limit_percent
+    delete extra.codex_7d_limit_percent
+    return
+  }
+  const limit5h = normalizeCodexQuotaLimitInput(Number(codex5hLimitPercent.value))
+  const limit7d = normalizeCodexQuotaLimitInput(Number(codex7dLimitPercent.value))
+  codex5hLimitPercent.value = limit5h
+  codex7dLimitPercent.value = limit7d
+  if (limit5h === CODEX_QUOTA_DEFAULT_LIMIT_PERCENT) {
+    delete extra.codex_5h_limit_percent
+  } else {
+    extra.codex_5h_limit_percent = limit5h
+  }
+  if (limit7d === CODEX_QUOTA_DEFAULT_LIMIT_PERCENT) {
+    delete extra.codex_7d_limit_percent
+  } else {
+    extra.codex_7d_limit_percent = limit7d
+  }
+}
+
 const normalizePoolModeRetryCount = (value: number) => {
   if (!Number.isFinite(value)) {
     return DEFAULT_POOL_MODE_RETRY_COUNT
@@ -2600,6 +2658,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
+  codex5hLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
+  codex7dLimitPercent.value = CODEX_QUOTA_DEFAULT_LIMIT_PERCENT
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'apikey')) {
@@ -2627,6 +2687,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       })
       if (newAccount.type === 'oauth') {
         codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
+        codex5hLimitPercent.value = normalizeCodexQuotaLimitInput(
+          Number(extra?.codex_5h_limit_percent ?? newAccount.codex_5h_limit_percent ?? CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
+        )
+        codex7dLimitPercent.value = normalizeCodexQuotaLimitInput(
+          Number(extra?.codex_7d_limit_percent ?? newAccount.codex_7d_limit_percent ?? CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
+        )
       }
       const credentials = newAccount.credentials as Record<string, unknown> | undefined
       const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -3336,6 +3402,7 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
       (next.extra as Record<string, unknown>) ||
       (props.account?.extra as Record<string, unknown>) ||
       {}
+    applyCodexQuotaLimitExtra(currentExtra)
     const templated = applyPersonalAccountTemplate(props.account?.platform || 'anthropic', currentCredentials, currentExtra)
     next.credentials = templated.credentials
     next.extra = templated.extra
@@ -3811,6 +3878,7 @@ const handleSubmit = async () => {
       }
 
       if (props.account.type === 'oauth') {
+        applyCodexQuotaLimitExtra(newExtra)
         if (codexCLIOnlyEnabled.value) {
           newExtra.codex_cli_only = true
         } else if (hadCodexCLIOnlyEnabled) {

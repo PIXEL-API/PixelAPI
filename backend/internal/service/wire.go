@@ -443,8 +443,13 @@ func ProvideGroupRateScheduleService(
 	repo GroupRateScheduleRepository,
 	groupRepo GroupRepository,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	apiKeyRepo APIKeyRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	systemNoticeService *SystemNoticeService,
 ) *GroupRateScheduleService {
 	svc := NewGroupRateScheduleService(repo, groupRepo, authCacheInvalidator, defaultGroupRateScheduleInterval)
+	svc.SetNotificationDependencies(apiKeyRepo, userSubRepo, userGroupRateRepo, systemNoticeService)
 	svc.Start()
 	return svc
 }
@@ -489,10 +494,37 @@ func ProvideAccountService(
 	userSubRepo UserSubscriptionRepository,
 	accountSharePolicyRepo AccountSharePolicyRepository,
 	privateGroupProvisioner UserPrivateGroupProvisioner,
+	systemNoticeService *SystemNoticeService,
 ) *AccountService {
 	svc := NewAccountService(accountRepo, groupRepo, userRepo, userSubRepo)
 	svc.SetAccountSharePolicyRepository(accountSharePolicyRepo)
 	svc.SetUserPrivateGroupProvisioner(privateGroupProvisioner)
+	svc.SetSystemNoticeService(systemNoticeService)
+	return svc
+}
+
+func ProvideSubscriptionService(
+	groupRepo GroupRepository,
+	userSubRepo UserSubscriptionRepository,
+	billingCacheService *BillingCacheService,
+	entClient *dbent.Client,
+	cfg *config.Config,
+	systemNoticeService *SystemNoticeService,
+) *SubscriptionService {
+	svc := NewSubscriptionService(groupRepo, userSubRepo, billingCacheService, entClient, cfg)
+	svc.SetSystemNoticeService(systemNoticeService)
+	return svc
+}
+
+func ProvideAnnouncementService(
+	announcementRepo AnnouncementRepository,
+	readRepo AnnouncementReadRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	systemNoticeService *SystemNoticeService,
+) *AnnouncementService {
+	svc := NewAnnouncementService(announcementRepo, readRepo, userRepo, userSubRepo)
+	svc.SetSystemNoticeService(systemNoticeService)
 	return svc
 }
 
@@ -515,6 +547,7 @@ func ProvideAdminService(
 	userSubRepo UserSubscriptionRepository,
 	privacyClientFactory PrivacyClientFactory,
 	privateGroupProvisioner UserPrivateGroupProvisioner,
+	systemNoticeService *SystemNoticeService,
 ) AdminService {
 	svc := NewAdminService(
 		userRepo,
@@ -535,7 +568,8 @@ func ProvideAdminService(
 		userSubRepo,
 		privacyClientFactory,
 	)
-	return SetAdminUserPrivateGroupProvisioner(svc, privateGroupProvisioner)
+	svc = SetAdminUserPrivateGroupProvisioner(svc, privateGroupProvisioner)
+	return SetAdminSystemNoticeService(svc, systemNoticeService)
 }
 
 // ProviderSet is the Wire provider set for all services
@@ -562,7 +596,9 @@ var ProviderSet = wire.NewSet(
 	NewAccountLeaseService,
 	NewRequestAuthorizeService,
 	NewUsageIngestService,
-	NewAnnouncementService,
+	ProvideAnnouncementService,
+	NewConversationService,
+	NewSystemNoticeService,
 	ProvideAdminService,
 	NewGatewayService,
 	NewOpenAIGatewayService,
@@ -596,7 +632,7 @@ var ProviderSet = wire.NewSet(
 	NewEmailService,
 	ProvideEmailQueueService,
 	NewTurnstileService,
-	NewSubscriptionService,
+	ProvideSubscriptionService,
 	wire.Bind(new(DefaultSubscriptionAssigner), new(*SubscriptionService)),
 	NewUserPrivateGroupService,
 	ProvideConcurrencyService,
@@ -630,14 +666,14 @@ var ProviderSet = wire.NewSet(
 	NewGroupCapacityService,
 	NewChannelService,
 	NewModelPricingResolver,
-	NewContentModerationService,
+	ProvideContentModerationService,
 	NewAffiliateService,
 	NewRevenueService,
 	NewReceiptCodeService,
 	NewWithdrawalService,
 	ProvideShopService,
 	ProvidePaymentConfigService,
-	NewPaymentService,
+	ProvidePaymentService,
 	ProvidePaymentOrderExpiryService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,
@@ -649,6 +685,38 @@ var ProviderSet = wire.NewSet(
 // payment.EncryptionKey type instead of raw []byte, avoiding Wire ambiguity.
 func ProvidePaymentConfigService(entClient *dbent.Client, settingRepo SettingRepository, key payment.EncryptionKey, cfg *config.Config) *PaymentConfigService {
 	return NewPaymentConfigService(entClient, settingRepo, []byte(key), cfg)
+}
+
+func ProvidePaymentService(
+	entClient *dbent.Client,
+	registry *payment.Registry,
+	loadBalancer payment.LoadBalancer,
+	redeemService *RedeemService,
+	subscriptionSvc *SubscriptionService,
+	configService *PaymentConfigService,
+	userRepo UserRepository,
+	groupRepo GroupRepository,
+	affiliateService *AffiliateService,
+	systemNoticeService *SystemNoticeService,
+) *PaymentService {
+	svc := NewPaymentService(entClient, registry, loadBalancer, redeemService, subscriptionSvc, configService, userRepo, groupRepo, affiliateService)
+	svc.SetSystemNoticeService(systemNoticeService)
+	return svc
+}
+
+func ProvideContentModerationService(
+	settingRepo SettingRepository,
+	repo ContentModerationRepository,
+	hashCache ContentModerationHashCache,
+	groupRepo GroupRepository,
+	userRepo UserRepository,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	emailService *EmailService,
+	systemNoticeService *SystemNoticeService,
+) *ContentModerationService {
+	svc := NewContentModerationService(settingRepo, repo, hashCache, groupRepo, userRepo, authCacheInvalidator, emailService)
+	svc.SetSystemNoticeService(systemNoticeService)
+	return svc
 }
 
 func ProvideShopService(

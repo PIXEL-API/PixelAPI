@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ type AnnouncementService struct {
 	readRepo         AnnouncementReadRepository
 	userRepo         UserRepository
 	userSubRepo      UserSubscriptionRepository
+	systemNotice     *SystemNoticeService
 }
 
 func NewAnnouncementService(
@@ -30,6 +32,13 @@ func NewAnnouncementService(
 		userRepo:         userRepo,
 		userSubRepo:      userSubRepo,
 	}
+}
+
+func (s *AnnouncementService) SetSystemNoticeService(noticeService *SystemNoticeService) {
+	if s == nil {
+		return
+	}
+	s.systemNotice = noticeService
 }
 
 type CreateAnnouncementInput struct {
@@ -126,6 +135,7 @@ func (s *AnnouncementService) Create(ctx context.Context, input *CreateAnnouncem
 	if err := s.announcementRepo.Create(ctx, a); err != nil {
 		return nil, fmt.Errorf("create announcement: %w", err)
 	}
+	s.notifyAnnouncementAudience(ctx, a)
 	return a, nil
 }
 
@@ -134,10 +144,11 @@ func (s *AnnouncementService) Update(ctx context.Context, id int64, input *Updat
 		return nil, ErrAnnouncementNilInput
 	}
 
-	a, err := s.announcementRepo.GetByID(ctx, id)
+	before, err := s.announcementRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	a := cloneAnnouncementForNotice(before)
 
 	if input.Title != nil {
 		title := strings.TrimSpace(*input.Title)
@@ -197,6 +208,7 @@ func (s *AnnouncementService) Update(ctx context.Context, id int64, input *Updat
 	if err := s.announcementRepo.Update(ctx, a); err != nil {
 		return nil, fmt.Errorf("update announcement: %w", err)
 	}
+	s.notifyAnnouncementAudienceOnUpdate(ctx, before, a)
 	return a, nil
 }
 
@@ -385,6 +397,72 @@ func (s *AnnouncementService) ListUserReadStatus(
 	}
 
 	return out, page, nil
+}
+
+func (s *AnnouncementService) notifyAnnouncementAudience(ctx context.Context, ann *Announcement) {
+	if s == nil || s.systemNotice == nil {
+		return
+	}
+	s.systemNotice.NotifyAnnouncementActiveUsers(ctx, ann, s.userRepo, s.userSubRepo)
+}
+
+func (s *AnnouncementService) notifyAnnouncementAudienceOnUpdate(ctx context.Context, before, after *Announcement) {
+	if after == nil || s == nil || s.systemNotice == nil {
+		return
+	}
+	now := time.Now()
+	wasActivePopup := before != nil && before.NotifyMode == AnnouncementNotifyModePopup && before.IsActiveAt(now)
+	isActivePopup := after.NotifyMode == AnnouncementNotifyModePopup && after.IsActiveAt(now)
+	if !isActivePopup {
+		return
+	}
+	if !wasActivePopup || announcementNoticeFieldsChanged(before, after) {
+		s.notifyAnnouncementAudience(ctx, after)
+	}
+}
+
+func cloneAnnouncementForNotice(ann *Announcement) *Announcement {
+	if ann == nil {
+		return nil
+	}
+	clone := *ann
+	if ann.StartsAt != nil {
+		t := *ann.StartsAt
+		clone.StartsAt = &t
+	}
+	if ann.EndsAt != nil {
+		t := *ann.EndsAt
+		clone.EndsAt = &t
+	}
+	if ann.CreatedBy != nil {
+		id := *ann.CreatedBy
+		clone.CreatedBy = &id
+	}
+	if ann.UpdatedBy != nil {
+		id := *ann.UpdatedBy
+		clone.UpdatedBy = &id
+	}
+	return &clone
+}
+
+func announcementNoticeFieldsChanged(before, after *Announcement) bool {
+	if before == nil || after == nil {
+		return true
+	}
+	if before.Title != after.Title || before.Content != after.Content || before.Status != after.Status || before.NotifyMode != after.NotifyMode {
+		return true
+	}
+	if !announcementTimePtrEqual(before.StartsAt, after.StartsAt) || !announcementTimePtrEqual(before.EndsAt, after.EndsAt) {
+		return true
+	}
+	return !reflect.DeepEqual(before.Targeting, after.Targeting)
+}
+
+func announcementTimePtrEqual(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 func isValidAnnouncementStatus(status string) bool {

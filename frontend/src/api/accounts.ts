@@ -7,6 +7,18 @@ import { apiClient } from './client'
 import type { Account, AccountUsageInfo, AccountUsageStatsResponse, AdminDataPayload, CreateAccountRequest, PaginatedResponse, UpdateAccountRequest, UserAccountQuotaPoolDashboard, WindowStats } from '@/types'
 
 const USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS = 120000
+const USER_ACCOUNT_LEVEL_VERIFY_TIMEOUT_MS = 90000
+
+export type UserAccountVerifyLevelTarget = 'free' | 'plus'
+
+export interface VerifyAccountLevelResponse {
+  account: Account
+  verified: boolean
+  target_level: UserAccountVerifyLevelTarget
+  applied_level: Account['account_level']
+  reason?: string
+  error_message?: string
+}
 
 export interface UserAccountListFilters {
   platform?: string
@@ -127,6 +139,18 @@ export async function revalidatePublicShare(id: number): Promise<Account> {
     `/accounts/${id}/revalidate-public-share`,
     undefined,
     { timeout: 75000 }
+  )
+  return data
+}
+
+export async function verifyLevel(
+  id: number,
+  targetLevel: UserAccountVerifyLevelTarget
+): Promise<VerifyAccountLevelResponse> {
+  const { data } = await apiClient.post<VerifyAccountLevelResponse>(
+    `/accounts/${id}/verify-level`,
+    { target_level: targetLevel },
+    { timeout: USER_ACCOUNT_LEVEL_VERIFY_TIMEOUT_MS }
   )
   return data
 }
@@ -510,6 +534,7 @@ export const accountsAPI = {
   exportData,
   update,
   revalidatePublicShare,
+  verifyLevel,
   delete: deleteAccount,
   toggleStatus,
   bulkUpdate,

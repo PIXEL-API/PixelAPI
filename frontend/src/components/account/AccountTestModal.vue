@@ -229,6 +229,7 @@ const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
 ])
+const defaultOpenAITestModel = 'gpt-5.5'
 const prioritizedGeminiModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const isImageGenerationModel = (modelId: string) => {
   const modelID = modelId.toLowerCase()
@@ -283,6 +284,9 @@ const loadAvailableModels = async () => {
     if (availableModels.value.length > 0) {
       if (props.account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
+      } else if (props.account.platform === 'openai') {
+        const defaultModel = availableModels.value.find((m) => m.id === defaultOpenAITestModel)
+        selectedModelId.value = defaultModel?.id || availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
         const sonnetModel = availableModels.value.find((m) => m.id.includes('sonnet'))
@@ -302,7 +306,7 @@ const loadAvailableModels = async () => {
 const getUserDefaultTestModels = (account: Account): ClaudeModel[] => {
   switch (account.platform) {
     case 'openai':
-      return [{ id: 'gpt-5.5', type: 'model', display_name: 'gpt-5.5', created_at: '' }]
+      return [{ id: defaultOpenAITestModel, type: 'model', display_name: defaultOpenAITestModel, created_at: '' }]
     case 'gemini':
     case 'antigravity':
       return [{ id: 'gemini-2.5-flash', type: 'model', display_name: 'gemini-2.5-flash', created_at: '' }]

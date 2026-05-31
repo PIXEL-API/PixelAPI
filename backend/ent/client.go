@@ -27,6 +27,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitordailyrollup"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorhistory"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
+	"github.com/Wei-Shaw/sub2api/ent/conversation"
+	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
@@ -48,6 +50,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/shoporder"
 	"github.com/Wei-Shaw/sub2api/ent/shopproduct"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
+	"github.com/Wei-Shaw/sub2api/ent/supportmessage"
+	"github.com/Wei-Shaw/sub2api/ent/supportthread"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
@@ -89,6 +93,10 @@ type Client struct {
 	ChannelMonitorHistory *ChannelMonitorHistoryClient
 	// ChannelMonitorRequestTemplate is the client for interacting with the ChannelMonitorRequestTemplate builders.
 	ChannelMonitorRequestTemplate *ChannelMonitorRequestTemplateClient
+	// Conversation is the client for interacting with the Conversation builders.
+	Conversation *ConversationClient
+	// ConversationMessage is the client for interacting with the ConversationMessage builders.
+	ConversationMessage *ConversationMessageClient
 	// ErrorPassthroughRule is the client for interacting with the ErrorPassthroughRule builders.
 	ErrorPassthroughRule *ErrorPassthroughRuleClient
 	// Group is the client for interacting with the Group builders.
@@ -131,6 +139,10 @@ type Client struct {
 	ShopProduct *ShopProductClient
 	// SubscriptionPlan is the client for interacting with the SubscriptionPlan builders.
 	SubscriptionPlan *SubscriptionPlanClient
+	// SupportMessage is the client for interacting with the SupportMessage builders.
+	SupportMessage *SupportMessageClient
+	// SupportThread is the client for interacting with the SupportThread builders.
+	SupportThread *SupportThreadClient
 	// TLSFingerprintProfile is the client for interacting with the TLSFingerprintProfile builders.
 	TLSFingerprintProfile *TLSFingerprintProfileClient
 	// UsageCleanupTask is the client for interacting with the UsageCleanupTask builders.
@@ -170,6 +182,8 @@ func (c *Client) init() {
 	c.ChannelMonitorDailyRollup = NewChannelMonitorDailyRollupClient(c.config)
 	c.ChannelMonitorHistory = NewChannelMonitorHistoryClient(c.config)
 	c.ChannelMonitorRequestTemplate = NewChannelMonitorRequestTemplateClient(c.config)
+	c.Conversation = NewConversationClient(c.config)
+	c.ConversationMessage = NewConversationMessageClient(c.config)
 	c.ErrorPassthroughRule = NewErrorPassthroughRuleClient(c.config)
 	c.Group = NewGroupClient(c.config)
 	c.IdempotencyRecord = NewIdempotencyRecordClient(c.config)
@@ -191,6 +205,8 @@ func (c *Client) init() {
 	c.ShopOrder = NewShopOrderClient(c.config)
 	c.ShopProduct = NewShopProductClient(c.config)
 	c.SubscriptionPlan = NewSubscriptionPlanClient(c.config)
+	c.SupportMessage = NewSupportMessageClient(c.config)
+	c.SupportThread = NewSupportThreadClient(c.config)
 	c.TLSFingerprintProfile = NewTLSFingerprintProfileClient(c.config)
 	c.UsageCleanupTask = NewUsageCleanupTaskClient(c.config)
 	c.UsageLog = NewUsageLogClient(c.config)
@@ -303,6 +319,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ChannelMonitorDailyRollup:     NewChannelMonitorDailyRollupClient(cfg),
 		ChannelMonitorHistory:         NewChannelMonitorHistoryClient(cfg),
 		ChannelMonitorRequestTemplate: NewChannelMonitorRequestTemplateClient(cfg),
+		Conversation:                  NewConversationClient(cfg),
+		ConversationMessage:           NewConversationMessageClient(cfg),
 		ErrorPassthroughRule:          NewErrorPassthroughRuleClient(cfg),
 		Group:                         NewGroupClient(cfg),
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
@@ -324,6 +342,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ShopOrder:                     NewShopOrderClient(cfg),
 		ShopProduct:                   NewShopProductClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
+		SupportMessage:                NewSupportMessageClient(cfg),
+		SupportThread:                 NewSupportThreadClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
 		UsageLog:                      NewUsageLogClient(cfg),
@@ -363,6 +383,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ChannelMonitorDailyRollup:     NewChannelMonitorDailyRollupClient(cfg),
 		ChannelMonitorHistory:         NewChannelMonitorHistoryClient(cfg),
 		ChannelMonitorRequestTemplate: NewChannelMonitorRequestTemplateClient(cfg),
+		Conversation:                  NewConversationClient(cfg),
+		ConversationMessage:           NewConversationMessageClient(cfg),
 		ErrorPassthroughRule:          NewErrorPassthroughRuleClient(cfg),
 		Group:                         NewGroupClient(cfg),
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
@@ -384,6 +406,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ShopOrder:                     NewShopOrderClient(cfg),
 		ShopProduct:                   NewShopProductClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
+		SupportMessage:                NewSupportMessageClient(cfg),
+		SupportThread:                 NewSupportThreadClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
 		UsageLog:                      NewUsageLogClient(cfg),
@@ -424,12 +448,13 @@ func (c *Client) Use(hooks ...Hook) {
 		c.APIKey, c.APIKeyGroupRoute, c.Account, c.AccountGroup, c.Announcement,
 		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.ChannelMonitor,
 		c.ChannelMonitorDailyRollup, c.ChannelMonitorHistory,
-		c.ChannelMonitorRequestTemplate, c.ErrorPassthroughRule, c.Group,
-		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
-		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
-		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.ShopBalanceLedger, c.ShopCardKey, c.ShopCategory, c.ShopDrawCycle,
-		c.ShopOrder, c.ShopProduct, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.ChannelMonitorRequestTemplate, c.Conversation, c.ConversationMessage,
+		c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
+		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
+		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
+		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.ShopBalanceLedger,
+		c.ShopCardKey, c.ShopCategory, c.ShopDrawCycle, c.ShopOrder, c.ShopProduct,
+		c.SubscriptionPlan, c.SupportMessage, c.SupportThread, c.TLSFingerprintProfile,
 		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
 		c.UserAttributeDefinition, c.UserAttributeValue, c.UserSubscription,
 	} {
@@ -444,12 +469,13 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.APIKey, c.APIKeyGroupRoute, c.Account, c.AccountGroup, c.Announcement,
 		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.ChannelMonitor,
 		c.ChannelMonitorDailyRollup, c.ChannelMonitorHistory,
-		c.ChannelMonitorRequestTemplate, c.ErrorPassthroughRule, c.Group,
-		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
-		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
-		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.ShopBalanceLedger, c.ShopCardKey, c.ShopCategory, c.ShopDrawCycle,
-		c.ShopOrder, c.ShopProduct, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.ChannelMonitorRequestTemplate, c.Conversation, c.ConversationMessage,
+		c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
+		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
+		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
+		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.ShopBalanceLedger,
+		c.ShopCardKey, c.ShopCategory, c.ShopDrawCycle, c.ShopOrder, c.ShopProduct,
+		c.SubscriptionPlan, c.SupportMessage, c.SupportThread, c.TLSFingerprintProfile,
 		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
 		c.UserAttributeDefinition, c.UserAttributeValue, c.UserSubscription,
 	} {
@@ -484,6 +510,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.ChannelMonitorHistory.mutate(ctx, m)
 	case *ChannelMonitorRequestTemplateMutation:
 		return c.ChannelMonitorRequestTemplate.mutate(ctx, m)
+	case *ConversationMutation:
+		return c.Conversation.mutate(ctx, m)
+	case *ConversationMessageMutation:
+		return c.ConversationMessage.mutate(ctx, m)
 	case *ErrorPassthroughRuleMutation:
 		return c.ErrorPassthroughRule.mutate(ctx, m)
 	case *GroupMutation:
@@ -526,6 +556,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.ShopProduct.mutate(ctx, m)
 	case *SubscriptionPlanMutation:
 		return c.SubscriptionPlan.mutate(ctx, m)
+	case *SupportMessageMutation:
+		return c.SupportMessage.mutate(ctx, m)
+	case *SupportThreadMutation:
+		return c.SupportThread.mutate(ctx, m)
 	case *TLSFingerprintProfileMutation:
 		return c.TLSFingerprintProfile.mutate(ctx, m)
 	case *UsageCleanupTaskMutation:
@@ -2511,6 +2545,384 @@ func (c *ChannelMonitorRequestTemplateClient) mutate(ctx context.Context, m *Cha
 		return (&ChannelMonitorRequestTemplateDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown ChannelMonitorRequestTemplate mutation op: %q", m.Op())
+	}
+}
+
+// ConversationClient is a client for the Conversation schema.
+type ConversationClient struct {
+	config
+}
+
+// NewConversationClient returns a client for the Conversation from the given config.
+func NewConversationClient(c config) *ConversationClient {
+	return &ConversationClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `conversation.Hooks(f(g(h())))`.
+func (c *ConversationClient) Use(hooks ...Hook) {
+	c.hooks.Conversation = append(c.hooks.Conversation, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `conversation.Intercept(f(g(h())))`.
+func (c *ConversationClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Conversation = append(c.inters.Conversation, interceptors...)
+}
+
+// Create returns a builder for creating a Conversation entity.
+func (c *ConversationClient) Create() *ConversationCreate {
+	mutation := newConversationMutation(c.config, OpCreate)
+	return &ConversationCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Conversation entities.
+func (c *ConversationClient) CreateBulk(builders ...*ConversationCreate) *ConversationCreateBulk {
+	return &ConversationCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ConversationClient) MapCreateBulk(slice any, setFunc func(*ConversationCreate, int)) *ConversationCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ConversationCreateBulk{err: fmt.Errorf("calling to ConversationClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ConversationCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ConversationCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Conversation.
+func (c *ConversationClient) Update() *ConversationUpdate {
+	mutation := newConversationMutation(c.config, OpUpdate)
+	return &ConversationUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ConversationClient) UpdateOne(_m *Conversation) *ConversationUpdateOne {
+	mutation := newConversationMutation(c.config, OpUpdateOne, withConversation(_m))
+	return &ConversationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ConversationClient) UpdateOneID(id int64) *ConversationUpdateOne {
+	mutation := newConversationMutation(c.config, OpUpdateOne, withConversationID(id))
+	return &ConversationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Conversation.
+func (c *ConversationClient) Delete() *ConversationDelete {
+	mutation := newConversationMutation(c.config, OpDelete)
+	return &ConversationDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ConversationClient) DeleteOne(_m *Conversation) *ConversationDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ConversationClient) DeleteOneID(id int64) *ConversationDeleteOne {
+	builder := c.Delete().Where(conversation.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ConversationDeleteOne{builder}
+}
+
+// Query returns a query builder for Conversation.
+func (c *ConversationClient) Query() *ConversationQuery {
+	return &ConversationQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeConversation},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Conversation entity by its id.
+func (c *ConversationClient) Get(ctx context.Context, id int64) (*Conversation, error) {
+	return c.Query().Where(conversation.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ConversationClient) GetX(ctx context.Context, id int64) *Conversation {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryUser queries the user edge of a Conversation.
+func (c *ConversationClient) QueryUser(_m *Conversation) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(conversation.Table, conversation.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, conversation.UserTable, conversation.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryAssignedAdmin queries the assigned_admin edge of a Conversation.
+func (c *ConversationClient) QueryAssignedAdmin(_m *Conversation) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(conversation.Table, conversation.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, conversation.AssignedAdminTable, conversation.AssignedAdminColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryReferencedNotice queries the referenced_notice edge of a Conversation.
+func (c *ConversationClient) QueryReferencedNotice(_m *Conversation) *ConversationQuery {
+	query := (&ConversationClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(conversation.Table, conversation.FieldID, id),
+			sqlgraph.To(conversation.Table, conversation.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, conversation.ReferencedNoticeTable, conversation.ReferencedNoticeColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryReferencedByConversations queries the referenced_by_conversations edge of a Conversation.
+func (c *ConversationClient) QueryReferencedByConversations(_m *Conversation) *ConversationQuery {
+	query := (&ConversationClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(conversation.Table, conversation.FieldID, id),
+			sqlgraph.To(conversation.Table, conversation.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, conversation.ReferencedByConversationsTable, conversation.ReferencedByConversationsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryMessages queries the messages edge of a Conversation.
+func (c *ConversationClient) QueryMessages(_m *Conversation) *ConversationMessageQuery {
+	query := (&ConversationMessageClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(conversation.Table, conversation.FieldID, id),
+			sqlgraph.To(conversationmessage.Table, conversationmessage.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, conversation.MessagesTable, conversation.MessagesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ConversationClient) Hooks() []Hook {
+	return c.hooks.Conversation
+}
+
+// Interceptors returns the client interceptors.
+func (c *ConversationClient) Interceptors() []Interceptor {
+	return c.inters.Conversation
+}
+
+func (c *ConversationClient) mutate(ctx context.Context, m *ConversationMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ConversationCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ConversationUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ConversationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ConversationDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Conversation mutation op: %q", m.Op())
+	}
+}
+
+// ConversationMessageClient is a client for the ConversationMessage schema.
+type ConversationMessageClient struct {
+	config
+}
+
+// NewConversationMessageClient returns a client for the ConversationMessage from the given config.
+func NewConversationMessageClient(c config) *ConversationMessageClient {
+	return &ConversationMessageClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `conversationmessage.Hooks(f(g(h())))`.
+func (c *ConversationMessageClient) Use(hooks ...Hook) {
+	c.hooks.ConversationMessage = append(c.hooks.ConversationMessage, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `conversationmessage.Intercept(f(g(h())))`.
+func (c *ConversationMessageClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ConversationMessage = append(c.inters.ConversationMessage, interceptors...)
+}
+
+// Create returns a builder for creating a ConversationMessage entity.
+func (c *ConversationMessageClient) Create() *ConversationMessageCreate {
+	mutation := newConversationMessageMutation(c.config, OpCreate)
+	return &ConversationMessageCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ConversationMessage entities.
+func (c *ConversationMessageClient) CreateBulk(builders ...*ConversationMessageCreate) *ConversationMessageCreateBulk {
+	return &ConversationMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ConversationMessageClient) MapCreateBulk(slice any, setFunc func(*ConversationMessageCreate, int)) *ConversationMessageCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ConversationMessageCreateBulk{err: fmt.Errorf("calling to ConversationMessageClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ConversationMessageCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ConversationMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ConversationMessage.
+func (c *ConversationMessageClient) Update() *ConversationMessageUpdate {
+	mutation := newConversationMessageMutation(c.config, OpUpdate)
+	return &ConversationMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ConversationMessageClient) UpdateOne(_m *ConversationMessage) *ConversationMessageUpdateOne {
+	mutation := newConversationMessageMutation(c.config, OpUpdateOne, withConversationMessage(_m))
+	return &ConversationMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ConversationMessageClient) UpdateOneID(id int64) *ConversationMessageUpdateOne {
+	mutation := newConversationMessageMutation(c.config, OpUpdateOne, withConversationMessageID(id))
+	return &ConversationMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ConversationMessage.
+func (c *ConversationMessageClient) Delete() *ConversationMessageDelete {
+	mutation := newConversationMessageMutation(c.config, OpDelete)
+	return &ConversationMessageDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ConversationMessageClient) DeleteOne(_m *ConversationMessage) *ConversationMessageDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ConversationMessageClient) DeleteOneID(id int64) *ConversationMessageDeleteOne {
+	builder := c.Delete().Where(conversationmessage.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ConversationMessageDeleteOne{builder}
+}
+
+// Query returns a query builder for ConversationMessage.
+func (c *ConversationMessageClient) Query() *ConversationMessageQuery {
+	return &ConversationMessageQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeConversationMessage},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ConversationMessage entity by its id.
+func (c *ConversationMessageClient) Get(ctx context.Context, id int64) (*ConversationMessage, error) {
+	return c.Query().Where(conversationmessage.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ConversationMessageClient) GetX(ctx context.Context, id int64) *ConversationMessage {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryConversation queries the conversation edge of a ConversationMessage.
+func (c *ConversationMessageClient) QueryConversation(_m *ConversationMessage) *ConversationQuery {
+	query := (&ConversationClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(conversationmessage.Table, conversationmessage.FieldID, id),
+			sqlgraph.To(conversation.Table, conversation.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, conversationmessage.ConversationTable, conversationmessage.ConversationColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySender queries the sender edge of a ConversationMessage.
+func (c *ConversationMessageClient) QuerySender(_m *ConversationMessage) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(conversationmessage.Table, conversationmessage.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, conversationmessage.SenderTable, conversationmessage.SenderColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ConversationMessageClient) Hooks() []Hook {
+	return c.hooks.ConversationMessage
+}
+
+// Interceptors returns the client interceptors.
+func (c *ConversationMessageClient) Interceptors() []Interceptor {
+	return c.inters.ConversationMessage
+}
+
+func (c *ConversationMessageClient) mutate(ctx context.Context, m *ConversationMessageMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ConversationMessageCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ConversationMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ConversationMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ConversationMessageDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ConversationMessage mutation op: %q", m.Op())
 	}
 }
 
@@ -5935,6 +6347,352 @@ func (c *SubscriptionPlanClient) mutate(ctx context.Context, m *SubscriptionPlan
 	}
 }
 
+// SupportMessageClient is a client for the SupportMessage schema.
+type SupportMessageClient struct {
+	config
+}
+
+// NewSupportMessageClient returns a client for the SupportMessage from the given config.
+func NewSupportMessageClient(c config) *SupportMessageClient {
+	return &SupportMessageClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `supportmessage.Hooks(f(g(h())))`.
+func (c *SupportMessageClient) Use(hooks ...Hook) {
+	c.hooks.SupportMessage = append(c.hooks.SupportMessage, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `supportmessage.Intercept(f(g(h())))`.
+func (c *SupportMessageClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SupportMessage = append(c.inters.SupportMessage, interceptors...)
+}
+
+// Create returns a builder for creating a SupportMessage entity.
+func (c *SupportMessageClient) Create() *SupportMessageCreate {
+	mutation := newSupportMessageMutation(c.config, OpCreate)
+	return &SupportMessageCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SupportMessage entities.
+func (c *SupportMessageClient) CreateBulk(builders ...*SupportMessageCreate) *SupportMessageCreateBulk {
+	return &SupportMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SupportMessageClient) MapCreateBulk(slice any, setFunc func(*SupportMessageCreate, int)) *SupportMessageCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SupportMessageCreateBulk{err: fmt.Errorf("calling to SupportMessageClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SupportMessageCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SupportMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SupportMessage.
+func (c *SupportMessageClient) Update() *SupportMessageUpdate {
+	mutation := newSupportMessageMutation(c.config, OpUpdate)
+	return &SupportMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SupportMessageClient) UpdateOne(_m *SupportMessage) *SupportMessageUpdateOne {
+	mutation := newSupportMessageMutation(c.config, OpUpdateOne, withSupportMessage(_m))
+	return &SupportMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SupportMessageClient) UpdateOneID(id int64) *SupportMessageUpdateOne {
+	mutation := newSupportMessageMutation(c.config, OpUpdateOne, withSupportMessageID(id))
+	return &SupportMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SupportMessage.
+func (c *SupportMessageClient) Delete() *SupportMessageDelete {
+	mutation := newSupportMessageMutation(c.config, OpDelete)
+	return &SupportMessageDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SupportMessageClient) DeleteOne(_m *SupportMessage) *SupportMessageDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SupportMessageClient) DeleteOneID(id int64) *SupportMessageDeleteOne {
+	builder := c.Delete().Where(supportmessage.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SupportMessageDeleteOne{builder}
+}
+
+// Query returns a query builder for SupportMessage.
+func (c *SupportMessageClient) Query() *SupportMessageQuery {
+	return &SupportMessageQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSupportMessage},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SupportMessage entity by its id.
+func (c *SupportMessageClient) Get(ctx context.Context, id int64) (*SupportMessage, error) {
+	return c.Query().Where(supportmessage.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SupportMessageClient) GetX(ctx context.Context, id int64) *SupportMessage {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryThread queries the thread edge of a SupportMessage.
+func (c *SupportMessageClient) QueryThread(_m *SupportMessage) *SupportThreadQuery {
+	query := (&SupportThreadClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(supportmessage.Table, supportmessage.FieldID, id),
+			sqlgraph.To(supportthread.Table, supportthread.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, supportmessage.ThreadTable, supportmessage.ThreadColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySender queries the sender edge of a SupportMessage.
+func (c *SupportMessageClient) QuerySender(_m *SupportMessage) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(supportmessage.Table, supportmessage.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, supportmessage.SenderTable, supportmessage.SenderColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *SupportMessageClient) Hooks() []Hook {
+	return c.hooks.SupportMessage
+}
+
+// Interceptors returns the client interceptors.
+func (c *SupportMessageClient) Interceptors() []Interceptor {
+	return c.inters.SupportMessage
+}
+
+func (c *SupportMessageClient) mutate(ctx context.Context, m *SupportMessageMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SupportMessageCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SupportMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SupportMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SupportMessageDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SupportMessage mutation op: %q", m.Op())
+	}
+}
+
+// SupportThreadClient is a client for the SupportThread schema.
+type SupportThreadClient struct {
+	config
+}
+
+// NewSupportThreadClient returns a client for the SupportThread from the given config.
+func NewSupportThreadClient(c config) *SupportThreadClient {
+	return &SupportThreadClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `supportthread.Hooks(f(g(h())))`.
+func (c *SupportThreadClient) Use(hooks ...Hook) {
+	c.hooks.SupportThread = append(c.hooks.SupportThread, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `supportthread.Intercept(f(g(h())))`.
+func (c *SupportThreadClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SupportThread = append(c.inters.SupportThread, interceptors...)
+}
+
+// Create returns a builder for creating a SupportThread entity.
+func (c *SupportThreadClient) Create() *SupportThreadCreate {
+	mutation := newSupportThreadMutation(c.config, OpCreate)
+	return &SupportThreadCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SupportThread entities.
+func (c *SupportThreadClient) CreateBulk(builders ...*SupportThreadCreate) *SupportThreadCreateBulk {
+	return &SupportThreadCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SupportThreadClient) MapCreateBulk(slice any, setFunc func(*SupportThreadCreate, int)) *SupportThreadCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SupportThreadCreateBulk{err: fmt.Errorf("calling to SupportThreadClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SupportThreadCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SupportThreadCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SupportThread.
+func (c *SupportThreadClient) Update() *SupportThreadUpdate {
+	mutation := newSupportThreadMutation(c.config, OpUpdate)
+	return &SupportThreadUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SupportThreadClient) UpdateOne(_m *SupportThread) *SupportThreadUpdateOne {
+	mutation := newSupportThreadMutation(c.config, OpUpdateOne, withSupportThread(_m))
+	return &SupportThreadUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SupportThreadClient) UpdateOneID(id int64) *SupportThreadUpdateOne {
+	mutation := newSupportThreadMutation(c.config, OpUpdateOne, withSupportThreadID(id))
+	return &SupportThreadUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SupportThread.
+func (c *SupportThreadClient) Delete() *SupportThreadDelete {
+	mutation := newSupportThreadMutation(c.config, OpDelete)
+	return &SupportThreadDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SupportThreadClient) DeleteOne(_m *SupportThread) *SupportThreadDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SupportThreadClient) DeleteOneID(id int64) *SupportThreadDeleteOne {
+	builder := c.Delete().Where(supportthread.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SupportThreadDeleteOne{builder}
+}
+
+// Query returns a query builder for SupportThread.
+func (c *SupportThreadClient) Query() *SupportThreadQuery {
+	return &SupportThreadQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSupportThread},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SupportThread entity by its id.
+func (c *SupportThreadClient) Get(ctx context.Context, id int64) (*SupportThread, error) {
+	return c.Query().Where(supportthread.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SupportThreadClient) GetX(ctx context.Context, id int64) *SupportThread {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryUser queries the user edge of a SupportThread.
+func (c *SupportThreadClient) QueryUser(_m *SupportThread) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(supportthread.Table, supportthread.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, supportthread.UserTable, supportthread.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryAssignedAdmin queries the assigned_admin edge of a SupportThread.
+func (c *SupportThreadClient) QueryAssignedAdmin(_m *SupportThread) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(supportthread.Table, supportthread.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, supportthread.AssignedAdminTable, supportthread.AssignedAdminColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryMessages queries the messages edge of a SupportThread.
+func (c *SupportThreadClient) QueryMessages(_m *SupportThread) *SupportMessageQuery {
+	query := (&SupportMessageClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(supportthread.Table, supportthread.FieldID, id),
+			sqlgraph.To(supportmessage.Table, supportmessage.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, supportthread.MessagesTable, supportthread.MessagesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *SupportThreadClient) Hooks() []Hook {
+	return c.hooks.SupportThread
+}
+
+// Interceptors returns the client interceptors.
+func (c *SupportThreadClient) Interceptors() []Interceptor {
+	return c.inters.SupportThread
+}
+
+func (c *SupportThreadClient) mutate(ctx context.Context, m *SupportThreadMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SupportThreadCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SupportThreadUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SupportThreadUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SupportThreadDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SupportThread mutation op: %q", m.Op())
+	}
+}
+
 // TLSFingerprintProfileClient is a client for the TLSFingerprintProfile schema.
 type TLSFingerprintProfileClient struct {
 	config
@@ -6595,6 +7353,102 @@ func (c *UserClient) QueryAnnouncementReads(_m *User) *AnnouncementReadQuery {
 			sqlgraph.From(user.Table, user.FieldID, id),
 			sqlgraph.To(announcementread.Table, announcementread.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.AnnouncementReadsTable, user.AnnouncementReadsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryConversations queries the conversations edge of a User.
+func (c *UserClient) QueryConversations(_m *User) *ConversationQuery {
+	query := (&ConversationClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(conversation.Table, conversation.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ConversationsTable, user.ConversationsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryAssignedConversations queries the assigned_conversations edge of a User.
+func (c *UserClient) QueryAssignedConversations(_m *User) *ConversationQuery {
+	query := (&ConversationClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(conversation.Table, conversation.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.AssignedConversationsTable, user.AssignedConversationsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySentConversationMessages queries the sent_conversation_messages edge of a User.
+func (c *UserClient) QuerySentConversationMessages(_m *User) *ConversationMessageQuery {
+	query := (&ConversationMessageClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(conversationmessage.Table, conversationmessage.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SentConversationMessagesTable, user.SentConversationMessagesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySupportThreads queries the support_threads edge of a User.
+func (c *UserClient) QuerySupportThreads(_m *User) *SupportThreadQuery {
+	query := (&SupportThreadClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(supportthread.Table, supportthread.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SupportThreadsTable, user.SupportThreadsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryAssignedSupportThreads queries the assigned_support_threads edge of a User.
+func (c *UserClient) QueryAssignedSupportThreads(_m *User) *SupportThreadQuery {
+	query := (&SupportThreadClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(supportthread.Table, supportthread.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.AssignedSupportThreadsTable, user.AssignedSupportThreadsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySentSupportMessages queries the sent_support_messages edge of a User.
+func (c *UserClient) QuerySentSupportMessages(_m *User) *SupportMessageQuery {
+	query := (&SupportMessageClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(supportmessage.Table, supportmessage.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.SentSupportMessagesTable, user.SentSupportMessagesColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -7457,25 +8311,27 @@ type (
 	hooks struct {
 		APIKey, APIKeyGroupRoute, Account, AccountGroup, Announcement, AnnouncementRead,
 		AuthIdentity, AuthIdentityChannel, ChannelMonitor, ChannelMonitorDailyRollup,
-		ChannelMonitorHistory, ChannelMonitorRequestTemplate, ErrorPassthroughRule,
-		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, ShopBalanceLedger,
-		ShopCardKey, ShopCategory, ShopDrawCycle, ShopOrder, ShopProduct,
-		SubscriptionPlan, TLSFingerprintProfile, UsageCleanupTask, UsageLog, User,
-		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		ChannelMonitorHistory, ChannelMonitorRequestTemplate, Conversation,
+		ConversationMessage, ErrorPassthroughRule, Group, IdempotencyRecord,
+		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
+		RedeemCode, SecuritySecret, Setting, ShopBalanceLedger, ShopCardKey,
+		ShopCategory, ShopDrawCycle, ShopOrder, ShopProduct, SubscriptionPlan,
+		SupportMessage, SupportThread, TLSFingerprintProfile, UsageCleanupTask,
+		UsageLog, User, UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
 		UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, APIKeyGroupRoute, Account, AccountGroup, Announcement, AnnouncementRead,
 		AuthIdentity, AuthIdentityChannel, ChannelMonitor, ChannelMonitorDailyRollup,
-		ChannelMonitorHistory, ChannelMonitorRequestTemplate, ErrorPassthroughRule,
-		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, ShopBalanceLedger,
-		ShopCardKey, ShopCategory, ShopDrawCycle, ShopOrder, ShopProduct,
-		SubscriptionPlan, TLSFingerprintProfile, UsageCleanupTask, UsageLog, User,
-		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		ChannelMonitorHistory, ChannelMonitorRequestTemplate, Conversation,
+		ConversationMessage, ErrorPassthroughRule, Group, IdempotencyRecord,
+		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
+		RedeemCode, SecuritySecret, Setting, ShopBalanceLedger, ShopCardKey,
+		ShopCategory, ShopDrawCycle, ShopOrder, ShopProduct, SubscriptionPlan,
+		SupportMessage, SupportThread, TLSFingerprintProfile, UsageCleanupTask,
+		UsageLog, User, UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
 		UserSubscription []ent.Interceptor
 	}
 )

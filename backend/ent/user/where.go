@@ -1515,6 +1515,144 @@ func HasAnnouncementReadsWith(preds ...predicate.AnnouncementRead) predicate.Use
 	})
 }
 
+// HasConversations applies the HasEdge predicate on the "conversations" edge.
+func HasConversations() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ConversationsTable, ConversationsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasConversationsWith applies the HasEdge predicate on the "conversations" edge with a given conditions (other predicates).
+func HasConversationsWith(preds ...predicate.Conversation) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newConversationsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasAssignedConversations applies the HasEdge predicate on the "assigned_conversations" edge.
+func HasAssignedConversations() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, AssignedConversationsTable, AssignedConversationsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasAssignedConversationsWith applies the HasEdge predicate on the "assigned_conversations" edge with a given conditions (other predicates).
+func HasAssignedConversationsWith(preds ...predicate.Conversation) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newAssignedConversationsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasSentConversationMessages applies the HasEdge predicate on the "sent_conversation_messages" edge.
+func HasSentConversationMessages() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, SentConversationMessagesTable, SentConversationMessagesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasSentConversationMessagesWith applies the HasEdge predicate on the "sent_conversation_messages" edge with a given conditions (other predicates).
+func HasSentConversationMessagesWith(preds ...predicate.ConversationMessage) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newSentConversationMessagesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasSupportThreads applies the HasEdge predicate on the "support_threads" edge.
+func HasSupportThreads() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, SupportThreadsTable, SupportThreadsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasSupportThreadsWith applies the HasEdge predicate on the "support_threads" edge with a given conditions (other predicates).
+func HasSupportThreadsWith(preds ...predicate.SupportThread) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newSupportThreadsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasAssignedSupportThreads applies the HasEdge predicate on the "assigned_support_threads" edge.
+func HasAssignedSupportThreads() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, AssignedSupportThreadsTable, AssignedSupportThreadsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasAssignedSupportThreadsWith applies the HasEdge predicate on the "assigned_support_threads" edge with a given conditions (other predicates).
+func HasAssignedSupportThreadsWith(preds ...predicate.SupportThread) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newAssignedSupportThreadsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasSentSupportMessages applies the HasEdge predicate on the "sent_support_messages" edge.
+func HasSentSupportMessages() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, SentSupportMessagesTable, SentSupportMessagesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasSentSupportMessagesWith applies the HasEdge predicate on the "sent_support_messages" edge with a given conditions (other predicates).
+func HasSentSupportMessagesWith(preds ...predicate.SupportMessage) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newSentSupportMessagesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasAllowedGroups applies the HasEdge predicate on the "allowed_groups" edge.
 func HasAllowedGroups() predicate.User {
 	return predicate.User(func(s *sql.Selector) {

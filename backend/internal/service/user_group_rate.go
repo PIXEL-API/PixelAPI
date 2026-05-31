@@ -42,6 +42,9 @@ type UserGroupRateRepository interface {
 	// GetByGroupID 获取指定分组下所有用户的专属配置（rate 与 rpm_override 任一非 NULL 即返回）
 	GetByGroupID(ctx context.Context, groupID int64) ([]UserGroupRateEntry, error)
 
+	// GetRateMultipliersByGroupID 获取指定分组下所有非 NULL 用户专属 rate_multiplier。
+	GetRateMultipliersByGroupID(ctx context.Context, groupID int64) (map[int64]float64, error)
+
 	// SyncUserGroupRates 同步用户的分组专属倍率；nil 表示清空该分组的 rate_multiplier
 	SyncUserGroupRates(ctx context.Context, userID int64, rates map[int64]*float64) error
 

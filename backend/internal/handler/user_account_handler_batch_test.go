@@ -255,3 +255,50 @@ func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
 	require.Equal(t, service.AccountBatchTaskOperationUserSetPublicShare, envelope.Data.Task.Operation)
 	require.Equal(t, 2, envelope.Data.Task.Total)
 }
+
+func TestUserAccountHandlerVerifyPlusAlreadyPlusDoesNotRequireTestService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerID := int64(101)
+	repo := &userAccountBatchRepoStub{
+		accounts: map[int64]*service.Account{
+			1: {
+				ID:           1,
+				OwnerUserID:  &ownerID,
+				Platform:     service.PlatformOpenAI,
+				Type:         service.AccountTypeOAuth,
+				AccountLevel: service.AccountLevelPlus,
+				Credentials:  map[string]any{"access_token": "token-1"},
+			},
+		},
+	}
+	accountSvc := service.NewAccountService(repo, nil, nil, nil)
+	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.POST("/accounts/:id/verify-level", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerID})
+		handler.VerifyLevel(c)
+	})
+
+	body := []byte(`{"target_level":"plus"}`)
+	req := httptest.NewRequest(http.MethodPost, "/accounts/1/verify-level", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Verified     bool   `json:"verified"`
+			TargetLevel  string `json:"target_level"`
+			AppliedLevel string `json:"applied_level"`
+			Reason       string `json:"reason"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	require.True(t, envelope.Data.Verified)
+	require.Equal(t, service.AccountLevelPlus, envelope.Data.TargetLevel)
+	require.Equal(t, service.AccountLevelPlus, envelope.Data.AppliedLevel)
+	require.Equal(t, "already_has_plus_access", envelope.Data.Reason)
+}

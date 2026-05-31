@@ -85,6 +85,18 @@ type UserEdges struct {
 	AssignedSubscriptions []*UserSubscription `json:"assigned_subscriptions,omitempty"`
 	// AnnouncementReads holds the value of the announcement_reads edge.
 	AnnouncementReads []*AnnouncementRead `json:"announcement_reads,omitempty"`
+	// Conversations holds the value of the conversations edge.
+	Conversations []*Conversation `json:"conversations,omitempty"`
+	// AssignedConversations holds the value of the assigned_conversations edge.
+	AssignedConversations []*Conversation `json:"assigned_conversations,omitempty"`
+	// SentConversationMessages holds the value of the sent_conversation_messages edge.
+	SentConversationMessages []*ConversationMessage `json:"sent_conversation_messages,omitempty"`
+	// SupportThreads holds the value of the support_threads edge.
+	SupportThreads []*SupportThread `json:"support_threads,omitempty"`
+	// AssignedSupportThreads holds the value of the assigned_support_threads edge.
+	AssignedSupportThreads []*SupportThread `json:"assigned_support_threads,omitempty"`
+	// SentSupportMessages holds the value of the sent_support_messages edge.
+	SentSupportMessages []*SupportMessage `json:"sent_support_messages,omitempty"`
 	// AllowedGroups holds the value of the allowed_groups edge.
 	AllowedGroups []*Group `json:"allowed_groups,omitempty"`
 	// UsageLogs holds the value of the usage_logs edge.
@@ -111,7 +123,7 @@ type UserEdges struct {
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [17]bool
+	loadedTypes [23]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -159,10 +171,64 @@ func (e UserEdges) AnnouncementReadsOrErr() ([]*AnnouncementRead, error) {
 	return nil, &NotLoadedError{edge: "announcement_reads"}
 }
 
+// ConversationsOrErr returns the Conversations value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) ConversationsOrErr() ([]*Conversation, error) {
+	if e.loadedTypes[5] {
+		return e.Conversations, nil
+	}
+	return nil, &NotLoadedError{edge: "conversations"}
+}
+
+// AssignedConversationsOrErr returns the AssignedConversations value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) AssignedConversationsOrErr() ([]*Conversation, error) {
+	if e.loadedTypes[6] {
+		return e.AssignedConversations, nil
+	}
+	return nil, &NotLoadedError{edge: "assigned_conversations"}
+}
+
+// SentConversationMessagesOrErr returns the SentConversationMessages value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) SentConversationMessagesOrErr() ([]*ConversationMessage, error) {
+	if e.loadedTypes[7] {
+		return e.SentConversationMessages, nil
+	}
+	return nil, &NotLoadedError{edge: "sent_conversation_messages"}
+}
+
+// SupportThreadsOrErr returns the SupportThreads value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) SupportThreadsOrErr() ([]*SupportThread, error) {
+	if e.loadedTypes[8] {
+		return e.SupportThreads, nil
+	}
+	return nil, &NotLoadedError{edge: "support_threads"}
+}
+
+// AssignedSupportThreadsOrErr returns the AssignedSupportThreads value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) AssignedSupportThreadsOrErr() ([]*SupportThread, error) {
+	if e.loadedTypes[9] {
+		return e.AssignedSupportThreads, nil
+	}
+	return nil, &NotLoadedError{edge: "assigned_support_threads"}
+}
+
+// SentSupportMessagesOrErr returns the SentSupportMessages value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) SentSupportMessagesOrErr() ([]*SupportMessage, error) {
+	if e.loadedTypes[10] {
+		return e.SentSupportMessages, nil
+	}
+	return nil, &NotLoadedError{edge: "sent_support_messages"}
+}
+
 // AllowedGroupsOrErr returns the AllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AllowedGroupsOrErr() ([]*Group, error) {
-	if e.loadedTypes[5] {
+	if e.loadedTypes[11] {
 		return e.AllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "allowed_groups"}
@@ -171,7 +237,7 @@ func (e UserEdges) AllowedGroupsOrErr() ([]*Group, error) {
 // UsageLogsOrErr returns the UsageLogs value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UsageLogsOrErr() ([]*UsageLog, error) {
-	if e.loadedTypes[6] {
+	if e.loadedTypes[12] {
 		return e.UsageLogs, nil
 	}
 	return nil, &NotLoadedError{edge: "usage_logs"}
@@ -180,7 +246,7 @@ func (e UserEdges) UsageLogsOrErr() ([]*UsageLog, error) {
 // AttributeValuesOrErr returns the AttributeValues value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AttributeValuesOrErr() ([]*UserAttributeValue, error) {
-	if e.loadedTypes[7] {
+	if e.loadedTypes[13] {
 		return e.AttributeValues, nil
 	}
 	return nil, &NotLoadedError{edge: "attribute_values"}
@@ -189,7 +255,7 @@ func (e UserEdges) AttributeValuesOrErr() ([]*UserAttributeValue, error) {
 // PromoCodeUsagesOrErr returns the PromoCodeUsages value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) PromoCodeUsagesOrErr() ([]*PromoCodeUsage, error) {
-	if e.loadedTypes[8] {
+	if e.loadedTypes[14] {
 		return e.PromoCodeUsages, nil
 	}
 	return nil, &NotLoadedError{edge: "promo_code_usages"}
@@ -198,7 +264,7 @@ func (e UserEdges) PromoCodeUsagesOrErr() ([]*PromoCodeUsage, error) {
 // PaymentOrdersOrErr returns the PaymentOrders value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) PaymentOrdersOrErr() ([]*PaymentOrder, error) {
-	if e.loadedTypes[9] {
+	if e.loadedTypes[15] {
 		return e.PaymentOrders, nil
 	}
 	return nil, &NotLoadedError{edge: "payment_orders"}
@@ -207,7 +273,7 @@ func (e UserEdges) PaymentOrdersOrErr() ([]*PaymentOrder, error) {
 // ShopOrdersOrErr returns the ShopOrders value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) ShopOrdersOrErr() ([]*ShopOrder, error) {
-	if e.loadedTypes[10] {
+	if e.loadedTypes[16] {
 		return e.ShopOrders, nil
 	}
 	return nil, &NotLoadedError{edge: "shop_orders"}
@@ -216,7 +282,7 @@ func (e UserEdges) ShopOrdersOrErr() ([]*ShopOrder, error) {
 // ShopDrawCyclesOrErr returns the ShopDrawCycles value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) ShopDrawCyclesOrErr() ([]*ShopDrawCycle, error) {
-	if e.loadedTypes[11] {
+	if e.loadedTypes[17] {
 		return e.ShopDrawCycles, nil
 	}
 	return nil, &NotLoadedError{edge: "shop_draw_cycles"}
@@ -225,7 +291,7 @@ func (e UserEdges) ShopDrawCyclesOrErr() ([]*ShopDrawCycle, error) {
 // ShopBalanceLedgerOrErr returns the ShopBalanceLedger value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) ShopBalanceLedgerOrErr() ([]*ShopBalanceLedger, error) {
-	if e.loadedTypes[12] {
+	if e.loadedTypes[18] {
 		return e.ShopBalanceLedger, nil
 	}
 	return nil, &NotLoadedError{edge: "shop_balance_ledger"}
@@ -234,7 +300,7 @@ func (e UserEdges) ShopBalanceLedgerOrErr() ([]*ShopBalanceLedger, error) {
 // OwnedAccountsOrErr returns the OwnedAccounts value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) OwnedAccountsOrErr() ([]*Account, error) {
-	if e.loadedTypes[13] {
+	if e.loadedTypes[19] {
 		return e.OwnedAccounts, nil
 	}
 	return nil, &NotLoadedError{edge: "owned_accounts"}
@@ -243,7 +309,7 @@ func (e UserEdges) OwnedAccountsOrErr() ([]*Account, error) {
 // AuthIdentitiesOrErr returns the AuthIdentities value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuthIdentitiesOrErr() ([]*AuthIdentity, error) {
-	if e.loadedTypes[14] {
+	if e.loadedTypes[20] {
 		return e.AuthIdentities, nil
 	}
 	return nil, &NotLoadedError{edge: "auth_identities"}
@@ -252,7 +318,7 @@ func (e UserEdges) AuthIdentitiesOrErr() ([]*AuthIdentity, error) {
 // PendingAuthSessionsOrErr returns the PendingAuthSessions value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) PendingAuthSessionsOrErr() ([]*PendingAuthSession, error) {
-	if e.loadedTypes[15] {
+	if e.loadedTypes[21] {
 		return e.PendingAuthSessions, nil
 	}
 	return nil, &NotLoadedError{edge: "pending_auth_sessions"}
@@ -261,7 +327,7 @@ func (e UserEdges) PendingAuthSessionsOrErr() ([]*PendingAuthSession, error) {
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[16] {
+	if e.loadedTypes[22] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -495,6 +561,36 @@ func (_m *User) QueryAssignedSubscriptions() *UserSubscriptionQuery {
 // QueryAnnouncementReads queries the "announcement_reads" edge of the User entity.
 func (_m *User) QueryAnnouncementReads() *AnnouncementReadQuery {
 	return NewUserClient(_m.config).QueryAnnouncementReads(_m)
+}
+
+// QueryConversations queries the "conversations" edge of the User entity.
+func (_m *User) QueryConversations() *ConversationQuery {
+	return NewUserClient(_m.config).QueryConversations(_m)
+}
+
+// QueryAssignedConversations queries the "assigned_conversations" edge of the User entity.
+func (_m *User) QueryAssignedConversations() *ConversationQuery {
+	return NewUserClient(_m.config).QueryAssignedConversations(_m)
+}
+
+// QuerySentConversationMessages queries the "sent_conversation_messages" edge of the User entity.
+func (_m *User) QuerySentConversationMessages() *ConversationMessageQuery {
+	return NewUserClient(_m.config).QuerySentConversationMessages(_m)
+}
+
+// QuerySupportThreads queries the "support_threads" edge of the User entity.
+func (_m *User) QuerySupportThreads() *SupportThreadQuery {
+	return NewUserClient(_m.config).QuerySupportThreads(_m)
+}
+
+// QueryAssignedSupportThreads queries the "assigned_support_threads" edge of the User entity.
+func (_m *User) QueryAssignedSupportThreads() *SupportThreadQuery {
+	return NewUserClient(_m.config).QueryAssignedSupportThreads(_m)
+}
+
+// QuerySentSupportMessages queries the "sent_support_messages" edge of the User entity.
+func (_m *User) QuerySentSupportMessages() *SupportMessageQuery {
+	return NewUserClient(_m.config).QuerySentSupportMessages(_m)
 }
 
 // QueryAllowedGroups queries the "allowed_groups" edge of the User entity.

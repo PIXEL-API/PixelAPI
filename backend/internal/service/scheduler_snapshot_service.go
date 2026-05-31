@@ -114,7 +114,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 		if err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
 		} else if hit {
-			return derefAccounts(cached), useMixed, nil
+			return filterSchedulableAccounts(derefAccounts(cached)), useMixed, nil
 		}
 	}
 
@@ -136,7 +136,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 		}
 	}
 
-	return accounts, useMixed, nil
+	return filterSchedulableAccounts(accounts), useMixed, nil
 }
 
 func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
@@ -656,23 +656,52 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 		if err != nil {
 			return nil, err
 		}
-		filtered := make([]Account, 0, len(accounts))
+		out := accounts[:0]
 		for _, acc := range accounts {
+			if !acc.IsSchedulableWithoutCodexQuotaProtection() {
+				continue
+			}
 			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
 				continue
 			}
-			filtered = append(filtered, acc)
+			out = append(out, acc)
 		}
-		return filtered, nil
+		return out, nil
 	}
 
+	filterSchedulable := func(accounts []Account, err error) ([]Account, error) {
+		if err != nil {
+			return nil, err
+		}
+		return filterSchedulableAccountsForSnapshot(accounts), nil
+	}
 	if groupID > 0 {
-		return s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, bucket.Platform)
+		return filterSchedulable(s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, bucket.Platform))
 	}
 	if s.isRunModeSimple() {
-		return s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+		return filterSchedulable(s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform))
 	}
-	return s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, bucket.Platform)
+	return filterSchedulable(s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, bucket.Platform))
+}
+
+func filterSchedulableAccounts(accounts []Account) []Account {
+	filtered := make([]Account, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc.IsSchedulable() {
+			filtered = append(filtered, acc)
+		}
+	}
+	return filtered
+}
+
+func filterSchedulableAccountsForSnapshot(accounts []Account) []Account {
+	filtered := make([]Account, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc.IsSchedulableWithoutCodexQuotaProtection() {
+			filtered = append(filtered, acc)
+		}
+	}
+	return filtered
 }
 
 func (s *SchedulerSnapshotService) bucketFor(groupID *int64, platform string, mode string) SchedulerBucket {

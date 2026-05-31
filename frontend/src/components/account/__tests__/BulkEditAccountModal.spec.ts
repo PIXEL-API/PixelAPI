@@ -148,8 +148,8 @@ describe('BulkEditAccountModal', () => {
 
     await selector.find('div.cursor-pointer').trigger('click')
 
-    expect(wrapper.text()).not.toContain('gemini-3.1-flash-image')
-    expect(wrapper.text()).not.toContain('gemini-2.5-flash-image')
+    expect(wrapper.text()).toContain('gemini-3.1-flash-image')
+    expect(wrapper.text()).toContain('gemini-2.5-flash-image')
     expect(wrapper.text()).not.toContain('gpt-5.3-codex')
   })
 
@@ -160,8 +160,8 @@ describe('BulkEditAccountModal', () => {
     expect(mappingTab).toBeTruthy()
     await mappingTab!.trigger('click')
 
-    expect(wrapper.text()).not.toContain('Flash-Image')
-    expect(wrapper.text()).not.toContain('Pro-Image')
+    expect(wrapper.text()).toContain('Flash-Image')
+    expect(wrapper.text()).toContain('Pro-Image')
     expect(wrapper.text()).not.toContain('GPT-5.3 Codex Spark')
   })
 
@@ -200,6 +200,32 @@ describe('BulkEditAccountModal', () => {
         openai_passthrough: true
       }
     })
+  })
+
+  it('OpenAI 管理员批量编辑可提交账号等级', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+
+    await wrapper.get('#bulk-edit-account-level-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-level').setValue('plus')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      account_level: 'plus'
+    })
+  })
+
+  it('非 OpenAI 账号批量编辑不显示账号等级入口', () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['anthropic'],
+      selectedTypes: ['oauth']
+    })
+
+    expect(wrapper.find('#bulk-edit-account-level-enabled').exists()).toBe(false)
   })
 
   it('OpenAI OAuth 批量编辑应提交 OAuth 专属 WS mode 字段', async () => {

@@ -170,6 +170,11 @@ func (s *PaymentService) RequestRefund(ctx context.Context, oid, uid int64, reas
 		return infraerrors.Conflict("CONFLICT", "order status changed")
 	}
 	s.writeAuditLog(ctx, oid, "REFUND_REQUESTED", fmt.Sprintf("user:%d", uid), map[string]any{"amount": o.Amount, "reason": nr})
+	if refundedOrder, err := s.entClient.PaymentOrder.Get(ctx, oid); err == nil {
+		s.notifyPaymentOrder(ctx, "refund_requested", refundedOrder)
+	} else {
+		slog.Warn("payment.system_notice_refund_requested_reload_failed", "order_id", oid, "error", err)
+	}
 	return nil
 }
 
@@ -366,11 +371,21 @@ func (s *PaymentService) handleGwFail(ctx context.Context, p *RefundPlan, gErr e
 	if s.RollbackRefund(ctx, p, gErr) {
 		s.restoreStatus(ctx, p)
 		s.writeAuditLog(ctx, p.OrderID, "REFUND_GATEWAY_FAILED", "admin", map[string]any{"detail": psErrMsg(gErr)})
+		if failedOrder, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID); err == nil {
+			s.notifyPaymentOrder(ctx, "refund_failed", failedOrder)
+		} else {
+			slog.Warn("payment.system_notice_refund_failed_reload_failed", "order_id", p.OrderID, "error", err)
+		}
 		return &RefundResult{Success: false, Warning: "gateway failed: " + psErrMsg(gErr) + ", rolled back"}, nil
 	}
 	now := time.Now()
 	_, _ = s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(OrderStatusRefundFailed).SetFailedAt(now).SetFailedReason(psErrMsg(gErr)).Save(ctx)
 	s.writeAuditLog(ctx, p.OrderID, "REFUND_FAILED", "admin", map[string]any{"detail": psErrMsg(gErr)})
+	if failedOrder, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID); err == nil {
+		s.notifyPaymentOrder(ctx, "refund_failed", failedOrder)
+	} else {
+		slog.Warn("payment.system_notice_refund_failed_reload_failed", "order_id", p.OrderID, "error", err)
+	}
 	return nil, infraerrors.InternalServer("REFUND_FAILED", psErrMsg(gErr))
 }
 
@@ -385,6 +400,11 @@ func (s *PaymentService) markRefundOk(ctx context.Context, p *RefundPlan) (*Refu
 		return nil, fmt.Errorf("mark refund: %w", err)
 	}
 	s.writeAuditLog(ctx, p.OrderID, "REFUND_SUCCESS", "admin", map[string]any{"refundAmount": p.RefundAmount, "reason": p.Reason, "balanceDeducted": p.BalanceToDeduct, "force": p.Force})
+	if refundedOrder, err := s.entClient.PaymentOrder.Get(ctx, p.OrderID); err == nil {
+		s.notifyPaymentOrder(ctx, "refunded", refundedOrder)
+	} else {
+		slog.Warn("payment.system_notice_refunded_reload_failed", "order_id", p.OrderID, "error", err)
+	}
 	return &RefundResult{Success: true, BalanceDeducted: p.BalanceToDeduct, SubDaysDeducted: p.SubDaysToDeduct}, nil
 }
 

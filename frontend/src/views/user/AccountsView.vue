@@ -491,6 +491,7 @@
       @reauth="handleReAuth"
       @refresh-token="handleRefreshToken"
       @set-privacy="handleSetPrivacy"
+      @verify-level="handleVerifyLevel"
     />
   </AppLayout>
 </template>
@@ -499,7 +500,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { accountsAPI, userGroupsAPI } from '@/api'
-import type { AccountBatchTask } from '@/api/accounts'
+import type { AccountBatchTask, UserAccountVerifyLevelTarget } from '@/api/accounts'
 import { useAppStore } from '@/stores/app'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -556,6 +557,7 @@ const reAuthAccount = ref<Account | null>(null)
 const togglingStatusId = ref<number | null>(null)
 const togglingSchedulableId = ref<number | null>(null)
 const revalidatingShareId = ref<number | null>(null)
+const verifyingLevelId = ref<number | null>(null)
 const usageManualRefreshToken = ref(0)
 const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
@@ -1126,7 +1128,7 @@ function openActionMenu(account: Account, event: MouseEvent): void {
   actionMenu.account = account
   const target = event.currentTarget as HTMLElement | null
   const menuWidth = 208
-  const menuHeight = 220
+  const menuHeight = 320
   const padding = 8
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
@@ -1219,6 +1221,42 @@ async function handleSetPrivacy(account: Account): Promise<void> {
   } catch (error: any) {
     console.error('Failed to set user account privacy:', error)
     appStore.showError(error?.response?.data?.message || t('admin.accounts.privacyFailed'))
+  }
+}
+
+async function handleVerifyLevel(account: Account, targetLevel: UserAccountVerifyLevelTarget): Promise<void> {
+  if (verifyingLevelId.value !== null) {
+    appStore.showWarning(t('userAccounts.levelVerifyInProgress'))
+    return
+  }
+  verifyingLevelId.value = account.id
+  try {
+    appStore.showInfo(
+      targetLevel === 'plus'
+        ? t('userAccounts.levelVerifyingPlus')
+        : t('userAccounts.levelUpdatingFree')
+    )
+    const result = await accountsAPI.verifyLevel(account.id, targetLevel)
+    patchAccountInList(result.account)
+    usageManualRefreshToken.value += 1
+    await refreshTodayStatsBatch()
+    if (targetLevel === 'free') {
+      appStore.showSuccess(t('userAccounts.levelFreeUpdated'))
+      return
+    }
+    if (result.verified) {
+      appStore.showSuccess(t('userAccounts.levelPlusVerified'))
+      return
+    }
+    const message = result.error_message
+      ? t('userAccounts.levelPlusRejectedWithReason', { reason: result.error_message })
+      : t('userAccounts.levelPlusRejected')
+    appStore.showWarning(message)
+  } catch (error: any) {
+    console.error('Failed to verify user account level:', error)
+    appStore.showError(error?.response?.data?.message || error?.message || t('userAccounts.levelVerifyFailed'))
+  } finally {
+    verifyingLevelId.value = null
   }
 }
 

@@ -199,6 +199,11 @@ type Account struct {
 	RateLimitResetAt *time.Time `json:"rate_limit_reset_at"`
 	OverloadUntil    *time.Time `json:"overload_until"`
 
+	Codex5hLimitPercent         *float64   `json:"codex_5h_limit_percent,omitempty"`
+	Codex7dLimitPercent         *float64   `json:"codex_7d_limit_percent,omitempty"`
+	CodexQuotaProtectionReason  *string    `json:"codex_quota_protection_reason,omitempty"`
+	CodexQuotaProtectionResetAt *time.Time `json:"codex_quota_protection_reset_at,omitempty"`
+
 	TempUnschedulableUntil  *time.Time `json:"temp_unschedulable_until"`
 	TempUnschedulableReason string     `json:"temp_unschedulable_reason"`
 

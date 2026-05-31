@@ -126,6 +126,70 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.Contains(t, recorder.Body.String(), "test_complete")
 }
 
+func TestAccountTestService_OpenAIDefaultConnectionTestUsesGPT55(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	account := &Account{
+		ID:          101,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+	repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{accountsByID: map[int64]*Account{
+		account.ID: account,
+	}}}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+
+	result, err := svc.RunTestBackground(ctx.Request.Context(), 101, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "success", result.Status)
+	require.Len(t, upstream.requests, 1)
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(upstream.requests[0].Body).Decode(&payload))
+	require.Equal(t, "gpt-5.5", payload["model"])
+}
+
+func TestAccountTestService_OpenAIExplicitPlusVerificationModelUsesGPT54(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	account := &Account{
+		ID:          102,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+	repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{accountsByID: map[int64]*Account{
+		account.ID: account,
+	}}}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+
+	result, err := svc.RunTestBackground(ctx.Request.Context(), 102, "gpt-5.4")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "success", result.Status)
+	require.Len(t, upstream.requests, 1)
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(upstream.requests[0].Body).Decode(&payload))
+	require.Equal(t, "gpt-5.4", payload["model"])
+}
+
 func TestCreateOpenAITestPayload_OAuthOmitsMaxOutputTokens(t *testing.T) {
 	payload := createOpenAITestPayload("gpt-5.4", true)
 

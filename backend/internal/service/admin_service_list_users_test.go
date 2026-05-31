@@ -64,6 +64,7 @@ type userGroupRateRepoStubForListUsers struct {
 
 	singleErr  map[int64]error
 	singleData map[int64]map[int64]float64
+	syncErr    error
 }
 
 func (s *userGroupRateRepoStubForListUsers) GetByUserIDs(_ context.Context, _ []int64) (map[int64]map[int64]float64, error) {
@@ -94,11 +95,15 @@ func (s *userGroupRateRepoStubForListUsers) GetRPMOverrideByUserAndGroup(_ conte
 }
 
 func (s *userGroupRateRepoStubForListUsers) SyncUserGroupRates(_ context.Context, userID int64, rates map[int64]*float64) error {
-	panic("unexpected SyncUserGroupRates call")
+	return s.syncErr
 }
 
 func (s *userGroupRateRepoStubForListUsers) GetByGroupID(_ context.Context, _ int64) ([]UserGroupRateEntry, error) {
 	panic("unexpected GetByGroupID call")
+}
+
+func (s *userGroupRateRepoStubForListUsers) GetRateMultipliersByGroupID(_ context.Context, _ int64) (map[int64]float64, error) {
+	panic("unexpected GetRateMultipliersByGroupID call")
 }
 
 func (s *userGroupRateRepoStubForListUsers) SyncGroupRateMultipliers(_ context.Context, _ int64, _ []GroupRateMultiplierInput) error {

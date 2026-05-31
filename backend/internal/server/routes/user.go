@@ -111,6 +111,7 @@ func RegisterUserRoutes(
 			accounts.POST("/batch-revalidate-public-share/async", h.UserAccount.CreateBatchRevalidatePublicShareTask)
 			accounts.GET("/batch-tasks/:task_id", h.UserAccount.GetBatchTask)
 			accounts.POST("/:id/test", h.UserAccount.Test)
+			accounts.POST("/:id/verify-level", h.UserAccount.VerifyLevel)
 			accounts.POST("/:id/refresh", h.UserAccount.Refresh)
 			accounts.POST("/:id/set-privacy", h.UserAccount.SetPrivacy)
 			accounts.POST("/:id/revalidate-public-share", h.UserAccount.RevalidatePublicShare)
@@ -170,6 +171,19 @@ func RegisterUserRoutes(
 		{
 			announcements.GET("", h.Announcement.List)
 			announcements.POST("/:id/read", h.Announcement.MarkRead)
+		}
+
+		// 工单服务
+		conversations := authenticated.Group("/conversations")
+		{
+			conversations.GET("", h.Conversation.List)
+			conversations.POST("", h.Conversation.Create)
+			conversations.GET("/unread-count", h.Conversation.UnreadCount)
+			conversations.GET("/:id", h.Conversation.Get)
+			conversations.GET("/:id/messages", h.Conversation.ListMessages)
+			conversations.POST("/:id/messages", h.Conversation.AddMessage)
+			conversations.POST("/:id/read", h.Conversation.MarkRead)
+			conversations.POST("/:id/close", h.Conversation.Close)
 		}
 
 		// 卡密兑换

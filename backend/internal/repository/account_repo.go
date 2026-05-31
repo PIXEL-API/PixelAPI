@@ -575,9 +575,11 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 			a.extra->>'codex_5h_used_percent',
 			a.extra->>'codex_5h_reset_after_seconds',
 			a.extra->>'codex_5h_reset_at',
+			a.extra->>'codex_5h_limit_percent',
 			a.extra->>'codex_7d_used_percent',
 			a.extra->>'codex_7d_reset_after_seconds',
 			a.extra->>'codex_7d_reset_at',
+			a.extra->>'codex_7d_limit_percent',
 			a.extra->>'codex_usage_updated_at',
 			a.extra->>'privacy_mode',
 			a.owner_user_id,
@@ -608,8 +610,8 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 		var quotaDailyStart, quotaDailyResetMode, quotaDailyResetAt sql.NullString
 		var quotaWeeklyLimit, quotaWeeklyUsed, quotaWeeklyStart sql.NullString
 		var quotaWeeklyResetMode, quotaWeeklyResetAt sql.NullString
-		var codex5hUsedPercent, codex5hResetAfterSeconds, codex5hResetAt sql.NullString
-		var codex7dUsedPercent, codex7dResetAfterSeconds, codex7dResetAt sql.NullString
+		var codex5hUsedPercent, codex5hResetAfterSeconds, codex5hResetAt, codex5hLimitPercent sql.NullString
+		var codex7dUsedPercent, codex7dResetAfterSeconds, codex7dResetAt, codex7dLimitPercent sql.NullString
 		var codexUsageUpdatedAt, privacyMode sql.NullString
 		if err := rows.Scan(
 			&account.ID,
@@ -632,9 +634,11 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 			&codex5hUsedPercent,
 			&codex5hResetAfterSeconds,
 			&codex5hResetAt,
+			&codex5hLimitPercent,
 			&codex7dUsedPercent,
 			&codex7dResetAfterSeconds,
 			&codex7dResetAt,
+			&codex7dLimitPercent,
 			&codexUsageUpdatedAt,
 			&privacyMode,
 			&ownerUserID,
@@ -673,9 +677,11 @@ func (r *accountRepository) listQuotaPoolAccountRows(ctx context.Context, ownerU
 		setNullStringExtra(account.Extra, "codex_5h_used_percent", codex5hUsedPercent)
 		setNullStringExtra(account.Extra, "codex_5h_reset_after_seconds", codex5hResetAfterSeconds)
 		setNullStringExtra(account.Extra, "codex_5h_reset_at", codex5hResetAt)
+		setNullStringExtra(account.Extra, "codex_5h_limit_percent", codex5hLimitPercent)
 		setNullStringExtra(account.Extra, "codex_7d_used_percent", codex7dUsedPercent)
 		setNullStringExtra(account.Extra, "codex_7d_reset_after_seconds", codex7dResetAfterSeconds)
 		setNullStringExtra(account.Extra, "codex_7d_reset_at", codex7dResetAt)
+		setNullStringExtra(account.Extra, "codex_7d_limit_percent", codex7dLimitPercent)
 		setNullStringExtra(account.Extra, "codex_usage_updated_at", codexUsageUpdatedAt)
 		setNullStringExtra(account.Extra, "privacy_mode", privacyMode)
 		accounts = append(accounts, account)
@@ -1667,10 +1673,12 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	if affected == 0 {
 		return service.ErrAccountNotFound
 	}
-	if shouldEnqueueSchedulerOutboxForExtraUpdates(updates) {
+	if shouldEnqueueSchedulerOutboxForExtraUpdates(updates) ||
+		(hasCodexQuotaProtectionRelevantExtraUpdate(updates) && r.isCodexQuotaProtectionActive(ctx, id)) {
 		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue extra update failed: account=%d err=%v", id, err)
 		}
+		r.syncSchedulerAccountSnapshot(ctx, id)
 	} else {
 		// 观测型 extra 字段不需要触发 bucket 重建，但仍同步单账号快照，
 		// 让 sticky session / GetAccount 命中缓存时也能读到最新数据，
@@ -1680,15 +1688,50 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	return nil
 }
 
+func (r *accountRepository) isCodexQuotaProtectionActive(ctx context.Context, accountID int64) bool {
+	account, err := r.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		if err != nil {
+			logger.LegacyPrintf("repository.account", "[Scheduler] check codex quota protection failed: account=%d err=%v", accountID, err)
+		}
+		return false
+	}
+	return account.IsCodexQuotaProtectionActiveAt(time.Now())
+}
+
 func shouldEnqueueSchedulerOutboxForExtraUpdates(updates map[string]any) bool {
 	if len(updates) == 0 {
 		return false
 	}
 	for key := range updates {
+		if isCodexQuotaLimitExtraKey(key) {
+			return true
+		}
 		if isSchedulerNeutralExtraKey(key) {
 			continue
 		}
 		return true
+	}
+	return false
+}
+
+func isCodexQuotaLimitExtraKey(key string) bool {
+	switch strings.TrimSpace(key) {
+	case "codex_5h_limit_percent", "codex_7d_limit_percent":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasCodexQuotaProtectionRelevantExtraUpdate(updates map[string]any) bool {
+	for key := range updates {
+		switch strings.TrimSpace(key) {
+		case "codex_5h_used_percent", "codex_5h_reset_at", "codex_5h_reset_after_seconds",
+			"codex_7d_used_percent", "codex_7d_reset_at", "codex_7d_reset_after_seconds",
+			"codex_5h_limit_percent", "codex_7d_limit_percent":
+			return true
+		}
 	}
 	return false
 }

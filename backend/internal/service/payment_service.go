@@ -256,6 +256,7 @@ type PaymentService struct {
 	resumeService    *PaymentResumeService
 	affiliateService *AffiliateService
 	shopFulfillment  ShopPaymentFulfillment
+	systemNotice     *SystemNoticeService
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {
@@ -269,6 +270,13 @@ func (s *PaymentService) SetShopFulfillment(fulfillment ShopPaymentFulfillment) 
 		return
 	}
 	s.shopFulfillment = fulfillment
+}
+
+func (s *PaymentService) SetSystemNoticeService(noticeService *SystemNoticeService) {
+	if s == nil {
+		return
+	}
+	s.systemNotice = noticeService
 }
 
 // --- Provider Registry ---
