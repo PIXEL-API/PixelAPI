@@ -118,6 +118,9 @@ func TestParsePaymentConfig(t *testing.T) {
 			SettingLoadBalanceStrategy: "least_amount",
 			SettingProductNamePrefix:   "PRE",
 			SettingProductNameSuffix:   "SUF",
+			SettingPaymentAnnouncement: "Please read before paying",
+			SettingRechargeCenterItems: `[{"name":"FastPay","description":"Instant balance top-up","url":"https://pay.example.com/fast"}]`,
+			SettingHelpText:            "Contact support after payment",
 		}
 		cfg := svc.parsePaymentConfig(vals)
 
@@ -156,6 +159,18 @@ func TestParsePaymentConfig(t *testing.T) {
 		}
 		if cfg.ProductNameSuffix != "SUF" {
 			t.Fatalf("ProductNameSuffix = %q, want %q", cfg.ProductNameSuffix, "SUF")
+		}
+		if cfg.AnnouncementText != "Please read before paying" {
+			t.Fatalf("AnnouncementText = %q, want %q", cfg.AnnouncementText, "Please read before paying")
+		}
+		if len(cfg.RechargeCenterItems) != 1 {
+			t.Fatalf("RechargeCenterItems len = %d, want 1", len(cfg.RechargeCenterItems))
+		}
+		if cfg.RechargeCenterItems[0].Name != "FastPay" || cfg.RechargeCenterItems[0].URL != "https://pay.example.com/fast" {
+			t.Fatalf("RechargeCenterItems[0] = %+v, want FastPay URL", cfg.RechargeCenterItems[0])
+		}
+		if cfg.HelpText != "Contact support after payment" {
+			t.Fatalf("HelpText = %q, want %q", cfg.HelpText, "Contact support after payment")
 		}
 	})
 
@@ -457,6 +472,53 @@ func TestUpdatePaymentConfig_PersistsVisibleMethodRouting(t *testing.T) {
 	}
 	if repo.values[SettingPaymentVisibleMethodWxpaySource] != VisibleMethodSourceOfficialWechat {
 		t.Fatalf("wxpay source = %q, want %q", repo.values[SettingPaymentVisibleMethodWxpaySource], VisibleMethodSourceOfficialWechat)
+	}
+}
+
+func TestUpdatePaymentConfig_PersistsAnnouncementText(t *testing.T) {
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo}
+
+	err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		AnnouncementText: paymentConfigStrPtr("Pay exact amount only"),
+	})
+	if err != nil {
+		t.Fatalf("UpdatePaymentConfig returned error: %v", err)
+	}
+
+	if repo.values[SettingPaymentAnnouncement] != "Pay exact amount only" {
+		t.Fatalf("announcement = %q, want %q", repo.values[SettingPaymentAnnouncement], "Pay exact amount only")
+	}
+}
+
+func TestUpdatePaymentConfig_PersistsRechargeCenterItems(t *testing.T) {
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo}
+
+	err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		RechargeCenterItems: []RechargeCenterItem{
+			{Name: " FastPay ", Description: " Instant top-up ", URL: " https://pay.example.com/fast "},
+			{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdatePaymentConfig returned error: %v", err)
+	}
+
+	if repo.values[SettingRechargeCenterItems] != `[{"name":"FastPay","description":"Instant top-up","url":"https://pay.example.com/fast"}]` {
+		t.Fatalf("recharge center items = %q", repo.values[SettingRechargeCenterItems])
+	}
+}
+
+func TestUpdatePaymentConfig_RejectsInvalidRechargeCenterURL(t *testing.T) {
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo}
+
+	err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		RechargeCenterItems: []RechargeCenterItem{{Name: "FastPay", URL: "/relative"}},
+	})
+	if err == nil {
+		t.Fatal("expected invalid recharge center URL error")
 	}
 }
 

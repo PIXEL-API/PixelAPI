@@ -376,6 +376,8 @@ const baseSettingsResponse = {
   payment_load_balance_strategy: "round-robin",
   payment_product_name_prefix: "",
   payment_product_name_suffix: "",
+  payment_announcement_text: "",
+  payment_recharge_center_items: [],
   payment_help_image_url: "",
   payment_help_text: "",
   payment_cancel_rate_limit_enabled: false,

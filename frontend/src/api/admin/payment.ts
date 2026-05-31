@@ -10,7 +10,8 @@ import type {
   PaymentOrder,
   PaymentChannel,
   SubscriptionPlan,
-  ProviderInstance
+  ProviderInstance,
+  RechargeCenterItem
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 import type { ReceiptCodePaymentMethod, WithdrawalRequest } from '@/types'
@@ -26,9 +27,12 @@ export interface AdminPaymentConfig {
   enabled_payment_types: string[]
   balance_disabled: boolean
   balance_recharge_multiplier: number
+  recharge_fee_rate: number
   load_balance_strategy: string
   product_name_prefix: string
   product_name_suffix: string
+  announcement_text: string
+  recharge_center_items: RechargeCenterItem[]
   help_image_url: string
   help_text: string
 }
@@ -44,9 +48,12 @@ export interface UpdatePaymentConfigRequest {
   enabled_payment_types?: string[]
   balance_disabled?: boolean
   balance_recharge_multiplier?: number
+  recharge_fee_rate?: number
   load_balance_strategy?: string
   product_name_prefix?: string
   product_name_suffix?: string
+  announcement_text?: string
+  recharge_center_items?: RechargeCenterItem[]
   help_image_url?: string
   help_text?: string
 }

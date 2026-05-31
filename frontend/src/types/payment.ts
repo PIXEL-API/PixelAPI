@@ -26,6 +26,12 @@ export type OrderType = 'balance' | 'subscription' | 'shop'
 
 // ==================== Configuration ====================
 
+export interface RechargeCenterItem {
+  name: string
+  description: string
+  url: string
+}
+
 export interface PaymentConfig {
   payment_enabled: boolean
   min_amount: number
@@ -36,6 +42,8 @@ export interface PaymentConfig {
   balance_disabled: boolean
   balance_recharge_multiplier: number
   enabled_payment_types: PaymentType[]
+  announcement_text: string
+  recharge_center_items: RechargeCenterItem[]
   help_image_url: string
   help_text: string
   stripe_publishable_key: string
@@ -70,6 +78,8 @@ export interface CheckoutInfoResponse {
   balance_disabled: boolean
   balance_recharge_multiplier: number
   recharge_fee_rate: number
+  announcement_text: string
+  recharge_center_items: RechargeCenterItem[]
   help_text: string
   help_image_url: string
   stripe_publishable_key: string

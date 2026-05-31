@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,8 @@ const (
 	SettingRechargeFeeRate     = "RECHARGE_FEE_RATE"
 	SettingProductNamePrefix   = "PRODUCT_NAME_PREFIX"
 	SettingProductNameSuffix   = "PRODUCT_NAME_SUFFIX"
+	SettingPaymentAnnouncement = "PAYMENT_ANNOUNCEMENT_TEXT"
+	SettingRechargeCenterItems = "PAYMENT_RECHARGE_CENTER_ITEMS"
 	SettingHelpImageURL        = "PAYMENT_HELP_IMAGE_URL"
 	SettingHelpText            = "PAYMENT_HELP_TEXT"
 	SettingCancelRateLimitOn   = "CANCEL_RATE_LIMIT_ENABLED"
@@ -65,22 +68,24 @@ const (
 
 // PaymentConfig holds the payment system configuration.
 type PaymentConfig struct {
-	Enabled                   bool     `json:"enabled"`
-	MinAmount                 float64  `json:"min_amount"`
-	MaxAmount                 float64  `json:"max_amount"`
-	DailyLimit                float64  `json:"daily_limit"`
-	OrderTimeoutMin           int      `json:"order_timeout_minutes"`
-	MaxPendingOrders          int      `json:"max_pending_orders"`
-	EnabledTypes              []string `json:"enabled_payment_types"`
-	BalanceDisabled           bool     `json:"balance_disabled"`
-	BalanceRechargeMultiplier float64  `json:"balance_recharge_multiplier"`
-	RechargeFeeRate           float64  `json:"recharge_fee_rate"`
-	LoadBalanceStrategy       string   `json:"load_balance_strategy"`
-	ProductNamePrefix         string   `json:"product_name_prefix"`
-	ProductNameSuffix         string   `json:"product_name_suffix"`
-	HelpImageURL              string   `json:"help_image_url"`
-	HelpText                  string   `json:"help_text"`
-	StripePublishableKey      string   `json:"stripe_publishable_key,omitempty"`
+	Enabled                   bool                 `json:"enabled"`
+	MinAmount                 float64              `json:"min_amount"`
+	MaxAmount                 float64              `json:"max_amount"`
+	DailyLimit                float64              `json:"daily_limit"`
+	OrderTimeoutMin           int                  `json:"order_timeout_minutes"`
+	MaxPendingOrders          int                  `json:"max_pending_orders"`
+	EnabledTypes              []string             `json:"enabled_payment_types"`
+	BalanceDisabled           bool                 `json:"balance_disabled"`
+	BalanceRechargeMultiplier float64              `json:"balance_recharge_multiplier"`
+	RechargeFeeRate           float64              `json:"recharge_fee_rate"`
+	LoadBalanceStrategy       string               `json:"load_balance_strategy"`
+	ProductNamePrefix         string               `json:"product_name_prefix"`
+	ProductNameSuffix         string               `json:"product_name_suffix"`
+	AnnouncementText          string               `json:"announcement_text"`
+	RechargeCenterItems       []RechargeCenterItem `json:"recharge_center_items"`
+	HelpImageURL              string               `json:"help_image_url"`
+	HelpText                  string               `json:"help_text"`
+	StripePublishableKey      string               `json:"stripe_publishable_key,omitempty"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled bool   `json:"cancel_rate_limit_enabled"`
@@ -90,6 +95,12 @@ type PaymentConfig struct {
 	CancelRateLimitMode    string `json:"cancel_rate_limit_window_mode"`
 
 	ReceiptCodeOSS ReceiptCodeOSSConfig `json:"receipt_code_oss"`
+}
+
+type RechargeCenterItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
 }
 
 type ReceiptCodeOSSConfig struct {
@@ -109,21 +120,23 @@ type ReceiptCodeOSSConfig struct {
 
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
 type UpdatePaymentConfigRequest struct {
-	Enabled                   *bool    `json:"enabled"`
-	MinAmount                 *float64 `json:"min_amount"`
-	MaxAmount                 *float64 `json:"max_amount"`
-	DailyLimit                *float64 `json:"daily_limit"`
-	OrderTimeoutMin           *int     `json:"order_timeout_minutes"`
-	MaxPendingOrders          *int     `json:"max_pending_orders"`
-	EnabledTypes              []string `json:"enabled_payment_types"`
-	BalanceDisabled           *bool    `json:"balance_disabled"`
-	BalanceRechargeMultiplier *float64 `json:"balance_recharge_multiplier"`
-	RechargeFeeRate           *float64 `json:"recharge_fee_rate"`
-	LoadBalanceStrategy       *string  `json:"load_balance_strategy"`
-	ProductNamePrefix         *string  `json:"product_name_prefix"`
-	ProductNameSuffix         *string  `json:"product_name_suffix"`
-	HelpImageURL              *string  `json:"help_image_url"`
-	HelpText                  *string  `json:"help_text"`
+	Enabled                   *bool                `json:"enabled"`
+	MinAmount                 *float64             `json:"min_amount"`
+	MaxAmount                 *float64             `json:"max_amount"`
+	DailyLimit                *float64             `json:"daily_limit"`
+	OrderTimeoutMin           *int                 `json:"order_timeout_minutes"`
+	MaxPendingOrders          *int                 `json:"max_pending_orders"`
+	EnabledTypes              []string             `json:"enabled_payment_types"`
+	BalanceDisabled           *bool                `json:"balance_disabled"`
+	BalanceRechargeMultiplier *float64             `json:"balance_recharge_multiplier"`
+	RechargeFeeRate           *float64             `json:"recharge_fee_rate"`
+	LoadBalanceStrategy       *string              `json:"load_balance_strategy"`
+	ProductNamePrefix         *string              `json:"product_name_prefix"`
+	ProductNameSuffix         *string              `json:"product_name_suffix"`
+	AnnouncementText          *string              `json:"announcement_text"`
+	RechargeCenterItems       []RechargeCenterItem `json:"recharge_center_items"`
+	HelpImageURL              *string              `json:"help_image_url"`
+	HelpText                  *string              `json:"help_text"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled *bool   `json:"cancel_rate_limit_enabled"`
@@ -250,7 +263,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
 		SettingProductNamePrefix, SettingProductNameSuffix,
-		SettingHelpImageURL, SettingHelpText,
+		SettingPaymentAnnouncement, SettingRechargeCenterItems, SettingHelpImageURL, SettingHelpText,
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
 		SettingCancelWindowSize, SettingCancelWindowUnit, SettingCancelWindowMode,
 		SettingPaymentVisibleMethodAlipayEnabled, SettingPaymentVisibleMethodAlipaySource,
@@ -286,6 +299,8 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		LoadBalanceStrategy:       vals[SettingLoadBalanceStrategy],
 		ProductNamePrefix:         vals[SettingProductNamePrefix],
 		ProductNameSuffix:         vals[SettingProductNameSuffix],
+		AnnouncementText:          vals[SettingPaymentAnnouncement],
+		RechargeCenterItems:       parseRechargeCenterItems(vals[SettingRechargeCenterItems]),
 		HelpImageURL:              vals[SettingHelpImageURL],
 		HelpText:                  vals[SettingHelpText],
 
@@ -419,6 +434,7 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 		SettingLoadBalanceStrategy:               derefStr(req.LoadBalanceStrategy),
 		SettingProductNamePrefix:                 derefStr(req.ProductNamePrefix),
 		SettingProductNameSuffix:                 derefStr(req.ProductNameSuffix),
+		SettingPaymentAnnouncement:               derefStr(req.AnnouncementText),
 		SettingHelpImageURL:                      derefStr(req.HelpImageURL),
 		SettingHelpText:                          derefStr(req.HelpText),
 		SettingCancelRateLimitOn:                 formatBoolOrEmpty(req.CancelRateLimitEnabled),
@@ -439,6 +455,13 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 		for key, value := range receiptCodeUpdates {
 			m[key] = value
 		}
+	}
+	if req.RechargeCenterItems != nil {
+		rechargeCenterItems, err := serializeRechargeCenterItems(req.RechargeCenterItems)
+		if err != nil {
+			return err
+		}
+		m[SettingRechargeCenterItems] = rechargeCenterItems
 	}
 	if req.EnabledTypes != nil {
 		m[SettingEnabledPaymentTypes] = strings.Join(req.EnabledTypes, ",")
@@ -568,6 +591,104 @@ func derefStr(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+func parseRechargeCenterItems(raw string) []RechargeCenterItem {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []RechargeCenterItem{}
+	}
+	var items []RechargeCenterItem
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return []RechargeCenterItem{}
+	}
+	normalized, err := normalizeRechargeCenterItems(items)
+	if err != nil {
+		return []RechargeCenterItem{}
+	}
+	return normalized
+}
+
+func serializeRechargeCenterItems(items []RechargeCenterItem) (string, error) {
+	normalized, err := normalizeRechargeCenterItems(items)
+	if err != nil {
+		return "", err
+	}
+	if len(normalized) == 0 {
+		return "[]", nil
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("marshal recharge center items: %w", err)
+	}
+	return string(data), nil
+}
+
+func normalizeRechargeCenterItems(items []RechargeCenterItem) ([]RechargeCenterItem, error) {
+	const (
+		maxRechargeCenterItems       = 20
+		maxRechargeCenterItemNameLen = 50
+		maxRechargeCenterItemDescLen = 300
+		maxRechargeCenterItemURLLen  = 2048
+	)
+	if len(items) > maxRechargeCenterItems {
+		return nil, infraerrors.BadRequest("TOO_MANY_RECHARGE_CENTER_ITEMS", "recharge center items cannot exceed 20")
+	}
+	normalized := make([]RechargeCenterItem, 0, len(items))
+	for _, item := range items {
+		next := RechargeCenterItem{
+			Name:        strings.TrimSpace(item.Name),
+			Description: strings.TrimSpace(item.Description),
+			URL:         strings.TrimSpace(item.URL),
+		}
+		if next.Name == "" && next.Description == "" && next.URL == "" {
+			continue
+		}
+		if next.Name == "" {
+			return nil, infraerrors.BadRequest("RECHARGE_CENTER_NAME_REQUIRED", "recharge center item name is required")
+		}
+		if next.URL == "" {
+			return nil, infraerrors.BadRequest("RECHARGE_CENTER_URL_REQUIRED", "recharge center item URL is required")
+		}
+		if len(next.Name) > maxRechargeCenterItemNameLen {
+			return nil, infraerrors.BadRequest("RECHARGE_CENTER_NAME_TOO_LONG", "recharge center item name is too long")
+		}
+		if len(next.Description) > maxRechargeCenterItemDescLen {
+			return nil, infraerrors.BadRequest("RECHARGE_CENTER_DESCRIPTION_TOO_LONG", "recharge center item description is too long")
+		}
+		if len(next.URL) > maxRechargeCenterItemURLLen {
+			return nil, infraerrors.BadRequest("RECHARGE_CENTER_URL_TOO_LONG", "recharge center item URL is too long")
+		}
+		if err := validateRechargeCenterURL(next.URL); err != nil {
+			return nil, infraerrors.BadRequest("INVALID_RECHARGE_CENTER_URL", "recharge center item URL must be an absolute http(s) URL")
+		}
+		normalized = append(normalized, next)
+	}
+	return normalized, nil
+}
+
+func validateRechargeCenterURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("empty url")
+	}
+	if strings.ContainsAny(raw, "\r\n") {
+		return fmt.Errorf("contains invalid characters")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if !parsed.IsAbs() {
+		return fmt.Errorf("must be absolute")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme: %s", parsed.Scheme)
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return fmt.Errorf("missing host")
+	}
+	return nil
 }
 
 func parseBoolWithDefault(raw string, fallback bool) bool {

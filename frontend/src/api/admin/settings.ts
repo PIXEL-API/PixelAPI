@@ -11,6 +11,12 @@ export interface DefaultSubscriptionSetting {
   validity_days: number;
 }
 
+export interface PaymentRechargeCenterItem {
+  name: string;
+  description: string;
+  url: string;
+}
+
 export type AuthSourceType = "email" | "linuxdo" | "oidc" | "wechat" | "github" | "google";
 
 export interface AuthSourceDefaultsValue {
@@ -490,6 +496,8 @@ export interface SystemSettings {
   payment_load_balance_strategy: string;
   payment_product_name_prefix: string;
   payment_product_name_suffix: string;
+  payment_announcement_text: string;
+  payment_recharge_center_items: PaymentRechargeCenterItem[];
   payment_help_image_url: string;
   payment_help_text: string;
   payment_receipt_code_oss_enabled: boolean;
@@ -708,6 +716,8 @@ export interface UpdateSettingsRequest {
   payment_load_balance_strategy?: string;
   payment_product_name_prefix?: string;
   payment_product_name_suffix?: string;
+  payment_announcement_text?: string;
+  payment_recharge_center_items?: PaymentRechargeCenterItem[];
   payment_help_image_url?: string;
   payment_help_text?: string;
   payment_receipt_code_oss_enabled?: boolean;

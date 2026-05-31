@@ -106,6 +106,8 @@ function checkoutInfoFixture() {
       balance_disabled: false,
       balance_recharge_multiplier: 1,
       recharge_fee_rate: 0,
+      announcement_text: '',
+      recharge_center_items: [],
       help_text: '',
       help_image_url: '',
       stripe_publishable_key: '',
@@ -233,6 +235,115 @@ describe('PaymentView WeChat JSAPI flow', () => {
       },
     })
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+  })
+
+  it('renders checkout announcement on the initial payment selection screen', async () => {
+    routeState.query = {}
+    getCheckoutInfo.mockResolvedValue({
+      data: {
+        ...checkoutInfoFixture().data,
+        announcement_text: 'Pay exact amount only\nGuide: https://pay.example.com/help.',
+      },
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Pay exact amount only')
+    expect(wrapper.text()).toContain('Guide:')
+    const link = wrapper.get('a[href="https://pay.example.com/help"]')
+    expect(link.text()).toBe('https://pay.example.com/help')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toBe('noopener noreferrer')
+    expect(wrapper.text()).toContain('.')
+  })
+
+  it('opens recharge center links in a new page by default', async () => {
+    routeState.query = {}
+    getCheckoutInfo.mockResolvedValue({
+      data: {
+        ...checkoutInfoFixture().data,
+        recharge_center_items: [
+          {
+            name: 'FastPay',
+            description: 'Instant recharge',
+            url: 'https://pay.example.com/fast',
+          },
+        ],
+      },
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('FastPay')
+    expect(wrapper.text()).toContain('Instant recharge')
+    const link = wrapper.get('a[href="https://pay.example.com/fast"]')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toBe('noopener noreferrer')
+  })
+
+  it('creates a recharge order directly without opening the old notice dialog', async () => {
+    routeState.query = {}
+    createOrder.mockResolvedValue({
+      order_id: 888,
+      amount: 5,
+      pay_amount: 5,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=direct-order',
+      out_trade_no: 'sub2_qr_888',
+    })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+          AmountInput: {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<button class="amount-stub" @click="$emit(\'update:modelValue\', 5)">set amount</button>',
+          },
+          PaymentMethodSelector: true,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+    await wrapper.get('button:nth-of-type(2)').trigger('click')
+    await flushPromises()
+    await wrapper.get('.amount-stub').trigger('click')
+    await flushPromises()
+    await wrapper.get('button.btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ConfirmDialog' }).exists()).toBe(false)
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      amount: 5,
+      payment_type: 'wxpay',
+      order_type: 'balance',
+    }))
   })
 
   it('resets payment state when JSAPI reports cancellation', async () => {

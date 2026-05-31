@@ -12,6 +12,26 @@
             :class="activeTab === tab.key ? 'bg-white text-gray-900 shadow dark:bg-dark-700 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
             @click="activeTab = tab.key">{{ tab.label }}</button>
         </div>
+        <div v-if="checkout.announcement_text && paymentPhase === 'select' && !selectedPlan"
+          class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 shadow-sm dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-200">
+          <div class="flex items-start gap-3">
+            <Icon name="exclamationTriangle" size="sm" class="mt-0.5 shrink-0 text-amber-500 dark:text-amber-300" />
+            <p class="whitespace-pre-line break-words">
+              <template v-for="(part, index) in announcementParts" :key="`${part.type}-${index}-${part.text}`">
+                <a
+                  v-if="part.type === 'link'"
+                  :href="part.href"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="font-medium text-amber-700 underline decoration-amber-400 underline-offset-2 transition-colors hover:text-amber-900 dark:text-amber-100 dark:decoration-amber-300 dark:hover:text-white"
+                >
+                  {{ part.text }}
+                </a>
+                <span v-else>{{ part.text }}</span>
+              </template>
+            </p>
+          </div>
+        </div>
         <!-- Payment in progress (shared by recharge and subscription) -->
         <template v-if="paymentPhase === 'paying'">
           <PaymentStatusPanel
@@ -28,8 +48,37 @@
         </template>
         <!-- Tab content (select phase) -->
         <template v-else>
+          <!-- Recharge Center Tab -->
+          <template v-if="activeTab === 'center'">
+            <div v-if="rechargeCenterItems.length === 0" class="card py-16 text-center">
+              <p class="text-gray-500 dark:text-gray-400">{{ t('payment.rechargeCenter.empty') }}</p>
+            </div>
+            <div v-else class="card divide-y divide-gray-100 p-0 dark:divide-dark-700">
+              <div
+                v-for="item in rechargeCenterItems"
+                :key="`${item.name}-${item.url}`"
+                class="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-[minmax(8rem,12rem)_1fr_auto] md:items-center"
+              >
+                <div class="min-w-0 text-base font-semibold text-gray-900 dark:text-white">
+                  {{ item.name }}
+                </div>
+                <div class="min-w-0 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                  {{ item.description }}
+                </div>
+                <a
+                  :href="item.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="btn btn-primary min-h-[44px] w-full justify-center md:w-auto"
+                >
+                  <Icon name="externalLink" size="sm" class="mr-1.5" />
+                  {{ t('payment.rechargeCenter.go') }}
+                </a>
+              </div>
+            </div>
+          </template>
           <!-- Top-up Tab -->
-          <template v-if="activeTab === 'recharge'">
+          <template v-else-if="activeTab === 'recharge'">
             <!-- Recharge Account Card -->
             <div class="card p-5">
               <p class="text-xs font-medium text-gray-400 dark:text-gray-500">{{ t('payment.rechargeAccount') }}</p>
@@ -243,15 +292,6 @@
         </div>
       </Transition>
     </Teleport>
-    <ConfirmDialog
-      :show="showRechargeNoticeDialog"
-      :title="t('payment.rechargeNotice.title')"
-      :message="t('payment.rechargeNotice.message')"
-      :confirm-text="t('payment.rechargeNotice.confirm')"
-      :cancel-text="t('common.cancel')"
-      @confirm="confirmRechargeNotice"
-      @cancel="cancelRechargeNotice"
-    />
   </AppLayout>
 </template>
 
@@ -266,12 +306,11 @@ import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
-import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType } from '@/types/payment'
+import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, RechargeCenterItem } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import { METHOD_ORDER, getPaymentPopupFeatures } from '@/components/payment/providerConfig'
-import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   buildCreateOrderPayload,
@@ -311,13 +350,12 @@ const loading = ref(true)
 const submitting = ref(false)
 const errorMessage = ref('')
 const errorHintMessage = ref('')
-const activeTab = ref<'recharge' | 'subscription'>('recharge')
+type PaymentTabKey = 'center' | 'recharge' | 'subscription'
+const activeTab = ref<PaymentTabKey>('center')
 const amount = ref<number | null>(null)
 const selectedMethod = ref('')
 const selectedPlan = ref<SubscriptionPlan | null>(null)
 const previewImage = ref('')
-const showRechargeNoticeDialog = ref(false)
-const pendingPaymentAction = ref<(() => Promise<void>) | null>(null)
 
 const RECHARGE_QUICK_AMOUNTS = [5, 10, 20, 30, 50, 100]
 
@@ -329,6 +367,12 @@ interface CreateOrderOptions {
   paymentType?: string
   isResume?: boolean
   mobileQrFallbackAttempted?: boolean
+}
+
+interface AnnouncementPart {
+  type: 'text' | 'link'
+  text: string
+  href?: string
 }
 
 interface WeixinJSBridgeLike {
@@ -468,11 +512,57 @@ function onPaymentSettled() {
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
   methods: {}, global_min: 0, global_max: 0, min_amount: 0, max_amount: 0,
-  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, recharge_fee_rate: 0, help_text: '', help_image_url: '', stripe_publishable_key: '',
+  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, recharge_fee_rate: 0, announcement_text: '', recharge_center_items: [], help_text: '', help_image_url: '', stripe_publishable_key: '',
 })
 
+const rechargeCenterItems = computed<RechargeCenterItem[]>(() =>
+  Array.isArray(checkout.value.recharge_center_items)
+    ? checkout.value.recharge_center_items
+    : [],
+)
+
+function trimTrailingUrlPunctuation(value: string): { href: string; trailing: string } {
+  let href = value
+  let trailing = ''
+  while (/[),.;!?，。！？；）]$/.test(href)) {
+    trailing = href.slice(-1) + trailing
+    href = href.slice(0, -1)
+  }
+  return { href, trailing }
+}
+
+function parseAnnouncementParts(text: string): AnnouncementPart[] {
+  const parts: AnnouncementPart[] = []
+  const urlPattern = /\b(?:https?:\/\/[^\s<>"']+|mailto:[^\s<>"']+)/gi
+  let lastIndex = 0
+  for (const match of text.matchAll(urlPattern)) {
+    const rawUrl = match[0]
+    const index = match.index ?? 0
+    if (index > lastIndex) {
+      parts.push({ type: 'text', text: text.slice(lastIndex, index) })
+    }
+
+    const { href, trailing } = trimTrailingUrlPunctuation(rawUrl)
+    if (href) {
+      parts.push({ type: 'link', text: href, href })
+    }
+    if (trailing) {
+      parts.push({ type: 'text', text: trailing })
+    }
+    lastIndex = index + rawUrl.length
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: 'text', text: text.slice(lastIndex) })
+  }
+  return parts.length > 0 ? parts : [{ type: 'text', text }]
+}
+
+const announcementParts = computed(() => parseAnnouncementParts(checkout.value.announcement_text || ''))
+
 const tabs = computed(() => {
-  const result: { key: 'recharge' | 'subscription'; label: string }[] = []
+  const result: { key: PaymentTabKey; label: string }[] = [
+    { key: 'center', label: t('payment.tabRechargeCenter') },
+  ]
   if (!checkout.value.balance_disabled) result.push({ key: 'recharge', label: t('payment.tabTopUp') })
   result.push({ key: 'subscription', label: t('payment.tabSubscribe') })
   return result
@@ -676,31 +766,13 @@ function closeRenewalModal() {
 async function handleSubmitRecharge() {
   if (!canSubmit.value || submitting.value) return
   const rechargeAmount = validAmount.value
-  requestRechargeNoticeConfirmation(() => createOrder(rechargeAmount, 'balance'))
+  await createOrder(rechargeAmount, 'balance')
 }
 
 async function confirmSubscribe() {
   if (!selectedPlan.value || submitting.value) return
   const plan = selectedPlan.value
-  requestRechargeNoticeConfirmation(() => createOrder(plan.price, 'subscription', plan.id))
-}
-
-function requestRechargeNoticeConfirmation(action: () => Promise<void>) {
-  pendingPaymentAction.value = action
-  showRechargeNoticeDialog.value = true
-}
-
-function cancelRechargeNotice() {
-  showRechargeNoticeDialog.value = false
-  pendingPaymentAction.value = null
-}
-
-async function confirmRechargeNotice() {
-  const action = pendingPaymentAction.value
-  showRechargeNoticeDialog.value = false
-  pendingPaymentAction.value = null
-  if (!action) return
-  await action()
+  await createOrder(plan.price, 'subscription', plan.id)
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {
@@ -1071,8 +1143,10 @@ onMounted(async () => {
       }
     }
     await resumeWechatPaymentFromQuery()
-    if (checkout.value.balance_disabled) {
-      activeTab.value = 'subscription'
+    if (route.query.tab === 'recharge' && !checkout.value.balance_disabled) {
+      activeTab.value = 'recharge'
+    } else if (route.query.tab === 'center') {
+      activeTab.value = 'center'
     }
     // Handle renewal navigation: ?tab=subscription&group=123
     if (route.query.tab === 'subscription') {

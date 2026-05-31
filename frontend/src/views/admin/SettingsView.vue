@@ -5865,8 +5865,106 @@
                     {{ t("admin.settings.payment.receiptCodeOssForcePathStyle") }}
                   </label>
                 </div>
-                <!-- Row 5: Help image + text -->
-                <div class="grid grid-cols-2 gap-3">
+                <!-- Row 5: Announcement + help image/text -->
+                <div>
+                  <label class="input-label">{{
+                    t("admin.settings.payment.announcementText")
+                  }}</label>
+                  <textarea
+                    v-model="form.payment_announcement_text"
+                    rows="3"
+                    class="input"
+                    :placeholder="
+                      t('admin.settings.payment.announcementPlaceholder')
+                    "
+                  ></textarea>
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.payment.announcementHint") }}
+                  </p>
+                </div>
+                <div class="space-y-3">
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ t("admin.settings.payment.rechargeCenterTitle") }}
+                      </h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.payment.rechargeCenterHint") }}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm min-h-[44px] sm:min-h-0"
+                      @click="addRechargeCenterItem"
+                    >
+                      <Icon name="plus" size="sm" class="mr-1.5" />
+                      {{ t("admin.settings.payment.rechargeCenterAdd") }}
+                    </button>
+                  </div>
+                  <div
+                    v-if="form.payment_recharge_center_items.length === 0"
+                    class="rounded-lg border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400"
+                  >
+                    {{ t("admin.settings.payment.rechargeCenterEmpty") }}
+                  </div>
+                  <div v-else class="space-y-3">
+                    <div
+                      v-for="(item, index) in form.payment_recharge_center_items"
+                      :key="index"
+                      class="rounded-lg border border-gray-200 p-3 dark:border-dark-700"
+                    >
+                      <div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(8rem,12rem)_1fr_minmax(12rem,18rem)_auto]">
+                        <div>
+                          <label class="input-label">
+                            {{ t("admin.settings.payment.rechargeCenterName") }}
+                          </label>
+                          <input
+                            v-model="item.name"
+                            type="text"
+                            class="input"
+                            :placeholder="t('admin.settings.payment.rechargeCenterNamePlaceholder')"
+                          />
+                        </div>
+                        <div>
+                          <label class="input-label">
+                            {{ t("admin.settings.payment.rechargeCenterDescription") }}
+                          </label>
+                          <input
+                            v-model="item.description"
+                            type="text"
+                            class="input"
+                            :placeholder="t('admin.settings.payment.rechargeCenterDescriptionPlaceholder')"
+                          />
+                        </div>
+                        <div>
+                          <label class="input-label">
+                            {{ t("admin.settings.payment.rechargeCenterUrl") }}
+                          </label>
+                          <input
+                            v-model="item.url"
+                            type="url"
+                            class="input"
+                            placeholder="https://example.com/recharge"
+                          />
+                        </div>
+                        <div class="flex items-end">
+                          <button
+                            type="button"
+                            class="btn btn-danger btn-sm min-h-[44px] w-full lg:w-auto"
+                            :title="t('admin.settings.payment.rechargeCenterRemove')"
+                            @click="removeRechargeCenterItem(index)"
+                          >
+                            <Icon name="trash" size="sm" class="lg:mr-0" />
+                            <span class="ml-1.5 lg:hidden">
+                              {{ t("admin.settings.payment.rechargeCenterRemove") }}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div>
                     <label class="input-label">{{
                       t("admin.settings.payment.helpImage")
@@ -6405,6 +6503,7 @@ import type {
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
   WebSearchTestResult,
+  PaymentRechargeCenterItem,
 } from "@/api/admin/settings";
 import type {
   AdminGroup,
@@ -6738,6 +6837,8 @@ const form = reactive<SettingsForm>({
   payment_balance_recharge_multiplier: 1,
   payment_recharge_fee_rate: 0,
   payment_enabled_types: [],
+  payment_announcement_text: "",
+  payment_recharge_center_items: [],
   payment_help_image_url: "",
   payment_help_text: "",
   payment_product_name_prefix: "",
@@ -7489,6 +7590,15 @@ async function loadSettings() {
       sort_order: Number.isInteger(item.sort_order) ? item.sort_order : index,
       open_in_new_window: Boolean(item.open_in_new_window),
     }));
+    form.payment_recharge_center_items = Array.isArray(
+      settings.payment_recharge_center_items,
+    )
+      ? settings.payment_recharge_center_items.map((item) => ({
+          name: item.name || "",
+          description: item.description || "",
+          url: item.url || "",
+        }))
+      : [];
     form.login_agreement_mode =
       settings.login_agreement_mode === "checkbox" ? "checkbox" : "modal";
     form.login_agreement_updated_at =
@@ -7668,6 +7778,54 @@ function removeAuthSourceDefaultSubscription(
   index: number,
 ) {
   authSourceDefaults[source].subscriptions.splice(index, 1);
+}
+
+function createEmptyRechargeCenterItem(): PaymentRechargeCenterItem {
+  return {
+    name: "",
+    description: "",
+    url: "",
+  };
+}
+
+function addRechargeCenterItem() {
+  form.payment_recharge_center_items.push(createEmptyRechargeCenterItem());
+}
+
+function removeRechargeCenterItem(index: number) {
+  form.payment_recharge_center_items.splice(index, 1);
+}
+
+function normalizeRechargeCenterItemsForSave(): PaymentRechargeCenterItem[] | null {
+  const normalized = form.payment_recharge_center_items
+    .map((item) => ({
+      name: item.name.trim(),
+      description: item.description.trim(),
+      url: item.url.trim(),
+    }))
+    .filter((item) => item.name !== "" || item.description !== "" || item.url !== "");
+
+  for (const item of normalized) {
+    if (!item.name) {
+      appStore.showError(t("admin.settings.payment.rechargeCenterNameRequired"));
+      return null;
+    }
+    if (!item.url) {
+      appStore.showError(t("admin.settings.payment.rechargeCenterUrlRequired"));
+      return null;
+    }
+    try {
+      const url = new URL(item.url);
+      if (!["http:", "https:"].includes(url.protocol) || !url.host) {
+        throw new Error("invalid protocol");
+      }
+    } catch {
+      appStore.showError(t("admin.settings.payment.rechargeCenterUrlInvalid"));
+      return null;
+    }
+  }
+
+  return normalized;
 }
 
 function findDuplicateDefaultSubscription(
@@ -7863,6 +8021,10 @@ async function saveSettings() {
       form.wechat_connect_mobile_enabled,
       form.wechat_connect_mode,
     );
+    const normalizedRechargeCenterItems = normalizeRechargeCenterItemsForSave();
+    if (!normalizedRechargeCenterItems) {
+      return;
+    }
 
     const payload: UpdateSettingsRequest = {
       registration_enabled: form.registration_enabled,
@@ -8027,6 +8189,8 @@ async function saveSettings() {
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,
       payment_product_name_suffix: form.payment_product_name_suffix,
+      payment_announcement_text: form.payment_announcement_text,
+      payment_recharge_center_items: normalizedRechargeCenterItems,
       payment_help_image_url: form.payment_help_image_url,
       payment_help_text: form.payment_help_text,
       payment_cancel_rate_limit_enabled: form.payment_cancel_rate_limit_enabled,

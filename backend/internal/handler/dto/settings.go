@@ -23,6 +23,12 @@ type CustomEndpoint struct {
 	Description string `json:"description"`
 }
 
+type PaymentRechargeCenterItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+}
+
 // SystemSettings represents the admin settings API response payload.
 type SystemSettings struct {
 	RegistrationEnabled              bool                     `json:"registration_enabled"`
@@ -189,21 +195,23 @@ type SystemSettings struct {
 	OpenAIFreeAccountRepairWeeklyThresholdUSD float64 `json:"openai_free_account_repair_weekly_threshold_usd"`
 
 	// Payment configuration
-	PaymentEnabled                   bool     `json:"payment_enabled"`
-	PaymentMinAmount                 float64  `json:"payment_min_amount"`
-	PaymentMaxAmount                 float64  `json:"payment_max_amount"`
-	PaymentDailyLimit                float64  `json:"payment_daily_limit"`
-	PaymentOrderTimeoutMin           int      `json:"payment_order_timeout_minutes"`
-	PaymentMaxPendingOrders          int      `json:"payment_max_pending_orders"`
-	PaymentEnabledTypes              []string `json:"payment_enabled_types"`
-	PaymentBalanceDisabled           bool     `json:"payment_balance_disabled"`
-	PaymentBalanceRechargeMultiplier float64  `json:"payment_balance_recharge_multiplier"`
-	PaymentRechargeFeeRate           float64  `json:"payment_recharge_fee_rate"`
-	PaymentLoadBalanceStrat          string   `json:"payment_load_balance_strategy"`
-	PaymentProductNamePrefix         string   `json:"payment_product_name_prefix"`
-	PaymentProductNameSuffix         string   `json:"payment_product_name_suffix"`
-	PaymentHelpImageURL              string   `json:"payment_help_image_url"`
-	PaymentHelpText                  string   `json:"payment_help_text"`
+	PaymentEnabled                   bool                        `json:"payment_enabled"`
+	PaymentMinAmount                 float64                     `json:"payment_min_amount"`
+	PaymentMaxAmount                 float64                     `json:"payment_max_amount"`
+	PaymentDailyLimit                float64                     `json:"payment_daily_limit"`
+	PaymentOrderTimeoutMin           int                         `json:"payment_order_timeout_minutes"`
+	PaymentMaxPendingOrders          int                         `json:"payment_max_pending_orders"`
+	PaymentEnabledTypes              []string                    `json:"payment_enabled_types"`
+	PaymentBalanceDisabled           bool                        `json:"payment_balance_disabled"`
+	PaymentBalanceRechargeMultiplier float64                     `json:"payment_balance_recharge_multiplier"`
+	PaymentRechargeFeeRate           float64                     `json:"payment_recharge_fee_rate"`
+	PaymentLoadBalanceStrat          string                      `json:"payment_load_balance_strategy"`
+	PaymentProductNamePrefix         string                      `json:"payment_product_name_prefix"`
+	PaymentProductNameSuffix         string                      `json:"payment_product_name_suffix"`
+	PaymentAnnouncementText          string                      `json:"payment_announcement_text"`
+	PaymentRechargeCenterItems       []PaymentRechargeCenterItem `json:"payment_recharge_center_items"`
+	PaymentHelpImageURL              string                      `json:"payment_help_image_url"`
+	PaymentHelpText                  string                      `json:"payment_help_text"`
 
 	PaymentReceiptCodeOSSEnabled              bool   `json:"payment_receipt_code_oss_enabled"`
 	PaymentReceiptCodeOSSEndpoint             string `json:"payment_receipt_code_oss_endpoint"`

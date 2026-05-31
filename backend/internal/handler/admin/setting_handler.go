@@ -44,6 +44,33 @@ func scopesContainOpenID(scopes string) bool {
 	return false
 }
 
+func rechargeCenterItemsToDTO(items []service.RechargeCenterItem) []dto.PaymentRechargeCenterItem {
+	result := make([]dto.PaymentRechargeCenterItem, 0, len(items))
+	for _, item := range items {
+		result = append(result, dto.PaymentRechargeCenterItem{
+			Name:        item.Name,
+			Description: item.Description,
+			URL:         item.URL,
+		})
+	}
+	return result
+}
+
+func rechargeCenterItemsFromDTO(items []dto.PaymentRechargeCenterItem) []service.RechargeCenterItem {
+	if items == nil {
+		return nil
+	}
+	result := make([]service.RechargeCenterItem, 0, len(items))
+	for _, item := range items {
+		result = append(result, service.RechargeCenterItem{
+			Name:        item.Name,
+			Description: item.Description,
+			URL:         item.URL,
+		})
+	}
+	return result
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
@@ -260,6 +287,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentLoadBalanceStrat:                   paymentCfg.LoadBalanceStrategy,
 		PaymentProductNamePrefix:                  paymentCfg.ProductNamePrefix,
 		PaymentProductNameSuffix:                  paymentCfg.ProductNameSuffix,
+		PaymentAnnouncementText:                   paymentCfg.AnnouncementText,
+		PaymentRechargeCenterItems:                rechargeCenterItemsToDTO(paymentCfg.RechargeCenterItems),
 		PaymentHelpImageURL:                       paymentCfg.HelpImageURL,
 		PaymentHelpText:                           paymentCfg.HelpText,
 		PaymentReceiptCodeOSSEnabled:              paymentCfg.ReceiptCodeOSS.Enabled,
@@ -564,21 +593,23 @@ type UpdateSettingsRequest struct {
 	AccountQuotaNotifyEmails    *[]dto.NotifyEmailEntry `json:"account_quota_notify_emails"`
 
 	// Payment configuration (integrated into settings, full replace)
-	PaymentEnabled                   *bool    `json:"payment_enabled"`
-	PaymentMinAmount                 *float64 `json:"payment_min_amount"`
-	PaymentMaxAmount                 *float64 `json:"payment_max_amount"`
-	PaymentDailyLimit                *float64 `json:"payment_daily_limit"`
-	PaymentOrderTimeoutMin           *int     `json:"payment_order_timeout_minutes"`
-	PaymentMaxPendingOrders          *int     `json:"payment_max_pending_orders"`
-	PaymentEnabledTypes              []string `json:"payment_enabled_types"`
-	PaymentBalanceDisabled           *bool    `json:"payment_balance_disabled"`
-	PaymentBalanceRechargeMultiplier *float64 `json:"payment_balance_recharge_multiplier"`
-	PaymentRechargeFeeRate           *float64 `json:"payment_recharge_fee_rate"`
-	PaymentLoadBalanceStrat          *string  `json:"payment_load_balance_strategy"`
-	PaymentProductNamePrefix         *string  `json:"payment_product_name_prefix"`
-	PaymentProductNameSuffix         *string  `json:"payment_product_name_suffix"`
-	PaymentHelpImageURL              *string  `json:"payment_help_image_url"`
-	PaymentHelpText                  *string  `json:"payment_help_text"`
+	PaymentEnabled                   *bool                           `json:"payment_enabled"`
+	PaymentMinAmount                 *float64                        `json:"payment_min_amount"`
+	PaymentMaxAmount                 *float64                        `json:"payment_max_amount"`
+	PaymentDailyLimit                *float64                        `json:"payment_daily_limit"`
+	PaymentOrderTimeoutMin           *int                            `json:"payment_order_timeout_minutes"`
+	PaymentMaxPendingOrders          *int                            `json:"payment_max_pending_orders"`
+	PaymentEnabledTypes              []string                        `json:"payment_enabled_types"`
+	PaymentBalanceDisabled           *bool                           `json:"payment_balance_disabled"`
+	PaymentBalanceRechargeMultiplier *float64                        `json:"payment_balance_recharge_multiplier"`
+	PaymentRechargeFeeRate           *float64                        `json:"payment_recharge_fee_rate"`
+	PaymentLoadBalanceStrat          *string                         `json:"payment_load_balance_strategy"`
+	PaymentProductNamePrefix         *string                         `json:"payment_product_name_prefix"`
+	PaymentProductNameSuffix         *string                         `json:"payment_product_name_suffix"`
+	PaymentAnnouncementText          *string                         `json:"payment_announcement_text"`
+	PaymentRechargeCenterItems       []dto.PaymentRechargeCenterItem `json:"payment_recharge_center_items"`
+	PaymentHelpImageURL              *string                         `json:"payment_help_image_url"`
+	PaymentHelpText                  *string                         `json:"payment_help_text"`
 
 	PaymentReceiptCodeOSSEnabled              *bool   `json:"payment_receipt_code_oss_enabled"`
 	PaymentReceiptCodeOSSEndpoint             *string `json:"payment_receipt_code_oss_endpoint"`
@@ -1689,6 +1720,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			LoadBalanceStrategy:                req.PaymentLoadBalanceStrat,
 			ProductNamePrefix:                  req.PaymentProductNamePrefix,
 			ProductNameSuffix:                  req.PaymentProductNameSuffix,
+			AnnouncementText:                   req.PaymentAnnouncementText,
+			RechargeCenterItems:                rechargeCenterItemsFromDTO(req.PaymentRechargeCenterItems),
 			HelpImageURL:                       req.PaymentHelpImageURL,
 			HelpText:                           req.PaymentHelpText,
 			ReceiptCodeOSSEnabled:              req.PaymentReceiptCodeOSSEnabled,
@@ -1899,6 +1932,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentLoadBalanceStrat:                   updatedPaymentCfg.LoadBalanceStrategy,
 		PaymentProductNamePrefix:                  updatedPaymentCfg.ProductNamePrefix,
 		PaymentProductNameSuffix:                  updatedPaymentCfg.ProductNameSuffix,
+		PaymentAnnouncementText:                   updatedPaymentCfg.AnnouncementText,
+		PaymentRechargeCenterItems:                rechargeCenterItemsToDTO(updatedPaymentCfg.RechargeCenterItems),
 		PaymentHelpImageURL:                       updatedPaymentCfg.HelpImageURL,
 		PaymentHelpText:                           updatedPaymentCfg.HelpText,
 		PaymentReceiptCodeOSSEnabled:              updatedPaymentCfg.ReceiptCodeOSS.Enabled,
@@ -1942,6 +1977,7 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentBalanceRechargeMultiplier != nil || req.PaymentRechargeFeeRate != nil ||
 		req.PaymentLoadBalanceStrat != nil || req.PaymentProductNamePrefix != nil ||
 		req.PaymentProductNameSuffix != nil || req.PaymentHelpImageURL != nil ||
+		req.PaymentAnnouncementText != nil || req.PaymentRechargeCenterItems != nil ||
 		req.PaymentHelpText != nil || req.PaymentReceiptCodeOSSEnabled != nil ||
 		req.PaymentReceiptCodeOSSEndpoint != nil || req.PaymentReceiptCodeOSSRegion != nil ||
 		req.PaymentReceiptCodeOSSBucket != nil || req.PaymentReceiptCodeOSSAccessKeyID != nil ||
