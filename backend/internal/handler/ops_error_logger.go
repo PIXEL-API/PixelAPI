@@ -59,7 +59,14 @@ const (
 	opsErrorLogMinQueueSize       = 256
 	opsErrorLogMaxQueueSize       = 8192
 	opsErrorLogBatchSize          = 32
+	opsRequestBodyContextMaxBytes = 256 * 1024
 )
+
+type opsRequestBodySnapshot struct {
+	raw       []byte
+	bytes     int
+	truncated bool
+}
 
 type opsErrorLogJob struct {
 	ops   *service.OpsService
@@ -340,7 +347,13 @@ func setOpsRequestContext(c *gin.Context, model string, stream bool, requestBody
 	c.Set(opsModelKey, model)
 	c.Set(opsStreamKey, stream)
 	if len(requestBody) > 0 {
-		c.Set(opsRequestBodyKey, requestBody)
+		snapshot := opsRequestBodySnapshot{bytes: len(requestBody)}
+		if len(requestBody) <= opsRequestBodyContextMaxBytes {
+			snapshot.raw = bytes.Clone(requestBody)
+		} else {
+			snapshot.truncated = true
+		}
+		c.Set(opsRequestBodyKey, snapshot)
 	}
 	if c.Request != nil && model != "" {
 		ctx := context.WithValue(c.Request.Context(), ctxkey.Model, model)
@@ -368,11 +381,32 @@ func attachOpsRequestBodyToEntry(c *gin.Context, entry *service.OpsInsertErrorLo
 	if !ok {
 		return
 	}
-	raw, ok := v.([]byte)
-	if !ok || len(raw) == 0 {
+	var raw []byte
+	var bytesLen int
+	var truncated bool
+	switch snapshot := v.(type) {
+	case opsRequestBodySnapshot:
+		raw = snapshot.raw
+		bytesLen = snapshot.bytes
+		truncated = snapshot.truncated
+	case []byte:
+		raw = snapshot
+		bytesLen = len(snapshot)
+	default:
+		return
+	}
+	if bytesLen > 0 {
+		n := bytesLen
+		entry.RequestBodyBytes = &n
+	}
+	if len(raw) == 0 {
+		entry.RequestBodyTruncated = truncated
 		return
 	}
 	entry.RequestBodyJSON, entry.RequestBodyTruncated, entry.RequestBodyBytes = service.PrepareOpsRequestBodyForQueue(raw)
+	if truncated {
+		entry.RequestBodyTruncated = true
+	}
 	opsErrorLogSanitized.Add(1)
 }
 

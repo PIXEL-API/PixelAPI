@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -44,7 +45,7 @@ func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	opsErrorLogDrained.Store(false)
 }
 
-func TestAttachOpsRequestBodyToEntry_SanitizeAndTrim(t *testing.T) {
+func TestAttachOpsRequestBodyToEntry_SanitizeSmallSnapshot(t *testing.T) {
 	resetOpsErrorLoggerStateForTest(t)
 	gin.SetMode(gin.TestMode)
 
@@ -66,7 +67,7 @@ func TestAttachOpsRequestBodyToEntry_SanitizeAndTrim(t *testing.T) {
 	require.Equal(t, int64(1), OpsErrorLogSanitizedTotal())
 }
 
-func TestAttachOpsRequestBodyToEntry_InvalidJSONKeepsSize(t *testing.T) {
+func TestAttachOpsRequestBodyToEntry_LargeSnapshotKeepsSizeOnly(t *testing.T) {
 	resetOpsErrorLoggerStateForTest(t)
 	gin.SetMode(gin.TestMode)
 
@@ -74,7 +75,7 @@ func TestAttachOpsRequestBodyToEntry_InvalidJSONKeepsSize(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	raw := []byte("not-json")
+	raw := bytes.Repeat([]byte("x"), opsRequestBodyContextMaxBytes+1)
 	setOpsRequestContext(c, "claude-3", false, raw)
 
 	entry := &service.OpsInsertErrorLogInput{}
@@ -83,8 +84,8 @@ func TestAttachOpsRequestBodyToEntry_InvalidJSONKeepsSize(t *testing.T) {
 	require.Nil(t, entry.RequestBodyJSON)
 	require.NotNil(t, entry.RequestBodyBytes)
 	require.Equal(t, len(raw), *entry.RequestBodyBytes)
-	require.False(t, entry.RequestBodyTruncated)
-	require.Equal(t, int64(1), OpsErrorLogSanitizedTotal())
+	require.True(t, entry.RequestBodyTruncated)
+	require.Equal(t, int64(0), OpsErrorLogSanitizedTotal())
 }
 
 func TestEnqueueOpsErrorLog_QueueFullDrop(t *testing.T) {
@@ -132,8 +133,8 @@ func TestAttachOpsRequestBodyToEntry_EarlyReturnBranches(t *testing.T) {
 	require.Nil(t, entry.RequestBodyJSON)
 	require.Nil(t, entry.RequestBodyBytes)
 
-	// 空 bytes
-	c.Set(opsRequestBodyKey, []byte{})
+	// 空 snapshot
+	c.Set(opsRequestBodyKey, opsRequestBodySnapshot{})
 	attachOpsRequestBodyToEntry(c, entry)
 	require.Nil(t, entry.RequestBodyJSON)
 	require.Nil(t, entry.RequestBodyBytes)

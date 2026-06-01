@@ -805,10 +805,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		requestIDHeader = idHeader
 
 		// Capture upstream request body for ops retry of this attempt.
-		if c != nil {
-			// In this code path `body` is already the JSON sent to upstream.
-			c.Set(OpsUpstreamRequestBodyKey, string(body))
-		}
+		setOpsUpstreamRequestBody(c, body)
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
@@ -1080,7 +1077,12 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	imageSize := s.extractImageSize(body)
 	if req.Stream {
+		if resp != nil {
+			resp.Request = nil
+		}
+		body = nil
 		streamRes, err := s.handleStreamingResponse(c, resp, startTime, originalModel)
 		if err != nil {
 			return nil, err
@@ -1110,7 +1112,6 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 	// 图片生成计费
 	imageCount := 0
-	imageSize := s.extractImageSize(body)
 	if isImageGenerationModel(originalModel) {
 		imageCount = 1
 	}
@@ -1330,10 +1331,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		requestIDHeader = idHeader
 
 		// Capture upstream request body for ops retry of this attempt.
-		if c != nil {
-			// In this code path `body` is already the JSON sent to upstream.
-			c.Set(OpsUpstreamRequestBodyKey, string(body))
-		}
+		setOpsUpstreamRequestBody(c, body)
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
@@ -1606,8 +1604,13 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	imageSize := s.extractImageSize(body)
 
 	if stream {
+		if resp != nil {
+			resp.Request = nil
+		}
+		body = nil
 		streamRes, err := s.handleNativeStreamingResponse(c, resp, startTime, isOAuth)
 		if err != nil {
 			return nil, err
@@ -1638,7 +1641,6 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	// 图片生成计费
 	imageCount := 0
-	imageSize := s.extractImageSize(body)
 	if isImageGenerationModel(originalModel) {
 		imageCount = 1
 	}

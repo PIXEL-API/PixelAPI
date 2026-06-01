@@ -45,8 +45,6 @@ const (
 	// codex_cli_only rejected request header values are truncated for diagnostics.
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
-	// OpenAIParsedRequestBodyKey caches the request body parsed by handler.
-	OpenAIParsedRequestBodyKey = "openai_parsed_request_body"
 	// OpenAI WS Mode reconnect retry limit after the first failed attempt.
 	openAIWSReconnectRetryLimit = 5
 	// OpenAI WS Mode default retry backoff values.
@@ -2491,6 +2489,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		disablePatch()
 	}
 
+	reasoningEffort := extractOpenAIReasoningEffort(reqBody, originalModel)
+	serviceTier := extractOpenAIServiceTier(reqBody)
+
 	// Apply OpenAI fast policy (鍙傜収 Claude BetaPolicy 鐨?fast-mode 杩囨护)锛?	// 閽堝 body 鐨?service_tier 瀛楁锛?priority" 鍗?fast锛?flex"锛夛紝鎸夌瓥鐣?	// 鎵ц filter锛堝垹闄ゅ瓧娈碉級鎴?block锛堟嫆缁濊姹傦級銆傚 gpt-5.5 绛夋ā鍨嬪睆钄?	// fast 鏃跺湪姝ょ敓鏁堛€?	//
 	// 娉ㄦ剰锛?	//   1. 姝ゅ缁熶竴浣跨敤 upstreamModel锛堝凡缁忚繃 GetMappedModel +
 	//      normalizeOpenAIModelForUpstream + Codex OAuth normalize锛夛紝涓?	//      chat-completions / messages 鍏ュ彛淇濇寔涓€鑷达紝閬垮厤涓嶅悓鍏ュ彛鍥犱负妯″瀷
@@ -2511,6 +2512,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, blocked
 			case BetaPolicyActionFilter:
 				delete(reqBody, "service_tier")
+				serviceTier = nil
 				bodyModified = true
 				disablePatch()
 			default:
@@ -2518,6 +2520,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				// 鍚庡啓鍥?body锛岀‘淇濅笂娓告敹鍒扮殑鏄叾鑳借瘑鍒殑瑙勮寖鍊笺€?
 				if normTier != rawTier {
 					reqBody["service_tier"] = normTier
+					serviceTier = &normTier
 					bodyModified = true
 					markPatchSet("service_tier", normTier)
 				}
@@ -2550,6 +2553,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 	}
+	openAIReqBody := reqBody
+	if !reqStream && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+		reqBody = nil
+	}
 
 	// Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -2562,10 +2569,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	// 鍛戒腑 WS 鏃朵粎璧?WebSocket Mode锛涗笉鍐嶈嚜鍔ㄥ洖閫€ HTTP銆?
 	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
-		wsReqBody := reqBody
-		if len(reqBody) > 0 {
-			wsReqBody = make(map[string]any, len(reqBody))
-			for k, v := range reqBody {
+		wsReqBody := openAIReqBody
+		if len(openAIReqBody) > 0 {
+			wsReqBody = make(map[string]any, len(openAIReqBody))
+			for k, v := range openAIReqBody {
 				wsReqBody[k] = v
 			}
 		}
@@ -2773,6 +2780,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
 		return nil, wsErr
 	}
+	if reqStream {
+		reqBody = nil
+	}
 
 	httpInvalidEncryptedContentRetryTried := false
 	for {
@@ -2814,7 +2824,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			})
 			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 		}
-
 		// Handle error response
 		if resp.StatusCode >= 400 {
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -2824,9 +2833,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 			upstreamCode := extractUpstreamErrorCode(respBody)
-			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
-				if trimOpenAIEncryptedReasoningItems(reqBody) {
-					body, err = json.Marshal(reqBody)
+			if !httpInvalidEncryptedContentRetryTried && openAIReqBody != nil && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
+				if trimOpenAIEncryptedReasoningItems(openAIReqBody) {
+					body, err = json.Marshal(openAIReqBody)
 					if err != nil {
 						return nil, fmt.Errorf("serialize invalid_encrypted_content retry body: %w", err)
 					}
@@ -2872,6 +2881,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		var usage *OpenAIUsage
 		var firstTokenMs *int
 		if reqStream {
+			if resp != nil {
+				resp.Request = nil
+			}
+			body = nil
+			openAIReqBody = nil
 			streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
 			if err != nil {
 				return nil, err
@@ -2879,8 +2893,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			usage = streamResult.usage
 			firstTokenMs = streamResult.firstTokenMs
 			if streamResult != nil {
-				if serviceTier := extractOpenAIServiceTierFromResponses(streamResult.responseServiceTier); serviceTier != nil {
-					reqBody["service_tier"] = *serviceTier
+				if responseServiceTier := extractOpenAIServiceTierFromResponses(streamResult.responseServiceTier); responseServiceTier != nil {
+					serviceTier = responseServiceTier
 				}
 			}
 		} else {
@@ -2889,8 +2903,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, err
 			}
 			if usage != nil {
-				if serviceTier := extractOpenAIServiceTierFromResponses(usage.ResponseServiceTier); serviceTier != nil {
-					reqBody["service_tier"] = *serviceTier
+				if responseServiceTier := extractOpenAIServiceTierFromResponses(usage.ResponseServiceTier); responseServiceTier != nil {
+					serviceTier = responseServiceTier
 				}
 			}
 		}
@@ -2905,9 +2919,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if usage == nil {
 			usage = &OpenAIUsage{}
 		}
-
-		reasoningEffort := extractOpenAIReasoningEffort(reqBody, originalModel)
-		serviceTier := extractOpenAIServiceTier(reqBody)
 
 		result := &OpenAIForwardResult{
 			RequestID:       resp.Header.Get("x-request-id"),
@@ -3098,7 +3109,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	var usage *OpenAIUsage
 	var firstTokenMs *int
+	serviceTier := extractOpenAIServiceTierFromBody(body)
 	if reqStream {
+		if resp != nil {
+			resp.Request = nil
+		}
+		body = nil
 		result, err := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 		if err != nil {
 			return nil, err
@@ -3106,10 +3122,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		usage = result.usage
 		firstTokenMs = result.firstTokenMs
 		if result != nil {
-			if serviceTier := extractOpenAIServiceTierFromResponses(result.responseServiceTier); serviceTier != nil {
-				if updated, serr := sjson.SetBytes(body, "service_tier", *serviceTier); serr == nil {
-					body = updated
-				}
+			if responseServiceTier := extractOpenAIServiceTierFromResponses(result.responseServiceTier); responseServiceTier != nil {
+				serviceTier = responseServiceTier
 			}
 		}
 	} else {
@@ -3118,10 +3132,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			return nil, err
 		}
 		if usage != nil {
-			if serviceTier := extractOpenAIServiceTierFromResponses(usage.ResponseServiceTier); serviceTier != nil {
-				if updated, serr := sjson.SetBytes(body, "service_tier", *serviceTier); serr == nil {
-					body = updated
-				}
+			if responseServiceTier := extractOpenAIServiceTierFromResponses(usage.ResponseServiceTier); responseServiceTier != nil {
+				serviceTier = responseServiceTier
 			}
 		}
 	}
@@ -3139,7 +3151,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		Usage:           *usage,
 		Model:           reqModel,
 		UpstreamModel:   upstreamPassthroughModel,
-		ServiceTier:     extractOpenAIServiceTierFromBody(body),
+		ServiceTier:     serviceTier,
 		ReasoningEffort: reasoningEffort,
 		Stream:          reqStream,
 		OpenAIWSMode:    false,
@@ -6411,21 +6423,10 @@ func isEmptyBase64DataURI(raw string) bool {
 	return strings.TrimSpace(strings.TrimPrefix(rest, "base64,")) == ""
 }
 
-func getOpenAIRequestBodyMap(c *gin.Context, body []byte) (map[string]any, error) {
-	if c != nil {
-		if cached, ok := c.Get(OpenAIParsedRequestBodyKey); ok {
-			if reqBody, ok := cached.(map[string]any); ok && reqBody != nil {
-				return reqBody, nil
-			}
-		}
-	}
-
+func getOpenAIRequestBodyMap(_ *gin.Context, body []byte) (map[string]any, error) {
 	var reqBody map[string]any
 	if err := json.Unmarshal(body, &reqBody); err != nil {
 		return nil, fmt.Errorf("parse request: %w", err)
-	}
-	if c != nil {
-		c.Set(OpenAIParsedRequestBodyKey, reqBody)
 	}
 	return reqBody, nil
 }

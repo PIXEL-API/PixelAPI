@@ -5202,6 +5202,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var firstTokenMs *int
 	var clientDisconnect bool
 	if reqStream {
+		if resp != nil {
+			resp.Request = nil
+		}
+		body = nil
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel, shouldMimicClaudeCode)
 		if err != nil {
 			if err.Error() == "have error in stream" {
@@ -5462,6 +5466,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	var firstTokenMs *int
 	var clientDisconnect bool
 	if input.RequestStream {
+		if resp != nil {
+			resp.Request = nil
+		}
+		input.Body = nil
 		streamResult, err := s.handleStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account, input.StartTime, input.RequestModel)
 		if err != nil {
 			return nil, err

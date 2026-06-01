@@ -1923,6 +1923,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
 	imageBillingConfig := resolveOpenAIResponseImageBillingConfig(openAIResponsesEndpoint, originalModel, payload)
+	serviceTier := extractOpenAIServiceTier(payload)
+	reasoningEffort := extractOpenAIReasoningEffort(payload, originalModel)
+	needsToolContinuation := NeedsToolContinuation(reqBody)
 	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
 	previousResponseID := openAIWSPayloadString(payload, "previous_response_id")
 	previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
@@ -2152,7 +2155,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		decision,
 		payload,
 		previousResponseID,
-		reqBody,
+		needsToolContinuation,
 		account,
 		stateStore,
 		groupID,
@@ -2556,8 +2559,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		Usage:           *usage,
 		Model:           originalModel,
 		UpstreamModel:   mappedModel,
-		ServiceTier:     extractOpenAIServiceTier(reqBody),
-		ReasoningEffort: extractOpenAIReasoningEffort(reqBody, originalModel),
+		ServiceTier:     serviceTier,
+		ReasoningEffort: reasoningEffort,
 		Stream:          reqStream,
 		OpenAIWSMode:    true,
 		ResponseHeaders: lease.HandshakeHeaders(),
@@ -3905,7 +3908,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	decision OpenAIWSProtocolDecision,
 	payload map[string]any,
 	previousResponseID string,
-	reqBody map[string]any,
+	needsToolContinuation bool,
 	account *Account,
 	stateStore OpenAIWSStateStore,
 	groupID int64,
@@ -3943,7 +3946,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=already_prewarmed", account.ID, connID)
 		return nil
 	}
-	if NeedsToolContinuation(reqBody) {
+	if needsToolContinuation {
 		logOpenAIWSModeInfo("prewarm_skip account_id=%d conn_id=%s reason=tool_continuation", account.ID, connID)
 		return nil
 	}

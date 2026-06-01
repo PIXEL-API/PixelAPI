@@ -198,18 +198,18 @@ func TestSetClaudeCodeClientContext_ReuseParsedRequestAndContextCache(t *testing
 		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
 	})
 
-	t.Run("reuse context cache without body unmarshal", func(t *testing.T) {
+	t.Run("reuse parsed request context cache without body unmarshal", func(t *testing.T) {
 		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
 		c.Request.Header.Set("User-Agent", "claude-cli/1.0.1")
 		c.Request.Header.Set("X-App", "claude-code")
 		c.Request.Header.Set("anthropic-beta", "message-batches-2024-09-24")
 		c.Request.Header.Set("anthropic-version", "2023-06-01")
-		c.Set(service.OpenAIParsedRequestBodyKey, map[string]any{
-			"model": "claude-3-5-sonnet-20241022",
-			"system": []any{
+		c.Set(claudeCodeParsedRequestContextKey, service.ParsedRequest{
+			Model: "claude-3-5-sonnet-20241022",
+			System: []any{
 				map[string]any{"text": "You are Claude Code, Anthropic's official CLI for Claude."},
 			},
-			"metadata": map[string]any{"user_id": "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+			MetadataUserID: "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		})
 
 		SetClaudeCodeClientContext(c, []byte(`{invalid`), nil)
