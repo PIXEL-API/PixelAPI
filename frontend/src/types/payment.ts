@@ -44,6 +44,9 @@ export interface PaymentConfig {
   enabled_payment_types: PaymentType[]
   announcement_text: string
   recharge_center_items: RechargeCenterItem[]
+  recharge_center_tab_enabled: boolean
+  recharge_tab_enabled: boolean
+  subscription_tab_enabled: boolean
   help_image_url: string
   help_text: string
   stripe_publishable_key: string
@@ -80,6 +83,9 @@ export interface CheckoutInfoResponse {
   recharge_fee_rate: number
   announcement_text: string
   recharge_center_items: RechargeCenterItem[]
+  recharge_center_tab_enabled: boolean
+  recharge_tab_enabled: boolean
+  subscription_tab_enabled: boolean
   help_text: string
   help_image_url: string
   stripe_publishable_key: string

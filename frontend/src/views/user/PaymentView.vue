@@ -48,8 +48,11 @@
         </template>
         <!-- Tab content (select phase) -->
         <template v-else>
+          <div v-if="tabs.length === 0" class="card py-16 text-center">
+            <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noVisibleTabs') }}</p>
+          </div>
           <!-- Recharge Center Tab -->
-          <template v-if="activeTab === 'center'">
+          <template v-else-if="activeTab === 'center'">
             <div v-if="rechargeCenterItems.length === 0" class="card py-16 text-center">
               <p class="text-gray-500 dark:text-gray-400">{{ t('payment.rechargeCenter.empty') }}</p>
             </div>
@@ -512,7 +515,9 @@ function onPaymentSettled() {
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
   methods: {}, global_min: 0, global_max: 0, min_amount: 0, max_amount: 0,
-  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, recharge_fee_rate: 0, announcement_text: '', recharge_center_items: [], help_text: '', help_image_url: '', stripe_publishable_key: '',
+  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, recharge_fee_rate: 0, announcement_text: '', recharge_center_items: [],
+  recharge_center_tab_enabled: true, recharge_tab_enabled: true, subscription_tab_enabled: true,
+  help_text: '', help_image_url: '', stripe_publishable_key: '',
 })
 
 const rechargeCenterItems = computed<RechargeCenterItem[]>(() =>
@@ -560,13 +565,26 @@ function parseAnnouncementParts(text: string): AnnouncementPart[] {
 const announcementParts = computed(() => parseAnnouncementParts(checkout.value.announcement_text || ''))
 
 const tabs = computed(() => {
-  const result: { key: PaymentTabKey; label: string }[] = [
-    { key: 'center', label: t('payment.tabRechargeCenter') },
-  ]
-  if (!checkout.value.balance_disabled) result.push({ key: 'recharge', label: t('payment.tabTopUp') })
-  result.push({ key: 'subscription', label: t('payment.tabSubscribe') })
+  const result: { key: PaymentTabKey; label: string }[] = []
+  if (checkout.value.recharge_center_tab_enabled) {
+    result.push({ key: 'center', label: t('payment.tabRechargeCenter') })
+  }
+  if (checkout.value.recharge_tab_enabled && !checkout.value.balance_disabled) {
+    result.push({ key: 'recharge', label: t('payment.tabTopUp') })
+  }
+  if (checkout.value.subscription_tab_enabled) {
+    result.push({ key: 'subscription', label: t('payment.tabSubscribe') })
+  }
   return result
 })
+
+function isTabVisible(tab: PaymentTabKey): boolean {
+  return tabs.value.some(item => item.key === tab)
+}
+
+function selectFirstVisibleTab() {
+  activeTab.value = tabs.value[0]?.key ?? 'center'
+}
 
 const visibleMethods = computed(() => getVisibleMethods(checkout.value.methods))
 const enabledMethods = computed(() => Object.keys(visibleMethods.value))
@@ -1143,13 +1161,14 @@ onMounted(async () => {
       }
     }
     await resumeWechatPaymentFromQuery()
-    if (route.query.tab === 'recharge' && !checkout.value.balance_disabled) {
+    selectFirstVisibleTab()
+    if (route.query.tab === 'recharge' && isTabVisible('recharge')) {
       activeTab.value = 'recharge'
-    } else if (route.query.tab === 'center') {
+    } else if (route.query.tab === 'center' && isTabVisible('center')) {
       activeTab.value = 'center'
     }
     // Handle renewal navigation: ?tab=subscription&group=123
-    if (route.query.tab === 'subscription') {
+    if (route.query.tab === 'subscription' && isTabVisible('subscription')) {
       activeTab.value = 'subscription'
       if (route.query.group) {
         const groupId = Number(route.query.group)

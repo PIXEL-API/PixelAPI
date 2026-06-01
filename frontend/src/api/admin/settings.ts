@@ -498,6 +498,9 @@ export interface SystemSettings {
   payment_product_name_suffix: string;
   payment_announcement_text: string;
   payment_recharge_center_items: PaymentRechargeCenterItem[];
+  payment_recharge_center_tab_enabled: boolean;
+  payment_recharge_tab_enabled: boolean;
+  payment_subscription_tab_enabled: boolean;
   payment_help_image_url: string;
   payment_help_text: string;
   payment_receipt_code_oss_enabled: boolean;
@@ -718,6 +721,9 @@ export interface UpdateSettingsRequest {
   payment_product_name_suffix?: string;
   payment_announcement_text?: string;
   payment_recharge_center_items?: PaymentRechargeCenterItem[];
+  payment_recharge_center_tab_enabled?: boolean;
+  payment_recharge_tab_enabled?: boolean;
+  payment_subscription_tab_enabled?: boolean;
   payment_help_image_url?: string;
   payment_help_text?: string;
   payment_receipt_code_oss_enabled?: boolean;

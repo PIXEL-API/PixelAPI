@@ -210,6 +210,9 @@ type SystemSettings struct {
 	PaymentProductNameSuffix         string                      `json:"payment_product_name_suffix"`
 	PaymentAnnouncementText          string                      `json:"payment_announcement_text"`
 	PaymentRechargeCenterItems       []PaymentRechargeCenterItem `json:"payment_recharge_center_items"`
+	PaymentRechargeCenterTabEnabled  bool                        `json:"payment_recharge_center_tab_enabled"`
+	PaymentRechargeTabEnabled        bool                        `json:"payment_recharge_tab_enabled"`
+	PaymentSubscriptionTabEnabled    bool                        `json:"payment_subscription_tab_enabled"`
 	PaymentHelpImageURL              string                      `json:"payment_help_image_url"`
 	PaymentHelpText                  string                      `json:"payment_help_text"`
 

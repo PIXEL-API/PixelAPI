@@ -33,6 +33,9 @@ export interface AdminPaymentConfig {
   product_name_suffix: string
   announcement_text: string
   recharge_center_items: RechargeCenterItem[]
+  recharge_center_tab_enabled: boolean
+  recharge_tab_enabled: boolean
+  subscription_tab_enabled: boolean
   help_image_url: string
   help_text: string
 }
@@ -54,6 +57,9 @@ export interface UpdatePaymentConfigRequest {
   product_name_suffix?: string
   announcement_text?: string
   recharge_center_items?: RechargeCenterItem[]
+  recharge_center_tab_enabled?: boolean
+  recharge_tab_enabled?: boolean
+  subscription_tab_enabled?: boolean
   help_image_url?: string
   help_text?: string
 }

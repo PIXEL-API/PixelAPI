@@ -102,6 +102,9 @@ func TestParsePaymentConfig(t *testing.T) {
 		if len(cfg.EnabledTypes) != 0 {
 			t.Fatalf("expected empty EnabledTypes, got %v", cfg.EnabledTypes)
 		}
+		if !cfg.RechargeCenterTabEnabled || !cfg.RechargeTabEnabled || !cfg.SubscriptionTabEnabled {
+			t.Fatalf("expected payment page tabs enabled by default, got center=%v recharge=%v subscription=%v", cfg.RechargeCenterTabEnabled, cfg.RechargeTabEnabled, cfg.SubscriptionTabEnabled)
+		}
 	})
 
 	t.Run("all values populated", func(t *testing.T) {
@@ -120,6 +123,9 @@ func TestParsePaymentConfig(t *testing.T) {
 			SettingProductNameSuffix:   "SUF",
 			SettingPaymentAnnouncement: "Please read before paying",
 			SettingRechargeCenterItems: `[{"name":"FastPay","description":"Instant balance top-up","url":"https://pay.example.com/fast"}]`,
+			SettingRechargeCenterTabOn: "false",
+			SettingRechargeTabOn:       "false",
+			SettingSubscriptionTabOn:   "false",
 			SettingHelpText:            "Contact support after payment",
 		}
 		cfg := svc.parsePaymentConfig(vals)
@@ -171,6 +177,9 @@ func TestParsePaymentConfig(t *testing.T) {
 		}
 		if cfg.HelpText != "Contact support after payment" {
 			t.Fatalf("HelpText = %q, want %q", cfg.HelpText, "Contact support after payment")
+		}
+		if cfg.RechargeCenterTabEnabled || cfg.RechargeTabEnabled || cfg.SubscriptionTabEnabled {
+			t.Fatalf("expected payment page tabs disabled, got center=%v recharge=%v subscription=%v", cfg.RechargeCenterTabEnabled, cfg.RechargeTabEnabled, cfg.SubscriptionTabEnabled)
 		}
 	})
 
@@ -488,6 +497,31 @@ func TestUpdatePaymentConfig_PersistsAnnouncementText(t *testing.T) {
 
 	if repo.values[SettingPaymentAnnouncement] != "Pay exact amount only" {
 		t.Fatalf("announcement = %q, want %q", repo.values[SettingPaymentAnnouncement], "Pay exact amount only")
+	}
+}
+
+func TestUpdatePaymentConfig_PersistsPaymentPageTabVisibility(t *testing.T) {
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{}}
+	svc := &PaymentConfigService{settingRepo: repo}
+
+	disabled := false
+	err := svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		RechargeCenterTabEnabled: &disabled,
+		RechargeTabEnabled:       &disabled,
+		SubscriptionTabEnabled:   &disabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePaymentConfig returned error: %v", err)
+	}
+
+	if repo.values[SettingRechargeCenterTabOn] != "false" {
+		t.Fatalf("recharge center tab = %q, want false", repo.values[SettingRechargeCenterTabOn])
+	}
+	if repo.values[SettingRechargeTabOn] != "false" {
+		t.Fatalf("recharge tab = %q, want false", repo.values[SettingRechargeTabOn])
+	}
+	if repo.values[SettingSubscriptionTabOn] != "false" {
+		t.Fatalf("subscription tab = %q, want false", repo.values[SettingSubscriptionTabOn])
 	}
 }
 

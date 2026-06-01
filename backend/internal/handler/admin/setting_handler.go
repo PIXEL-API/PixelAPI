@@ -289,6 +289,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentProductNameSuffix:                  paymentCfg.ProductNameSuffix,
 		PaymentAnnouncementText:                   paymentCfg.AnnouncementText,
 		PaymentRechargeCenterItems:                rechargeCenterItemsToDTO(paymentCfg.RechargeCenterItems),
+		PaymentRechargeCenterTabEnabled:           paymentCfg.RechargeCenterTabEnabled,
+		PaymentRechargeTabEnabled:                 paymentCfg.RechargeTabEnabled,
+		PaymentSubscriptionTabEnabled:             paymentCfg.SubscriptionTabEnabled,
 		PaymentHelpImageURL:                       paymentCfg.HelpImageURL,
 		PaymentHelpText:                           paymentCfg.HelpText,
 		PaymentReceiptCodeOSSEnabled:              paymentCfg.ReceiptCodeOSS.Enabled,
@@ -608,6 +611,9 @@ type UpdateSettingsRequest struct {
 	PaymentProductNameSuffix         *string                         `json:"payment_product_name_suffix"`
 	PaymentAnnouncementText          *string                         `json:"payment_announcement_text"`
 	PaymentRechargeCenterItems       []dto.PaymentRechargeCenterItem `json:"payment_recharge_center_items"`
+	PaymentRechargeCenterTabEnabled  *bool                           `json:"payment_recharge_center_tab_enabled"`
+	PaymentRechargeTabEnabled        *bool                           `json:"payment_recharge_tab_enabled"`
+	PaymentSubscriptionTabEnabled    *bool                           `json:"payment_subscription_tab_enabled"`
 	PaymentHelpImageURL              *string                         `json:"payment_help_image_url"`
 	PaymentHelpText                  *string                         `json:"payment_help_text"`
 
@@ -1722,6 +1728,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			ProductNameSuffix:                  req.PaymentProductNameSuffix,
 			AnnouncementText:                   req.PaymentAnnouncementText,
 			RechargeCenterItems:                rechargeCenterItemsFromDTO(req.PaymentRechargeCenterItems),
+			RechargeCenterTabEnabled:           req.PaymentRechargeCenterTabEnabled,
+			RechargeTabEnabled:                 req.PaymentRechargeTabEnabled,
+			SubscriptionTabEnabled:             req.PaymentSubscriptionTabEnabled,
 			HelpImageURL:                       req.PaymentHelpImageURL,
 			HelpText:                           req.PaymentHelpText,
 			ReceiptCodeOSSEnabled:              req.PaymentReceiptCodeOSSEnabled,
@@ -1934,6 +1943,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentProductNameSuffix:                  updatedPaymentCfg.ProductNameSuffix,
 		PaymentAnnouncementText:                   updatedPaymentCfg.AnnouncementText,
 		PaymentRechargeCenterItems:                rechargeCenterItemsToDTO(updatedPaymentCfg.RechargeCenterItems),
+		PaymentRechargeCenterTabEnabled:           updatedPaymentCfg.RechargeCenterTabEnabled,
+		PaymentRechargeTabEnabled:                 updatedPaymentCfg.RechargeTabEnabled,
+		PaymentSubscriptionTabEnabled:             updatedPaymentCfg.SubscriptionTabEnabled,
 		PaymentHelpImageURL:                       updatedPaymentCfg.HelpImageURL,
 		PaymentHelpText:                           updatedPaymentCfg.HelpText,
 		PaymentReceiptCodeOSSEnabled:              updatedPaymentCfg.ReceiptCodeOSS.Enabled,
@@ -1978,6 +1990,8 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentLoadBalanceStrat != nil || req.PaymentProductNamePrefix != nil ||
 		req.PaymentProductNameSuffix != nil || req.PaymentHelpImageURL != nil ||
 		req.PaymentAnnouncementText != nil || req.PaymentRechargeCenterItems != nil ||
+		req.PaymentRechargeCenterTabEnabled != nil || req.PaymentRechargeTabEnabled != nil ||
+		req.PaymentSubscriptionTabEnabled != nil ||
 		req.PaymentHelpText != nil || req.PaymentReceiptCodeOSSEnabled != nil ||
 		req.PaymentReceiptCodeOSSEndpoint != nil || req.PaymentReceiptCodeOSSRegion != nil ||
 		req.PaymentReceiptCodeOSSBucket != nil || req.PaymentReceiptCodeOSSAccessKeyID != nil ||

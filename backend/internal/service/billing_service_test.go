@@ -187,6 +187,40 @@ func TestCalculateCost_OpenAIGPT54LongContextAppliesWholeSessionMultipliers(t *t
 	require.InDelta(t, expectedInput+expectedOutput, cost.ActualCost, 1e-10)
 }
 
+func TestCalculateCost_OpenAIGPT54LongContextScalesCacheReadAndCreation(t *testing.T) {
+	svc := newTestBillingService()
+
+	tokens := UsageTokens{
+		InputTokens:         1000,
+		OutputTokens:        1000,
+		CacheCreationTokens: 10000,
+		CacheReadTokens:     300000,
+	}
+
+	cost, err := svc.CalculateCost("gpt-5.4-2026-03-05", tokens, 1.0)
+	require.NoError(t, err)
+
+	require.InDelta(t, float64(tokens.CacheReadTokens)*6.25e-6*2.0, cost.CacheReadCost, 1e-10)
+	require.InDelta(t, float64(tokens.CacheCreationTokens)*62.5e-6*2.0, cost.CacheCreationCost, 1e-10)
+}
+
+func TestCalculateCost_NoLongContextKeepsCacheReadAndCreationAtBasePrice(t *testing.T) {
+	svc := newTestBillingService()
+
+	tokens := UsageTokens{
+		InputTokens:         1000,
+		OutputTokens:        1000,
+		CacheCreationTokens: 10000,
+		CacheReadTokens:     100000,
+	}
+
+	cost, err := svc.CalculateCost("gpt-5.4-2026-03-05", tokens, 1.0)
+	require.NoError(t, err)
+
+	require.InDelta(t, float64(tokens.CacheReadTokens)*6.25e-6, cost.CacheReadCost, 1e-10)
+	require.InDelta(t, float64(tokens.CacheCreationTokens)*62.5e-6, cost.CacheCreationCost, 1e-10)
+}
+
 func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 	svc := newTestBillingService()
 
@@ -450,6 +484,40 @@ func TestCalculateCost_SupportsCacheBreakdown(t *testing.T) {
 
 	expected5m := float64(tokens.CacheCreation5mTokens) * 4e-6
 	expected1h := float64(tokens.CacheCreation1hTokens) * 5e-6
+	require.InDelta(t, expected5m+expected1h, cost.CacheCreationCost, 1e-10)
+}
+
+func TestCalculateCost_LongContextScalesCacheCreation5mAnd1h(t *testing.T) {
+	svc := &BillingService{
+		cfg: &config.Config{},
+		fallbackPrices: map[string]*ModelPricing{
+			"claude-sonnet-4": {
+				InputPricePerToken:          3e-6,
+				OutputPricePerToken:         15e-6,
+				CacheReadPricePerToken:      0.3e-6,
+				SupportsCacheBreakdown:      true,
+				CacheCreation5mPrice:        4e-6,
+				CacheCreation1hPrice:        5e-6,
+				LongContextInputThreshold:   200000,
+				LongContextInputMultiplier:  2.0,
+				LongContextOutputMultiplier: 1.5,
+			},
+		},
+	}
+
+	tokens := UsageTokens{
+		InputTokens:           1000,
+		OutputTokens:          1000,
+		CacheReadTokens:       300000,
+		CacheCreation5mTokens: 8000,
+		CacheCreation1hTokens: 4000,
+	}
+
+	cost, err := svc.CalculateCost("claude-sonnet-4", tokens, 1.0)
+	require.NoError(t, err)
+
+	expected5m := float64(tokens.CacheCreation5mTokens) * 4e-6 * 2.0
+	expected1h := float64(tokens.CacheCreation1hTokens) * 5e-6 * 2.0
 	require.InDelta(t, expected5m+expected1h, cost.CacheCreationCost, 1e-10)
 }
 

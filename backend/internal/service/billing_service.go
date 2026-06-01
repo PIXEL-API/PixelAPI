@@ -492,6 +492,7 @@ func (s *BillingService) computeTokenBreakdown(
 	inputPrice := pricing.InputPricePerToken
 	outputPrice := pricing.OutputPricePerToken
 	cacheReadPrice := pricing.CacheReadPricePerToken
+	cacheCreationLongContextMultiplier := 1.0
 	inputTierMultiplier := 1.0
 	outputTierMultiplier := 1.0
 	cacheCreationTierMultiplier := 1.0
@@ -530,6 +531,8 @@ func (s *BillingService) computeTokenBreakdown(
 	if applyLongCtx && s.shouldApplySessionLongContextPricing(tokens, pricing) {
 		inputPrice *= pricing.LongContextInputMultiplier
 		outputPrice *= pricing.LongContextOutputMultiplier
+		cacheReadPrice *= pricing.LongContextInputMultiplier
+		cacheCreationLongContextMultiplier = pricing.LongContextInputMultiplier
 	}
 
 	bd := &CostBreakdown{}
@@ -552,7 +555,8 @@ func (s *BillingService) computeTokenBreakdown(
 	}
 
 	// 缓存创建费用
-	bd.CacheCreationCost = s.computeCacheCreationCost(pricing, tokens) * cacheCreationTierMultiplier
+	bd.CacheCreationCost = s.computeCacheCreationCost(pricing, tokens) *
+		cacheCreationLongContextMultiplier * cacheCreationTierMultiplier
 
 	bd.CacheReadCost = float64(tokens.CacheReadTokens) * cacheReadPrice * cacheReadTierMultiplier
 

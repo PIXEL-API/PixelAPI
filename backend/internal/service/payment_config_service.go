@@ -32,6 +32,9 @@ const (
 	SettingProductNameSuffix   = "PRODUCT_NAME_SUFFIX"
 	SettingPaymentAnnouncement = "PAYMENT_ANNOUNCEMENT_TEXT"
 	SettingRechargeCenterItems = "PAYMENT_RECHARGE_CENTER_ITEMS"
+	SettingRechargeCenterTabOn = "PAYMENT_RECHARGE_CENTER_TAB_ENABLED"
+	SettingRechargeTabOn       = "PAYMENT_RECHARGE_TAB_ENABLED"
+	SettingSubscriptionTabOn   = "PAYMENT_SUBSCRIPTION_TAB_ENABLED"
 	SettingHelpImageURL        = "PAYMENT_HELP_IMAGE_URL"
 	SettingHelpText            = "PAYMENT_HELP_TEXT"
 	SettingCancelRateLimitOn   = "CANCEL_RATE_LIMIT_ENABLED"
@@ -83,6 +86,9 @@ type PaymentConfig struct {
 	ProductNameSuffix         string               `json:"product_name_suffix"`
 	AnnouncementText          string               `json:"announcement_text"`
 	RechargeCenterItems       []RechargeCenterItem `json:"recharge_center_items"`
+	RechargeCenterTabEnabled  bool                 `json:"recharge_center_tab_enabled"`
+	RechargeTabEnabled        bool                 `json:"recharge_tab_enabled"`
+	SubscriptionTabEnabled    bool                 `json:"subscription_tab_enabled"`
 	HelpImageURL              string               `json:"help_image_url"`
 	HelpText                  string               `json:"help_text"`
 	StripePublishableKey      string               `json:"stripe_publishable_key,omitempty"`
@@ -135,6 +141,9 @@ type UpdatePaymentConfigRequest struct {
 	ProductNameSuffix         *string              `json:"product_name_suffix"`
 	AnnouncementText          *string              `json:"announcement_text"`
 	RechargeCenterItems       []RechargeCenterItem `json:"recharge_center_items"`
+	RechargeCenterTabEnabled  *bool                `json:"recharge_center_tab_enabled"`
+	RechargeTabEnabled        *bool                `json:"recharge_tab_enabled"`
+	SubscriptionTabEnabled    *bool                `json:"subscription_tab_enabled"`
 	HelpImageURL              *string              `json:"help_image_url"`
 	HelpText                  *string              `json:"help_text"`
 
@@ -263,7 +272,9 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
 		SettingProductNamePrefix, SettingProductNameSuffix,
-		SettingPaymentAnnouncement, SettingRechargeCenterItems, SettingHelpImageURL, SettingHelpText,
+		SettingPaymentAnnouncement, SettingRechargeCenterItems,
+		SettingRechargeCenterTabOn, SettingRechargeTabOn, SettingSubscriptionTabOn,
+		SettingHelpImageURL, SettingHelpText,
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
 		SettingCancelWindowSize, SettingCancelWindowUnit, SettingCancelWindowMode,
 		SettingPaymentVisibleMethodAlipayEnabled, SettingPaymentVisibleMethodAlipaySource,
@@ -301,6 +312,9 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		ProductNameSuffix:         vals[SettingProductNameSuffix],
 		AnnouncementText:          vals[SettingPaymentAnnouncement],
 		RechargeCenterItems:       parseRechargeCenterItems(vals[SettingRechargeCenterItems]),
+		RechargeCenterTabEnabled:  parseBoolWithDefault(vals[SettingRechargeCenterTabOn], true),
+		RechargeTabEnabled:        parseBoolWithDefault(vals[SettingRechargeTabOn], true),
+		SubscriptionTabEnabled:    parseBoolWithDefault(vals[SettingSubscriptionTabOn], true),
 		HelpImageURL:              vals[SettingHelpImageURL],
 		HelpText:                  vals[SettingHelpText],
 
@@ -435,6 +449,9 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 		SettingProductNamePrefix:                 derefStr(req.ProductNamePrefix),
 		SettingProductNameSuffix:                 derefStr(req.ProductNameSuffix),
 		SettingPaymentAnnouncement:               derefStr(req.AnnouncementText),
+		SettingRechargeCenterTabOn:               formatBoolOrEmpty(req.RechargeCenterTabEnabled),
+		SettingRechargeTabOn:                     formatBoolOrEmpty(req.RechargeTabEnabled),
+		SettingSubscriptionTabOn:                 formatBoolOrEmpty(req.SubscriptionTabEnabled),
 		SettingHelpImageURL:                      derefStr(req.HelpImageURL),
 		SettingHelpText:                          derefStr(req.HelpText),
 		SettingCancelRateLimitOn:                 formatBoolOrEmpty(req.CancelRateLimitEnabled),

@@ -142,6 +142,9 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		RechargeFeeRate:           cfg.RechargeFeeRate,
 		AnnouncementText:          cfg.AnnouncementText,
 		RechargeCenterItems:       cfg.RechargeCenterItems,
+		RechargeCenterTabEnabled:  cfg.RechargeCenterTabEnabled,
+		RechargeTabEnabled:        cfg.RechargeTabEnabled,
+		SubscriptionTabEnabled:    cfg.SubscriptionTabEnabled,
 		HelpText:                  cfg.HelpText,
 		HelpImageURL:              cfg.HelpImageURL,
 		StripePublishableKey:      cfg.StripePublishableKey,
@@ -160,6 +163,9 @@ type checkoutInfoResponse struct {
 	RechargeFeeRate           float64                         `json:"recharge_fee_rate"`
 	AnnouncementText          string                          `json:"announcement_text"`
 	RechargeCenterItems       []service.RechargeCenterItem    `json:"recharge_center_items"`
+	RechargeCenterTabEnabled  bool                            `json:"recharge_center_tab_enabled"`
+	RechargeTabEnabled        bool                            `json:"recharge_tab_enabled"`
+	SubscriptionTabEnabled    bool                            `json:"subscription_tab_enabled"`
 	HelpText                  string                          `json:"help_text"`
 	HelpImageURL              string                          `json:"help_image_url"`
 	StripePublishableKey      string                          `json:"stripe_publishable_key"`
