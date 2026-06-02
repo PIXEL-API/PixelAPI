@@ -7,11 +7,14 @@ import (
 	_ "embed"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // Admin/debug profiling is intentionally exposed only when the server is started with that route mounted.
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -125,7 +128,10 @@ func runSetupServer() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := serveServer(server, config.ServerListenSpec{
+		Network: config.ServerListenNetworkTCP,
+		Address: addr,
+	}); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Failed to start setup server: %v", err)
 	}
 }
@@ -154,15 +160,19 @@ func runMainServer() {
 	defer app.Cleanup()
 
 	pprofServer := startPprofServer()
+	listenSpec, err := cfg.Server.ListenSpec()
+	if err != nil {
+		log.Fatalf("Invalid server listen configuration: %v", err)
+	}
 
 	// 启动服务器
 	go func() {
-		if err := app.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serveServer(app.Server, listenSpec); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
 
-	log.Printf("Server started on %s", app.Server.Addr)
+	log.Printf("Server started on %s", listenSpec.DisplayAddress())
 
 	// 等待中断信号
 	quit := make(chan os.Signal, 1)
@@ -185,6 +195,35 @@ func runMainServer() {
 	}
 
 	log.Println("Server exited")
+}
+
+func serveServer(server *http.Server, spec config.ServerListenSpec) error {
+	switch spec.Network {
+	case config.ServerListenNetworkUnix:
+		if err := os.MkdirAll(filepath.Dir(spec.Address), 0o755); err != nil {
+			return fmt.Errorf("create unix socket directory: %w", err)
+		}
+		if err := config.RemoveUnixSocketIfExists(spec.Address); err != nil {
+			return err
+		}
+		listener, err := net.Listen(string(spec.Network), spec.Address)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", spec.DisplayAddress(), err)
+		}
+		if err := os.Chmod(spec.Address, spec.Mode); err != nil {
+			_ = listener.Close()
+			_ = os.Remove(spec.Address)
+			return fmt.Errorf("chmod unix socket %s: %w", spec.Address, err)
+		}
+		defer func() {
+			_ = listener.Close()
+			_ = os.Remove(spec.Address)
+		}()
+		return server.Serve(listener)
+	default:
+		server.Addr = spec.Address
+		return server.ListenAndServe()
+	}
 }
 
 func startPprofServer() *http.Server {

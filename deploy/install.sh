@@ -677,6 +677,8 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/opt/sub2api
+RuntimeDirectory=sub2api
+RuntimeDirectoryMode=0755
 
 # Environment - Server configuration
 Environment=GIN_MODE=release

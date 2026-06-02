@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/sysutil"
 
@@ -296,12 +297,6 @@ func install(c *gin.Context) {
 		return
 	}
 
-	// Server validation
-	if req.Server.Port != 0 && !validatePort(req.Server.Port) {
-		response.Error(c, http.StatusBadRequest, "Invalid server port")
-		return
-	}
-
 	// ========== SET DEFAULTS ==========
 	if req.Database.SSLMode == "" {
 		req.Database.SSLMode = "disable"
@@ -322,6 +317,10 @@ func install(c *gin.Context) {
 	// Validate server mode
 	if req.Server.Mode != "release" && req.Server.Mode != "debug" {
 		response.Error(c, http.StatusBadRequest, "Invalid server mode (must be 'release' or 'debug')")
+		return
+	}
+	if _, err := config.ParseServerListenSpec(req.Server.Host, req.Server.Port); err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid server listen config: "+err.Error())
 		return
 	}
 

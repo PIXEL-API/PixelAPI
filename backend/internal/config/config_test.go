@@ -1,8 +1,11 @@
 package config
 
 import (
+	"net"
 	"os"
+	pathpkg "path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +210,144 @@ func TestLoadDefaultIdempotencyConfig(t *testing.T) {
 	}
 	if cfg.Idempotency.SystemOperationTTLSeconds != 3600 {
 		t.Fatalf("Idempotency.SystemOperationTTLSeconds = %d, want 3600", cfg.Idempotency.SystemOperationTTLSeconds)
+	}
+}
+
+func TestServerListenSpecTCP(t *testing.T) {
+	server := &ServerConfig{Host: "127.0.0.1", Port: 9000}
+
+	spec, err := server.ListenSpec()
+	if err != nil {
+		t.Fatalf("ListenSpec() error: %v", err)
+	}
+	if spec.Network != ServerListenNetworkTCP {
+		t.Fatalf("ListenSpec().Network = %q, want %q", spec.Network, ServerListenNetworkTCP)
+	}
+	if spec.Address != "127.0.0.1:9000" {
+		t.Fatalf("ListenSpec().Address = %q", spec.Address)
+	}
+	if spec.DisplayAddress() != "127.0.0.1:9000" {
+		t.Fatalf("ListenSpec().DisplayAddress() = %q", spec.DisplayAddress())
+	}
+}
+
+func TestServerListenSpecUnixCompat(t *testing.T) {
+	spec, err := ParseServerListenSpec("/var/run/pixel.sock,0660", 0)
+	if err != nil {
+		t.Fatalf("ParseServerListenSpec() error: %v", err)
+	}
+	if spec.Network != ServerListenNetworkUnix {
+		t.Fatalf("Network = %q, want %q", spec.Network, ServerListenNetworkUnix)
+	}
+	if spec.Address != pathpkg.Clean("/var/run/pixel.sock") {
+		t.Fatalf("Address = %q", spec.Address)
+	}
+	if spec.Mode != 0o660 {
+		t.Fatalf("Mode = %#o, want 0660", spec.Mode)
+	}
+	if spec.DisplayAddress() != "unix:///var/run/pixel.sock" {
+		t.Fatalf("DisplayAddress() = %q", spec.DisplayAddress())
+	}
+}
+
+func TestServerListenSpecUnixExplicitPrefix(t *testing.T) {
+	spec, err := ParseServerListenSpec("unix:/run/pixel/pixel.sock,0600", 8080)
+	if err != nil {
+		t.Fatalf("ParseServerListenSpec() error: %v", err)
+	}
+	if spec.Network != ServerListenNetworkUnix {
+		t.Fatalf("Network = %q, want %q", spec.Network, ServerListenNetworkUnix)
+	}
+	if spec.Address != pathpkg.Clean("/run/pixel/pixel.sock") {
+		t.Fatalf("Address = %q", spec.Address)
+	}
+	if spec.Mode != 0o600 {
+		t.Fatalf("Mode = %#o, want 0600", spec.Mode)
+	}
+}
+
+func TestServerListenSpecUnixDefaultMode(t *testing.T) {
+	spec, err := ParseServerListenSpec("unix:/run/pixel/pixel.sock", 8080)
+	if err != nil {
+		t.Fatalf("ParseServerListenSpec() error: %v", err)
+	}
+	if spec.Mode != defaultUnixSocketFileMode {
+		t.Fatalf("Mode = %#o, want %#o", spec.Mode, defaultUnixSocketFileMode)
+	}
+}
+
+func TestServerListenSpecRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		port int
+	}{
+		{name: "tcp_missing_port", host: "127.0.0.1", port: 0},
+		{name: "unix_relative", host: "unix:pixel.sock", port: 8080},
+		{name: "unix_bad_mode", host: "unix:/run/pixel.sock,09", port: 8080},
+		{name: "unix_empty_path", host: "unix:", port: 8080},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseServerListenSpec(tt.host, tt.port); err == nil {
+				t.Fatalf("ParseServerListenSpec(%q, %d) expected error", tt.host, tt.port)
+			}
+		})
+	}
+}
+
+func TestRemoveUnixSocketIfExists(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix domain sockets are not available in this Windows test environment")
+	}
+
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "pixel.sock")
+
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("net.Listen(unix) error: %v", err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close unix listener: %v", err)
+	}
+
+	if err := RemoveUnixSocketIfExists(socketPath); err != nil {
+		t.Fatalf("RemoveUnixSocketIfExists() error: %v", err)
+	}
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("socket path still exists after removal, stat err=%v", err)
+	}
+}
+
+func TestRemoveUnixSocketIfExistsRejectsNonSocket(t *testing.T) {
+	dir := t.TempDir()
+	plainFile := filepath.Join(dir, "pixel.sock")
+	if err := os.WriteFile(plainFile, []byte("not-a-socket"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	if err := RemoveUnixSocketIfExists(plainFile); err == nil {
+		t.Fatal("RemoveUnixSocketIfExists() expected error for non-socket file")
+	}
+}
+
+func TestValidateAllowsUnixSocketServerHost(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("SERVER_HOST", "unix:/run/pixel/pixel.sock,0660")
+	t.Setenv("SERVER_PORT", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	spec, err := cfg.Server.ListenSpec()
+	if err != nil {
+		t.Fatalf("ListenSpec() error: %v", err)
+	}
+	if spec.Network != ServerListenNetworkUnix {
+		t.Fatalf("ListenSpec().Network = %q, want unix", spec.Network)
 	}
 }
 
