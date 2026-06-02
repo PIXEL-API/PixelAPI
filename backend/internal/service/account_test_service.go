@@ -51,7 +51,6 @@ type TestEvent struct {
 
 const (
 	defaultGeminiTextTestPrompt  = "hi"
-	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	openAITestMaxOutputTokens    = 16
 )
@@ -1030,34 +1029,9 @@ func (s *AccountTestService) buildCodeAssistRequest(ctx context.Context, accessT
 	return req, nil
 }
 
-// createGeminiTestPayload creates a minimal test payload for Gemini API.
-// Image models use the image-generation path so the frontend can preview the returned image.
+// createGeminiTestPayload creates a minimal text-only test payload for Gemini API.
 func createGeminiTestPayload(modelID string, prompt string) []byte {
-	if isImageGenerationModel(modelID) {
-		imagePrompt := strings.TrimSpace(prompt)
-		if imagePrompt == "" {
-			imagePrompt = defaultGeminiImageTestPrompt
-		}
-
-		payload := map[string]any{
-			"contents": []map[string]any{
-				{
-					"role": "user",
-					"parts": []map[string]any{
-						{"text": imagePrompt},
-					},
-				},
-			},
-			"generationConfig": map[string]any{
-				"responseModalities": []string{"TEXT", "IMAGE"},
-				"imageConfig": map[string]any{
-					"aspectRatio": "1:1",
-				},
-			},
-		}
-		bytes, _ := json.Marshal(payload)
-		return bytes
-	}
+	_ = modelID
 
 	textPrompt := strings.TrimSpace(prompt)
 	if textPrompt == "" {

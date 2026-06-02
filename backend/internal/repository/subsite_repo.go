@@ -124,7 +124,7 @@ func (r *subsiteRepository) List(ctx context.Context, params pagination.Paginati
 	if err != nil {
 		return nil, nil, fmt.Errorf("list subsites: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]service.Subsite, 0)
 	for rows.Next() {
 		subsite, err := scanSubsite(rows)
@@ -459,7 +459,7 @@ func (r *accountLeaseRepository) ListActiveAccountIDsBySubsite(ctx context.Conte
 	if err != nil {
 		return nil, fmt.Errorf("list active lease account ids: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	accountIDs := make([]int64, 0)
 	for rows.Next() {
@@ -644,7 +644,7 @@ func (r *accountLeaseRepository) list(ctx context.Context, query string, args ..
 	if err != nil {
 		return nil, fmt.Errorf("list account leases: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	leases := make([]service.AccountLease, 0)
 	for rows.Next() {
 		lease, err := scanAccountLease(rows)

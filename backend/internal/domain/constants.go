@@ -103,12 +103,10 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"claude-haiku-4-5":          "claude-sonnet-4-6",
 	"claude-haiku-4-5-20251001": "claude-sonnet-4-6",
 	// Gemini 2.5 白名单
-	"gemini-2.5-flash":               "gemini-2.5-flash",
-	"gemini-2.5-flash-image":         "gemini-2.5-flash-image",
-	"gemini-2.5-flash-image-preview": "gemini-2.5-flash-image",
-	"gemini-2.5-flash-lite":          "gemini-2.5-flash-lite",
-	"gemini-2.5-flash-thinking":      "gemini-2.5-flash-thinking",
-	"gemini-2.5-pro":                 "gemini-2.5-pro",
+	"gemini-2.5-flash":          "gemini-2.5-flash",
+	"gemini-2.5-flash-lite":     "gemini-2.5-flash-lite",
+	"gemini-2.5-flash-thinking": "gemini-2.5-flash-thinking",
+	"gemini-2.5-pro":            "gemini-2.5-pro",
 	// Gemini 3 白名单
 	"gemini-3-flash":    "gemini-3-flash",
 	"gemini-3-pro-high": "gemini-3-pro-high",
@@ -121,13 +119,6 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.1-pro-low":  "gemini-3.1-pro-low",
 	// Gemini 3.1 preview 映射
 	"gemini-3.1-pro-preview": "gemini-3.1-pro-high",
-	// Gemini 3.1 image 白名单
-	"gemini-3.1-flash-image": "gemini-3.1-flash-image",
-	// Gemini 3.1 image preview 映射
-	"gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
-	// Gemini 3 image 兼容映射（向 3.1 image 迁移）
-	"gemini-3-pro-image":         "gemini-3.1-flash-image",
-	"gemini-3-pro-image-preview": "gemini-3.1-flash-image",
 	// 其他官方模型
 	"gpt-oss-120b-medium":    "gpt-oss-120b-medium",
 	"tab_flash_lite_preview": "tab_flash_lite_preview",

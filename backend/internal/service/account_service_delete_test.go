@@ -19,14 +19,20 @@ import (
 // 用于隔离测试 AccountService.Delete 方法，避免依赖真实数据库。
 //
 // 设计说明：
+//   - account/getErr: 模拟 GetByID 返回的账号和错误
 //   - exists: 模拟 ExistsByID 返回的存在性结果
 //   - existsErr: 模拟 ExistsByID 返回的错误
 //   - deleteErr: 模拟 Delete 返回的错误
+//   - getIDs/existsIDs: 记录查询调用的账号 ID，用于断言验证
 //   - deletedIDs: 记录被调用删除的账号 ID，用于断言验证
 type accountRepoStub struct {
+	account    *Account
+	getErr     error
 	exists     bool    // ExistsByID 的返回值
 	existsErr  error   // ExistsByID 的错误返回值
 	deleteErr  error   // Delete 的错误返回值
+	getIDs     []int64 // 记录已查询的账号 ID 列表
+	existsIDs  []int64 // 记录已检查存在性的账号 ID 列表
 	deletedIDs []int64 // 记录已删除的账号 ID 列表
 }
 
@@ -37,7 +43,8 @@ func (s *accountRepoStub) Create(ctx context.Context, account *Account) error {
 }
 
 func (s *accountRepoStub) GetByID(ctx context.Context, id int64) (*Account, error) {
-	panic("unexpected GetByID call")
+	s.getIDs = append(s.getIDs, id)
+	return s.account, s.getErr
 }
 
 func (s *accountRepoStub) GetByIDs(ctx context.Context, ids []int64) ([]*Account, error) {
@@ -45,8 +52,9 @@ func (s *accountRepoStub) GetByIDs(ctx context.Context, ids []int64) ([]*Account
 }
 
 // ExistsByID 返回预设的存在性检查结果。
-// 这是 Delete 方法调用的第一个仓储方法，用于验证账号是否存在。
+// Delete 方法会在 GetByID 失败时使用它作为兼容性兜底。
 func (s *accountRepoStub) ExistsByID(ctx context.Context, id int64) (bool, error) {
+	s.existsIDs = append(s.existsIDs, id)
 	return s.exists, s.existsErr
 }
 
@@ -209,7 +217,7 @@ func (s *accountRepoStub) ResetQuotaUsed(ctx context.Context, id int64) error {
 
 // TestAccountService_Delete_NotFound 测试删除不存在的账号时返回正确的错误。
 // 预期行为：
-//   - ExistsByID 返回 false（账号不存在）
+//   - GetByID 返回 nil（账号不存在）
 //   - 返回 ErrAccountNotFound 错误
 //   - Delete 方法不被调用（deletedIDs 为空）
 func TestAccountService_Delete_NotFound(t *testing.T) {
@@ -218,21 +226,29 @@ func TestAccountService_Delete_NotFound(t *testing.T) {
 
 	err := svc.Delete(context.Background(), 55)
 	require.ErrorIs(t, err, ErrAccountNotFound)
+	require.Equal(t, []int64{55}, repo.getIDs)
+	require.Empty(t, repo.existsIDs)
 	require.Empty(t, repo.deletedIDs) // 验证删除操作未被调用
 }
 
 // TestAccountService_Delete_CheckError 测试存在性检查失败时的错误处理。
 // 预期行为：
+//   - GetByID 返回错误
 //   - ExistsByID 返回数据库错误
 //   - 返回包含 "check account" 的错误信息
 //   - Delete 方法不被调用
 func TestAccountService_Delete_CheckError(t *testing.T) {
-	repo := &accountRepoStub{existsErr: errors.New("db down")}
+	repo := &accountRepoStub{
+		getErr:    errors.New("get failed"),
+		existsErr: errors.New("db down"),
+	}
 	svc := &AccountService{accountRepo: repo}
 
 	err := svc.Delete(context.Background(), 55)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "check account") // 验证错误信息包含上下文
+	require.Equal(t, []int64{55}, repo.getIDs)
+	require.Equal(t, []int64{55}, repo.existsIDs)
 	require.Empty(t, repo.deletedIDs)
 }
 
@@ -244,6 +260,7 @@ func TestAccountService_Delete_CheckError(t *testing.T) {
 //   - deletedIDs 记录了尝试删除的 ID
 func TestAccountService_Delete_DeleteError(t *testing.T) {
 	repo := &accountRepoStub{
+		account:   &Account{ID: 55},
 		exists:    true,
 		deleteErr: errors.New("delete failed"),
 	}
@@ -252,6 +269,8 @@ func TestAccountService_Delete_DeleteError(t *testing.T) {
 	err := svc.Delete(context.Background(), 55)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "delete account")
+	require.Equal(t, []int64{55}, repo.getIDs)
+	require.Empty(t, repo.existsIDs)
 	require.Equal(t, []int64{55}, repo.deletedIDs) // 验证删除操作被调用
 }
 
@@ -262,10 +281,12 @@ func TestAccountService_Delete_DeleteError(t *testing.T) {
 //   - 返回 nil 错误
 //   - deletedIDs 记录了被删除的 ID
 func TestAccountService_Delete_Success(t *testing.T) {
-	repo := &accountRepoStub{exists: true}
+	repo := &accountRepoStub{account: &Account{ID: 55}}
 	svc := &AccountService{accountRepo: repo}
 
 	err := svc.Delete(context.Background(), 55)
 	require.NoError(t, err)
+	require.Equal(t, []int64{55}, repo.getIDs)
+	require.Empty(t, repo.existsIDs)
 	require.Equal(t, []int64{55}, repo.deletedIDs) // 验证正确的 ID 被删除
 }
