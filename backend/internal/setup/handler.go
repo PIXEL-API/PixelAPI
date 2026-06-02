@@ -178,7 +178,7 @@ func testDatabase(c *gin.Context) {
 // TestRedisRequest represents Redis test request
 type TestRedisRequest struct {
 	Host      string `json:"host" binding:"required"`
-	Port      int    `json:"port" binding:"required"`
+	Port      int    `json:"port"`
 	Password  string `json:"password"`
 	DB        int    `json:"db"`
 	EnableTLS bool   `json:"enable_tls"`
@@ -192,17 +192,21 @@ func testRedis(c *gin.Context) {
 		return
 	}
 
-	// Security: Validate inputs
-	if !validateHostname(req.Host) {
-		response.Error(c, http.StatusBadRequest, "Invalid hostname format")
-		return
-	}
-	if !validatePort(req.Port) {
-		response.Error(c, http.StatusBadRequest, "Invalid port number")
+	spec, err := config.ParseRedisConnectionSpec(req.Host, req.Port)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid Redis connection config: "+err.Error())
 		return
 	}
 	if req.DB < 0 || req.DB > 15 {
 		response.Error(c, http.StatusBadRequest, "Invalid Redis database number (0-15)")
+		return
+	}
+	if spec.Network == config.RedisConnectionNetworkTCP && !validateHostname(req.Host) {
+		response.Error(c, http.StatusBadRequest, "Invalid hostname format")
+		return
+	}
+	if spec.Network == config.RedisConnectionNetworkUnix && req.EnableTLS {
+		response.Error(c, http.StatusBadRequest, "Redis TLS is not supported with unix socket connections")
 		return
 	}
 
@@ -274,16 +278,21 @@ func install(c *gin.Context) {
 	}
 
 	// Redis validation
-	if !validateHostname(req.Redis.Host) {
-		response.Error(c, http.StatusBadRequest, "Invalid Redis hostname")
-		return
-	}
-	if !validatePort(req.Redis.Port) {
-		response.Error(c, http.StatusBadRequest, "Invalid Redis port")
+	redisSpec, err := config.ParseRedisConnectionSpec(req.Redis.Host, req.Redis.Port)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid Redis connection config: "+err.Error())
 		return
 	}
 	if req.Redis.DB < 0 || req.Redis.DB > 15 {
 		response.Error(c, http.StatusBadRequest, "Invalid Redis database number")
+		return
+	}
+	if redisSpec.Network == config.RedisConnectionNetworkTCP && !validateHostname(req.Redis.Host) {
+		response.Error(c, http.StatusBadRequest, "Invalid Redis hostname")
+		return
+	}
+	if redisSpec.Network == config.RedisConnectionNetworkUnix && req.Redis.EnableTLS {
+		response.Error(c, http.StatusBadRequest, "Redis TLS is not supported with unix socket connections")
 		return
 	}
 

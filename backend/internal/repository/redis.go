@@ -27,8 +27,19 @@ func InitRedis(cfg *config.Config) *redis.Client {
 // buildRedisOptions 构建 Redis 连接选项
 // 从配置文件读取连接池和超时参数，支持生产环境调优
 func buildRedisOptions(cfg *config.Config) *redis.Options {
+	spec, err := cfg.Redis.ConnectionSpec()
+	if err != nil {
+		// Config validation should catch this before repository wiring; keep a
+		// defensive fallback so tests and partial configs do not panic.
+		spec = config.RedisConnectionSpec{
+			Network: config.RedisConnectionNetworkTCP,
+			Address: cfg.Redis.Address(),
+		}
+	}
+
 	opts := &redis.Options{
-		Addr:         cfg.Redis.Address(),
+		Network:      string(spec.Network),
+		Addr:         spec.Address,
 		Password:     cfg.Redis.Password,
 		DB:           cfg.Redis.DB,
 		DialTimeout:  time.Duration(cfg.Redis.DialTimeoutSeconds) * time.Second,  // 建连超时

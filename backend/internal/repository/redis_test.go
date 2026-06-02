@@ -24,6 +24,7 @@ func TestBuildRedisOptions(t *testing.T) {
 	}
 
 	opts := buildRedisOptions(cfg)
+	require.Equal(t, "tcp", opts.Network)
 	require.Equal(t, "localhost:6379", opts.Addr)
 	require.Equal(t, "secret", opts.Password)
 	require.Equal(t, 2, opts.DB)
@@ -44,4 +45,26 @@ func TestBuildRedisOptions(t *testing.T) {
 	optsTLS := buildRedisOptions(cfgTLS)
 	require.NotNil(t, optsTLS.TLSConfig)
 	require.Equal(t, "localhost", optsTLS.TLSConfig.ServerName)
+}
+
+func TestBuildRedisOptionsUnixSocket(t *testing.T) {
+	cfg := &config.Config{
+		Redis: config.RedisConfig{
+			Host:                "unix:/run/redis/redis.sock",
+			Password:            "secret",
+			DB:                  1,
+			DialTimeoutSeconds:  5,
+			ReadTimeoutSeconds:  3,
+			WriteTimeoutSeconds: 4,
+			PoolSize:            100,
+			MinIdleConns:        10,
+		},
+	}
+
+	opts := buildRedisOptions(cfg)
+	require.Equal(t, "unix", opts.Network)
+	require.Equal(t, "/run/redis/redis.sock", opts.Addr)
+	require.Equal(t, "secret", opts.Password)
+	require.Equal(t, 1, opts.DB)
+	require.Nil(t, opts.TLSConfig)
 }

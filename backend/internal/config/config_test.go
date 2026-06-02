@@ -903,6 +903,74 @@ func TestConfigAddressHelpers(t *testing.T) {
 	}
 }
 
+func TestRedisConnectionSpecTCP(t *testing.T) {
+	redis := RedisConfig{Host: "redis", Port: 6379}
+
+	spec, err := redis.ConnectionSpec()
+	if err != nil {
+		t.Fatalf("ConnectionSpec() error: %v", err)
+	}
+	if spec.Network != RedisConnectionNetworkTCP {
+		t.Fatalf("ConnectionSpec().Network = %q, want %q", spec.Network, RedisConnectionNetworkTCP)
+	}
+	if spec.Address != "redis:6379" {
+		t.Fatalf("ConnectionSpec().Address = %q", spec.Address)
+	}
+}
+
+func TestRedisConnectionSpecUnix(t *testing.T) {
+	spec, err := ParseRedisConnectionSpec("unix:/run/redis/redis.sock", 0)
+	if err != nil {
+		t.Fatalf("ParseRedisConnectionSpec() error: %v", err)
+	}
+	if spec.Network != RedisConnectionNetworkUnix {
+		t.Fatalf("Network = %q, want %q", spec.Network, RedisConnectionNetworkUnix)
+	}
+	if spec.Address != pathpkg.Clean("/run/redis/redis.sock") {
+		t.Fatalf("Address = %q", spec.Address)
+	}
+}
+
+func TestRedisConnectionSpecUnixCompat(t *testing.T) {
+	spec, err := ParseRedisConnectionSpec("/var/run/redis.sock", 6379)
+	if err != nil {
+		t.Fatalf("ParseRedisConnectionSpec() error: %v", err)
+	}
+	if spec.Network != RedisConnectionNetworkUnix {
+		t.Fatalf("Network = %q, want %q", spec.Network, RedisConnectionNetworkUnix)
+	}
+	if spec.Address != pathpkg.Clean("/var/run/redis.sock") {
+		t.Fatalf("Address = %q", spec.Address)
+	}
+}
+
+func TestRedisConnectionSpecRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		port int
+	}{
+		{name: "tcp_missing_port", host: "redis", port: 0},
+		{name: "unix_relative", host: "unix:redis.sock", port: 0},
+		{name: "unix_empty_path", host: "unix:", port: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseRedisConnectionSpec(tt.host, tt.port); err == nil {
+				t.Fatalf("ParseRedisConnectionSpec(%q, %d) expected error", tt.host, tt.port)
+			}
+		})
+	}
+}
+
+func TestRedisConnectionSpecRejectsTLSWithUnixSocket(t *testing.T) {
+	redis := RedisConfig{Host: "unix:/run/redis/redis.sock", EnableTLS: true}
+	if _, err := redis.ConnectionSpec(); err == nil {
+		t.Fatal("ConnectionSpec() expected error for TLS over unix socket")
+	}
+}
+
 func TestNormalizeStringSlice(t *testing.T) {
 	values := normalizeStringSlice([]string{" a ", "", "b", "   ", "c"})
 	if len(values) != 3 || values[0] != "a" || values[1] != "b" || values[2] != "c" {
