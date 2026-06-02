@@ -76,7 +76,7 @@ func (s *Server) proxyAuthorizedRequest(c *gin.Context, authorization *service.A
 	if err != nil {
 		return nil, fmt.Errorf("call upstream: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	responseBody, wroteResponse, metrics, err := streamOrBufferResponse(c, resp)
 	if err != nil {
@@ -148,7 +148,7 @@ func (s *Server) proxyOpenAIChatCompletionsViaResponses(c *gin.Context, authoriz
 	if err != nil {
 		return nil, fmt.Errorf("call upstream: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	responseBody, wroteResponse, metrics, err := streamOrBufferResponse(c, resp)
 	if err != nil {
@@ -1240,7 +1240,7 @@ func convertResponsesSSEToChatCompletionsSSE(body []byte, originalModel string) 
 			if err != nil {
 				return nil, fmt.Errorf("marshal chat chunk: %w", err)
 			}
-			out.WriteString(sse)
+			_, _ = out.WriteString(sse)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -1251,8 +1251,8 @@ func convertResponsesSSEToChatCompletionsSSE(body []byte, originalModel string) 
 		if err != nil {
 			return nil, fmt.Errorf("finalize chat chunk: %w", err)
 		}
-		out.WriteString(sse)
+		_, _ = out.WriteString(sse)
 	}
-	out.WriteString("data: [DONE]\n\n")
+	_, _ = out.WriteString("data: [DONE]\n\n")
 	return out.Bytes(), nil
 }

@@ -6,7 +6,7 @@
         v-if="normalizedFiles.length > 1"
         type="button"
         class="btn btn-secondary btn-sm min-h-[2.5rem]"
-        @click="downloadAllFiles"
+        @click="handleDownloadAllFiles"
       >
         <Icon name="download" size="sm" />
         <span>{{ t('store.downloadAllFiles') }}</span>
@@ -25,7 +25,7 @@
         <button
           type="button"
           class="btn btn-secondary btn-sm min-h-[2.5rem] shrink-0 justify-center"
-          @click="downloadFile(file.id, file.filename)"
+          @click="handleDownloadFile(file.id, file.filename)"
         >
           <Icon name="download" size="sm" />
           <span>{{ t('store.downloadFile') }}</span>
@@ -52,7 +52,7 @@ const props = defineProps<{
 const { t } = useI18n()
 const normalizedFiles = computed(() => props.files || [])
 
-async function downloadFile(cardId: number, filename: string): Promise<void> {
+async function handleDownloadFile(cardId: number, filename: string): Promise<void> {
   if (props.downloadFile) {
     await props.downloadFile(props.orderId, cardId, filename)
     return
@@ -60,7 +60,7 @@ async function downloadFile(cardId: number, filename: string): Promise<void> {
   await storeAPI.downloadOrderFile(props.orderId, cardId, filename)
 }
 
-async function downloadAllFiles(): Promise<void> {
+async function handleDownloadAllFiles(): Promise<void> {
   if (props.downloadAllFiles) {
     await props.downloadAllFiles(props.orderId)
     return
