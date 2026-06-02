@@ -104,4 +104,3 @@ func (s *receiptCodeOSSStore) PublicURL(key string) string {
 	}
 	return s.publicBaseURL + "/" + strings.TrimLeft(key, "/")
 }
-

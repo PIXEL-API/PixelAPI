@@ -80,7 +80,7 @@ func TestSubsiteAgentProxy_AuthorizesForwardsAndQueuesUsage(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -137,7 +137,7 @@ func TestSubsiteAgentProxy_WebSocketQueuesEachCompletedTurn(t *testing.T) {
 		upstreamAuth = r.Header.Get("Authorization")
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{InsecureSkipVerify: true})
 		require.NoError(t, err)
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		for i := 1; i <= 2; i++ {
 			readCtx, cancel := context.WithTimeout(r.Context(), time.Second)
 			_, payload, err := conn.Read(readCtx)
@@ -202,7 +202,7 @@ func TestSubsiteAgentProxy_WebSocketQueuesEachCompletedTurn(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -223,7 +223,7 @@ func TestSubsiteAgentProxy_WebSocketQueuesEachCompletedTurn(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 
 	writeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	require.NoError(t, client.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.4","input":"one"}`)))
@@ -306,7 +306,7 @@ func TestSubsiteAgentProxy_OpenAIOAuthResponsesUsesCodexUpstream(t *testing.T) {
 
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // Test transport connects only to httptest.NewTLSServer.
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if addr == "chatgpt.com:443" {
 				return (&net.Dialer{}).DialContext(ctx, network, strings.TrimPrefix(upstream.URL, "https://"))
@@ -353,7 +353,7 @@ func TestSubsiteAgentProxy_OpenAIOAuthResponsesUsesCodexUpstream(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -437,7 +437,7 @@ func TestSubsiteAgentProxy_OpenAIChatCompletionsViaResponses(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -521,7 +521,7 @@ func TestSubsiteAgentProxy_OpenAIChatCompletionsViaResponsesCapturesLatencyAndRe
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -583,7 +583,7 @@ func TestSubsiteAgentProxy_OpenAIOAuthChatCompletionsUseCodexResponsesUpstream(t
 
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // Test transport connects only to httptest.NewTLSServer.
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if addr == "chatgpt.com:443" {
 				return (&net.Dialer{}).DialContext(ctx, network, strings.TrimPrefix(upstream.URL, "https://"))
@@ -630,7 +630,7 @@ func TestSubsiteAgentProxy_OpenAIOAuthChatCompletionsUseCodexResponsesUpstream(t
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -755,7 +755,7 @@ func TestSubsiteAgentProxy_FailoverOnOpenAIResponsesScopeError(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -869,7 +869,7 @@ func TestSubsiteAgentProxy_FailoverOnUpstreamServerError(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -947,7 +947,7 @@ func TestSubsiteAgentProxy_ReturnsRetryAuthorizeError(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -979,7 +979,7 @@ func TestSubsiteAgentProxy_WebSocketFailoverOnInitialDialError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{InsecureSkipVerify: true})
 		require.NoError(t, err)
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		readCtx, cancel := context.WithTimeout(r.Context(), time.Second)
 		_, payload, err := conn.Read(readCtx)
 		cancel()
@@ -1057,7 +1057,7 @@ func TestSubsiteAgentProxy_WebSocketFailoverOnInitialDialError(t *testing.T) {
 
 	usageQueue, err := queue.Open(filepath.Join(t.TempDir(), "usage.db"))
 	require.NoError(t, err)
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 
 	server := NewServer(&Config{
 		ListenAddr: ":0",
@@ -1075,7 +1075,7 @@ func TestSubsiteAgentProxy_WebSocketFailoverOnInitialDialError(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 
 	writeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	require.NoError(t, client.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.4","input":"one"}`)))

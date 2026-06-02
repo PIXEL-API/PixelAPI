@@ -72,7 +72,7 @@ func (q *UsageQueue) DequeueBatch(ctx context.Context, limit int) ([]UsageQueueI
 	if err != nil {
 		return nil, fmt.Errorf("select usage queue: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]UsageQueueItem, 0, limit)
 	for rows.Next() {
 		var item UsageQueueItem
@@ -101,7 +101,7 @@ func (q *UsageQueue) Ack(ctx context.Context, ids []int64) error {
 	if err != nil {
 		return fmt.Errorf("prepare usage queue ack: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	for _, id := range ids {
 		if _, err := stmt.ExecContext(ctx, id); err != nil {
 			return fmt.Errorf("ack usage queue item: %w", err)

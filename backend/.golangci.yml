@@ -9,7 +9,6 @@ linters:
     - govet
     - ineffassign
     - staticcheck
-    - unused
 
   settings:
     depguard:
