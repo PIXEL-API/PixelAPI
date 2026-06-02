@@ -582,6 +582,9 @@ func (r *affiliateRepository) withTx(ctx context.Context, fn func(txCtx context.
 
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
+		if errors.Is(err, dbent.ErrTxStarted) {
+			return fn(ctx, r.client)
+		}
 		return fmt.Errorf("begin affiliate transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -984,7 +987,7 @@ func (r *affiliateRepository) ListUsersWithCustomSettings(ctx context.Context, f
 	const baseFrom = `
 FROM user_affiliates ua
 JOIN users u ON u.id = ua.user_id
-WHERE ua.aff_code_custom = true
+WHERE (ua.aff_code_custom = true OR ua.aff_rebate_rate_percent IS NOT NULL)
   AND (u.email ILIKE $1 OR u.username ILIKE $1)`
 
 	client := clientFromContext(ctx, r.client)
