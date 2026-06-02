@@ -132,6 +132,7 @@ func TestQuotaReservationRepositoryCreateEnforcesLeaseCapacity(t *testing.T) {
 		AccountID:          accountID,
 		APIKeyID:           apiKeyID,
 		UserID:             userID,
+		GroupID:            &groupID,
 		Platform:           service.PlatformOpenAI,
 		RequestedModel:     "gpt-5.4",
 		MappedModel:        "gpt-5.4",
