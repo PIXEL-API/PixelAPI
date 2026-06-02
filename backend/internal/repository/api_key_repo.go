@@ -913,6 +913,9 @@ func (r *apiKeyRepository) withTx(ctx context.Context, fn func(txCtx context.Con
 	}
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
+		if errors.Is(err, dbent.ErrTxStarted) {
+			return fn(ctx, r.client)
+		}
 		return fmt.Errorf("begin api key transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
