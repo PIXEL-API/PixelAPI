@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+
 	"golang.org/x/term"
 )
 
@@ -125,18 +127,26 @@ func RunCLI() error {
 
 	for {
 		cfg.Redis.Host = promptString(reader, "Redis Host", "localhost")
-		if cliValidateHostname(cfg.Redis.Host) {
+		if isRedisUnixSocketHost(cfg.Redis.Host) {
+			if _, err := config.ParseRedisConnectionSpec(cfg.Redis.Host, 0); err == nil {
+				break
+			}
+		} else if cliValidateHostname(cfg.Redis.Host) {
 			break
 		}
-		fmt.Println("  Invalid hostname format. Use alphanumeric, dots, hyphens only.")
+		fmt.Println("  Invalid Redis host. Use a hostname/IP or unix:/absolute/path.sock.")
 	}
 
-	for {
-		cfg.Redis.Port = promptInt(reader, "Redis Port", 6379)
-		if cliValidatePort(cfg.Redis.Port) {
-			break
+	if isRedisUnixSocketHost(cfg.Redis.Host) {
+		cfg.Redis.Port = 0
+	} else {
+		for {
+			cfg.Redis.Port = promptInt(reader, "Redis Port", 6379)
+			if cliValidatePort(cfg.Redis.Port) {
+				break
+			}
+			fmt.Println("  Invalid port. Must be between 1 and 65535.")
 		}
-		fmt.Println("  Invalid port. Must be between 1 and 65535.")
 	}
 
 	cfg.Redis.Password = promptPassword("Redis Password (optional)")
@@ -149,7 +159,11 @@ func RunCLI() error {
 		fmt.Println("  Invalid Redis DB. Must be between 0 and 15.")
 	}
 
-	cfg.Redis.EnableTLS = promptConfirm(reader, "Enable Redis TLS?")
+	if isRedisUnixSocketHost(cfg.Redis.Host) {
+		cfg.Redis.EnableTLS = false
+	} else {
+		cfg.Redis.EnableTLS = promptConfirm(reader, "Enable Redis TLS?")
+	}
 
 	fmt.Println()
 	fmt.Print("Testing Redis connection... ")
@@ -206,7 +220,11 @@ func RunCLI() error {
 	fmt.Println()
 	fmt.Println("── Configuration Summary ──")
 	fmt.Printf("Database: %s@%s:%d/%s\n", cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
-	fmt.Printf("Redis: %s:%d\n", cfg.Redis.Host, cfg.Redis.Port)
+	if spec, err := config.ParseRedisConnectionSpec(cfg.Redis.Host, cfg.Redis.Port); err == nil && spec.Network == config.RedisConnectionNetworkUnix {
+		fmt.Printf("Redis: unix://%s\n", spec.Address)
+	} else {
+		fmt.Printf("Redis: %s:%d\n", cfg.Redis.Host, cfg.Redis.Port)
+	}
 	fmt.Printf("Redis TLS: %s\n", map[bool]string{true: "enabled", false: "disabled"}[cfg.Redis.EnableTLS])
 	fmt.Printf("Admin: %s\n", cfg.Admin.Email)
 	fmt.Printf("Server: :%d\n", cfg.Server.Port)
@@ -237,6 +255,11 @@ func RunCLI() error {
 	fmt.Println()
 
 	return nil
+}
+
+func isRedisUnixSocketHost(host string) bool {
+	trimmed := strings.TrimSpace(host)
+	return strings.HasPrefix(trimmed, "unix:") || strings.HasPrefix(trimmed, "/")
 }
 
 func promptString(reader *bufio.Reader, prompt, defaultVal string) string {

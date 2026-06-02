@@ -247,8 +247,17 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 
 // TestRedisConnection tests the Redis connection
 func TestRedisConnection(cfg *RedisConfig) error {
+	spec, err := config.ParseRedisConnectionSpec(cfg.Host, cfg.Port)
+	if err != nil {
+		return err
+	}
+	if spec.Network == config.RedisConnectionNetworkUnix && cfg.EnableTLS {
+		return fmt.Errorf("redis TLS is not supported with unix socket connections")
+	}
+
 	opts := &redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Network:  string(spec.Network),
+		Addr:     spec.Address,
 		Password: cfg.Password,
 		DB:       cfg.DB,
 	}

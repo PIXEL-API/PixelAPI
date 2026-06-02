@@ -778,9 +778,11 @@ database:
 redis:
   # Redis host address
   # Redis 主机地址
+  # For unix socket, use "unix:/run/redis/redis.sock" or "/run/redis/redis.sock"
+  # 如需通过 Unix Socket 连接，可填写 "unix:/run/redis/redis.sock" 或 "/run/redis/redis.sock"
   host: "localhost"
   # Redis port
-  # Redis 端口
+  # Redis 端口（Unix Socket 模式下忽略）
   port: 6379
   # Redis password (leave empty if no password is set)
   # Redis 密码（如果未设置密码则留空）
@@ -795,7 +797,7 @@ redis:
   # 最小空闲连接数
   min_idle_conns: 128
   # Enable TLS/SSL connection
-  # 是否启用 TLS/SSL 连接
+  # 是否启用 TLS/SSL 连接（Unix Socket 模式不支持 TLS）
   enable_tls: false
 
 # =============================================================================

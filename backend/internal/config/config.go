@@ -1192,8 +1192,74 @@ type RedisConfig struct {
 	EnableTLS bool `mapstructure:"enable_tls"`
 }
 
+type RedisConnectionNetwork string
+
+const (
+	RedisConnectionNetworkTCP  RedisConnectionNetwork = "tcp"
+	RedisConnectionNetworkUnix RedisConnectionNetwork = "unix"
+)
+
+type RedisConnectionSpec struct {
+	Network RedisConnectionNetwork
+	Address string
+}
+
+func ParseRedisConnectionSpec(host string, port int) (RedisConnectionSpec, error) {
+	rawHost := strings.TrimSpace(host)
+	if rawHost == "" {
+		rawHost = "localhost"
+	}
+
+	switch {
+	case strings.HasPrefix(rawHost, "unix:"):
+		return parseRedisUnixSocketSpec(strings.TrimSpace(strings.TrimPrefix(rawHost, "unix:")))
+	case strings.HasPrefix(rawHost, "/"):
+		return parseRedisUnixSocketSpec(rawHost)
+	default:
+		if port <= 0 || port > 65535 {
+			return RedisConnectionSpec{}, fmt.Errorf("tcp redis port must be between 1-65535")
+		}
+		return RedisConnectionSpec{
+			Network: RedisConnectionNetworkTCP,
+			Address: fmt.Sprintf("%s:%d", rawHost, port),
+		}, nil
+	}
+}
+
+func parseRedisUnixSocketSpec(raw string) (RedisConnectionSpec, error) {
+	socketPath := strings.TrimSpace(raw)
+	if socketPath == "" {
+		return RedisConnectionSpec{}, fmt.Errorf("redis unix socket path is required")
+	}
+	if !strings.HasPrefix(socketPath, "/") {
+		return RedisConnectionSpec{}, fmt.Errorf("redis unix socket path must be absolute")
+	}
+	cleanPath := pathpkg.Clean(socketPath)
+	if cleanPath == "/" {
+		return RedisConnectionSpec{}, fmt.Errorf("redis unix socket path cannot be root directory")
+	}
+	return RedisConnectionSpec{
+		Network: RedisConnectionNetworkUnix,
+		Address: cleanPath,
+	}, nil
+}
+
 func (r *RedisConfig) Address() string {
 	return fmt.Sprintf("%s:%d", r.Host, r.Port)
+}
+
+func (r *RedisConfig) ConnectionSpec() (RedisConnectionSpec, error) {
+	if r == nil {
+		return ParseRedisConnectionSpec("", 6379)
+	}
+	spec, err := ParseRedisConnectionSpec(r.Host, r.Port)
+	if err != nil {
+		return RedisConnectionSpec{}, err
+	}
+	if spec.Network == RedisConnectionNetworkUnix && r.EnableTLS {
+		return RedisConnectionSpec{}, fmt.Errorf("redis.enable_tls is not supported with unix socket connections")
+	}
+	return spec, nil
 }
 
 type OpsConfig struct {
@@ -2343,6 +2409,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Redis.MinIdleConns > c.Redis.PoolSize {
 		return fmt.Errorf("redis.min_idle_conns cannot exceed redis.pool_size")
+	}
+	if _, err := c.Redis.ConnectionSpec(); err != nil {
+		return fmt.Errorf("redis connection config invalid: %w", err)
 	}
 	if c.Dashboard.Enabled {
 		if c.Dashboard.StatsFreshTTLSeconds <= 0 {
