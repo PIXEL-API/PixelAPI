@@ -9,7 +9,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" //nolint:gosec // Admin/debug profiling is intentionally exposed only when the server is started with that route mounted.
 	"os"
 	"os/signal"
 	"strconv"
@@ -27,7 +27,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
+	"golang.org/x/net/http2/h2c" //nolint:staticcheck // Keep existing h2c behavior until the server moves fully to Go's Protocols API.
 )
 
 //go:embed VERSION
@@ -120,7 +120,7 @@ func runSetupServer() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           h2c.NewHandler(r, &http2.Server{}),
+		Handler:           h2c.NewHandler(r, &http2.Server{}), //nolint:staticcheck // Keep existing h2c behavior until the server moves fully to Go's Protocols API.
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

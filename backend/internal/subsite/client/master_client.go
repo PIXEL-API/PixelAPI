@@ -81,7 +81,7 @@ func (c *MasterClient) do(ctx context.Context, method, path string, body []byte,
 	if err != nil {
 		return fmt.Errorf("call master: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read master response: %w", err)

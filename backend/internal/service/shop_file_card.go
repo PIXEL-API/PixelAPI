@@ -379,10 +379,10 @@ func (s *ShopService) writeOrderFileCardArchive(ctx context.Context, orderID int
 		}
 		name := uniqueArchiveFilename(sanitizeShopFilename(file.Filename), usedNames)
 		header := &zip.FileHeader{
-			Name:   name,
-			Method: zip.Deflate,
+			Name:     name,
+			Method:   zip.Deflate,
+			Modified: time.Now(),
 		}
-		header.SetModTime(time.Now())
 		writer, err := zw.CreateHeader(header)
 		if err != nil {
 			_ = body.Close()

@@ -1741,7 +1741,6 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		if resp != nil {
 			resp.Request = nil
 		}
-		body = nil
 		// 客户端要求流式，直接透传转换
 		streamRes, err := s.handleClaudeStreamingResponse(c, resp, startTime, originalModel)
 		if err != nil {
@@ -2428,7 +2427,6 @@ handleSuccess:
 		if resp != nil {
 			resp.Request = nil
 		}
-		body = nil
 		// 客户端要求流式，直接透传
 		streamRes, err := s.handleGeminiStreamingResponse(c, resp, startTime)
 		if err != nil {
@@ -4297,7 +4295,6 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		if resp != nil {
 			resp.Request = nil
 		}
-		body = nil
 		// 流式响应：透传
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")

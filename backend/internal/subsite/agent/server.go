@@ -571,7 +571,7 @@ func Run(ctx context.Context, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	defer usageQueue.Close()
+	defer func() { _ = usageQueue.Close() }()
 	server := NewServer(cfg, master, usageQueue)
 	return server.Run(ctx)
 }

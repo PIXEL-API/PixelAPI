@@ -1082,7 +1082,6 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		if resp != nil {
 			resp.Request = nil
 		}
-		body = nil
 		streamRes, err := s.handleStreamingResponse(c, resp, startTime, originalModel)
 		if err != nil {
 			return nil, err

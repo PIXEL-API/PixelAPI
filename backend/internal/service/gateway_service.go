@@ -5205,7 +5205,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if resp != nil {
 			resp.Request = nil
 		}
-		body = nil
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel, shouldMimicClaudeCode)
 		if err != nil {
 			if err.Error() == "have error in stream" {

@@ -2554,9 +2554,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	openAIReqBody := reqBody
-	if !reqStream && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
-		reqBody = nil
-	}
 
 	// Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -2780,9 +2777,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
 		return nil, wsErr
 	}
-	if reqStream {
-		reqBody = nil
-	}
 
 	httpInvalidEncryptedContentRetryTried := false
 	for {
@@ -2884,15 +2878,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if resp != nil {
 				resp.Request = nil
 			}
-			body = nil
-			openAIReqBody = nil
 			streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
 			if err != nil {
 				return nil, err
 			}
-			usage = streamResult.usage
-			firstTokenMs = streamResult.firstTokenMs
 			if streamResult != nil {
+				usage = streamResult.usage
+				firstTokenMs = streamResult.firstTokenMs
 				if responseServiceTier := extractOpenAIServiceTierFromResponses(streamResult.responseServiceTier); responseServiceTier != nil {
 					serviceTier = responseServiceTier
 				}
@@ -3114,14 +3106,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if resp != nil {
 			resp.Request = nil
 		}
-		body = nil
 		result, err := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 		if err != nil {
 			return nil, err
 		}
-		usage = result.usage
-		firstTokenMs = result.firstTokenMs
 		if result != nil {
+			usage = result.usage
+			firstTokenMs = result.firstTokenMs
 			if responseServiceTier := extractOpenAIServiceTierFromResponses(result.responseServiceTier); responseServiceTier != nil {
 				serviceTier = responseServiceTier
 			}
