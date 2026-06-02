@@ -4,10 +4,13 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
+	pathpkg "path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -530,6 +533,139 @@ type ServerConfig struct {
 	H2C                H2CConfig `mapstructure:"h2c"`                   // HTTP/2 Cleartext 配置
 }
 
+type ServerListenNetwork string
+
+const (
+	ServerListenNetworkTCP  ServerListenNetwork = "tcp"
+	ServerListenNetworkUnix ServerListenNetwork = "unix"
+)
+
+const (
+	defaultUnixSocketFileMode os.FileMode = 0o660
+)
+
+type ServerListenSpec struct {
+	Network ServerListenNetwork
+	Address string
+	Mode    os.FileMode
+}
+
+func (s ServerListenSpec) DisplayAddress() string {
+	switch s.Network {
+	case ServerListenNetworkUnix:
+		return fmt.Sprintf("unix://%s", s.Address)
+	default:
+		return s.Address
+	}
+}
+
+func ParseServerListenSpec(host string, port int) (ServerListenSpec, error) {
+	rawHost := strings.TrimSpace(host)
+	if rawHost == "" {
+		rawHost = "0.0.0.0"
+	}
+
+	socketMode := defaultUnixSocketFileMode
+	switch {
+	case strings.HasPrefix(rawHost, "unix:"):
+		return parseUnixSocketListenSpec(strings.TrimSpace(strings.TrimPrefix(rawHost, "unix:")), socketMode)
+	case strings.HasPrefix(rawHost, "/"):
+		return parseUnixSocketListenSpec(rawHost, socketMode)
+	default:
+		if port <= 0 || port > 65535 {
+			return ServerListenSpec{}, fmt.Errorf("tcp listen port must be between 1-65535")
+		}
+		return ServerListenSpec{
+			Network: ServerListenNetworkTCP,
+			Address: fmt.Sprintf("%s:%d", rawHost, port),
+		}, nil
+	}
+}
+
+func parseUnixSocketListenSpec(raw string, defaultMode os.FileMode) (ServerListenSpec, error) {
+	socketPath := strings.TrimSpace(raw)
+	if socketPath == "" {
+		return ServerListenSpec{}, fmt.Errorf("unix socket path is required")
+	}
+
+	mode := defaultMode
+	if idx := strings.LastIndex(socketPath, ","); idx >= 0 {
+		maybeMode := strings.TrimSpace(socketPath[idx+1:])
+		if maybeMode != "" {
+			parsedMode, err := parseUnixSocketFileMode(maybeMode)
+			if err != nil {
+				return ServerListenSpec{}, err
+			}
+			mode = parsedMode
+			socketPath = strings.TrimSpace(socketPath[:idx])
+		}
+	}
+
+	if socketPath == "" {
+		return ServerListenSpec{}, fmt.Errorf("unix socket path is required")
+	}
+	if !strings.HasPrefix(socketPath, "/") {
+		return ServerListenSpec{}, fmt.Errorf("unix socket path must be absolute")
+	}
+	cleanPath := pathpkg.Clean(socketPath)
+	if cleanPath == "/" {
+		return ServerListenSpec{}, fmt.Errorf("unix socket path cannot be root directory")
+	}
+
+	return ServerListenSpec{
+		Network: ServerListenNetworkUnix,
+		Address: cleanPath,
+		Mode:    mode,
+	}, nil
+}
+
+func parseUnixSocketFileMode(raw string) (os.FileMode, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("unix socket file mode cannot be empty")
+	}
+	if strings.HasPrefix(value, "0o") || strings.HasPrefix(value, "0O") {
+		value = value[2:]
+	}
+	if strings.HasPrefix(value, "0") && len(value) > 1 {
+		value = value[1:]
+	}
+	if len(value) < 3 || len(value) > 4 {
+		return 0, fmt.Errorf("unix socket file mode must be 3-4 octal digits")
+	}
+	for _, r := range value {
+		if r < '0' || r > '7' {
+			return 0, fmt.Errorf("unix socket file mode must be octal")
+		}
+	}
+	parsed, err := strconv.ParseUint(value, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parse unix socket file mode: %w", err)
+	}
+	mode := os.FileMode(parsed)
+	if mode&os.ModeType != 0 {
+		return 0, fmt.Errorf("unix socket file mode must not include file type bits")
+	}
+	return mode, nil
+}
+
+func RemoveUnixSocketIfExists(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat unix socket %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("refusing to remove non-socket file at %q", path)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale unix socket %q: %w", path, err)
+	}
+	return nil
+}
+
 // H2CConfig HTTP/2 Cleartext 配置
 type H2CConfig struct {
 	Enabled                      bool   `mapstructure:"enabled"`                          // 是否启用 H2C
@@ -965,6 +1101,21 @@ type GatewaySchedulingConfig struct {
 
 func (s *ServerConfig) Address() string {
 	return fmt.Sprintf("%s:%d", s.Host, s.Port)
+}
+
+func (s *ServerConfig) ListenSpec() (ServerListenSpec, error) {
+	if s == nil {
+		return ParseServerListenSpec("", 8080)
+	}
+	return ParseServerListenSpec(s.Host, s.Port)
+}
+
+func (s *ServerConfig) DisplayAddress() string {
+	spec, err := s.ListenSpec()
+	if err != nil {
+		return s.Address()
+	}
+	return spec.DisplayAddress()
 }
 
 // DatabaseConfig 数据库连接配置
@@ -1948,6 +2099,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("server.frontend_url invalid: must not include userinfo")
 		}
 		warnIfInsecureURL("server.frontend_url", c.Server.FrontendURL)
+	}
+	if _, err := c.Server.ListenSpec(); err != nil {
+		return fmt.Errorf("server listen config invalid: %w", err)
 	}
 	if c.JWT.ExpireHour <= 0 {
 		return fmt.Errorf("jwt.expire_hour must be positive")
