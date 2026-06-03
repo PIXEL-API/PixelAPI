@@ -24,6 +24,7 @@ type AccountRepoSuite struct {
 
 type schedulerCacheRecorder struct {
 	setAccounts []*service.Account
+	deletedIDs  []int64
 	accounts    map[int64]*service.Account
 }
 
@@ -54,6 +55,10 @@ func (s *schedulerCacheRecorder) SetAccount(ctx context.Context, account *servic
 }
 
 func (s *schedulerCacheRecorder) DeleteAccount(ctx context.Context, accountID int64) error {
+	s.deletedIDs = append(s.deletedIDs, accountID)
+	if s.accounts != nil {
+		delete(s.accounts, accountID)
+	}
 	return nil
 }
 
@@ -178,9 +183,12 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange()
 
 func (s *AccountRepoSuite) TestDelete() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "to-delete"})
+	cacheRecorder := &schedulerCacheRecorder{}
+	s.repo.schedulerCache = cacheRecorder
 
 	err := s.repo.Delete(s.ctx, account.ID)
 	s.Require().NoError(err, "Delete")
+	s.Require().Equal([]int64{account.ID}, cacheRecorder.deletedIDs)
 
 	_, err = s.repo.GetByID(s.ctx, account.ID)
 	s.Require().Error(err, "expected error after delete")

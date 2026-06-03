@@ -178,6 +178,7 @@ type SystemSettings struct {
 	EnableFingerprintUnification       bool `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough          bool `json:"enable_metadata_passthrough"`
 	EnableCCHSigning                   bool `json:"enable_cch_signing"`
+	OpenAICleanRelayEnabled            bool `json:"openai_clean_relay_enabled"`
 	EnableAnthropicCacheTTL1hInjection bool `json:"enable_anthropic_cache_ttl_1h_injection"`
 
 	// Web Search Emulation

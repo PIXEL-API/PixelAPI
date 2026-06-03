@@ -3499,12 +3499,8 @@ const handleSubmit = async () => {
 
       // Handle API key
       if (editApiKey.value.trim()) {
-        // User provided a new API key
         newCredentials.api_key = editApiKey.value.trim()
-      } else if (currentCredentials.api_key) {
-        // Preserve existing api_key
-        newCredentials.api_key = currentCredentials.api_key
-      } else {
+      } else if (!props.account.credentials_status?.has_api_key) {
         appStore.showError(t('admin.accounts.apiKeyIsRequired'))
         return
       }
@@ -3589,7 +3585,10 @@ const handleSubmit = async () => {
         return
       }
 
-      if (!currentCredentials.service_account_json && !currentCredentials.service_account) {
+      const hasExistingServiceAccountJson =
+        props.account.credentials_status?.has_service_account_json ||
+        props.account.credentials_status?.has_service_account
+      if (!hasExistingServiceAccountJson) {
         appStore.showError(t('admin.accounts.vertexSaJsonRequired'))
         return
       }

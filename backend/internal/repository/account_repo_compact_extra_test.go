@@ -22,3 +22,14 @@ func TestShouldEnqueueSchedulerOutboxForExtraUpdates_CodexLimitKeysAreRelevant(t
 		t.Fatalf("expected codex limit updates to enqueue scheduler outbox")
 	}
 }
+
+func TestShouldEnqueueSchedulerOutboxForExtraUpdates_OpenAIResponsesRoutingKeysAreRelevant(t *testing.T) {
+	updates := map[string]any{
+		"openai_responses_mode":      "force_chat_completions",
+		"openai_responses_supported": false,
+	}
+
+	if !shouldEnqueueSchedulerOutboxForExtraUpdates(updates) {
+		t.Fatalf("expected OpenAI Responses routing updates to enqueue scheduler outbox")
+	}
+}

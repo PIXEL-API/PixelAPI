@@ -746,7 +746,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	if req.Credentials != nil {
-		account.Credentials = *req.Credentials
+		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, *req.Credentials)
 	}
 
 	if req.Extra != nil {
@@ -856,7 +856,7 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		account.Notes = normalizeAccountNotes(req.Notes)
 	}
 	if req.Credentials != nil {
-		account.Credentials = *req.Credentials
+		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, *req.Credentials)
 	}
 	if req.Extra != nil {
 		extra, err := NormalizeCodexQuotaLimitExtra(account.Platform, account.Type, *req.Extra)
@@ -1117,6 +1117,13 @@ func mergeAccountMap(current map[string]any, updates map[string]any) map[string]
 		next[key] = value
 	}
 	return next
+}
+
+func mergeAccountMapPreservingSensitiveCreds(current map[string]any, updates map[string]any) map[string]any {
+	if len(updates) == 0 {
+		return mergeAccountMap(current, updates)
+	}
+	return MergePreservingSensitiveCreds(current, mergeAccountMap(current, updates))
 }
 
 func accountDuplicateIdentityKeys(account *Account) []ownedAccountDuplicateKey {

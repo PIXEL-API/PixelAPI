@@ -407,6 +407,8 @@ type GatewayCache interface {
 	DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error
 }
 
+var ErrGatewaySessionStringNotFound = errors.New("gateway session string not found")
+
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
 func derefGroupID(groupID *int64) int64 {
 	if groupID == nil {

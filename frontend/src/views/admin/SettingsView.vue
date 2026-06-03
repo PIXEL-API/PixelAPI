@@ -3416,6 +3416,21 @@
                 <Toggle v-model="form.enable_metadata_passthrough" />
               </div>
 
+              <!-- OpenAI Clean Relay -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.cleanRelay") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.gatewayForwarding.cleanRelayHint") }}
+                  </p>
+                </div>
+                <Toggle v-model="form.openai_clean_relay_enabled" />
+              </div>
+
               <!-- CCH Signing -->
               <div class="flex items-center justify-between">
                 <div>
@@ -6824,6 +6839,7 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_enabled: boolean;
   openai_free_account_repair_enabled: boolean;
   openai_free_account_repair_weekly_threshold_usd: number;
+  openai_clean_relay_enabled: boolean;
 };
 
 const form = reactive<SettingsForm>({
@@ -7020,6 +7036,7 @@ const form = reactive<SettingsForm>({
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
   enable_cch_signing: false,
+  openai_clean_relay_enabled: false,
   enable_anthropic_cache_ttl_1h_injection: false,
   // Balance & quota notification
   balance_low_notify_enabled: false,
@@ -8211,6 +8228,7 @@ async function saveSettings() {
       enable_fingerprint_unification: form.enable_fingerprint_unification,
       enable_metadata_passthrough: form.enable_metadata_passthrough,
       enable_cch_signing: form.enable_cch_signing,
+      openai_clean_relay_enabled: form.openai_clean_relay_enabled,
       enable_anthropic_cache_ttl_1h_injection:
         form.enable_anthropic_cache_ttl_1h_injection,
       // Payment configuration

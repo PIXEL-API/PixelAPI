@@ -145,7 +145,7 @@ func (s *stickyGatewayCacheHotpathStub) DeleteSessionAccountID(ctx context.Conte
 }
 
 func (s *stickyGatewayCacheHotpathStub) GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error) {
-	return "", errors.New("not found")
+	return "", ErrGatewaySessionStringNotFound
 }
 
 func (s *stickyGatewayCacheHotpathStub) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {

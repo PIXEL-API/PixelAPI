@@ -34,6 +34,6 @@ func TestOpenAIGatewayServiceRecordUsage_ResetsOpenAI403CounterBeforeZeroUsageRe
 		Account: &Account{ID: 777, Platform: PlatformOpenAI},
 	})
 
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "api key is nil")
 	require.Equal(t, []int64{777}, counter.resetCalls)
 }

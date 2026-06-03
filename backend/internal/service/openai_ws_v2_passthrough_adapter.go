@@ -23,9 +23,9 @@ type openAIWSClientFrameConn struct {
 }
 
 // openAIWSPolicyEnforcingFrameConn wraps a client-side FrameConn and runs
-// every client→upstream frame through the OpenAI Fast Policy. It is the
-// passthrough-relay equivalent of the parseClientPayload integration in the
-// ingress session path. filter returns:
+// every client→upstream frame through the passthrough request filter. It is
+// the relay equivalent of the parseClientPayload integration in the ingress
+// session path. filter returns:
 //   - newPayload, nil, nil: forward the (possibly mutated) payload
 //   - _, *OpenAIFastBlockedError, nil: block — the wrapper sends an error
 //     event via onBlock and surfaces a transport-level error so the relay
@@ -250,6 +250,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
 	firstClientMessage = updatedFirst
+	cleanedFirst, cleanRelayState, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, firstClientMessage, firstClientMessage)
+	if cleanRelayErr != nil {
+		return fmt.Errorf("apply openai clean relay on first ws frame: %w", cleanRelayErr)
+	}
+	if cleanRelayState != nil {
+		firstClientMessage = cleanedFirst
+	}
 
 	// 在 policy filter 之后再提取 service_tier 用于 billing 上报：filter
 	// 命中时 service_tier 已经从 firstClientMessage 中删除，billing 应当
@@ -364,6 +371,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				model = capturedSessionModel
 			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
+			if policyErr == nil && blocked == nil &&
+				strings.TrimSpace(gjson.GetBytes(out, "type").String()) == "response.create" {
+				cleanedOut, _, _, cleanRelayErr := s.applyOpenAICleanRelayToRawBody(ctx, c, account, out, payload)
+				if cleanRelayErr != nil {
+					return out, nil, cleanRelayErr
+				}
+				out = cleanedOut
+			}
 			// 多轮 passthrough billing：仅在成功（non-block / non-err）
 			// 的 response.create 帧上更新 requestServiceTierPtr，使用
 			// filter 处理后的 payload，与首帧 policy-after-extract 语义
@@ -379,7 +394,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     覆盖（Store(nil)），因为 OpenAI 上游对该帧实际不传
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil &&
-				strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
+				strings.TrimSpace(gjson.GetBytes(out, "type").String()) == "response.create" {
 				requestServiceTierPtr.Store(extractOpenAIServiceTierFromBody(out))
 				frameModel := strings.TrimSpace(gjson.GetBytes(out, "model").String())
 				if frameModel == "" {

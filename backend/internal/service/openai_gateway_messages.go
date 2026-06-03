@@ -245,7 +245,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				Detail:             upstreamDetail,
 			})
 			if s.rateLimitService != nil {
-				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+				s.rateLimitService.HandleUpstreamErrorForModel(ctx, account, originalModel, resp.StatusCode, resp.Header, respBody)
 			}
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
@@ -254,7 +254,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 		}
 		// Non-failover error: return Anthropic-formatted error to client
-		return s.handleAnthropicErrorResponse(resp, c, account)
+		return s.handleAnthropicErrorResponse(resp, c, account, originalModel)
 	}
 
 	// 9. Handle normal response
@@ -297,8 +297,9 @@ func (s *OpenAIGatewayService) handleAnthropicErrorResponse(
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
+	requestedModel string,
 ) (*OpenAIForwardResult, error) {
-	return s.handleCompatErrorResponse(resp, c, account, writeAnthropicError)
+	return s.handleCompatErrorResponse(resp, c, account, requestedModel, writeAnthropicError)
 }
 
 // handleAnthropicBufferedStreamingResponse reads all Responses SSE events from
@@ -331,10 +332,10 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+		payload, ok := extractOpenAISSEDataLine(line)
+		if !ok || strings.TrimSpace(payload) == "[DONE]" {
 			continue
 		}
-		payload := line[6:]
 
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -547,10 +548,11 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	if keepaliveInterval <= 0 {
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+			payload, ok := extractOpenAISSEDataLine(line)
+			if !ok || strings.TrimSpace(payload) == "[DONE]" {
 				continue
 			}
-			if processDataLine(line[6:]) {
+			if processDataLine(payload) {
 				return resultWithUsage(), nil
 			}
 		}
@@ -603,10 +605,11 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			lastDataAt = time.Now()
 			line := ev.line
-			if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+			payload, ok := extractOpenAISSEDataLine(line)
+			if !ok || strings.TrimSpace(payload) == "[DONE]" {
 				continue
 			}
-			if processDataLine(line[6:]) {
+			if processDataLine(payload) {
 				return resultWithUsage(), nil
 			}
 

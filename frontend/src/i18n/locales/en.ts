@@ -5896,6 +5896,8 @@ export default {
         fingerprintUnificationHint: 'Unify X-Stainless-* headers across users sharing the same OAuth account. Disabling passes through each client\'s original headers.',
         metadataPassthrough: 'Metadata Passthrough',
         metadataPassthroughHint: 'Pass through client\'s original metadata.user_id without rewriting. May improve upstream cache hit rates.',
+        cleanRelay: 'Clean Relay Mode',
+        cleanRelayHint: 'Uses gateway-managed upstream installation/session/cache identifiers for OpenAI OAuth requests. First entry or account migration clears previous_response_id, encrypted reasoning, and old turn state.',
         cchSigning: 'CCH Signing',
         cchSigningHint: 'Sign the billing header in forwarded requests with CCH hash. When disabled, the placeholder is preserved.',
         anthropicCacheTTL1hInjection: 'Anthropic Cache TTL Injection',

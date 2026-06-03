@@ -36,7 +36,7 @@ frontend/node_modules/
 frontend/dist/
 *.local
 *.tsbuildinfo
-vite.config.d.ts
+frontend/vite.config.d.ts
 vite.config.js.timestamp-*
 
 # 日志
@@ -136,10 +136,8 @@ backend/.installed
 # ===================
 # 其他
 # ===================
-tests
 CLAUDE.md
 .claude
-scripts
 .code-review-state
 #openspec/
 code-reviews/
@@ -147,13 +145,9 @@ AGENTS.md
 backend/cmd/server/server
 deploy/docker-compose.override.yml
 .gocache/
-vite.config.js
-docs/*
-!docs/PAYMENT.md
-!docs/PAYMENT_CN.md
-!docs/ADMIN_PAYMENT_INTEGRATION_API.md
-!docs/OFFICIAL_UPDATE_AND_DEPLOY_CN.md
-!docs/LOCAL_IMAGE_UPLOAD_DEPLOY_CN.md
+frontend/vite.config.js
+docs/private/
+docs/服务器项目信息.md
 .serena/
 .codex/
 frontend/coverage/

@@ -622,6 +622,17 @@ func TestOpenAIGatewayService_OpenAIPassthrough_429And529TriggerFailover(t *test
 			},
 		},
 		{
+			name:        "oauth_503_service_unavailable",
+			accountType: AccountTypeOAuth,
+			statusCode:  http.StatusServiceUnavailable,
+			body:        `{"error":{"message":"Service temporarily unavailable","type":"server_error"}}`,
+			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
+				require.Empty(t, repo.rateLimitCalls)
+				require.Empty(t, repo.overloadCalls)
+				require.Empty(t, repo.tempCalls)
+			},
+		},
+		{
 			name:        "oauth_400_model_capacity",
 			accountType: AccountTypeOAuth,
 			statusCode:  http.StatusBadRequest,

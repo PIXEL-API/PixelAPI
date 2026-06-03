@@ -22,13 +22,17 @@ func TestDefaultModels_ContainsFallbackCatalogModels(t *testing.T) {
 		}
 	}
 
-	blocked := []string{
+	imageModels := []string{
 		"models/gemini-2.5-flash-image",
 		"models/gemini-3.1-flash-image",
 	}
-	for _, name := range blocked {
-		if _, ok := byName[name]; ok {
-			t.Fatalf("did not expect fallback image generation model %q to exist", name)
+	for _, name := range imageModels {
+		model, ok := byName[name]
+		if !ok {
+			t.Fatalf("expected fallback image generation model %q to exist", name)
+		}
+		if len(model.SupportedGenerationMethods) == 0 {
+			t.Fatalf("expected fallback image generation model %q to advertise generation methods", name)
 		}
 	}
 }

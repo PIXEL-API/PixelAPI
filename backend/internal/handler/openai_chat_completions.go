@@ -147,15 +147,19 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			zap.Int("excluded_account_count", len(failedAccountIDs)),
 			zap.Int64p("group_id", currentAPIKey.GroupID),
 		)
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithScheduler(
+		selectionModel := resolveOpenAIAccountSelectionModel(reqModel, channelMapping)
+		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithCleanRelayScheduler(
 			c.Request.Context(),
+			c,
 			currentAPIKey.GroupID,
 			"",
 			sessionHash,
 			reqModel,
+			selectionModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
 			false,
+			body,
 		)
 		if err != nil {
 			reqLog.Warn("openai_chat_completions.account_select_failed",
@@ -172,15 +176,18 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					reqLog.Info("openai_chat_completions.fallback_to_default_model",
 						zap.String("default_mapped_model", defaultModel),
 					)
-					selection, scheduleDecision, err = h.gatewayService.SelectAccountWithScheduler(
+					selection, scheduleDecision, err = h.gatewayService.SelectAccountWithCleanRelayScheduler(
 						c.Request.Context(),
+						c,
 						currentAPIKey.GroupID,
 						"",
 						sessionHash,
 						defaultModel,
+						defaultModel,
 						failedAccountIDs,
 						service.OpenAIUpstreamTransportAny,
 						false,
+						body,
 					)
 					if err == nil && selection != nil {
 						c.Set("openai_chat_completions_fallback_model", defaultModel)

@@ -387,6 +387,8 @@ const (
 	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
 	// SettingKeyEnableCCHSigning 是否对 billing header 中的 cch 进行 xxHash64 签名（默认 false）
 	SettingKeyEnableCCHSigning = "enable_cch_signing"
+	// SettingKeyOpenAICleanRelayEnabled 是否启用 OpenAI 洁净中继模式（默认 false）
+	SettingKeyOpenAICleanRelayEnabled = "openai_clean_relay_enabled"
 	// SettingKeyEnableAnthropicCacheTTL1hInjection 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 	SettingKeyEnableAnthropicCacheTTL1hInjection = "enable_anthropic_cache_ttl_1h_injection"
 

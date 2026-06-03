@@ -63,6 +63,7 @@ const (
 	openAI403DisableThreshold       = 3
 	openAI403CounterWindowMinutes   = 180
 	openAIModelCapacityCooldown     = time.Minute
+	upstreamModelNotFoundCooldown   = 30 * time.Minute
 )
 
 var cloudflareChallengeCooldownSteps = []time.Duration{
@@ -307,6 +308,75 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	}
 
 	return shouldDisable
+}
+
+func (s *RateLimitService) HandleUpstreamErrorForModel(ctx context.Context, account *Account, requestedModel string, statusCode int, headers http.Header, responseBody []byte) (shouldDisable bool) {
+	if s.handleUpstreamModelNotFound(ctx, account, requestedModel, statusCode, responseBody) {
+		return true
+	}
+	return s.HandleUpstreamError(ctx, account, statusCode, headers, responseBody)
+}
+
+func (s *RateLimitService) handleUpstreamModelNotFound(ctx context.Context, account *Account, requestedModel string, statusCode int, responseBody []byte) bool {
+	if s == nil || s.accountRepo == nil || account == nil {
+		return false
+	}
+	if !account.ShouldHandleErrorCode(statusCode) {
+		return false
+	}
+	if !isUpstreamModelNotFoundError(statusCode, responseBody) {
+		return false
+	}
+	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)
+	if modelKey == "" {
+		return false
+	}
+	resetAt := time.Now().Add(upstreamModelNotFoundCooldown)
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt); err != nil {
+		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "error", err)
+		return true
+	}
+	slog.Info("upstream_model_not_found_model_rate_limited", "account_id", account.ID, "model", modelKey, "reset_at", resetAt)
+	return true
+}
+
+func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusNotFound {
+		return false
+	}
+	normalized := normalizeModelNotFoundBody(body)
+	if normalized == "" || !strings.Contains(normalized, "model") {
+		return false
+	}
+	return strings.Contains(normalized, "model not found") ||
+		strings.Contains(normalized, "unknown model") ||
+		strings.Contains(normalized, "not found")
+}
+
+func normalizeModelNotFoundBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	normalized := strings.ToLower(string(body))
+	normalized = strings.NewReplacer("_", " ", "-", " ", "\n", " ", "\r", " ", "\t", " ").Replace(normalized)
+	return strings.Join(strings.Fields(normalized), " ")
+}
+
+func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Account, requestedModel string) string {
+	modelKey := strings.TrimSpace(requestedModel)
+	if account == nil || modelKey == "" {
+		return modelKey
+	}
+	mapped := strings.TrimSpace(account.GetMappedModel(modelKey))
+	if mapped != "" {
+		modelKey = mapped
+	}
+	if account.Platform == PlatformAntigravity {
+		if resolved := strings.TrimSpace(resolveFinalAntigravityModelKey(ctx, account, requestedModel)); resolved != "" {
+			modelKey = resolved
+		}
+	}
+	return modelKey
 }
 
 func (s *RateLimitService) handleOpenAIModelCapacityError(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {

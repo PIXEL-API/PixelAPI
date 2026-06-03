@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -50,6 +51,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
+
 	startTime := time.Now()
 
 	// 1. Parse Chat Completions request
@@ -249,7 +254,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				Detail:             upstreamDetail,
 			})
 			if s.rateLimitService != nil {
-				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+				s.rateLimitService.HandleUpstreamErrorForModel(ctx, account, originalModel, resp.StatusCode, resp.Header, respBody)
 			}
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
@@ -257,7 +262,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				RetryableOnSameAccount: account.IsPoolMode() && (isPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
 		}
-		return s.handleChatCompletionsErrorResponse(resp, c, account)
+		return s.handleChatCompletionsErrorResponse(resp, c, account, originalModel)
 	}
 
 	// 9. Handle normal response
@@ -337,8 +342,9 @@ func (s *OpenAIGatewayService) handleChatCompletionsErrorResponse(
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
+	requestedModel string,
 ) (*OpenAIForwardResult, error) {
-	return s.handleCompatErrorResponse(resp, c, account, writeChatCompletionsError)
+	return s.handleCompatErrorResponse(resp, c, account, requestedModel, writeChatCompletionsError)
 }
 
 // handleChatBufferedStreamingResponse reads all Responses SSE events from the
@@ -367,10 +373,10 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+		payload, ok := extractOpenAISSEDataLine(line)
+		if !ok || strings.TrimSpace(payload) == "[DONE]" {
 			continue
 		}
-		payload := line[6:]
 
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -578,10 +584,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	if keepaliveInterval <= 0 {
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+			payload, ok := extractOpenAISSEDataLine(line)
+			if !ok || strings.TrimSpace(payload) == "[DONE]" {
 				continue
 			}
-			if processDataLine(line[6:]) {
+			if processDataLine(payload) {
 				return resultWithUsage(), nil
 			}
 		}
@@ -633,10 +640,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 			lastDataAt = time.Now()
 			line := ev.line
-			if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+			payload, ok := extractOpenAISSEDataLine(line)
+			if !ok || strings.TrimSpace(payload) == "[DONE]" {
 				continue
 			}
-			if processDataLine(line[6:]) {
+			if processDataLine(payload) {
 				return resultWithUsage(), nil
 			}
 

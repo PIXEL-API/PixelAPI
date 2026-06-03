@@ -465,13 +465,17 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		openaiWSResolver:          NewOpenAIWSProtocolResolver(cfg),
 		toolCorrector:             NewCodexToolCorrector(),
 		openaiWSPassthroughDialer: captureDialer,
+		settingService:            newCleanRelaySettingService(true),
 	}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
 
 	account := &Account{
 		ID:          452,
 		Name:        "openai-ingress-passthrough",
 		Platform:    PlatformOpenAI,
-		Type:        AccountTypeAPIKey,
+		Type:        AccountTypeOAuth,
 		Status:      StatusActive,
 		Schedulable: true,
 		Concurrency: 1,
@@ -479,7 +483,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 			"api_key": "sk-test",
 		},
 		Extra: map[string]any{
-			"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
+			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
+			"chatgpt_account_id":                        "chatgpt-account-test",
 		},
 	}
 
@@ -510,7 +515,13 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		req := r.Clone(r.Context())
 		req.Header = req.Header.Clone()
 		req.Header.Set("User-Agent", "unit-test-agent/1.0")
+		req.Header.Set(openAICleanRelayInstallationField, "client-iid")
+		req.Header.Set("session_id", "client-session")
+		req.Header.Set("conversation_id", "client-conversation")
+		req.Header.Set(openAIWSTurnStateHeader, "client-turn-state")
 		ginCtx.Request = req
+		groupID := int64(901)
+		ginCtx.Set("api_key", &APIKey{ID: 900, GroupID: &groupID})
 
 		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		msgType, firstMessage, readErr := conn.Read(readCtx)
@@ -537,7 +548,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	}()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false,"service_tier":"fast","tools":[{"type":"image_generation","model":"gpt-image-2","size":"1024x1024"}]}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false,"service_tier":"fast","prompt_cache_key":"client-cache","previous_response_id":"resp_client_old","client_metadata":{"x-codex-installation-id":"client-body-iid"},"input":[{"type":"reasoning","encrypted_content":"sealed"},{"type":"input_text","text":"hello"}],"tools":[{"type":"image_generation","model":"gpt-image-2","size":"1024x1024"}]}`))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -578,14 +589,21 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		require.Equal(t, "1K", result.ImageSize)
 		require.Equal(t, "gpt-image-2", result.BillingModel)
 		require.Equal(t, "gpt-image-2", result.Model)
-		require.NotNil(t, result.ServiceTier)
-		require.Equal(t, "priority", *result.ServiceTier)
+		require.Nil(t, result.ServiceTier)
 	case <-time.After(2 * time.Second):
 		t.Fatal("未收到 passthrough turn 结果回调")
 	}
 
 	require.Equal(t, 1, captureDialer.DialCount(), "passthrough 模式应直接建立上游 websocket")
 	require.Len(t, upstreamConn.writes, 1, "passthrough 模式应透传首条 response.create")
+	require.False(t, upstreamConn.writes[0]["previous_response_id"] != nil, "洁净中继 cold start 应清理客户端 previous_response_id")
+	require.Equal(t, "input_text", upstreamConn.writes[0]["input"].([]any)[0].(map[string]any)["type"])
+	require.Equal(t, openAICleanRelayInstallationID(account.ID), upstreamConn.writes[0]["client_metadata"].(map[string]any)[openAICleanRelayInstallationField])
+	require.NotEqual(t, "client-cache", upstreamConn.writes[0]["prompt_cache_key"])
+	require.Equal(t, openAICleanRelayInstallationID(account.ID), captureDialer.lastHeaders.Get(openAICleanRelayInstallationField))
+	require.NotEqual(t, "client-session", captureDialer.lastHeaders.Get("session_id"))
+	require.NotEqual(t, "client-conversation", captureDialer.lastHeaders.Get("conversation_id"))
+	require.Empty(t, captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ModeOffReturnsPolicyViolation(t *testing.T) {
