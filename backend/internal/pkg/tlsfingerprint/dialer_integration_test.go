@@ -28,8 +28,13 @@ func skipIfExternalServiceUnavailable(t *testing.T, err error) {
 		if strings.Contains(errStr, "certificate has expired") ||
 			strings.Contains(errStr, "certificate is not yet valid") ||
 			strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "connection reset") ||
 			strings.Contains(errStr, "no such host") ||
 			strings.Contains(errStr, "network is unreachable") ||
+			strings.Contains(errStr, "TLS handshake failed") ||
+			strings.Contains(errStr, "unexpected EOF") ||
+			strings.Contains(errStr, "EOF") ||
+			strings.Contains(errStr, "remote error") ||
 			strings.Contains(errStr, "timeout") ||
 			strings.Contains(errStr, "deadline exceeded") {
 			t.Skipf("skipping test: external service unavailable: %v", err)

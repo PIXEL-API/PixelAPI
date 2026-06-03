@@ -71,6 +71,7 @@ func TestOpenAISelectAccountWithLoadAwareness_HydratesSelectedAccountFromSchedul
 				Schedulable: true,
 				Concurrency: 1,
 				Priority:    1,
+				GroupIDs:    []int64{2},
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{
 						"gpt-4": "gpt-4",
@@ -87,6 +88,7 @@ func TestOpenAISelectAccountWithLoadAwareness_HydratesSelectedAccountFromSchedul
 				Schedulable: true,
 				Concurrency: 1,
 				Priority:    1,
+				GroupIDs:    []int64{2},
 				Credentials: map[string]any{
 					"api_key":       "sk-live",
 					"model_mapping": map[string]any{"gpt-4": "gpt-4"},
