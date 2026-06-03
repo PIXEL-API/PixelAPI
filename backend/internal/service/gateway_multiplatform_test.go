@@ -242,7 +242,7 @@ func (m *mockGatewayCacheForPlatform) GetSessionString(ctx context.Context, grou
 			return value, nil
 		}
 	}
-	return "", errors.New("not found")
+	return "", ErrGatewaySessionStringNotFound
 }
 
 func (m *mockGatewayCacheForPlatform) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {

@@ -24,6 +24,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_UsesWSPassthroughSnapsh
 			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
 		},
 	}
+	account = openAITestAccountPtrWithGroupIfUnset(account, groupID)
 
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{account},

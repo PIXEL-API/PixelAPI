@@ -6054,6 +6054,8 @@ export default {
         fingerprintUnificationHint: '统一共享同一 OAuth 账号的用户的 X-Stainless-* 请求头。关闭后透传客户端原始请求头。',
         metadataPassthrough: 'Metadata 透传',
         metadataPassthroughHint: '透传客户端原始 metadata.user_id，不进行重写。可能提高上游缓存命中率。',
+        cleanRelay: '洁净中继模式',
+        cleanRelayHint: '开启后，OpenAI OAuth 请求会使用中转站维护的上游 installation/session/cache 标识；首次进站或账号迁移时会清理 previous_response_id、加密 reasoning 和旧 turn state。',
         cchSigning: 'CCH 签名',
         cchSigningHint: '对转发请求的 billing header 进行 CCH 哈希签名。关闭时保留原始占位符。',
         anthropicCacheTTL1hInjection: 'Anthropic 缓存 TTL 注入',

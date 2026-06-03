@@ -30,6 +30,49 @@ type stubOpenAIAccountRepo struct {
 	accounts []Account
 }
 
+func openAITestAccountHasGroupMetadata(account Account) bool {
+	return len(account.AccountGroups) > 0 || len(account.GroupIDs) > 0
+}
+
+func openAITestAccountBelongsToGroup(account Account, groupID int64) bool {
+	for _, accountGroup := range account.AccountGroups {
+		if accountGroup.GroupID == groupID {
+			return true
+		}
+	}
+	for _, existingGroupID := range account.GroupIDs {
+		if existingGroupID == groupID {
+			return true
+		}
+	}
+	return false
+}
+
+func openAITestAccountWithGroupIfUnset(account Account, groupID int64) Account {
+	if openAITestAccountHasGroupMetadata(account) {
+		return account
+	}
+	account.GroupIDs = []int64{groupID}
+	account.AccountGroups = []AccountGroup{{AccountID: account.ID, GroupID: groupID}}
+	return account
+}
+
+func openAITestAccountPtrWithGroupIfUnset(account *Account, groupID int64) *Account {
+	if account == nil {
+		return nil
+	}
+	grouped := openAITestAccountWithGroupIfUnset(*account, groupID)
+	return &grouped
+}
+
+func openAITestAccountsWithGroupIfUnset(accounts []Account, groupID int64) []Account {
+	grouped := make([]Account, 0, len(accounts))
+	for _, account := range accounts {
+		grouped = append(grouped, openAITestAccountWithGroupIfUnset(account, groupID))
+	}
+	return grouped
+}
+
 type snapshotUpdateAccountRepo struct {
 	stubOpenAIAccountRepo
 	updateExtraCalls chan map[string]any
@@ -79,9 +122,16 @@ func (r stubOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account,
 func (r stubOpenAIAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error) {
 	var result []Account
 	for _, acc := range r.accounts {
-		if acc.Platform == platform {
-			result = append(result, acc)
+		if acc.Platform != platform {
+			continue
 		}
+		if openAITestAccountHasGroupMetadata(acc) {
+			if openAITestAccountBelongsToGroup(acc, groupID) {
+				result = append(result, acc)
+			}
+			continue
+		}
+		result = append(result, openAITestAccountWithGroupIfUnset(acc, groupID))
 	}
 	return result, nil
 }
@@ -407,7 +457,7 @@ func (c *stubGatewayCache) GetSessionString(ctx context.Context, groupID int64, 
 			return value, nil
 		}
 	}
-	return "", errors.New("not found")
+	return "", ErrGatewaySessionStringNotFound
 }
 
 func (c *stubGatewayCache) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {

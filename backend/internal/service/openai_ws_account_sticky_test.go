@@ -23,6 +23,7 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_Hit(t *testing.T
 			"openai_apikey_responses_websockets_v2_enabled": true,
 		},
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &stubGatewayCache{}
 	store := NewOpenAIWSStateStore(cache)
 	cfg := newOpenAIWSV2TestConfig()
@@ -64,6 +65,7 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_RateLimitedMiss(
 			"openai_apikey_responses_websockets_v2_enabled": true,
 		},
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &stubGatewayCache{}
 	store := NewOpenAIWSStateStore(cache)
 	cfg := newOpenAIWSV2TestConfig()
@@ -83,6 +85,46 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_RateLimitedMiss(
 	boundAccountID, getErr := store.GetResponseAccount(ctx, groupID, "resp_prev_rl")
 	require.NoError(t, getErr)
 	require.Zero(t, boundAccountID)
+}
+
+func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_CleanRelayOAuthSkipsSticky(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(23)
+	account := Account{
+		ID:          22,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Extra: map[string]any{
+			"openai_oauth_responses_websockets_v2_enabled": true,
+		},
+	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
+	cache := &stubGatewayCache{}
+	store := NewOpenAIWSStateStore(cache)
+	cfg := newOpenAIWSV2TestConfig()
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              cache,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(stubConcurrencyCache{}),
+		openaiWSStateStore: store,
+		settingService:     newCleanRelaySettingService(true),
+	}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
+
+	require.NoError(t, store.BindResponseAccount(ctx, groupID, "resp_prev_clean_relay", account.ID, time.Hour))
+
+	selection, err := svc.SelectAccountByPreviousResponseID(ctx, &groupID, "resp_prev_clean_relay", "gpt-5.1", nil, false)
+	require.NoError(t, err)
+	require.Nil(t, selection, "洁净中继开启时 OAuth 账号不应继续按客户端 previous_response_id 粘连")
+	boundAccountID, getErr := store.GetResponseAccount(ctx, groupID, "resp_prev_clean_relay")
+	require.NoError(t, getErr)
+	require.Equal(t, account.ID, boundAccountID, "跳过调度粘连不应删除已有 response-account 绑定")
 }
 
 func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_DBRuntimeRecheckRateLimitedMiss(t *testing.T) {
@@ -112,6 +154,8 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_DBRuntimeRecheck
 			"openai_apikey_responses_websockets_v2_enabled": true,
 		},
 	}
+	staleAccount = openAITestAccountPtrWithGroupIfUnset(staleAccount, groupID)
+	dbAccount = openAITestAccountWithGroupIfUnset(dbAccount, groupID)
 	cache := &stubGatewayCache{}
 	store := NewOpenAIWSStateStore(cache)
 	cfg := newOpenAIWSV2TestConfig()
@@ -151,6 +195,7 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_Excluded(t *test
 			"openai_apikey_responses_websockets_v2_enabled": true,
 		},
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &stubGatewayCache{}
 	store := NewOpenAIWSStateStore(cache)
 	cfg := newOpenAIWSV2TestConfig()
@@ -184,6 +229,7 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_ForceHTTPIgnored
 			"responses_websockets_v2_enabled": true,
 		},
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &stubGatewayCache{}
 	store := NewOpenAIWSStateStore(cache)
 	cfg := newOpenAIWSV2TestConfig()
@@ -231,6 +277,7 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_BusyKeepsSticky(
 			},
 		},
 	}
+	accounts = openAITestAccountsWithGroupIfUnset(accounts, groupID)
 
 	cache := &stubGatewayCache{}
 	store := NewOpenAIWSStateStore(cache)

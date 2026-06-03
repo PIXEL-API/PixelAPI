@@ -98,6 +98,7 @@ type cachedGatewayForwardingSettings struct {
 	fingerprintUnification       bool
 	metadataPassthrough          bool
 	cchSigning                   bool
+	openAICleanRelay             bool
 	anthropicCacheTTL1hInjection bool
 	expiresAt                    int64 // unix nano
 }
@@ -1714,6 +1715,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
+	updates[SettingKeyOpenAICleanRelayEnabled] = strconv.FormatBool(settings.OpenAICleanRelayEnabled)
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
 	updates[SettingPaymentVisibleMethodAlipaySource] = settings.PaymentVisibleMethodAlipaySource
 	updates[SettingPaymentVisibleMethodWxpaySource] = settings.PaymentVisibleMethodWxpaySource
@@ -1793,6 +1795,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		fingerprintUnification:       settings.EnableFingerprintUnification,
 		metadataPassthrough:          settings.EnableMetadataPassthrough,
 		cchSigning:                   settings.EnableCCHSigning,
+		openAICleanRelay:             settings.OpenAICleanRelayEnabled,
 		anthropicCacheTTL1hInjection: settings.EnableAnthropicCacheTTL1hInjection,
 		expiresAt:                    time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 	})
@@ -1957,7 +1960,7 @@ func parseMasterDataPlaneEnabled(settings map[string]string) bool {
 }
 
 type gatewayForwardingSettingsResult struct {
-	fp, mp, cch, cacheTTL1h bool
+	fp, mp, cch, cleanRelay, cacheTTL1h bool
 }
 
 func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context) gatewayForwardingSettingsResult {
@@ -1967,6 +1970,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				fp:         cached.fingerprintUnification,
 				mp:         cached.metadataPassthrough,
 				cch:        cached.cchSigning,
+				cleanRelay: cached.openAICleanRelay,
 				cacheTTL1h: cached.anthropicCacheTTL1hInjection,
 			}
 		}
@@ -1978,6 +1982,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 					fp:         cached.fingerprintUnification,
 					mp:         cached.metadataPassthrough,
 					cch:        cached.cchSigning,
+					cleanRelay: cached.openAICleanRelay,
 					cacheTTL1h: cached.anthropicCacheTTL1hInjection,
 				}, nil
 			}
@@ -1988,6 +1993,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			SettingKeyEnableFingerprintUnification,
 			SettingKeyEnableMetadataPassthrough,
 			SettingKeyEnableCCHSigning,
+			SettingKeyOpenAICleanRelayEnabled,
 			SettingKeyEnableAnthropicCacheTTL1hInjection,
 		})
 		if err != nil {
@@ -1996,6 +2002,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				fingerprintUnification:       true,
 				metadataPassthrough:          false,
 				cchSigning:                   false,
+				openAICleanRelay:             false,
 				anthropicCacheTTL1hInjection: false,
 				expiresAt:                    time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
@@ -2007,15 +2014,17 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		}
 		mp := values[SettingKeyEnableMetadataPassthrough] == "true"
 		cch := values[SettingKeyEnableCCHSigning] == "true"
+		cleanRelay := values[SettingKeyOpenAICleanRelayEnabled] == "true"
 		cacheTTL1h := values[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 			fingerprintUnification:       fp,
 			metadataPassthrough:          mp,
 			cchSigning:                   cch,
+			openAICleanRelay:             cleanRelay,
 			anthropicCacheTTL1hInjection: cacheTTL1h,
 			expiresAt:                    time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 		})
-		return gatewayForwardingSettingsResult{fp: fp, mp: mp, cch: cch, cacheTTL1h: cacheTTL1h}, nil
+		return gatewayForwardingSettingsResult{fp: fp, mp: mp, cch: cch, cleanRelay: cleanRelay, cacheTTL1h: cacheTTL1h}, nil
 	})
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
@@ -2034,6 +2043,11 @@ func (s *SettingService) GetGatewayForwardingSettings(ctx context.Context) (fing
 // IsAnthropicCacheTTL1hInjectionEnabled 检查是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl。
 func (s *SettingService) IsAnthropicCacheTTL1hInjectionEnabled(ctx context.Context) bool {
 	return s.getGatewayForwardingSettingsCached(ctx).cacheTTL1h
+}
+
+// IsOpenAICleanRelayEnabled 检查是否启用 OpenAI 洁净中继模式。
+func (s *SettingService) IsOpenAICleanRelayEnabled(ctx context.Context) bool {
+	return s.getGatewayForwardingSettingsCached(ctx).cleanRelay
 }
 
 // IsEmailVerifyEnabled 检查是否开启邮件验证
@@ -2528,6 +2542,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// 分组隔离（默认不允许未分组 Key 调度）
 		SettingKeyAllowUngroupedKeyScheduling:               "false",
+		SettingKeyOpenAICleanRelayEnabled:                   "false",
 		SettingKeyEnableAnthropicCacheTTL1hInjection:        "false",
 		SettingKeyUserPrivateGroupDailyLimitUSD:             "0",
 		SettingKeyUserPrivateGroupWeeklyLimitUSD:            "0",
@@ -2935,6 +2950,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.EnableMetadataPassthrough = settings[SettingKeyEnableMetadataPassthrough] == "true"
 	result.EnableCCHSigning = settings[SettingKeyEnableCCHSigning] == "true"
+	result.OpenAICleanRelayEnabled = settings[SettingKeyOpenAICleanRelayEnabled] == "true"
 	result.EnableAnthropicCacheTTL1hInjection = settings[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 
 	// Web search emulation: quick enabled check from the JSON config

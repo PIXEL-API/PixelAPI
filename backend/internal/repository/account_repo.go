@@ -67,6 +67,11 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"session_window_utilization": {},
 }
 
+var schedulerRelevantExtraKeys = map[string]struct{}{
+	"openai_responses_mode":      {},
+	"openai_responses_supported": {},
+}
+
 // NewAccountRepository 创建账户仓储实例。
 // 这是对外暴露的构造函数，返回接口类型以便于依赖注入。
 func NewAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache service.SchedulerCache) service.AccountRepository {
@@ -485,6 +490,7 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 			return err
 		}
 	}
+	r.deleteSchedulerAccountSnapshot(ctx, id)
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account delete failed: account=%d err=%v", id, err)
 	}
@@ -1100,6 +1106,15 @@ func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, ac
 	}
 }
 
+func (r *accountRepository) deleteSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
+	if r == nil || r.schedulerCache == nil || accountID <= 0 {
+		return
+	}
+	if err := r.schedulerCache.DeleteAccount(ctx, accountID); err != nil {
+		logger.LegacyPrintf("repository.account", "[Scheduler] delete account snapshot failed: id=%d err=%v", accountID, err)
+	}
+}
+
 func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, accountIDs []int64) {
 	if r == nil || r.schedulerCache == nil || len(accountIDs) == 0 {
 		return
@@ -1704,6 +1719,9 @@ func shouldEnqueueSchedulerOutboxForExtraUpdates(updates map[string]any) bool {
 		return false
 	}
 	for key := range updates {
+		if _, ok := schedulerRelevantExtraKeys[strings.TrimSpace(key)]; ok {
+			return true
+		}
 		if isCodexQuotaLimitExtraKey(key) {
 			return true
 		}

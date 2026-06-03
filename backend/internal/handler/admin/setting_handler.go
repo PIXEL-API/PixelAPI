@@ -260,6 +260,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableFingerprintUnification:              settings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:                 settings.EnableMetadataPassthrough,
 		EnableCCHSigning:                          settings.EnableCCHSigning,
+		OpenAICleanRelayEnabled:                   settings.OpenAICleanRelayEnabled,
 		EnableAnthropicCacheTTL1hInjection:        settings.EnableAnthropicCacheTTL1hInjection,
 		WebSearchEmulationEnabled:                 settings.WebSearchEmulationEnabled,
 		PaymentVisibleMethodAlipaySource:          settings.PaymentVisibleMethodAlipaySource,
@@ -575,6 +576,7 @@ type UpdateSettingsRequest struct {
 	EnableFingerprintUnification       *bool `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough          *bool `json:"enable_metadata_passthrough"`
 	EnableCCHSigning                   *bool `json:"enable_cch_signing"`
+	OpenAICleanRelayEnabled            *bool `json:"openai_clean_relay_enabled"`
 	EnableAnthropicCacheTTL1hInjection *bool `json:"enable_anthropic_cache_ttl_1h_injection"`
 
 	// Payment visible method routing
@@ -1547,6 +1549,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.EnableCCHSigning
 		}(),
+		OpenAICleanRelayEnabled: func() bool {
+			if req.OpenAICleanRelayEnabled != nil {
+				return *req.OpenAICleanRelayEnabled
+			}
+			return previousSettings.OpenAICleanRelayEnabled
+		}(),
 		EnableAnthropicCacheTTL1hInjection: func() bool {
 			if req.EnableAnthropicCacheTTL1hInjection != nil {
 				return *req.EnableAnthropicCacheTTL1hInjection
@@ -1915,6 +1923,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableFingerprintUnification:              updatedSettings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:                 updatedSettings.EnableMetadataPassthrough,
 		EnableCCHSigning:                          updatedSettings.EnableCCHSigning,
+		OpenAICleanRelayEnabled:                   updatedSettings.OpenAICleanRelayEnabled,
 		EnableAnthropicCacheTTL1hInjection:        updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		PaymentVisibleMethodAlipaySource:          updatedSettings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:           updatedSettings.PaymentVisibleMethodWxpaySource,
@@ -2679,6 +2688,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.EnableCCHSigning != after.EnableCCHSigning {
 		changed = append(changed, "enable_cch_signing")
+	}
+	if before.OpenAICleanRelayEnabled != after.OpenAICleanRelayEnabled {
+		changed = append(changed, "openai_clean_relay_enabled")
 	}
 	if before.EnableAnthropicCacheTTL1hInjection != after.EnableAnthropicCacheTTL1hInjection {
 		changed = append(changed, "enable_anthropic_cache_ttl_1h_injection")

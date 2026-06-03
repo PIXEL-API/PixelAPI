@@ -55,6 +55,15 @@ func resolveOpenAIMessagesDispatchMappedModel(apiKey *service.APIKey, requestedM
 	return strings.TrimSpace(apiKey.Group.ResolveMessagesDispatchModel(requestedModel))
 }
 
+func resolveOpenAIAccountSelectionModel(requestedModel string, mapping service.ChannelMappingResult) string {
+	if mapping.Mapped {
+		if mappedModel := strings.TrimSpace(mapping.MappedModel); mappedModel != "" {
+			return mappedModel
+		}
+	}
+	return strings.TrimSpace(requestedModel)
+}
+
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
 func NewOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
@@ -276,15 +285,19 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Int("excluded_account_count", len(failedAccountIDs)),
 			zap.Int64p("group_id", currentAPIKey.GroupID),
 		)
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithScheduler(
+		selectionModel := resolveOpenAIAccountSelectionModel(reqModel, channelMapping)
+		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithCleanRelayScheduler(
 			c.Request.Context(),
+			c,
 			currentAPIKey.GroupID,
 			previousResponseID,
 			sessionHash,
 			reqModel,
+			selectionModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
 			requireCompact,
+			sessionHashBody,
 		)
 		if err != nil {
 			reqLog.Warn("openai.account_select_failed",
@@ -724,19 +737,23 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if effectiveMappedModel != "" {
 			currentRoutingModel = effectiveMappedModel
 		}
+		currentRoutingModel = resolveOpenAIAccountSelectionModel(currentRoutingModel, channelMappingMsg)
 		reqLog.Debug("openai_messages.account_selecting",
 			zap.Int("excluded_account_count", len(failedAccountIDs)),
 			zap.Int64p("group_id", currentAPIKey.GroupID),
 		)
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithScheduler(
+		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithCleanRelayScheduler(
 			c.Request.Context(),
+			c,
 			currentAPIKey.GroupID,
 			"", // no previous_response_id
 			sessionHash,
+			reqModel,
 			currentRoutingModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
 			false,
+			body,
 		)
 		if err != nil {
 			reqLog.Warn("openai_messages.account_select_failed",
@@ -1326,15 +1343,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return
 		}
 		var selectErr error
-		selection, scheduleDecision, selectErr = h.gatewayService.SelectAccountWithScheduler(
+		selectionModel := resolveOpenAIAccountSelectionModel(reqModel, channelMappingWS)
+		selection, scheduleDecision, selectErr = h.gatewayService.SelectAccountWithCleanRelayScheduler(
 			ctx,
+			c,
 			currentAPIKey.GroupID,
 			previousResponseID,
 			sessionHash,
 			reqModel,
+			selectionModel,
 			nil,
 			service.OpenAIUpstreamTransportResponsesWebsocketV2,
 			false,
+			firstMessage,
 		)
 		if selectErr == nil && selection != nil && selection.Account != nil {
 			break

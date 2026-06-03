@@ -295,7 +295,7 @@ func (m *mockGatewayCacheForGemini) GetSessionString(ctx context.Context, groupI
 			return value, nil
 		}
 	}
-	return "", errors.New("not found")
+	return "", ErrGatewaySessionStringNotFound
 }
 
 func (m *mockGatewayCacheForGemini) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {

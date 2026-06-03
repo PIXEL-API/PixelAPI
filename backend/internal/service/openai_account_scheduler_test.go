@@ -36,9 +36,16 @@ func (r schedulerTestOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (
 func (r schedulerTestOpenAIAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error) {
 	var result []Account
 	for _, acc := range r.accounts {
-		if acc.Platform == platform {
-			result = append(result, acc)
+		if acc.Platform != platform {
+			continue
 		}
+		if openAITestAccountHasGroupMetadata(acc) {
+			if openAITestAccountBelongsToGroup(acc, groupID) {
+				result = append(result, acc)
+			}
+			continue
+		}
+		result = append(result, openAITestAccountWithGroupIfUnset(acc, groupID))
 	}
 	return result, nil
 }
@@ -156,7 +163,7 @@ func (c *schedulerTestGatewayCache) GetSessionString(ctx context.Context, groupI
 			return value, nil
 		}
 	}
-	return "", errors.New("not found")
+	return "", ErrGatewaySessionStringNotFound
 }
 
 func (c *schedulerTestGatewayCache) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {
@@ -446,6 +453,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_EnabledUsesAdvancedPrev
 			Priority:    0,
 		},
 	}
+	accounts = openAITestAccountsWithGroupIfUnset(accounts, groupID)
 	cfg := &config.Config{}
 	cfg.Gateway.Scheduling.LoadBatchEnabled = false
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -503,6 +511,10 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyRateLimite
 	staleBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
 	freshSticky := &Account{ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
 	freshBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	staleSticky = openAITestAccountPtrWithGroupIfUnset(staleSticky, groupID)
+	staleBackup = openAITestAccountPtrWithGroupIfUnset(staleBackup, groupID)
+	freshSticky = openAITestAccountPtrWithGroupIfUnset(freshSticky, groupID)
+	freshBackup = openAITestAccountPtrWithGroupIfUnset(freshBackup, groupID)
 	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_rate_limited": 31001}}
 	snapshotCache := &openAISnapshotCacheStub{snapshotAccounts: []*Account{staleSticky, staleBackup}, accountsByID: map[int64]*Account{31001: freshSticky, 31002: freshBackup}}
 	snapshotService := &SchedulerSnapshotService{cache: snapshotCache}
@@ -531,6 +543,10 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_SkipsFreshlyRa
 	staleSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
 	freshPrimary := &Account{ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
 	freshSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	stalePrimary = openAITestAccountPtrWithGroupIfUnset(stalePrimary, groupID)
+	staleSecondary = openAITestAccountPtrWithGroupIfUnset(staleSecondary, groupID)
+	freshPrimary = openAITestAccountPtrWithGroupIfUnset(freshPrimary, groupID)
+	freshSecondary = openAITestAccountPtrWithGroupIfUnset(freshSecondary, groupID)
 	snapshotCache := &openAISnapshotCacheStub{snapshotAccounts: []*Account{stalePrimary, staleSecondary}, accountsByID: map[int64]*Account{32001: freshPrimary, 32002: freshSecondary}}
 	snapshotService := &SchedulerSnapshotService{cache: snapshotCache}
 	svc := &OpenAIGatewayService{
@@ -554,6 +570,10 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyDBRuntimeR
 	staleBackup := &Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
 	dbSticky := Account{ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
 	dbBackup := Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	staleSticky = openAITestAccountPtrWithGroupIfUnset(staleSticky, groupID)
+	staleBackup = openAITestAccountPtrWithGroupIfUnset(staleBackup, groupID)
+	dbSticky = openAITestAccountWithGroupIfUnset(dbSticky, groupID)
+	dbBackup = openAITestAccountWithGroupIfUnset(dbBackup, groupID)
 	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_db_runtime_recheck": 33001}}
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{staleSticky, staleBackup},
@@ -577,6 +597,73 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyDBRuntimeR
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 }
 
+func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyClearsAccountMovedOutOfGroup(t *testing.T) {
+	ctx := context.Background()
+	freeGroupID := int64(1197)
+	plusGroupID := int64(18)
+	sessionHash := "session_hash_moved_out_of_group"
+
+	movedOut := Account{
+		ID:            234206,
+		Platform:      PlatformOpenAI,
+		Type:          AccountTypeOAuth,
+		Status:        StatusActive,
+		Schedulable:   true,
+		Concurrency:   1,
+		Priority:      0,
+		GroupIDs:      []int64{plusGroupID},
+		AccountGroups: []AccountGroup{{AccountID: 234206, GroupID: plusGroupID}},
+	}
+	freeBackup := Account{
+		ID:            234207,
+		Platform:      PlatformOpenAI,
+		Type:          AccountTypeOAuth,
+		Status:        StatusActive,
+		Schedulable:   true,
+		Concurrency:   1,
+		Priority:      1,
+		GroupIDs:      []int64{freeGroupID},
+		AccountGroups: []AccountGroup{{AccountID: 234207, GroupID: freeGroupID}},
+	}
+	cache := &schedulerTestGatewayCache{
+		sessionBindings: map[string]int64{"openai:" + sessionHash: movedOut.ID},
+	}
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{&movedOut, &freeBackup},
+		accountsByID:     map[int64]*Account{movedOut.ID: &movedOut, freeBackup.ID: &freeBackup},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{movedOut, freeBackup}},
+		cache:              cache,
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx,
+		&freeGroupID,
+		"",
+		sessionHash,
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, freeBackup.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.False(t, decision.StickySessionHit)
+	require.Equal(t, 1, cache.deletedSessions["openai:"+sessionHash])
+	require.Equal(t, freeBackup.ID, cache.sessionBindings["openai:"+sessionHash])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
 func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_DBRuntimeRecheckSkipsStaleCachedCandidate(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10104)
@@ -585,6 +672,10 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_DBRuntimeReche
 	staleSecondary := &Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
 	dbPrimary := Account{ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
 	dbSecondary := Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	stalePrimary = openAITestAccountPtrWithGroupIfUnset(stalePrimary, groupID)
+	staleSecondary = openAITestAccountPtrWithGroupIfUnset(staleSecondary, groupID)
+	dbPrimary = openAITestAccountWithGroupIfUnset(dbPrimary, groupID)
+	dbSecondary = openAITestAccountWithGroupIfUnset(dbSecondary, groupID)
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{stalePrimary, staleSecondary},
 		accountsByID:     map[int64]*Account{34001: stalePrimary, 34002: staleSecondary},
@@ -617,6 +708,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_PreviousResponseSticky(
 			"openai_apikey_responses_websockets_v2_enabled": true,
 		},
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &schedulerTestGatewayCache{}
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -670,6 +762,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky(t *testin
 		Schedulable: true,
 		Concurrency: 1,
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &schedulerTestGatewayCache{
 		sessionBindings: map[string]int64{
 			"openai:session_hash_abc": account.ID,
@@ -854,6 +947,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky_ForceHTTP
 			"openai_ws_force_http": true,
 		},
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &schedulerTestGatewayCache{
 		sessionBindings: map[string]int64{
 			"openai:session_hash_force_http": account.ID,
@@ -1093,6 +1187,7 @@ func TestOpenAIGatewayService_OpenAIAccountSchedulerMetrics(t *testing.T) {
 		Schedulable: true,
 		Concurrency: 1,
 	}
+	account = openAITestAccountWithGroupIfUnset(account, groupID)
 	cache := &schedulerTestGatewayCache{
 		sessionBindings: map[string]int64{
 			"openai:session_hash_metrics": account.ID,

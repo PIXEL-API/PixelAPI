@@ -232,6 +232,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	if a == nil {
 		return nil
 	}
+	redactedCredentials, credentialsStatus := RedactCredentials(a.Credentials)
 	out := &Account{
 		ID:                      a.ID,
 		Name:                    a.Name,
@@ -239,7 +240,8 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Platform:                a.Platform,
 		AccountLevel:            service.NormalizeAccountLevel(a.AccountLevel),
 		Type:                    a.Type,
-		Credentials:             a.Credentials,
+		Credentials:             redactedCredentials,
+		CredentialsStatus:       credentialsStatus,
 		Extra:                   a.Extra,
 		OwnerUserID:             a.OwnerUserID,
 		ShareMode:               service.NormalizeAccountShareMode(a.ShareMode),

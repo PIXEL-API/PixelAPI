@@ -335,6 +335,85 @@ func TestRateLimitService_HandleUpstreamError_OpenAICapacityTempUnschedsPoolMode
 	require.Contains(t, repo.lastTempReason, "openai_model_capacity")
 }
 
+func TestRateLimitService_HandleUpstreamErrorForModel_OpenAI404SetsModelCooldown(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       204,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+	}
+
+	before := time.Now()
+	shouldDisable := service.HandleUpstreamErrorForModel(
+		context.Background(),
+		account,
+		"gpt-missing",
+		http.StatusNotFound,
+		http.Header{},
+		[]byte(`{"error":{"message":"Model not found","type":"invalid_request_error"}}`),
+	)
+	after := time.Now()
+
+	require.True(t, shouldDisable)
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	call := repo.modelRateLimitCalls[0]
+	require.Equal(t, account.ID, call.accountID)
+	require.Equal(t, "gpt-missing", call.modelKey)
+	require.True(t, !call.resetAt.Before(before.Add(upstreamModelNotFoundCooldown)))
+	require.True(t, !call.resetAt.After(after.Add(upstreamModelNotFoundCooldown)))
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+}
+
+func TestRateLimitService_HandleUpstreamErrorForModel_OpenAI404WithoutRequestedModelFallsBack(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       205,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+	}
+
+	shouldDisable := service.HandleUpstreamErrorForModel(
+		context.Background(),
+		account,
+		"",
+		http.StatusNotFound,
+		http.Header{},
+		[]byte(`{"error":{"message":"Model not found","type":"invalid_request_error"}}`),
+	)
+
+	require.False(t, shouldDisable)
+	require.Empty(t, repo.modelRateLimitCalls)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+}
+
+func TestRateLimitService_HandleUpstreamErrorForModel_OpenAI404NonModelBodyDoesNotCooldown(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       206,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+	}
+
+	shouldDisable := service.HandleUpstreamErrorForModel(
+		context.Background(),
+		account,
+		"gpt-5",
+		http.StatusNotFound,
+		http.Header{},
+		[]byte(`{"error":{"message":"Endpoint not found","type":"invalid_request_error"}}`),
+	)
+
+	require.False(t, shouldDisable)
+	require.Empty(t, repo.modelRateLimitCalls)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+}
+
 func TestNormalizedCodexLimits_OnlySecondaryData(t *testing.T) {
 	// Test when only secondary has data, no window_minutes
 	sUsed := 60.0

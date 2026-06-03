@@ -193,6 +193,7 @@ type SystemSettings struct {
 	EnableFingerprintUnification       bool // 是否统一 OAuth 账号的指纹头（默认 true）
 	EnableMetadataPassthrough          bool // 是否透传客户端原始 metadata（默认 false）
 	EnableCCHSigning                   bool // 是否对 billing header cch 进行签名（默认 false）
+	OpenAICleanRelayEnabled            bool // 是否启用 OpenAI 洁净中继模式（默认 false）
 	EnableAnthropicCacheTTL1hInjection bool // 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 
 	// Web Search Emulation
