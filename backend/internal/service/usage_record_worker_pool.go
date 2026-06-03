@@ -320,14 +320,22 @@ func (p *UsageRecordWorkerPool) execute(task UsageRecordTask) {
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.L().With(
-				zap.String("component", "service.usage_record_worker_pool"),
-				zap.Any("panic", recovered),
-			).Error("usage_record.task_panic")
+			logUsageRecordTaskPanic(recovered)
 		}
 	}()
 
 	task(ctx)
+}
+
+func logUsageRecordTaskPanic(recovered any) {
+	defer func() {
+		_ = recover()
+	}()
+
+	logger.L().With(
+		zap.String("component", "service.usage_record_worker_pool"),
+		zap.Any("panic", recovered),
+	).Error("usage_record.task_panic")
 }
 
 func (p *UsageRecordWorkerPool) logDrop(reason string) {

@@ -40,7 +40,6 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 	clientStream := gjson.GetBytes(body, "stream").Bool()
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
-	serviceTier := extractOpenAIServiceTierFromBody(body)
 
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
@@ -59,7 +58,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		}
 		return nil, err
 	}
-	serviceTier = extractOpenAIServiceTierFromBody(upstreamBody)
+	serviceTier := extractOpenAIServiceTierFromBody(upstreamBody)
 	if clientStream {
 		upstreamBody, err = ensureOpenAIChatStreamUsage(upstreamBody)
 		if err != nil {
