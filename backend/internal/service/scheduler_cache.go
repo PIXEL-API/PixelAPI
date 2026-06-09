@@ -20,6 +20,8 @@ type SchedulerBucket struct {
 	Mode     string
 }
 
+type schedulerCandidateIndexBypassKey struct{}
+
 func (b SchedulerBucket) String() string {
 	return fmt.Sprintf("%d:%s:%s", b.GroupID, b.Platform, b.Mode)
 }
@@ -41,6 +43,15 @@ func ParseSchedulerBucket(raw string) (SchedulerBucket, bool) {
 		Platform: parts[1],
 		Mode:     parts[2],
 	}, true
+}
+
+func WithSchedulerCandidateIndexBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, schedulerCandidateIndexBypassKey{}, true)
+}
+
+func IsSchedulerCandidateIndexBypassed(ctx context.Context) bool {
+	bypass, _ := ctx.Value(schedulerCandidateIndexBypassKey{}).(bool)
+	return bypass
 }
 
 // SchedulerCache 负责调度快照与账号快照的缓存读写。
@@ -67,4 +78,12 @@ type SchedulerCache interface {
 	GetOutboxWatermark(ctx context.Context) (int64, error)
 	// SetOutboxWatermark 保存 outbox 水位。
 	SetOutboxWatermark(ctx context.Context, id int64) error
+}
+
+// SchedulerCandidateCache is an optional extension for caches that can return a
+// small indexed candidate set instead of materializing a whole scheduler bucket.
+type SchedulerCandidateCache interface {
+	// GetCandidateSnapshot reads a manually enabled candidate index for bucket.
+	// hit=false means callers should fall back to the full scheduler snapshot.
+	GetCandidateSnapshot(ctx context.Context, bucket SchedulerBucket, limit int) ([]*Account, bool, error)
 }

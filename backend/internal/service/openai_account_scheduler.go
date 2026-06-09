@@ -850,35 +850,16 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		schedGroup, _ = s.service.schedulerSnapshot.GetGroupByID(ctx, *req.GroupID)
 	}
 
-	filtered := make([]*Account, 0, len(accounts))
-	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
-	for i := range accounts {
-		account := &accounts[i]
-		if req.ExcludedIDs != nil {
-			if _, excluded := req.ExcludedIDs[account.ID]; excluded {
-				continue
+	filtered, loadReq := s.filterOpenAIAccountsForLoadBalance(ctx, accounts, req, schedGroup)
+	if len(filtered) == 0 {
+		if s.service.shouldRetryOpenAISchedulerWithoutCandidateIndex(ctx, req.GroupID) {
+			retryCtx := WithSchedulerCandidateIndexBypass(ctx)
+			accounts, err = s.service.listSchedulableAccounts(retryCtx, req.GroupID)
+			if err != nil {
+				return nil, 0, 0, 0, err
 			}
+			filtered, loadReq = s.filterOpenAIAccountsForLoadBalance(retryCtx, accounts, req, schedGroup)
 		}
-		if !account.IsSchedulable() || !account.IsOpenAI() {
-			continue
-		}
-		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
-		if schedGroup != nil && schedGroup.RequirePrivacySet && !account.IsPrivacySet() {
-			_ = s.service.accountRepo.SetError(ctx, account.ID,
-				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
-			continue
-		}
-		if !s.isAccountRequestCompatible(account, req) {
-			continue
-		}
-		if !s.isAccountTransportCompatible(account, req.RequiredTransport) {
-			continue
-		}
-		filtered = append(filtered, account)
-		loadReq = append(loadReq, AccountWithConcurrency{
-			ID:             account.ID,
-			MaxConcurrency: account.EffectiveLoadFactor(),
-		})
 	}
 	if len(filtered) == 0 {
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false)
@@ -1124,6 +1105,45 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	}
 
 	return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, compactBlocked)
+}
+
+func (s *defaultOpenAIAccountScheduler) filterOpenAIAccountsForLoadBalance(
+	ctx context.Context,
+	accounts []Account,
+	req OpenAIAccountScheduleRequest,
+	schedGroup *Group,
+) ([]*Account, []AccountWithConcurrency) {
+	filtered := make([]*Account, 0, len(accounts))
+	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
+	for i := range accounts {
+		account := &accounts[i]
+		if req.ExcludedIDs != nil {
+			if _, excluded := req.ExcludedIDs[account.ID]; excluded {
+				continue
+			}
+		}
+		if !account.IsSchedulable() || !account.IsOpenAI() {
+			continue
+		}
+		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
+		if schedGroup != nil && schedGroup.RequirePrivacySet && !account.IsPrivacySet() {
+			_ = s.service.accountRepo.SetError(ctx, account.ID,
+				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
+			continue
+		}
+		if !s.isAccountRequestCompatible(account, req) {
+			continue
+		}
+		if !s.isAccountTransportCompatible(account, req.RequiredTransport) {
+			continue
+		}
+		filtered = append(filtered, account)
+		loadReq = append(loadReq, AccountWithConcurrency{
+			ID:             account.ID,
+			MaxConcurrency: account.EffectiveLoadFactor(),
+		})
+	}
+	return filtered, loadReq
 }
 
 func (s *defaultOpenAIAccountScheduler) isAccountTransportCompatible(account *Account, requiredTransport OpenAIUpstreamTransport) bool {
@@ -1431,6 +1451,26 @@ func (s *OpenAIGatewayService) openAIWSLBTopK() int {
 		return s.cfg.Gateway.OpenAIWS.LBTopK
 	}
 	return 7
+}
+
+func (s *OpenAIGatewayService) shouldRetryOpenAISchedulerWithoutCandidateIndex(ctx context.Context, groupID *int64) bool {
+	if s == nil || s.schedulerSnapshot == nil || IsSchedulerCandidateIndexBypassed(ctx) {
+		return false
+	}
+	cfg := s.schedulingConfig()
+	if len(cfg.IndexedBuckets) == 0 {
+		return false
+	}
+	bucket := SchedulerBucket{GroupID: 0, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}
+	if groupID != nil && *groupID > 0 {
+		bucket.GroupID = *groupID
+	}
+	for _, raw := range cfg.IndexedBuckets {
+		if raw == bucket.String() {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *OpenAIGatewayService) openAIWSSchedulerWeights() GatewayOpenAIWSSchedulerScoreWeightsView {

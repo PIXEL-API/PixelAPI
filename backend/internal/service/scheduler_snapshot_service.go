@@ -110,6 +110,17 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	bucket := s.bucketFor(groupID, platform, mode)
 
 	if s.cache != nil {
+		if candidateCache, ok := s.cache.(SchedulerCandidateCache); ok {
+			if !IsSchedulerCandidateIndexBypassed(ctx) {
+				candidateLimit := s.candidateIndexLimit()
+				cached, hit, err := candidateCache.GetCandidateSnapshot(ctx, bucket, candidateLimit)
+				if err != nil {
+					logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] candidate cache read failed: bucket=%s err=%v", bucket.String(), err)
+				} else if hit {
+					return filterSchedulableAccounts(derefAccounts(cached)), useMixed, nil
+				}
+			}
+		}
 		cached, hit, err := s.cache.GetSnapshot(ctx, bucket)
 		if err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
@@ -808,6 +819,13 @@ func (s *SchedulerSnapshotService) fullRebuildInterval() time.Duration {
 		return 0
 	}
 	return time.Duration(sec) * time.Second
+}
+
+func (s *SchedulerSnapshotService) candidateIndexLimit() int {
+	if s == nil || s.cfg == nil || s.cfg.Gateway.Scheduling.IndexedCandidateLimit <= 0 {
+		return 256
+	}
+	return s.cfg.Gateway.Scheduling.IndexedCandidateLimit
 }
 
 func (s *SchedulerSnapshotService) defaultBuckets(ctx context.Context) ([]SchedulerBucket, error) {

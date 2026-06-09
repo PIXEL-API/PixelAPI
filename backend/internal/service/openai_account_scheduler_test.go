@@ -19,6 +19,14 @@ type openAISnapshotCacheStub struct {
 	accountsByID     map[int64]*Account
 }
 
+type openAICandidateSnapshotCacheStub struct {
+	openAISnapshotCacheStub
+	candidateAccounts []*Account
+	candidateHits     int
+	fullHits          int
+	bypassHits        int
+}
+
 type schedulerTestOpenAIAccountRepo struct {
 	AccountRepository
 	accounts []Account
@@ -272,6 +280,34 @@ func (s *openAISnapshotCacheStub) GetAccount(ctx context.Context, accountID int6
 	}
 	cloned := *account
 	return &cloned, nil
+}
+
+func (s *openAICandidateSnapshotCacheStub) GetCandidateSnapshot(ctx context.Context, bucket SchedulerBucket, limit int) ([]*Account, bool, error) {
+	s.candidateHits++
+	if len(s.candidateAccounts) == 0 {
+		return nil, false, nil
+	}
+	out := make([]*Account, 0, len(s.candidateAccounts))
+	for _, account := range s.candidateAccounts {
+		if account == nil {
+			continue
+		}
+		cloned := *account
+		out = append(out, &cloned)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, true, nil
+}
+
+func (s *openAICandidateSnapshotCacheStub) GetSnapshot(ctx context.Context, bucket SchedulerBucket) ([]*Account, bool, error) {
+	if IsSchedulerCandidateIndexBypassed(ctx) {
+		s.bypassHits++
+	} else {
+		s.fullHits++
+	}
+	return s.openAISnapshotCacheStub.GetSnapshot(ctx, bucket)
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLegacyLoadAwareness(t *testing.T) {
@@ -1174,6 +1210,88 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_LoadBalanceTopKFallback
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_CandidateIndexFallbacksToFullSnapshot(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(18)
+	indexedBucket := SchedulerBucket{GroupID: groupID, Platform: PlatformOpenAI, Mode: SchedulerModeSingle}
+
+	candidateOnly := Account{
+		ID:          3101,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-4o": "gpt-4o"},
+		},
+	}
+	fullOnly := Account{
+		ID:          3102,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-5.1": "gpt-5.1"},
+		},
+	}
+	candidateOnly = openAITestAccountWithGroupIfUnset(candidateOnly, groupID)
+	fullOnly = openAITestAccountWithGroupIfUnset(fullOnly, groupID)
+
+	cache := &openAICandidateSnapshotCacheStub{
+		openAISnapshotCacheStub: openAISnapshotCacheStub{
+			snapshotAccounts: []*Account{&candidateOnly, &fullOnly},
+			accountsByID: map[int64]*Account{
+				candidateOnly.ID: &candidateOnly,
+				fullOnly.ID:      &fullOnly,
+			},
+		},
+		candidateAccounts: []*Account{&candidateOnly},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.IndexedBuckets = []string{indexedBucket.String()}
+	cfg.Gateway.Scheduling.IndexedCandidateLimit = 256
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Load = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT = 1
+
+	snapshot := NewSchedulerSnapshotService(cache, nil, schedulerTestOpenAIAccountRepo{accounts: []Account{candidateOnly, fullOnly}}, nil, cfg)
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{candidateOnly, fullOnly}},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		schedulerSnapshot:  snapshot,
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, fullOnly.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.Equal(t, 1, decision.CandidateCount)
+	require.Equal(t, 1, cache.candidateHits)
+	require.Equal(t, 1, cache.bypassHits)
+	require.Zero(t, cache.fullHits)
 }
 
 func TestOpenAIGatewayService_OpenAIAccountSchedulerMetrics(t *testing.T) {

@@ -51,6 +51,7 @@ func ProvideSessionLimitCache(rdb *redis.Client, cfg *config.Config) service.Ses
 func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.SchedulerCache {
 	mgetChunkSize := defaultSchedulerSnapshotMGetChunkSize
 	writeChunkSize := defaultSchedulerSnapshotWriteChunkSize
+	var indexedBuckets []string
 	if cfg != nil {
 		if cfg.Gateway.Scheduling.SnapshotMGetChunkSize > 0 {
 			mgetChunkSize = cfg.Gateway.Scheduling.SnapshotMGetChunkSize
@@ -58,8 +59,9 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 		if cfg.Gateway.Scheduling.SnapshotWriteChunkSize > 0 {
 			writeChunkSize = cfg.Gateway.Scheduling.SnapshotWriteChunkSize
 		}
+		indexedBuckets = cfg.Gateway.Scheduling.IndexedBuckets
 	}
-	return newSchedulerCacheWithChunkSizes(rdb, mgetChunkSize, writeChunkSize)
+	return newSchedulerCacheWithOptions(rdb, mgetChunkSize, writeChunkSize, indexedBuckets)
 }
 
 // ProviderSet is the Wire provider set for all repositories
