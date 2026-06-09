@@ -657,7 +657,12 @@ func registerRevenueRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	revenue := admin.Group("/revenue")
 	{
 		revenue.GET("/summary", h.Admin.Revenue.GetSummary)
+		revenue.GET("/breakdowns", h.Admin.Revenue.GetBreakdowns)
 		revenue.GET("/share-settlements", h.Admin.Revenue.ListShareSettlements)
+		revenue.POST("/share-settlements/exports", h.Admin.Revenue.CreateShareSettlementExport)
+		revenue.GET("/share-settlements/exports/:id", h.Admin.Revenue.GetShareSettlementExport)
+		revenue.POST("/share-settlements/exports/:id/cancel", h.Admin.Revenue.CancelShareSettlementExport)
+		revenue.GET("/share-settlements/exports/:id/download", h.Admin.Revenue.DownloadShareSettlementExport)
 	}
 }
 

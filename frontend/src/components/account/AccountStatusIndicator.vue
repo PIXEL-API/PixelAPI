@@ -18,6 +18,15 @@
     </div>
 
     <!-- Main Status Badge (shown when not rate limited/overloaded) -->
+    <div v-else-if="hasError" class="flex flex-col items-center gap-1">
+      <span :class="['badge text-xs', statusClass]">
+        {{ statusText }}
+      </span>
+      <span v-if="errorAutoDeleteText" class="text-[11px] text-gray-400 dark:text-gray-500">
+        {{ errorAutoDeleteText }}
+      </span>
+    </div>
+
     <template v-else>
       <button
         v-if="isTempUnschedulable"
@@ -54,6 +63,9 @@
       >
         <div class="whitespace-pre-wrap break-words leading-relaxed text-gray-300">
           {{ account.error_message }}
+        </div>
+        <div v-if="errorAutoDeleteAt" class="mt-2 border-t border-gray-700 pt-2 text-gray-300">
+          {{ t('admin.accounts.status.errorAutoDeleteAt', { time: formatDateTime(errorAutoDeleteAt) }) }}
         </div>
         <!-- 上方小三角 -->
         <div
@@ -315,6 +327,22 @@ const isTempUnschedulable = computed(() => {
 // Computed: has error status
 const hasError = computed(() => {
   return props.account.status === 'error'
+})
+
+const errorAutoDeleteAt = computed(() => {
+  if (!props.account.error_since) return null
+  const startedAt = new Date(props.account.error_since)
+  if (Number.isNaN(startedAt.getTime())) return null
+  return new Date(startedAt.getTime() + 24 * 60 * 60 * 1000)
+})
+
+const errorAutoDeleteCountdown = computed(() => {
+  return formatCountdown(errorAutoDeleteAt.value)
+})
+
+const errorAutoDeleteText = computed(() => {
+  if (!errorAutoDeleteCountdown.value) return ''
+  return t('admin.accounts.status.errorAutoDeleteIn', { time: errorAutoDeleteCountdown.value })
 })
 
 const isQuotaExceeded = computed(() => {

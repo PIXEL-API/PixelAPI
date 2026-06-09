@@ -254,6 +254,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		RateMultiplier:          a.BillingRateMultiplier(),
 		Status:                  a.Status,
 		ErrorMessage:            a.ErrorMessage,
+		ErrorSince:              a.ErrorSince,
 		LastUsedAt:              a.LastUsedAt,
 		ExpiresAt:               timeToUnixSeconds(a.ExpiresAt),
 		AutoPauseOnExpired:      a.AutoPauseOnExpired,
@@ -461,15 +462,16 @@ func ProxyFromService(p *service.Proxy) *Proxy {
 		return nil
 	}
 	return &Proxy{
-		ID:        p.ID,
-		Name:      p.Name,
-		Protocol:  p.Protocol,
-		Host:      p.Host,
-		Port:      p.Port,
-		Username:  p.Username,
-		Status:    p.Status,
-		CreatedAt: p.CreatedAt,
-		UpdatedAt: p.UpdatedAt,
+		ID:          p.ID,
+		Name:        p.Name,
+		Protocol:    p.Protocol,
+		Host:        p.Host,
+		Port:        p.Port,
+		Username:    p.Username,
+		Status:      p.Status,
+		MaxAccounts: p.MaxAccounts,
+		CreatedAt:   p.CreatedAt,
+		UpdatedAt:   p.UpdatedAt,
 	}
 }
 

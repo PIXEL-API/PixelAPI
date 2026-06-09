@@ -147,6 +147,11 @@ type ConversationListFilters struct {
 	UnreadOnly      bool
 }
 
+type ConversationMessageListFilters struct {
+	BeforeID int64
+	Latest   bool
+}
+
 type ConversationRepository interface {
 	CreateWithMessage(ctx context.Context, conv *Conversation, msg *ConversationMessage) error
 	AddMessage(ctx context.Context, conversationID int64, msg *ConversationMessage, nextStatus string) (*Conversation, error)
@@ -155,7 +160,7 @@ type ConversationRepository interface {
 	GetSystemNoticeBySource(ctx context.Context, userID int64, source, sourceID string) (*Conversation, error)
 	List(ctx context.Context, params pagination.PaginationParams, filters ConversationListFilters) ([]Conversation, *pagination.PaginationResult, error)
 	ListForUser(ctx context.Context, userID int64, params pagination.PaginationParams, filters ConversationListFilters) ([]Conversation, *pagination.PaginationResult, error)
-	ListMessages(ctx context.Context, conversationID int64, params pagination.PaginationParams) ([]ConversationMessage, *pagination.PaginationResult, error)
+	ListMessages(ctx context.Context, conversationID int64, params pagination.PaginationParams, filters ConversationMessageListFilters) ([]ConversationMessage, *pagination.PaginationResult, error)
 	MarkRead(ctx context.Context, conversationID int64, readerType string, readUntilMessageID *int64) (*Conversation, error)
 	UpdateStatus(ctx context.Context, conversationID int64, status string) (*Conversation, error)
 	UpdateAssignee(ctx context.Context, conversationID int64, adminID *int64) (*Conversation, error)
@@ -427,24 +432,30 @@ func (s *ConversationService) GetAdmin(ctx context.Context, id int64) (*Conversa
 	return s.repo.GetByID(ctx, id)
 }
 
-func (s *ConversationService) ListMessagesForUser(ctx context.Context, userID, conversationID int64, params pagination.PaginationParams) ([]ConversationMessage, *pagination.PaginationResult, error) {
+func (s *ConversationService) ListMessagesForUser(ctx context.Context, userID, conversationID int64, params pagination.PaginationParams, filters ConversationMessageListFilters) ([]ConversationMessage, *pagination.PaginationResult, error) {
 	if userID <= 0 || conversationID <= 0 {
+		return nil, nil, ErrConversationInputRequired
+	}
+	if filters.BeforeID < 0 {
 		return nil, nil, ErrConversationInputRequired
 	}
 	if _, err := s.repo.GetByIDForUser(ctx, userID, conversationID); err != nil {
 		return nil, nil, err
 	}
-	return s.repo.ListMessages(ctx, conversationID, normalizePagination(params))
+	return s.repo.ListMessages(ctx, conversationID, normalizePagination(params), filters)
 }
 
-func (s *ConversationService) ListMessagesAdmin(ctx context.Context, conversationID int64, params pagination.PaginationParams) ([]ConversationMessage, *pagination.PaginationResult, error) {
+func (s *ConversationService) ListMessagesAdmin(ctx context.Context, conversationID int64, params pagination.PaginationParams, filters ConversationMessageListFilters) ([]ConversationMessage, *pagination.PaginationResult, error) {
 	if conversationID <= 0 {
+		return nil, nil, ErrConversationInputRequired
+	}
+	if filters.BeforeID < 0 {
 		return nil, nil, ErrConversationInputRequired
 	}
 	if _, err := s.repo.GetByID(ctx, conversationID); err != nil {
 		return nil, nil, err
 	}
-	return s.repo.ListMessages(ctx, conversationID, normalizePagination(params))
+	return s.repo.ListMessages(ctx, conversationID, normalizePagination(params), filters)
 }
 
 func (s *ConversationService) MarkReadForUser(ctx context.Context, userID, conversationID int64, readUntilMessageID *int64) (*Conversation, error) {

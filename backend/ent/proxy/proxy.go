@@ -35,6 +35,8 @@ const (
 	FieldPassword = "password"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldMaxAccounts holds the string denoting the max_accounts field in the database.
+	FieldMaxAccounts = "max_accounts"
 	// EdgeAccounts holds the string denoting the accounts edge name in mutations.
 	EdgeAccounts = "accounts"
 	// Table holds the table name of the proxy in the database.
@@ -61,6 +63,7 @@ var Columns = []string{
 	FieldUsername,
 	FieldPassword,
 	FieldStatus,
+	FieldMaxAccounts,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -101,6 +104,8 @@ var (
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	StatusValidator func(string) error
+	// DefaultMaxAccounts holds the default value on creation for the "max_accounts" field.
+	DefaultMaxAccounts int
 )
 
 // OrderOption defines the ordering options for the Proxy queries.
@@ -159,6 +164,11 @@ func ByPassword(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByMaxAccounts orders the results by the max_accounts field.
+func ByMaxAccounts(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldMaxAccounts, opts...).ToFunc()
 }
 
 // ByAccountsCount orders the results by accounts count.

@@ -206,7 +206,10 @@
             </div>
           </div>
 
-          <div v-if="activeBreakdownItems.length" class="overflow-x-auto">
+          <div v-if="breakdownsLoading" class="flex h-40 items-center justify-center">
+            <LoadingSpinner />
+          </div>
+          <div v-else-if="activeBreakdownItems.length" class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
               <thead>
                 <tr>
@@ -293,6 +296,7 @@ import { revenueAPI } from '@/api/admin/revenue'
 import type {
   RevenueBreakdownItem,
   RevenueGranularity,
+  RevenueSummaryParams,
   RevenueShareOwnerBreakdownItem,
   RevenueSummary
 } from '@/api/admin/revenue'
@@ -341,6 +345,7 @@ const userResults = ref<SimpleUser[]>([])
 const showUserDropdown = ref(false)
 const granularity = ref<RevenueGranularity>('day')
 const loading = ref(false)
+const breakdownsLoading = ref(false)
 const summary = ref<RevenueSummary | null>(null)
 const activeBreakdown = ref<BreakdownKey>('shareOwners')
 const activeRevenueTab = ref<RevenueTab>('overview')
@@ -722,16 +727,39 @@ async function loadSummary() {
 
   const currentRequest = ++requestSeq
   loading.value = true
+  breakdownsLoading.value = false
+  const params = buildRevenueQueryParams()
   try {
-    const res = await revenueAPI.getSummary({
-      start_date: startDate.value,
-      end_date: endDate.value,
-      granularity: granularity.value,
-      top_limit: 10,
-      user_id: selectedUserId.value ?? undefined
-    })
+    const res = await revenueAPI.getSummary({ ...params, include_breakdowns: false })
     if (currentRequest === requestSeq) {
       summary.value = res.data
+      void loadBreakdowns(currentRequest, params)
+    }
+  } catch (err: unknown) {
+    if (currentRequest === requestSeq) {
+      appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.errors', t('admin.revenue.loadFailed')))
+      breakdownsLoading.value = false
+    }
+  } finally {
+    if (currentRequest === requestSeq) {
+      loading.value = false
+    }
+  }
+}
+
+async function loadBreakdowns(currentRequest: number, params: RevenueSummaryParams) {
+  breakdownsLoading.value = true
+  try {
+    const res = await revenueAPI.getBreakdowns(params)
+    if (currentRequest === requestSeq && summary.value) {
+      summary.value = {
+        ...summary.value,
+        top_users: res.data.top_users ?? [],
+        top_groups: res.data.top_groups ?? [],
+        top_accounts: res.data.top_accounts ?? [],
+        top_models: res.data.top_models ?? [],
+        top_share_owners: res.data.top_share_owners ?? []
+      }
     }
   } catch (err: unknown) {
     if (currentRequest === requestSeq) {
@@ -739,8 +767,18 @@ async function loadSummary() {
     }
   } finally {
     if (currentRequest === requestSeq) {
-      loading.value = false
+      breakdownsLoading.value = false
     }
+  }
+}
+
+function buildRevenueQueryParams(): RevenueSummaryParams {
+  return {
+    start_date: startDate.value,
+    end_date: endDate.value,
+    granularity: granularity.value,
+    top_limit: 10,
+    user_id: selectedUserId.value ?? undefined
   }
 }
 

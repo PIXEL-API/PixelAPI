@@ -36,6 +36,8 @@ type RevenueQueryParams struct {
 	Timezone    string
 	TopLimit    int
 	UserID      *int64
+	// SkipBreakdowns lets the UI load the expensive TopN sections separately.
+	SkipBreakdowns bool
 }
 
 type RevenueShareSettlementQueryParams struct {
@@ -57,6 +59,14 @@ type RevenueSummary struct {
 	Adjustments    RevenueAdjustmentStats           `json:"adjustments"`
 	Profit         RevenueProfitStats               `json:"profit"`
 	Trend          []RevenueTrendPoint              `json:"trend"`
+	TopUsers       []RevenueBreakdownItem           `json:"top_users"`
+	TopGroups      []RevenueBreakdownItem           `json:"top_groups"`
+	TopAccounts    []RevenueBreakdownItem           `json:"top_accounts"`
+	TopModels      []RevenueBreakdownItem           `json:"top_models"`
+	TopShareOwners []RevenueShareOwnerBreakdownItem `json:"top_share_owners"`
+}
+
+type RevenueBreakdowns struct {
 	TopUsers       []RevenueBreakdownItem           `json:"top_users"`
 	TopGroups      []RevenueBreakdownItem           `json:"top_groups"`
 	TopAccounts    []RevenueBreakdownItem           `json:"top_accounts"`
@@ -213,11 +223,16 @@ func (s *RevenueService) GetSummary(ctx context.Context, params RevenueQueryPara
 	loc := loadRevenueLocation(params.Timezone)
 	points, pointIndex := buildRevenueTrendSkeleton(params.StartTime, params.EndTime, params.Granularity, loc)
 	out := &RevenueSummary{
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		StartDate:   params.StartTime.In(loc).Format("2006-01-02"),
-		EndDate:     params.EndTime.Add(-time.Nanosecond).In(loc).Format("2006-01-02"),
-		Granularity: params.Granularity,
-		Trend:       points,
+		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		StartDate:      params.StartTime.In(loc).Format("2006-01-02"),
+		EndDate:        params.EndTime.Add(-time.Nanosecond).In(loc).Format("2006-01-02"),
+		Granularity:    params.Granularity,
+		Trend:          points,
+		TopUsers:       []RevenueBreakdownItem{},
+		TopGroups:      []RevenueBreakdownItem{},
+		TopAccounts:    []RevenueBreakdownItem{},
+		TopModels:      []RevenueBreakdownItem{},
+		TopShareOwners: []RevenueShareOwnerBreakdownItem{},
 	}
 
 	if err := s.fillRevenueCashStats(ctx, params, out, pointIndex); err != nil {
@@ -241,24 +256,30 @@ func (s *RevenueService) GetSummary(ctx context.Context, params RevenueQueryPara
 
 	finalizeRevenueSummary(out)
 
-	var err error
-	if out.TopUsers, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownUsers); err != nil {
-		return nil, err
-	}
-	if out.TopGroups, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownGroups); err != nil {
-		return nil, err
-	}
-	if out.TopAccounts, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownAccounts); err != nil {
-		return nil, err
-	}
-	if out.TopModels, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownModels); err != nil {
-		return nil, err
-	}
-	if out.TopShareOwners, err = s.queryRevenueShareOwnerBreakdown(ctx, params); err != nil {
-		return nil, err
+	if !params.SkipBreakdowns {
+		breakdowns, err := s.getRevenueBreakdowns(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		out.TopUsers = breakdowns.TopUsers
+		out.TopGroups = breakdowns.TopGroups
+		out.TopAccounts = breakdowns.TopAccounts
+		out.TopModels = breakdowns.TopModels
+		out.TopShareOwners = breakdowns.TopShareOwners
 	}
 
 	return out, nil
+}
+
+func (s *RevenueService) GetBreakdowns(ctx context.Context, params RevenueQueryParams) (*RevenueBreakdowns, error) {
+	if s == nil || s.entClient == nil {
+		return nil, infraerrors.New(500, "REVENUE_SERVICE_UNAVAILABLE", "revenue service is unavailable")
+	}
+	if err := validateRevenueQueryParams(params); err != nil {
+		return nil, err
+	}
+	params.TopLimit = normalizeRevenueTopLimit(params.TopLimit)
+	return s.getRevenueBreakdowns(ctx, params)
 }
 
 func (s *RevenueService) ListShareSettlements(ctx context.Context, params RevenueShareSettlementQueryParams) ([]RevenueShareSettlementItem, int64, error) {
@@ -281,61 +302,15 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 	}
 
 	where, args := buildRevenueShareSettlementWhere(params, status)
-	countQuery := `
-		SELECT COUNT(*)
-		FROM account_share_settlement_entries ase
-		LEFT JOIN users cu ON cu.id = ase.consumer_user_id
-		LEFT JOIN users ou ON ou.id = ase.owner_user_id
-		LEFT JOIN users iu ON iu.id = ase.inviter_user_id
-		LEFT JOIN accounts a ON a.id = ase.account_id
-		LEFT JOIN api_keys ak ON ak.id = ase.api_key_id
-		LEFT JOIN groups g ON g.id = ase.group_id
-		WHERE ` + where
 	var total int64
-	if err := s.querySingle(ctx, countQuery, args, &total); err != nil {
+	if err := s.querySingle(ctx, revenueShareSettlementCountQuery(params.Search, where), args, &total); err != nil {
 		return nil, 0, fmt.Errorf("query revenue share settlement count: %w", err)
 	}
 
 	limitArg := len(args) + 1
 	offsetArg := len(args) + 2
 	query := fmt.Sprintf(`
-		SELECT
-			ase.id,
-			ase.usage_log_id,
-			ase.request_id,
-			ase.api_key_id,
-			COALESCE(NULLIF(ak.name, ''), '') AS api_key_name,
-			ase.consumer_user_id,
-			COALESCE(NULLIF(cu.email, ''), 'unknown') AS consumer_email,
-			COALESCE(NULLIF(cu.username, ''), '') AS consumer_username,
-			ase.owner_user_id,
-			COALESCE(NULLIF(ou.email, ''), 'unknown') AS owner_email,
-			COALESCE(NULLIF(ou.username, ''), '') AS owner_username,
-			ase.inviter_user_id,
-			COALESCE(NULLIF(iu.email, ''), '') AS inviter_email,
-			COALESCE(NULLIF(iu.username, ''), '') AS inviter_username,
-			ase.account_id,
-			COALESCE(NULLIF(a.name, ''), CONCAT('Account #', ase.account_id::text)) AS account_name,
-			COALESCE(NULLIF(a.platform, ''), '') AS account_platform,
-			ase.group_id,
-			COALESCE(NULLIF(g.name, ''), '') AS group_name,
-			ase.policy_id,
-			ase.policy_version,
-			ase.share_mode_snapshot,
-			ase.share_status_snapshot,
-			ase.consumer_charge::double precision,
-			ase.account_cost::double precision,
-			ase.owner_share_ratio::double precision,
-			ase.owner_credit::double precision,
-			ase.invite_bound_at_snapshot,
-			ase.invite_expires_at_snapshot,
-			ase.invite_share_ratio::double precision,
-			ase.invite_credit::double precision,
-			ase.platform_share_ratio::double precision,
-			ase.platform_fee::double precision,
-			(ase.platform_fee - ase.account_cost)::double precision AS platform_net_profit,
-			ase.status,
-			ase.created_at
+		SELECT %s
 		FROM account_share_settlement_entries ase
 		LEFT JOIN users cu ON cu.id = ase.consumer_user_id
 		LEFT JOIN users ou ON ou.id = ase.owner_user_id
@@ -346,104 +321,46 @@ func (s *RevenueService) ListShareSettlements(ctx context.Context, params Revenu
 		WHERE %s
 		ORDER BY ase.created_at DESC, ase.id DESC
 		LIMIT $%d OFFSET $%d
-	`, where, limitArg, offsetArg)
+	`, revenueShareSettlementSelectColumns, where, limitArg, offsetArg)
 	args = append(args, params.PageSize, (params.Page-1)*params.PageSize)
 	rows, err := s.entClient.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query revenue share settlements: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-
-	items := make([]RevenueShareSettlementItem, 0, params.PageSize)
-	for rows.Next() {
-		var (
-			item       RevenueShareSettlementItem
-			usageLogID sql.NullInt64
-			groupID    sql.NullInt64
-			policyID   sql.NullInt64
-			inviterID  sql.NullInt64
-			boundAt    sql.NullTime
-			expiresAt  sql.NullTime
-		)
-		if err := rows.Scan(
-			&item.ID,
-			&usageLogID,
-			&item.RequestID,
-			&item.APIKeyID,
-			&item.APIKeyName,
-			&item.ConsumerUserID,
-			&item.ConsumerEmail,
-			&item.ConsumerUsername,
-			&item.OwnerUserID,
-			&item.OwnerEmail,
-			&item.OwnerUsername,
-			&inviterID,
-			&item.InviterEmail,
-			&item.InviterUsername,
-			&item.AccountID,
-			&item.AccountName,
-			&item.AccountPlatform,
-			&groupID,
-			&item.GroupName,
-			&policyID,
-			&item.PolicyVersion,
-			&item.ShareModeSnapshot,
-			&item.ShareStatusSnapshot,
-			&item.ConsumerCharge,
-			&item.AccountCost,
-			&item.OwnerShareRatio,
-			&item.OwnerCredit,
-			&boundAt,
-			&expiresAt,
-			&item.InviteShareRatio,
-			&item.InviteCredit,
-			&item.PlatformShareRatio,
-			&item.PlatformFee,
-			&item.PlatformNetProfit,
-			&item.Status,
-			&item.CreatedAt,
-		); err != nil {
-			return nil, 0, fmt.Errorf("scan revenue share settlement: %w", err)
-		}
-		if usageLogID.Valid {
-			v := usageLogID.Int64
-			item.UsageLogID = &v
-		}
-		if groupID.Valid {
-			v := groupID.Int64
-			item.GroupID = &v
-		}
-		if policyID.Valid {
-			v := policyID.Int64
-			item.PolicyID = &v
-		}
-		if inviterID.Valid {
-			v := inviterID.Int64
-			item.InviterUserID = &v
-		}
-		if boundAt.Valid {
-			v := boundAt.Time
-			item.InviteBoundAt = &v
-		}
-		if expiresAt.Valid {
-			v := expiresAt.Time
-			item.InviteExpiresAt = &v
-		}
-		item.ConsumerCharge = roundRevenue(item.ConsumerCharge)
-		item.AccountCost = roundRevenue(item.AccountCost)
-		item.OwnerShareRatio = roundRevenue(item.OwnerShareRatio)
-		item.OwnerCredit = roundRevenue(item.OwnerCredit)
-		item.InviteShareRatio = roundRevenue(item.InviteShareRatio)
-		item.InviteCredit = roundRevenue(item.InviteCredit)
-		item.PlatformShareRatio = roundRevenue(item.PlatformShareRatio)
-		item.PlatformFee = roundRevenue(item.PlatformFee)
-		item.PlatformNetProfit = roundRevenue(item.PlatformNetProfit)
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterate revenue share settlements: %w", err)
+	items, err := scanRevenueShareSettlementItems(rows, params.PageSize)
+	if err != nil {
+		return nil, 0, err
 	}
 	return items, total, nil
+}
+
+func (s *RevenueService) getRevenueBreakdowns(ctx context.Context, params RevenueQueryParams) (*RevenueBreakdowns, error) {
+	out := &RevenueBreakdowns{
+		TopUsers:       []RevenueBreakdownItem{},
+		TopGroups:      []RevenueBreakdownItem{},
+		TopAccounts:    []RevenueBreakdownItem{},
+		TopModels:      []RevenueBreakdownItem{},
+		TopShareOwners: []RevenueShareOwnerBreakdownItem{},
+	}
+
+	var err error
+	if out.TopUsers, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownUsers); err != nil {
+		return nil, err
+	}
+	if out.TopGroups, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownGroups); err != nil {
+		return nil, err
+	}
+	if out.TopAccounts, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownAccounts); err != nil {
+		return nil, err
+	}
+	if out.TopModels, err = s.queryRevenueBreakdown(ctx, params, revenueBreakdownModels); err != nil {
+		return nil, err
+	}
+	if out.TopShareOwners, err = s.queryRevenueShareOwnerBreakdown(ctx, params); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func validateRevenueQueryParams(params RevenueQueryParams) error {

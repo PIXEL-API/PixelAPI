@@ -654,137 +654,6 @@ var (
 			},
 		},
 	}
-	// ConversationsColumns holds the columns for the "conversations" table.
-	ConversationsColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt64, Increment: true},
-		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "subject", Type: field.TypeString, Size: 200},
-		{Name: "status", Type: field.TypeString, Size: 30, Default: "pending_admin"},
-		{Name: "kind", Type: field.TypeString, Size: 30, Default: "ticket"},
-		{Name: "priority", Type: field.TypeString, Size: 20, Default: "normal"},
-		{Name: "type", Type: field.TypeString, Size: 40, Default: "support"},
-		{Name: "source", Type: field.TypeString, Size: 80, Default: ""},
-		{Name: "source_id", Type: field.TypeString, Size: 120, Default: ""},
-		{Name: "last_message_id", Type: field.TypeInt64, Nullable: true},
-		{Name: "last_message_sender_type", Type: field.TypeString, Size: 20, Default: ""},
-		{Name: "last_message_excerpt", Type: field.TypeString, Size: 240, Default: ""},
-		{Name: "last_message_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "user_last_read_message_id", Type: field.TypeInt64, Nullable: true},
-		{Name: "user_last_read_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "admin_last_read_message_id", Type: field.TypeInt64, Nullable: true},
-		{Name: "admin_last_read_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "referenced_notice_id", Type: field.TypeInt64, Nullable: true},
-		{Name: "user_id", Type: field.TypeInt64},
-		{Name: "assigned_admin_id", Type: field.TypeInt64, Nullable: true},
-	}
-	// ConversationsTable holds the schema information for the "conversations" table.
-	ConversationsTable = &schema.Table{
-		Name:       "conversations",
-		Columns:    ConversationsColumns,
-		PrimaryKey: []*schema.Column{ConversationsColumns[0]},
-		ForeignKeys: []*schema.ForeignKey{
-			{
-				Symbol:     "conversations_conversations_referenced_by_conversations",
-				Columns:    []*schema.Column{ConversationsColumns[18]},
-				RefColumns: []*schema.Column{ConversationsColumns[0]},
-				OnDelete:   schema.SetNull,
-			},
-			{
-				Symbol:     "conversations_users_conversations",
-				Columns:    []*schema.Column{ConversationsColumns[19]},
-				RefColumns: []*schema.Column{UsersColumns[0]},
-				OnDelete:   schema.NoAction,
-			},
-			{
-				Symbol:     "conversations_users_assigned_conversations",
-				Columns:    []*schema.Column{ConversationsColumns[20]},
-				RefColumns: []*schema.Column{UsersColumns[0]},
-				OnDelete:   schema.SetNull,
-			},
-		},
-		Indexes: []*schema.Index{
-			{
-				Name:    "conversation_user_id_last_message_at",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationsColumns[19], ConversationsColumns[13]},
-			},
-			{
-				Name:    "conversation_status_last_message_at",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationsColumns[4], ConversationsColumns[13]},
-			},
-			{
-				Name:    "conversation_kind_last_message_at",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationsColumns[5], ConversationsColumns[13]},
-			},
-			{
-				Name:    "conversation_assigned_admin_id_status",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationsColumns[20], ConversationsColumns[4]},
-			},
-			{
-				Name:    "conversation_source_source_id",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationsColumns[8], ConversationsColumns[9]},
-			},
-			{
-				Name:    "conversation_referenced_notice_id",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationsColumns[18]},
-			},
-		},
-	}
-	// ConversationMessagesColumns holds the columns for the "conversation_messages" table.
-	ConversationMessagesColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt64, Increment: true},
-		{Name: "sender_type", Type: field.TypeString, Size: 20},
-		{Name: "message_type", Type: field.TypeString, Size: 30, Default: "text"},
-		{Name: "content_format", Type: field.TypeString, Size: 20, Default: "plain"},
-		{Name: "content", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
-		{Name: "metadata", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
-		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
-		{Name: "conversation_id", Type: field.TypeInt64},
-		{Name: "sender_id", Type: field.TypeInt64, Nullable: true},
-	}
-	// ConversationMessagesTable holds the schema information for the "conversation_messages" table.
-	ConversationMessagesTable = &schema.Table{
-		Name:       "conversation_messages",
-		Columns:    ConversationMessagesColumns,
-		PrimaryKey: []*schema.Column{ConversationMessagesColumns[0]},
-		ForeignKeys: []*schema.ForeignKey{
-			{
-				Symbol:     "conversation_messages_conversations_messages",
-				Columns:    []*schema.Column{ConversationMessagesColumns[7]},
-				RefColumns: []*schema.Column{ConversationsColumns[0]},
-				OnDelete:   schema.Cascade,
-			},
-			{
-				Symbol:     "conversation_messages_users_sent_conversation_messages",
-				Columns:    []*schema.Column{ConversationMessagesColumns[8]},
-				RefColumns: []*schema.Column{UsersColumns[0]},
-				OnDelete:   schema.SetNull,
-			},
-		},
-		Indexes: []*schema.Index{
-			{
-				Name:    "conversationmessage_conversation_id_id",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationMessagesColumns[7], ConversationMessagesColumns[0]},
-			},
-			{
-				Name:    "conversationmessage_conversation_id_created_at",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationMessagesColumns[7], ConversationMessagesColumns[6]},
-			},
-			{
-				Name:    "conversationmessage_sender_type_sender_id",
-				Unique:  false,
-				Columns: []*schema.Column{ConversationMessagesColumns[1], ConversationMessagesColumns[8]},
-			},
-		},
-	}
 	// ErrorPassthroughRulesColumns holds the columns for the "error_passthrough_rules" table.
 	ErrorPassthroughRulesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1319,6 +1188,7 @@ var (
 		{Name: "username", Type: field.TypeString, Nullable: true, Size: 100},
 		{Name: "password", Type: field.TypeString, Nullable: true, Size: 100},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
+		{Name: "max_accounts", Type: field.TypeInt, Default: 0},
 	}
 	// ProxiesTable holds the schema information for the "proxies" table.
 	ProxiesTable = &schema.Table{
@@ -2376,8 +2246,6 @@ var (
 		ChannelMonitorDailyRollupsTable,
 		ChannelMonitorHistoriesTable,
 		ChannelMonitorRequestTemplatesTable,
-		ConversationsTable,
-		ConversationMessagesTable,
 		ErrorPassthroughRulesTable,
 		GroupsTable,
 		IdempotencyRecordsTable,
@@ -2463,17 +2331,6 @@ func init() {
 	}
 	ChannelMonitorRequestTemplatesTable.Annotation = &entsql.Annotation{
 		Table: "channel_monitor_request_templates",
-	}
-	ConversationsTable.ForeignKeys[0].RefTable = ConversationsTable
-	ConversationsTable.ForeignKeys[1].RefTable = UsersTable
-	ConversationsTable.ForeignKeys[2].RefTable = UsersTable
-	ConversationsTable.Annotation = &entsql.Annotation{
-		Table: "conversations",
-	}
-	ConversationMessagesTable.ForeignKeys[0].RefTable = ConversationsTable
-	ConversationMessagesTable.ForeignKeys[1].RefTable = UsersTable
-	ConversationMessagesTable.Annotation = &entsql.Annotation{
-		Table: "conversation_messages",
 	}
 	ErrorPassthroughRulesTable.Annotation = &entsql.Annotation{
 		Table: "error_passthrough_rules",

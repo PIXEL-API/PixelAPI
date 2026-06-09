@@ -12,8 +12,7 @@ export const useConversationNotificationStore = defineStore('conversationNotific
   const userUnreadCount = ref(0)
   const loading = ref(false)
 
-  let pollingTimer: ReturnType<typeof setInterval> | null = null
-  let pollingScope: ConversationUnreadScope | null = null
+  const pollingTimers: Partial<Record<ConversationUnreadScope, ReturnType<typeof setInterval>>> = {}
 
   async function fetchUnreadCount(scope: ConversationUnreadScope): Promise<number> {
     loading.value = true
@@ -41,21 +40,27 @@ export const useConversationNotificationStore = defineStore('conversationNotific
   }
 
   function startPolling(scope: ConversationUnreadScope): void {
-    if (pollingTimer && pollingScope === scope) return
-    stopPolling()
-    pollingScope = scope
+    if (pollingTimers[scope]) return
     void fetchUnreadCount(scope)
-    pollingTimer = setInterval(() => {
+    pollingTimers[scope] = setInterval(() => {
       void fetchUnreadCount(scope)
     }, POLL_INTERVAL_MS)
   }
 
-  function stopPolling(): void {
-    if (pollingTimer) {
-      clearInterval(pollingTimer)
-      pollingTimer = null
+  function stopPolling(scope?: ConversationUnreadScope): void {
+    if (scope) {
+      if (pollingTimers[scope]) {
+        clearInterval(pollingTimers[scope])
+        delete pollingTimers[scope]
+      }
+      return
     }
-    pollingScope = null
+    for (const timerScope of ['admin', 'user'] as const) {
+      if (pollingTimers[timerScope]) {
+        clearInterval(pollingTimers[timerScope])
+        delete pollingTimers[timerScope]
+      }
+    }
   }
 
   function reset(): void {

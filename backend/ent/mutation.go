@@ -24,8 +24,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitordailyrollup"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorhistory"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
-	"github.com/Wei-Shaw/sub2api/ent/conversation"
-	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
@@ -82,8 +80,6 @@ const (
 	TypeChannelMonitorDailyRollup     = "ChannelMonitorDailyRollup"
 	TypeChannelMonitorHistory         = "ChannelMonitorHistory"
 	TypeChannelMonitorRequestTemplate = "ChannelMonitorRequestTemplate"
-	TypeConversation                  = "Conversation"
-	TypeConversationMessage           = "ConversationMessage"
 	TypeErrorPassthroughRule          = "ErrorPassthroughRule"
 	TypeGroup                         = "Group"
 	TypeIdempotencyRecord             = "IdempotencyRecord"
@@ -14831,2761 +14827,6 @@ func (m *ChannelMonitorRequestTemplateMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown ChannelMonitorRequestTemplate edge %s", name)
 }
 
-// ConversationMutation represents an operation that mutates the Conversation nodes in the graph.
-type ConversationMutation struct {
-	config
-	op                                 Op
-	typ                                string
-	id                                 *int64
-	created_at                         *time.Time
-	updated_at                         *time.Time
-	subject                            *string
-	status                             *string
-	kind                               *string
-	priority                           *string
-	_type                              *string
-	source                             *string
-	source_id                          *string
-	last_message_id                    *int64
-	addlast_message_id                 *int64
-	last_message_sender_type           *string
-	last_message_excerpt               *string
-	last_message_at                    *time.Time
-	user_last_read_message_id          *int64
-	adduser_last_read_message_id       *int64
-	user_last_read_at                  *time.Time
-	admin_last_read_message_id         *int64
-	addadmin_last_read_message_id      *int64
-	admin_last_read_at                 *time.Time
-	clearedFields                      map[string]struct{}
-	user                               *int64
-	cleareduser                        bool
-	assigned_admin                     *int64
-	clearedassigned_admin              bool
-	referenced_notice                  *int64
-	clearedreferenced_notice           bool
-	referenced_by_conversations        map[int64]struct{}
-	removedreferenced_by_conversations map[int64]struct{}
-	clearedreferenced_by_conversations bool
-	messages                           map[int64]struct{}
-	removedmessages                    map[int64]struct{}
-	clearedmessages                    bool
-	done                               bool
-	oldValue                           func(context.Context) (*Conversation, error)
-	predicates                         []predicate.Conversation
-}
-
-var _ ent.Mutation = (*ConversationMutation)(nil)
-
-// conversationOption allows management of the mutation configuration using functional options.
-type conversationOption func(*ConversationMutation)
-
-// newConversationMutation creates new mutation for the Conversation entity.
-func newConversationMutation(c config, op Op, opts ...conversationOption) *ConversationMutation {
-	m := &ConversationMutation{
-		config:        c,
-		op:            op,
-		typ:           TypeConversation,
-		clearedFields: make(map[string]struct{}),
-	}
-	for _, opt := range opts {
-		opt(m)
-	}
-	return m
-}
-
-// withConversationID sets the ID field of the mutation.
-func withConversationID(id int64) conversationOption {
-	return func(m *ConversationMutation) {
-		var (
-			err   error
-			once  sync.Once
-			value *Conversation
-		)
-		m.oldValue = func(ctx context.Context) (*Conversation, error) {
-			once.Do(func() {
-				if m.done {
-					err = errors.New("querying old values post mutation is not allowed")
-				} else {
-					value, err = m.Client().Conversation.Get(ctx, id)
-				}
-			})
-			return value, err
-		}
-		m.id = &id
-	}
-}
-
-// withConversation sets the old Conversation of the mutation.
-func withConversation(node *Conversation) conversationOption {
-	return func(m *ConversationMutation) {
-		m.oldValue = func(context.Context) (*Conversation, error) {
-			return node, nil
-		}
-		m.id = &node.ID
-	}
-}
-
-// Client returns a new `ent.Client` from the mutation. If the mutation was
-// executed in a transaction (ent.Tx), a transactional client is returned.
-func (m ConversationMutation) Client() *Client {
-	client := &Client{config: m.config}
-	client.init()
-	return client
-}
-
-// Tx returns an `ent.Tx` for mutations that were executed in transactions;
-// it returns an error otherwise.
-func (m ConversationMutation) Tx() (*Tx, error) {
-	if _, ok := m.driver.(*txDriver); !ok {
-		return nil, errors.New("ent: mutation is not running in a transaction")
-	}
-	tx := &Tx{config: m.config}
-	tx.init()
-	return tx, nil
-}
-
-// ID returns the ID value in the mutation. Note that the ID is only available
-// if it was provided to the builder or after it was returned from the database.
-func (m *ConversationMutation) ID() (id int64, exists bool) {
-	if m.id == nil {
-		return
-	}
-	return *m.id, true
-}
-
-// IDs queries the database and returns the entity ids that match the mutation's predicate.
-// That means, if the mutation is applied within a transaction with an isolation level such
-// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
-// or updated by the mutation.
-func (m *ConversationMutation) IDs(ctx context.Context) ([]int64, error) {
-	switch {
-	case m.op.Is(OpUpdateOne | OpDeleteOne):
-		id, exists := m.ID()
-		if exists {
-			return []int64{id}, nil
-		}
-		fallthrough
-	case m.op.Is(OpUpdate | OpDelete):
-		return m.Client().Conversation.Query().Where(m.predicates...).IDs(ctx)
-	default:
-		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
-	}
-}
-
-// SetCreatedAt sets the "created_at" field.
-func (m *ConversationMutation) SetCreatedAt(t time.Time) {
-	m.created_at = &t
-}
-
-// CreatedAt returns the value of the "created_at" field in the mutation.
-func (m *ConversationMutation) CreatedAt() (r time.Time, exists bool) {
-	v := m.created_at
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldCreatedAt returns the old "created_at" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
-	}
-	return oldValue.CreatedAt, nil
-}
-
-// ResetCreatedAt resets all changes to the "created_at" field.
-func (m *ConversationMutation) ResetCreatedAt() {
-	m.created_at = nil
-}
-
-// SetUpdatedAt sets the "updated_at" field.
-func (m *ConversationMutation) SetUpdatedAt(t time.Time) {
-	m.updated_at = &t
-}
-
-// UpdatedAt returns the value of the "updated_at" field in the mutation.
-func (m *ConversationMutation) UpdatedAt() (r time.Time, exists bool) {
-	v := m.updated_at
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldUpdatedAt returns the old "updated_at" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
-	}
-	return oldValue.UpdatedAt, nil
-}
-
-// ResetUpdatedAt resets all changes to the "updated_at" field.
-func (m *ConversationMutation) ResetUpdatedAt() {
-	m.updated_at = nil
-}
-
-// SetUserID sets the "user_id" field.
-func (m *ConversationMutation) SetUserID(i int64) {
-	m.user = &i
-}
-
-// UserID returns the value of the "user_id" field in the mutation.
-func (m *ConversationMutation) UserID() (r int64, exists bool) {
-	v := m.user
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldUserID returns the old "user_id" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldUserID(ctx context.Context) (v int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldUserID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
-	}
-	return oldValue.UserID, nil
-}
-
-// ResetUserID resets all changes to the "user_id" field.
-func (m *ConversationMutation) ResetUserID() {
-	m.user = nil
-}
-
-// SetSubject sets the "subject" field.
-func (m *ConversationMutation) SetSubject(s string) {
-	m.subject = &s
-}
-
-// Subject returns the value of the "subject" field in the mutation.
-func (m *ConversationMutation) Subject() (r string, exists bool) {
-	v := m.subject
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldSubject returns the old "subject" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldSubject(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldSubject is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldSubject requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldSubject: %w", err)
-	}
-	return oldValue.Subject, nil
-}
-
-// ResetSubject resets all changes to the "subject" field.
-func (m *ConversationMutation) ResetSubject() {
-	m.subject = nil
-}
-
-// SetStatus sets the "status" field.
-func (m *ConversationMutation) SetStatus(s string) {
-	m.status = &s
-}
-
-// Status returns the value of the "status" field in the mutation.
-func (m *ConversationMutation) Status() (r string, exists bool) {
-	v := m.status
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldStatus returns the old "status" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldStatus(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldStatus requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
-	}
-	return oldValue.Status, nil
-}
-
-// ResetStatus resets all changes to the "status" field.
-func (m *ConversationMutation) ResetStatus() {
-	m.status = nil
-}
-
-// SetKind sets the "kind" field.
-func (m *ConversationMutation) SetKind(s string) {
-	m.kind = &s
-}
-
-// Kind returns the value of the "kind" field in the mutation.
-func (m *ConversationMutation) Kind() (r string, exists bool) {
-	v := m.kind
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldKind returns the old "kind" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldKind(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldKind is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldKind requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldKind: %w", err)
-	}
-	return oldValue.Kind, nil
-}
-
-// ResetKind resets all changes to the "kind" field.
-func (m *ConversationMutation) ResetKind() {
-	m.kind = nil
-}
-
-// SetPriority sets the "priority" field.
-func (m *ConversationMutation) SetPriority(s string) {
-	m.priority = &s
-}
-
-// Priority returns the value of the "priority" field in the mutation.
-func (m *ConversationMutation) Priority() (r string, exists bool) {
-	v := m.priority
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldPriority returns the old "priority" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldPriority(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldPriority is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldPriority requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldPriority: %w", err)
-	}
-	return oldValue.Priority, nil
-}
-
-// ResetPriority resets all changes to the "priority" field.
-func (m *ConversationMutation) ResetPriority() {
-	m.priority = nil
-}
-
-// SetType sets the "type" field.
-func (m *ConversationMutation) SetType(s string) {
-	m._type = &s
-}
-
-// GetType returns the value of the "type" field in the mutation.
-func (m *ConversationMutation) GetType() (r string, exists bool) {
-	v := m._type
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldType returns the old "type" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldType(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldType is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldType requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldType: %w", err)
-	}
-	return oldValue.Type, nil
-}
-
-// ResetType resets all changes to the "type" field.
-func (m *ConversationMutation) ResetType() {
-	m._type = nil
-}
-
-// SetSource sets the "source" field.
-func (m *ConversationMutation) SetSource(s string) {
-	m.source = &s
-}
-
-// Source returns the value of the "source" field in the mutation.
-func (m *ConversationMutation) Source() (r string, exists bool) {
-	v := m.source
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldSource returns the old "source" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldSource(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldSource is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldSource requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldSource: %w", err)
-	}
-	return oldValue.Source, nil
-}
-
-// ResetSource resets all changes to the "source" field.
-func (m *ConversationMutation) ResetSource() {
-	m.source = nil
-}
-
-// SetSourceID sets the "source_id" field.
-func (m *ConversationMutation) SetSourceID(s string) {
-	m.source_id = &s
-}
-
-// SourceID returns the value of the "source_id" field in the mutation.
-func (m *ConversationMutation) SourceID() (r string, exists bool) {
-	v := m.source_id
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldSourceID returns the old "source_id" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldSourceID(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldSourceID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldSourceID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldSourceID: %w", err)
-	}
-	return oldValue.SourceID, nil
-}
-
-// ResetSourceID resets all changes to the "source_id" field.
-func (m *ConversationMutation) ResetSourceID() {
-	m.source_id = nil
-}
-
-// SetReferencedNoticeID sets the "referenced_notice_id" field.
-func (m *ConversationMutation) SetReferencedNoticeID(i int64) {
-	m.referenced_notice = &i
-}
-
-// ReferencedNoticeID returns the value of the "referenced_notice_id" field in the mutation.
-func (m *ConversationMutation) ReferencedNoticeID() (r int64, exists bool) {
-	v := m.referenced_notice
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldReferencedNoticeID returns the old "referenced_notice_id" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldReferencedNoticeID(ctx context.Context) (v *int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldReferencedNoticeID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldReferencedNoticeID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldReferencedNoticeID: %w", err)
-	}
-	return oldValue.ReferencedNoticeID, nil
-}
-
-// ClearReferencedNoticeID clears the value of the "referenced_notice_id" field.
-func (m *ConversationMutation) ClearReferencedNoticeID() {
-	m.referenced_notice = nil
-	m.clearedFields[conversation.FieldReferencedNoticeID] = struct{}{}
-}
-
-// ReferencedNoticeIDCleared returns if the "referenced_notice_id" field was cleared in this mutation.
-func (m *ConversationMutation) ReferencedNoticeIDCleared() bool {
-	_, ok := m.clearedFields[conversation.FieldReferencedNoticeID]
-	return ok
-}
-
-// ResetReferencedNoticeID resets all changes to the "referenced_notice_id" field.
-func (m *ConversationMutation) ResetReferencedNoticeID() {
-	m.referenced_notice = nil
-	delete(m.clearedFields, conversation.FieldReferencedNoticeID)
-}
-
-// SetAssignedAdminID sets the "assigned_admin_id" field.
-func (m *ConversationMutation) SetAssignedAdminID(i int64) {
-	m.assigned_admin = &i
-}
-
-// AssignedAdminID returns the value of the "assigned_admin_id" field in the mutation.
-func (m *ConversationMutation) AssignedAdminID() (r int64, exists bool) {
-	v := m.assigned_admin
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldAssignedAdminID returns the old "assigned_admin_id" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldAssignedAdminID(ctx context.Context) (v *int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldAssignedAdminID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldAssignedAdminID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldAssignedAdminID: %w", err)
-	}
-	return oldValue.AssignedAdminID, nil
-}
-
-// ClearAssignedAdminID clears the value of the "assigned_admin_id" field.
-func (m *ConversationMutation) ClearAssignedAdminID() {
-	m.assigned_admin = nil
-	m.clearedFields[conversation.FieldAssignedAdminID] = struct{}{}
-}
-
-// AssignedAdminIDCleared returns if the "assigned_admin_id" field was cleared in this mutation.
-func (m *ConversationMutation) AssignedAdminIDCleared() bool {
-	_, ok := m.clearedFields[conversation.FieldAssignedAdminID]
-	return ok
-}
-
-// ResetAssignedAdminID resets all changes to the "assigned_admin_id" field.
-func (m *ConversationMutation) ResetAssignedAdminID() {
-	m.assigned_admin = nil
-	delete(m.clearedFields, conversation.FieldAssignedAdminID)
-}
-
-// SetLastMessageID sets the "last_message_id" field.
-func (m *ConversationMutation) SetLastMessageID(i int64) {
-	m.last_message_id = &i
-	m.addlast_message_id = nil
-}
-
-// LastMessageID returns the value of the "last_message_id" field in the mutation.
-func (m *ConversationMutation) LastMessageID() (r int64, exists bool) {
-	v := m.last_message_id
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldLastMessageID returns the old "last_message_id" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldLastMessageID(ctx context.Context) (v *int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldLastMessageID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldLastMessageID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldLastMessageID: %w", err)
-	}
-	return oldValue.LastMessageID, nil
-}
-
-// AddLastMessageID adds i to the "last_message_id" field.
-func (m *ConversationMutation) AddLastMessageID(i int64) {
-	if m.addlast_message_id != nil {
-		*m.addlast_message_id += i
-	} else {
-		m.addlast_message_id = &i
-	}
-}
-
-// AddedLastMessageID returns the value that was added to the "last_message_id" field in this mutation.
-func (m *ConversationMutation) AddedLastMessageID() (r int64, exists bool) {
-	v := m.addlast_message_id
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// ClearLastMessageID clears the value of the "last_message_id" field.
-func (m *ConversationMutation) ClearLastMessageID() {
-	m.last_message_id = nil
-	m.addlast_message_id = nil
-	m.clearedFields[conversation.FieldLastMessageID] = struct{}{}
-}
-
-// LastMessageIDCleared returns if the "last_message_id" field was cleared in this mutation.
-func (m *ConversationMutation) LastMessageIDCleared() bool {
-	_, ok := m.clearedFields[conversation.FieldLastMessageID]
-	return ok
-}
-
-// ResetLastMessageID resets all changes to the "last_message_id" field.
-func (m *ConversationMutation) ResetLastMessageID() {
-	m.last_message_id = nil
-	m.addlast_message_id = nil
-	delete(m.clearedFields, conversation.FieldLastMessageID)
-}
-
-// SetLastMessageSenderType sets the "last_message_sender_type" field.
-func (m *ConversationMutation) SetLastMessageSenderType(s string) {
-	m.last_message_sender_type = &s
-}
-
-// LastMessageSenderType returns the value of the "last_message_sender_type" field in the mutation.
-func (m *ConversationMutation) LastMessageSenderType() (r string, exists bool) {
-	v := m.last_message_sender_type
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldLastMessageSenderType returns the old "last_message_sender_type" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldLastMessageSenderType(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldLastMessageSenderType is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldLastMessageSenderType requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldLastMessageSenderType: %w", err)
-	}
-	return oldValue.LastMessageSenderType, nil
-}
-
-// ResetLastMessageSenderType resets all changes to the "last_message_sender_type" field.
-func (m *ConversationMutation) ResetLastMessageSenderType() {
-	m.last_message_sender_type = nil
-}
-
-// SetLastMessageExcerpt sets the "last_message_excerpt" field.
-func (m *ConversationMutation) SetLastMessageExcerpt(s string) {
-	m.last_message_excerpt = &s
-}
-
-// LastMessageExcerpt returns the value of the "last_message_excerpt" field in the mutation.
-func (m *ConversationMutation) LastMessageExcerpt() (r string, exists bool) {
-	v := m.last_message_excerpt
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldLastMessageExcerpt returns the old "last_message_excerpt" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldLastMessageExcerpt(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldLastMessageExcerpt is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldLastMessageExcerpt requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldLastMessageExcerpt: %w", err)
-	}
-	return oldValue.LastMessageExcerpt, nil
-}
-
-// ResetLastMessageExcerpt resets all changes to the "last_message_excerpt" field.
-func (m *ConversationMutation) ResetLastMessageExcerpt() {
-	m.last_message_excerpt = nil
-}
-
-// SetLastMessageAt sets the "last_message_at" field.
-func (m *ConversationMutation) SetLastMessageAt(t time.Time) {
-	m.last_message_at = &t
-}
-
-// LastMessageAt returns the value of the "last_message_at" field in the mutation.
-func (m *ConversationMutation) LastMessageAt() (r time.Time, exists bool) {
-	v := m.last_message_at
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldLastMessageAt returns the old "last_message_at" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldLastMessageAt(ctx context.Context) (v time.Time, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldLastMessageAt is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldLastMessageAt requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldLastMessageAt: %w", err)
-	}
-	return oldValue.LastMessageAt, nil
-}
-
-// ResetLastMessageAt resets all changes to the "last_message_at" field.
-func (m *ConversationMutation) ResetLastMessageAt() {
-	m.last_message_at = nil
-}
-
-// SetUserLastReadMessageID sets the "user_last_read_message_id" field.
-func (m *ConversationMutation) SetUserLastReadMessageID(i int64) {
-	m.user_last_read_message_id = &i
-	m.adduser_last_read_message_id = nil
-}
-
-// UserLastReadMessageID returns the value of the "user_last_read_message_id" field in the mutation.
-func (m *ConversationMutation) UserLastReadMessageID() (r int64, exists bool) {
-	v := m.user_last_read_message_id
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldUserLastReadMessageID returns the old "user_last_read_message_id" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldUserLastReadMessageID(ctx context.Context) (v *int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldUserLastReadMessageID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldUserLastReadMessageID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldUserLastReadMessageID: %w", err)
-	}
-	return oldValue.UserLastReadMessageID, nil
-}
-
-// AddUserLastReadMessageID adds i to the "user_last_read_message_id" field.
-func (m *ConversationMutation) AddUserLastReadMessageID(i int64) {
-	if m.adduser_last_read_message_id != nil {
-		*m.adduser_last_read_message_id += i
-	} else {
-		m.adduser_last_read_message_id = &i
-	}
-}
-
-// AddedUserLastReadMessageID returns the value that was added to the "user_last_read_message_id" field in this mutation.
-func (m *ConversationMutation) AddedUserLastReadMessageID() (r int64, exists bool) {
-	v := m.adduser_last_read_message_id
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// ClearUserLastReadMessageID clears the value of the "user_last_read_message_id" field.
-func (m *ConversationMutation) ClearUserLastReadMessageID() {
-	m.user_last_read_message_id = nil
-	m.adduser_last_read_message_id = nil
-	m.clearedFields[conversation.FieldUserLastReadMessageID] = struct{}{}
-}
-
-// UserLastReadMessageIDCleared returns if the "user_last_read_message_id" field was cleared in this mutation.
-func (m *ConversationMutation) UserLastReadMessageIDCleared() bool {
-	_, ok := m.clearedFields[conversation.FieldUserLastReadMessageID]
-	return ok
-}
-
-// ResetUserLastReadMessageID resets all changes to the "user_last_read_message_id" field.
-func (m *ConversationMutation) ResetUserLastReadMessageID() {
-	m.user_last_read_message_id = nil
-	m.adduser_last_read_message_id = nil
-	delete(m.clearedFields, conversation.FieldUserLastReadMessageID)
-}
-
-// SetUserLastReadAt sets the "user_last_read_at" field.
-func (m *ConversationMutation) SetUserLastReadAt(t time.Time) {
-	m.user_last_read_at = &t
-}
-
-// UserLastReadAt returns the value of the "user_last_read_at" field in the mutation.
-func (m *ConversationMutation) UserLastReadAt() (r time.Time, exists bool) {
-	v := m.user_last_read_at
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldUserLastReadAt returns the old "user_last_read_at" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldUserLastReadAt(ctx context.Context) (v *time.Time, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldUserLastReadAt is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldUserLastReadAt requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldUserLastReadAt: %w", err)
-	}
-	return oldValue.UserLastReadAt, nil
-}
-
-// ClearUserLastReadAt clears the value of the "user_last_read_at" field.
-func (m *ConversationMutation) ClearUserLastReadAt() {
-	m.user_last_read_at = nil
-	m.clearedFields[conversation.FieldUserLastReadAt] = struct{}{}
-}
-
-// UserLastReadAtCleared returns if the "user_last_read_at" field was cleared in this mutation.
-func (m *ConversationMutation) UserLastReadAtCleared() bool {
-	_, ok := m.clearedFields[conversation.FieldUserLastReadAt]
-	return ok
-}
-
-// ResetUserLastReadAt resets all changes to the "user_last_read_at" field.
-func (m *ConversationMutation) ResetUserLastReadAt() {
-	m.user_last_read_at = nil
-	delete(m.clearedFields, conversation.FieldUserLastReadAt)
-}
-
-// SetAdminLastReadMessageID sets the "admin_last_read_message_id" field.
-func (m *ConversationMutation) SetAdminLastReadMessageID(i int64) {
-	m.admin_last_read_message_id = &i
-	m.addadmin_last_read_message_id = nil
-}
-
-// AdminLastReadMessageID returns the value of the "admin_last_read_message_id" field in the mutation.
-func (m *ConversationMutation) AdminLastReadMessageID() (r int64, exists bool) {
-	v := m.admin_last_read_message_id
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldAdminLastReadMessageID returns the old "admin_last_read_message_id" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldAdminLastReadMessageID(ctx context.Context) (v *int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldAdminLastReadMessageID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldAdminLastReadMessageID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldAdminLastReadMessageID: %w", err)
-	}
-	return oldValue.AdminLastReadMessageID, nil
-}
-
-// AddAdminLastReadMessageID adds i to the "admin_last_read_message_id" field.
-func (m *ConversationMutation) AddAdminLastReadMessageID(i int64) {
-	if m.addadmin_last_read_message_id != nil {
-		*m.addadmin_last_read_message_id += i
-	} else {
-		m.addadmin_last_read_message_id = &i
-	}
-}
-
-// AddedAdminLastReadMessageID returns the value that was added to the "admin_last_read_message_id" field in this mutation.
-func (m *ConversationMutation) AddedAdminLastReadMessageID() (r int64, exists bool) {
-	v := m.addadmin_last_read_message_id
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// ClearAdminLastReadMessageID clears the value of the "admin_last_read_message_id" field.
-func (m *ConversationMutation) ClearAdminLastReadMessageID() {
-	m.admin_last_read_message_id = nil
-	m.addadmin_last_read_message_id = nil
-	m.clearedFields[conversation.FieldAdminLastReadMessageID] = struct{}{}
-}
-
-// AdminLastReadMessageIDCleared returns if the "admin_last_read_message_id" field was cleared in this mutation.
-func (m *ConversationMutation) AdminLastReadMessageIDCleared() bool {
-	_, ok := m.clearedFields[conversation.FieldAdminLastReadMessageID]
-	return ok
-}
-
-// ResetAdminLastReadMessageID resets all changes to the "admin_last_read_message_id" field.
-func (m *ConversationMutation) ResetAdminLastReadMessageID() {
-	m.admin_last_read_message_id = nil
-	m.addadmin_last_read_message_id = nil
-	delete(m.clearedFields, conversation.FieldAdminLastReadMessageID)
-}
-
-// SetAdminLastReadAt sets the "admin_last_read_at" field.
-func (m *ConversationMutation) SetAdminLastReadAt(t time.Time) {
-	m.admin_last_read_at = &t
-}
-
-// AdminLastReadAt returns the value of the "admin_last_read_at" field in the mutation.
-func (m *ConversationMutation) AdminLastReadAt() (r time.Time, exists bool) {
-	v := m.admin_last_read_at
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldAdminLastReadAt returns the old "admin_last_read_at" field's value of the Conversation entity.
-// If the Conversation object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMutation) OldAdminLastReadAt(ctx context.Context) (v *time.Time, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldAdminLastReadAt is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldAdminLastReadAt requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldAdminLastReadAt: %w", err)
-	}
-	return oldValue.AdminLastReadAt, nil
-}
-
-// ClearAdminLastReadAt clears the value of the "admin_last_read_at" field.
-func (m *ConversationMutation) ClearAdminLastReadAt() {
-	m.admin_last_read_at = nil
-	m.clearedFields[conversation.FieldAdminLastReadAt] = struct{}{}
-}
-
-// AdminLastReadAtCleared returns if the "admin_last_read_at" field was cleared in this mutation.
-func (m *ConversationMutation) AdminLastReadAtCleared() bool {
-	_, ok := m.clearedFields[conversation.FieldAdminLastReadAt]
-	return ok
-}
-
-// ResetAdminLastReadAt resets all changes to the "admin_last_read_at" field.
-func (m *ConversationMutation) ResetAdminLastReadAt() {
-	m.admin_last_read_at = nil
-	delete(m.clearedFields, conversation.FieldAdminLastReadAt)
-}
-
-// ClearUser clears the "user" edge to the User entity.
-func (m *ConversationMutation) ClearUser() {
-	m.cleareduser = true
-	m.clearedFields[conversation.FieldUserID] = struct{}{}
-}
-
-// UserCleared reports if the "user" edge to the User entity was cleared.
-func (m *ConversationMutation) UserCleared() bool {
-	return m.cleareduser
-}
-
-// UserIDs returns the "user" edge IDs in the mutation.
-// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
-// UserID instead. It exists only for internal usage by the builders.
-func (m *ConversationMutation) UserIDs() (ids []int64) {
-	if id := m.user; id != nil {
-		ids = append(ids, *id)
-	}
-	return
-}
-
-// ResetUser resets all changes to the "user" edge.
-func (m *ConversationMutation) ResetUser() {
-	m.user = nil
-	m.cleareduser = false
-}
-
-// ClearAssignedAdmin clears the "assigned_admin" edge to the User entity.
-func (m *ConversationMutation) ClearAssignedAdmin() {
-	m.clearedassigned_admin = true
-	m.clearedFields[conversation.FieldAssignedAdminID] = struct{}{}
-}
-
-// AssignedAdminCleared reports if the "assigned_admin" edge to the User entity was cleared.
-func (m *ConversationMutation) AssignedAdminCleared() bool {
-	return m.AssignedAdminIDCleared() || m.clearedassigned_admin
-}
-
-// AssignedAdminIDs returns the "assigned_admin" edge IDs in the mutation.
-// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
-// AssignedAdminID instead. It exists only for internal usage by the builders.
-func (m *ConversationMutation) AssignedAdminIDs() (ids []int64) {
-	if id := m.assigned_admin; id != nil {
-		ids = append(ids, *id)
-	}
-	return
-}
-
-// ResetAssignedAdmin resets all changes to the "assigned_admin" edge.
-func (m *ConversationMutation) ResetAssignedAdmin() {
-	m.assigned_admin = nil
-	m.clearedassigned_admin = false
-}
-
-// ClearReferencedNotice clears the "referenced_notice" edge to the Conversation entity.
-func (m *ConversationMutation) ClearReferencedNotice() {
-	m.clearedreferenced_notice = true
-	m.clearedFields[conversation.FieldReferencedNoticeID] = struct{}{}
-}
-
-// ReferencedNoticeCleared reports if the "referenced_notice" edge to the Conversation entity was cleared.
-func (m *ConversationMutation) ReferencedNoticeCleared() bool {
-	return m.ReferencedNoticeIDCleared() || m.clearedreferenced_notice
-}
-
-// ReferencedNoticeIDs returns the "referenced_notice" edge IDs in the mutation.
-// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
-// ReferencedNoticeID instead. It exists only for internal usage by the builders.
-func (m *ConversationMutation) ReferencedNoticeIDs() (ids []int64) {
-	if id := m.referenced_notice; id != nil {
-		ids = append(ids, *id)
-	}
-	return
-}
-
-// ResetReferencedNotice resets all changes to the "referenced_notice" edge.
-func (m *ConversationMutation) ResetReferencedNotice() {
-	m.referenced_notice = nil
-	m.clearedreferenced_notice = false
-}
-
-// AddReferencedByConversationIDs adds the "referenced_by_conversations" edge to the Conversation entity by ids.
-func (m *ConversationMutation) AddReferencedByConversationIDs(ids ...int64) {
-	if m.referenced_by_conversations == nil {
-		m.referenced_by_conversations = make(map[int64]struct{})
-	}
-	for i := range ids {
-		m.referenced_by_conversations[ids[i]] = struct{}{}
-	}
-}
-
-// ClearReferencedByConversations clears the "referenced_by_conversations" edge to the Conversation entity.
-func (m *ConversationMutation) ClearReferencedByConversations() {
-	m.clearedreferenced_by_conversations = true
-}
-
-// ReferencedByConversationsCleared reports if the "referenced_by_conversations" edge to the Conversation entity was cleared.
-func (m *ConversationMutation) ReferencedByConversationsCleared() bool {
-	return m.clearedreferenced_by_conversations
-}
-
-// RemoveReferencedByConversationIDs removes the "referenced_by_conversations" edge to the Conversation entity by IDs.
-func (m *ConversationMutation) RemoveReferencedByConversationIDs(ids ...int64) {
-	if m.removedreferenced_by_conversations == nil {
-		m.removedreferenced_by_conversations = make(map[int64]struct{})
-	}
-	for i := range ids {
-		delete(m.referenced_by_conversations, ids[i])
-		m.removedreferenced_by_conversations[ids[i]] = struct{}{}
-	}
-}
-
-// RemovedReferencedByConversations returns the removed IDs of the "referenced_by_conversations" edge to the Conversation entity.
-func (m *ConversationMutation) RemovedReferencedByConversationsIDs() (ids []int64) {
-	for id := range m.removedreferenced_by_conversations {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// ReferencedByConversationsIDs returns the "referenced_by_conversations" edge IDs in the mutation.
-func (m *ConversationMutation) ReferencedByConversationsIDs() (ids []int64) {
-	for id := range m.referenced_by_conversations {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// ResetReferencedByConversations resets all changes to the "referenced_by_conversations" edge.
-func (m *ConversationMutation) ResetReferencedByConversations() {
-	m.referenced_by_conversations = nil
-	m.clearedreferenced_by_conversations = false
-	m.removedreferenced_by_conversations = nil
-}
-
-// AddMessageIDs adds the "messages" edge to the ConversationMessage entity by ids.
-func (m *ConversationMutation) AddMessageIDs(ids ...int64) {
-	if m.messages == nil {
-		m.messages = make(map[int64]struct{})
-	}
-	for i := range ids {
-		m.messages[ids[i]] = struct{}{}
-	}
-}
-
-// ClearMessages clears the "messages" edge to the ConversationMessage entity.
-func (m *ConversationMutation) ClearMessages() {
-	m.clearedmessages = true
-}
-
-// MessagesCleared reports if the "messages" edge to the ConversationMessage entity was cleared.
-func (m *ConversationMutation) MessagesCleared() bool {
-	return m.clearedmessages
-}
-
-// RemoveMessageIDs removes the "messages" edge to the ConversationMessage entity by IDs.
-func (m *ConversationMutation) RemoveMessageIDs(ids ...int64) {
-	if m.removedmessages == nil {
-		m.removedmessages = make(map[int64]struct{})
-	}
-	for i := range ids {
-		delete(m.messages, ids[i])
-		m.removedmessages[ids[i]] = struct{}{}
-	}
-}
-
-// RemovedMessages returns the removed IDs of the "messages" edge to the ConversationMessage entity.
-func (m *ConversationMutation) RemovedMessagesIDs() (ids []int64) {
-	for id := range m.removedmessages {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// MessagesIDs returns the "messages" edge IDs in the mutation.
-func (m *ConversationMutation) MessagesIDs() (ids []int64) {
-	for id := range m.messages {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// ResetMessages resets all changes to the "messages" edge.
-func (m *ConversationMutation) ResetMessages() {
-	m.messages = nil
-	m.clearedmessages = false
-	m.removedmessages = nil
-}
-
-// Where appends a list predicates to the ConversationMutation builder.
-func (m *ConversationMutation) Where(ps ...predicate.Conversation) {
-	m.predicates = append(m.predicates, ps...)
-}
-
-// WhereP appends storage-level predicates to the ConversationMutation builder. Using this method,
-// users can use type-assertion to append predicates that do not depend on any generated package.
-func (m *ConversationMutation) WhereP(ps ...func(*sql.Selector)) {
-	p := make([]predicate.Conversation, len(ps))
-	for i := range ps {
-		p[i] = ps[i]
-	}
-	m.Where(p...)
-}
-
-// Op returns the operation name.
-func (m *ConversationMutation) Op() Op {
-	return m.op
-}
-
-// SetOp allows setting the mutation operation.
-func (m *ConversationMutation) SetOp(op Op) {
-	m.op = op
-}
-
-// Type returns the node type of this mutation (Conversation).
-func (m *ConversationMutation) Type() string {
-	return m.typ
-}
-
-// Fields returns all fields that were changed during this mutation. Note that in
-// order to get all numeric fields that were incremented/decremented, call
-// AddedFields().
-func (m *ConversationMutation) Fields() []string {
-	fields := make([]string, 0, 20)
-	if m.created_at != nil {
-		fields = append(fields, conversation.FieldCreatedAt)
-	}
-	if m.updated_at != nil {
-		fields = append(fields, conversation.FieldUpdatedAt)
-	}
-	if m.user != nil {
-		fields = append(fields, conversation.FieldUserID)
-	}
-	if m.subject != nil {
-		fields = append(fields, conversation.FieldSubject)
-	}
-	if m.status != nil {
-		fields = append(fields, conversation.FieldStatus)
-	}
-	if m.kind != nil {
-		fields = append(fields, conversation.FieldKind)
-	}
-	if m.priority != nil {
-		fields = append(fields, conversation.FieldPriority)
-	}
-	if m._type != nil {
-		fields = append(fields, conversation.FieldType)
-	}
-	if m.source != nil {
-		fields = append(fields, conversation.FieldSource)
-	}
-	if m.source_id != nil {
-		fields = append(fields, conversation.FieldSourceID)
-	}
-	if m.referenced_notice != nil {
-		fields = append(fields, conversation.FieldReferencedNoticeID)
-	}
-	if m.assigned_admin != nil {
-		fields = append(fields, conversation.FieldAssignedAdminID)
-	}
-	if m.last_message_id != nil {
-		fields = append(fields, conversation.FieldLastMessageID)
-	}
-	if m.last_message_sender_type != nil {
-		fields = append(fields, conversation.FieldLastMessageSenderType)
-	}
-	if m.last_message_excerpt != nil {
-		fields = append(fields, conversation.FieldLastMessageExcerpt)
-	}
-	if m.last_message_at != nil {
-		fields = append(fields, conversation.FieldLastMessageAt)
-	}
-	if m.user_last_read_message_id != nil {
-		fields = append(fields, conversation.FieldUserLastReadMessageID)
-	}
-	if m.user_last_read_at != nil {
-		fields = append(fields, conversation.FieldUserLastReadAt)
-	}
-	if m.admin_last_read_message_id != nil {
-		fields = append(fields, conversation.FieldAdminLastReadMessageID)
-	}
-	if m.admin_last_read_at != nil {
-		fields = append(fields, conversation.FieldAdminLastReadAt)
-	}
-	return fields
-}
-
-// Field returns the value of a field with the given name. The second boolean
-// return value indicates that this field was not set, or was not defined in the
-// schema.
-func (m *ConversationMutation) Field(name string) (ent.Value, bool) {
-	switch name {
-	case conversation.FieldCreatedAt:
-		return m.CreatedAt()
-	case conversation.FieldUpdatedAt:
-		return m.UpdatedAt()
-	case conversation.FieldUserID:
-		return m.UserID()
-	case conversation.FieldSubject:
-		return m.Subject()
-	case conversation.FieldStatus:
-		return m.Status()
-	case conversation.FieldKind:
-		return m.Kind()
-	case conversation.FieldPriority:
-		return m.Priority()
-	case conversation.FieldType:
-		return m.GetType()
-	case conversation.FieldSource:
-		return m.Source()
-	case conversation.FieldSourceID:
-		return m.SourceID()
-	case conversation.FieldReferencedNoticeID:
-		return m.ReferencedNoticeID()
-	case conversation.FieldAssignedAdminID:
-		return m.AssignedAdminID()
-	case conversation.FieldLastMessageID:
-		return m.LastMessageID()
-	case conversation.FieldLastMessageSenderType:
-		return m.LastMessageSenderType()
-	case conversation.FieldLastMessageExcerpt:
-		return m.LastMessageExcerpt()
-	case conversation.FieldLastMessageAt:
-		return m.LastMessageAt()
-	case conversation.FieldUserLastReadMessageID:
-		return m.UserLastReadMessageID()
-	case conversation.FieldUserLastReadAt:
-		return m.UserLastReadAt()
-	case conversation.FieldAdminLastReadMessageID:
-		return m.AdminLastReadMessageID()
-	case conversation.FieldAdminLastReadAt:
-		return m.AdminLastReadAt()
-	}
-	return nil, false
-}
-
-// OldField returns the old value of the field from the database. An error is
-// returned if the mutation operation is not UpdateOne, or the query to the
-// database failed.
-func (m *ConversationMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
-	switch name {
-	case conversation.FieldCreatedAt:
-		return m.OldCreatedAt(ctx)
-	case conversation.FieldUpdatedAt:
-		return m.OldUpdatedAt(ctx)
-	case conversation.FieldUserID:
-		return m.OldUserID(ctx)
-	case conversation.FieldSubject:
-		return m.OldSubject(ctx)
-	case conversation.FieldStatus:
-		return m.OldStatus(ctx)
-	case conversation.FieldKind:
-		return m.OldKind(ctx)
-	case conversation.FieldPriority:
-		return m.OldPriority(ctx)
-	case conversation.FieldType:
-		return m.OldType(ctx)
-	case conversation.FieldSource:
-		return m.OldSource(ctx)
-	case conversation.FieldSourceID:
-		return m.OldSourceID(ctx)
-	case conversation.FieldReferencedNoticeID:
-		return m.OldReferencedNoticeID(ctx)
-	case conversation.FieldAssignedAdminID:
-		return m.OldAssignedAdminID(ctx)
-	case conversation.FieldLastMessageID:
-		return m.OldLastMessageID(ctx)
-	case conversation.FieldLastMessageSenderType:
-		return m.OldLastMessageSenderType(ctx)
-	case conversation.FieldLastMessageExcerpt:
-		return m.OldLastMessageExcerpt(ctx)
-	case conversation.FieldLastMessageAt:
-		return m.OldLastMessageAt(ctx)
-	case conversation.FieldUserLastReadMessageID:
-		return m.OldUserLastReadMessageID(ctx)
-	case conversation.FieldUserLastReadAt:
-		return m.OldUserLastReadAt(ctx)
-	case conversation.FieldAdminLastReadMessageID:
-		return m.OldAdminLastReadMessageID(ctx)
-	case conversation.FieldAdminLastReadAt:
-		return m.OldAdminLastReadAt(ctx)
-	}
-	return nil, fmt.Errorf("unknown Conversation field %s", name)
-}
-
-// SetField sets the value of a field with the given name. It returns an error if
-// the field is not defined in the schema, or if the type mismatched the field
-// type.
-func (m *ConversationMutation) SetField(name string, value ent.Value) error {
-	switch name {
-	case conversation.FieldCreatedAt:
-		v, ok := value.(time.Time)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetCreatedAt(v)
-		return nil
-	case conversation.FieldUpdatedAt:
-		v, ok := value.(time.Time)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetUpdatedAt(v)
-		return nil
-	case conversation.FieldUserID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetUserID(v)
-		return nil
-	case conversation.FieldSubject:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetSubject(v)
-		return nil
-	case conversation.FieldStatus:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetStatus(v)
-		return nil
-	case conversation.FieldKind:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetKind(v)
-		return nil
-	case conversation.FieldPriority:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetPriority(v)
-		return nil
-	case conversation.FieldType:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetType(v)
-		return nil
-	case conversation.FieldSource:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetSource(v)
-		return nil
-	case conversation.FieldSourceID:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetSourceID(v)
-		return nil
-	case conversation.FieldReferencedNoticeID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetReferencedNoticeID(v)
-		return nil
-	case conversation.FieldAssignedAdminID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetAssignedAdminID(v)
-		return nil
-	case conversation.FieldLastMessageID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetLastMessageID(v)
-		return nil
-	case conversation.FieldLastMessageSenderType:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetLastMessageSenderType(v)
-		return nil
-	case conversation.FieldLastMessageExcerpt:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetLastMessageExcerpt(v)
-		return nil
-	case conversation.FieldLastMessageAt:
-		v, ok := value.(time.Time)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetLastMessageAt(v)
-		return nil
-	case conversation.FieldUserLastReadMessageID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetUserLastReadMessageID(v)
-		return nil
-	case conversation.FieldUserLastReadAt:
-		v, ok := value.(time.Time)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetUserLastReadAt(v)
-		return nil
-	case conversation.FieldAdminLastReadMessageID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetAdminLastReadMessageID(v)
-		return nil
-	case conversation.FieldAdminLastReadAt:
-		v, ok := value.(time.Time)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetAdminLastReadAt(v)
-		return nil
-	}
-	return fmt.Errorf("unknown Conversation field %s", name)
-}
-
-// AddedFields returns all numeric fields that were incremented/decremented during
-// this mutation.
-func (m *ConversationMutation) AddedFields() []string {
-	var fields []string
-	if m.addlast_message_id != nil {
-		fields = append(fields, conversation.FieldLastMessageID)
-	}
-	if m.adduser_last_read_message_id != nil {
-		fields = append(fields, conversation.FieldUserLastReadMessageID)
-	}
-	if m.addadmin_last_read_message_id != nil {
-		fields = append(fields, conversation.FieldAdminLastReadMessageID)
-	}
-	return fields
-}
-
-// AddedField returns the numeric value that was incremented/decremented on a field
-// with the given name. The second boolean return value indicates that this field
-// was not set, or was not defined in the schema.
-func (m *ConversationMutation) AddedField(name string) (ent.Value, bool) {
-	switch name {
-	case conversation.FieldLastMessageID:
-		return m.AddedLastMessageID()
-	case conversation.FieldUserLastReadMessageID:
-		return m.AddedUserLastReadMessageID()
-	case conversation.FieldAdminLastReadMessageID:
-		return m.AddedAdminLastReadMessageID()
-	}
-	return nil, false
-}
-
-// AddField adds the value to the field with the given name. It returns an error if
-// the field is not defined in the schema, or if the type mismatched the field
-// type.
-func (m *ConversationMutation) AddField(name string, value ent.Value) error {
-	switch name {
-	case conversation.FieldLastMessageID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.AddLastMessageID(v)
-		return nil
-	case conversation.FieldUserLastReadMessageID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.AddUserLastReadMessageID(v)
-		return nil
-	case conversation.FieldAdminLastReadMessageID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.AddAdminLastReadMessageID(v)
-		return nil
-	}
-	return fmt.Errorf("unknown Conversation numeric field %s", name)
-}
-
-// ClearedFields returns all nullable fields that were cleared during this
-// mutation.
-func (m *ConversationMutation) ClearedFields() []string {
-	var fields []string
-	if m.FieldCleared(conversation.FieldReferencedNoticeID) {
-		fields = append(fields, conversation.FieldReferencedNoticeID)
-	}
-	if m.FieldCleared(conversation.FieldAssignedAdminID) {
-		fields = append(fields, conversation.FieldAssignedAdminID)
-	}
-	if m.FieldCleared(conversation.FieldLastMessageID) {
-		fields = append(fields, conversation.FieldLastMessageID)
-	}
-	if m.FieldCleared(conversation.FieldUserLastReadMessageID) {
-		fields = append(fields, conversation.FieldUserLastReadMessageID)
-	}
-	if m.FieldCleared(conversation.FieldUserLastReadAt) {
-		fields = append(fields, conversation.FieldUserLastReadAt)
-	}
-	if m.FieldCleared(conversation.FieldAdminLastReadMessageID) {
-		fields = append(fields, conversation.FieldAdminLastReadMessageID)
-	}
-	if m.FieldCleared(conversation.FieldAdminLastReadAt) {
-		fields = append(fields, conversation.FieldAdminLastReadAt)
-	}
-	return fields
-}
-
-// FieldCleared returns a boolean indicating if a field with the given name was
-// cleared in this mutation.
-func (m *ConversationMutation) FieldCleared(name string) bool {
-	_, ok := m.clearedFields[name]
-	return ok
-}
-
-// ClearField clears the value of the field with the given name. It returns an
-// error if the field is not defined in the schema.
-func (m *ConversationMutation) ClearField(name string) error {
-	switch name {
-	case conversation.FieldReferencedNoticeID:
-		m.ClearReferencedNoticeID()
-		return nil
-	case conversation.FieldAssignedAdminID:
-		m.ClearAssignedAdminID()
-		return nil
-	case conversation.FieldLastMessageID:
-		m.ClearLastMessageID()
-		return nil
-	case conversation.FieldUserLastReadMessageID:
-		m.ClearUserLastReadMessageID()
-		return nil
-	case conversation.FieldUserLastReadAt:
-		m.ClearUserLastReadAt()
-		return nil
-	case conversation.FieldAdminLastReadMessageID:
-		m.ClearAdminLastReadMessageID()
-		return nil
-	case conversation.FieldAdminLastReadAt:
-		m.ClearAdminLastReadAt()
-		return nil
-	}
-	return fmt.Errorf("unknown Conversation nullable field %s", name)
-}
-
-// ResetField resets all changes in the mutation for the field with the given name.
-// It returns an error if the field is not defined in the schema.
-func (m *ConversationMutation) ResetField(name string) error {
-	switch name {
-	case conversation.FieldCreatedAt:
-		m.ResetCreatedAt()
-		return nil
-	case conversation.FieldUpdatedAt:
-		m.ResetUpdatedAt()
-		return nil
-	case conversation.FieldUserID:
-		m.ResetUserID()
-		return nil
-	case conversation.FieldSubject:
-		m.ResetSubject()
-		return nil
-	case conversation.FieldStatus:
-		m.ResetStatus()
-		return nil
-	case conversation.FieldKind:
-		m.ResetKind()
-		return nil
-	case conversation.FieldPriority:
-		m.ResetPriority()
-		return nil
-	case conversation.FieldType:
-		m.ResetType()
-		return nil
-	case conversation.FieldSource:
-		m.ResetSource()
-		return nil
-	case conversation.FieldSourceID:
-		m.ResetSourceID()
-		return nil
-	case conversation.FieldReferencedNoticeID:
-		m.ResetReferencedNoticeID()
-		return nil
-	case conversation.FieldAssignedAdminID:
-		m.ResetAssignedAdminID()
-		return nil
-	case conversation.FieldLastMessageID:
-		m.ResetLastMessageID()
-		return nil
-	case conversation.FieldLastMessageSenderType:
-		m.ResetLastMessageSenderType()
-		return nil
-	case conversation.FieldLastMessageExcerpt:
-		m.ResetLastMessageExcerpt()
-		return nil
-	case conversation.FieldLastMessageAt:
-		m.ResetLastMessageAt()
-		return nil
-	case conversation.FieldUserLastReadMessageID:
-		m.ResetUserLastReadMessageID()
-		return nil
-	case conversation.FieldUserLastReadAt:
-		m.ResetUserLastReadAt()
-		return nil
-	case conversation.FieldAdminLastReadMessageID:
-		m.ResetAdminLastReadMessageID()
-		return nil
-	case conversation.FieldAdminLastReadAt:
-		m.ResetAdminLastReadAt()
-		return nil
-	}
-	return fmt.Errorf("unknown Conversation field %s", name)
-}
-
-// AddedEdges returns all edge names that were set/added in this mutation.
-func (m *ConversationMutation) AddedEdges() []string {
-	edges := make([]string, 0, 5)
-	if m.user != nil {
-		edges = append(edges, conversation.EdgeUser)
-	}
-	if m.assigned_admin != nil {
-		edges = append(edges, conversation.EdgeAssignedAdmin)
-	}
-	if m.referenced_notice != nil {
-		edges = append(edges, conversation.EdgeReferencedNotice)
-	}
-	if m.referenced_by_conversations != nil {
-		edges = append(edges, conversation.EdgeReferencedByConversations)
-	}
-	if m.messages != nil {
-		edges = append(edges, conversation.EdgeMessages)
-	}
-	return edges
-}
-
-// AddedIDs returns all IDs (to other nodes) that were added for the given edge
-// name in this mutation.
-func (m *ConversationMutation) AddedIDs(name string) []ent.Value {
-	switch name {
-	case conversation.EdgeUser:
-		if id := m.user; id != nil {
-			return []ent.Value{*id}
-		}
-	case conversation.EdgeAssignedAdmin:
-		if id := m.assigned_admin; id != nil {
-			return []ent.Value{*id}
-		}
-	case conversation.EdgeReferencedNotice:
-		if id := m.referenced_notice; id != nil {
-			return []ent.Value{*id}
-		}
-	case conversation.EdgeReferencedByConversations:
-		ids := make([]ent.Value, 0, len(m.referenced_by_conversations))
-		for id := range m.referenced_by_conversations {
-			ids = append(ids, id)
-		}
-		return ids
-	case conversation.EdgeMessages:
-		ids := make([]ent.Value, 0, len(m.messages))
-		for id := range m.messages {
-			ids = append(ids, id)
-		}
-		return ids
-	}
-	return nil
-}
-
-// RemovedEdges returns all edge names that were removed in this mutation.
-func (m *ConversationMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 5)
-	if m.removedreferenced_by_conversations != nil {
-		edges = append(edges, conversation.EdgeReferencedByConversations)
-	}
-	if m.removedmessages != nil {
-		edges = append(edges, conversation.EdgeMessages)
-	}
-	return edges
-}
-
-// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
-// the given name in this mutation.
-func (m *ConversationMutation) RemovedIDs(name string) []ent.Value {
-	switch name {
-	case conversation.EdgeReferencedByConversations:
-		ids := make([]ent.Value, 0, len(m.removedreferenced_by_conversations))
-		for id := range m.removedreferenced_by_conversations {
-			ids = append(ids, id)
-		}
-		return ids
-	case conversation.EdgeMessages:
-		ids := make([]ent.Value, 0, len(m.removedmessages))
-		for id := range m.removedmessages {
-			ids = append(ids, id)
-		}
-		return ids
-	}
-	return nil
-}
-
-// ClearedEdges returns all edge names that were cleared in this mutation.
-func (m *ConversationMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 5)
-	if m.cleareduser {
-		edges = append(edges, conversation.EdgeUser)
-	}
-	if m.clearedassigned_admin {
-		edges = append(edges, conversation.EdgeAssignedAdmin)
-	}
-	if m.clearedreferenced_notice {
-		edges = append(edges, conversation.EdgeReferencedNotice)
-	}
-	if m.clearedreferenced_by_conversations {
-		edges = append(edges, conversation.EdgeReferencedByConversations)
-	}
-	if m.clearedmessages {
-		edges = append(edges, conversation.EdgeMessages)
-	}
-	return edges
-}
-
-// EdgeCleared returns a boolean which indicates if the edge with the given name
-// was cleared in this mutation.
-func (m *ConversationMutation) EdgeCleared(name string) bool {
-	switch name {
-	case conversation.EdgeUser:
-		return m.cleareduser
-	case conversation.EdgeAssignedAdmin:
-		return m.clearedassigned_admin
-	case conversation.EdgeReferencedNotice:
-		return m.clearedreferenced_notice
-	case conversation.EdgeReferencedByConversations:
-		return m.clearedreferenced_by_conversations
-	case conversation.EdgeMessages:
-		return m.clearedmessages
-	}
-	return false
-}
-
-// ClearEdge clears the value of the edge with the given name. It returns an error
-// if that edge is not defined in the schema.
-func (m *ConversationMutation) ClearEdge(name string) error {
-	switch name {
-	case conversation.EdgeUser:
-		m.ClearUser()
-		return nil
-	case conversation.EdgeAssignedAdmin:
-		m.ClearAssignedAdmin()
-		return nil
-	case conversation.EdgeReferencedNotice:
-		m.ClearReferencedNotice()
-		return nil
-	}
-	return fmt.Errorf("unknown Conversation unique edge %s", name)
-}
-
-// ResetEdge resets all changes to the edge with the given name in this mutation.
-// It returns an error if the edge is not defined in the schema.
-func (m *ConversationMutation) ResetEdge(name string) error {
-	switch name {
-	case conversation.EdgeUser:
-		m.ResetUser()
-		return nil
-	case conversation.EdgeAssignedAdmin:
-		m.ResetAssignedAdmin()
-		return nil
-	case conversation.EdgeReferencedNotice:
-		m.ResetReferencedNotice()
-		return nil
-	case conversation.EdgeReferencedByConversations:
-		m.ResetReferencedByConversations()
-		return nil
-	case conversation.EdgeMessages:
-		m.ResetMessages()
-		return nil
-	}
-	return fmt.Errorf("unknown Conversation edge %s", name)
-}
-
-// ConversationMessageMutation represents an operation that mutates the ConversationMessage nodes in the graph.
-type ConversationMessageMutation struct {
-	config
-	op                  Op
-	typ                 string
-	id                  *int64
-	sender_type         *string
-	message_type        *string
-	content_format      *string
-	content             *string
-	metadata            *map[string]interface{}
-	created_at          *time.Time
-	clearedFields       map[string]struct{}
-	conversation        *int64
-	clearedconversation bool
-	sender              *int64
-	clearedsender       bool
-	done                bool
-	oldValue            func(context.Context) (*ConversationMessage, error)
-	predicates          []predicate.ConversationMessage
-}
-
-var _ ent.Mutation = (*ConversationMessageMutation)(nil)
-
-// conversationmessageOption allows management of the mutation configuration using functional options.
-type conversationmessageOption func(*ConversationMessageMutation)
-
-// newConversationMessageMutation creates new mutation for the ConversationMessage entity.
-func newConversationMessageMutation(c config, op Op, opts ...conversationmessageOption) *ConversationMessageMutation {
-	m := &ConversationMessageMutation{
-		config:        c,
-		op:            op,
-		typ:           TypeConversationMessage,
-		clearedFields: make(map[string]struct{}),
-	}
-	for _, opt := range opts {
-		opt(m)
-	}
-	return m
-}
-
-// withConversationMessageID sets the ID field of the mutation.
-func withConversationMessageID(id int64) conversationmessageOption {
-	return func(m *ConversationMessageMutation) {
-		var (
-			err   error
-			once  sync.Once
-			value *ConversationMessage
-		)
-		m.oldValue = func(ctx context.Context) (*ConversationMessage, error) {
-			once.Do(func() {
-				if m.done {
-					err = errors.New("querying old values post mutation is not allowed")
-				} else {
-					value, err = m.Client().ConversationMessage.Get(ctx, id)
-				}
-			})
-			return value, err
-		}
-		m.id = &id
-	}
-}
-
-// withConversationMessage sets the old ConversationMessage of the mutation.
-func withConversationMessage(node *ConversationMessage) conversationmessageOption {
-	return func(m *ConversationMessageMutation) {
-		m.oldValue = func(context.Context) (*ConversationMessage, error) {
-			return node, nil
-		}
-		m.id = &node.ID
-	}
-}
-
-// Client returns a new `ent.Client` from the mutation. If the mutation was
-// executed in a transaction (ent.Tx), a transactional client is returned.
-func (m ConversationMessageMutation) Client() *Client {
-	client := &Client{config: m.config}
-	client.init()
-	return client
-}
-
-// Tx returns an `ent.Tx` for mutations that were executed in transactions;
-// it returns an error otherwise.
-func (m ConversationMessageMutation) Tx() (*Tx, error) {
-	if _, ok := m.driver.(*txDriver); !ok {
-		return nil, errors.New("ent: mutation is not running in a transaction")
-	}
-	tx := &Tx{config: m.config}
-	tx.init()
-	return tx, nil
-}
-
-// ID returns the ID value in the mutation. Note that the ID is only available
-// if it was provided to the builder or after it was returned from the database.
-func (m *ConversationMessageMutation) ID() (id int64, exists bool) {
-	if m.id == nil {
-		return
-	}
-	return *m.id, true
-}
-
-// IDs queries the database and returns the entity ids that match the mutation's predicate.
-// That means, if the mutation is applied within a transaction with an isolation level such
-// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
-// or updated by the mutation.
-func (m *ConversationMessageMutation) IDs(ctx context.Context) ([]int64, error) {
-	switch {
-	case m.op.Is(OpUpdateOne | OpDeleteOne):
-		id, exists := m.ID()
-		if exists {
-			return []int64{id}, nil
-		}
-		fallthrough
-	case m.op.Is(OpUpdate | OpDelete):
-		return m.Client().ConversationMessage.Query().Where(m.predicates...).IDs(ctx)
-	default:
-		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
-	}
-}
-
-// SetConversationID sets the "conversation_id" field.
-func (m *ConversationMessageMutation) SetConversationID(i int64) {
-	m.conversation = &i
-}
-
-// ConversationID returns the value of the "conversation_id" field in the mutation.
-func (m *ConversationMessageMutation) ConversationID() (r int64, exists bool) {
-	v := m.conversation
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldConversationID returns the old "conversation_id" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldConversationID(ctx context.Context) (v int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldConversationID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldConversationID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldConversationID: %w", err)
-	}
-	return oldValue.ConversationID, nil
-}
-
-// ResetConversationID resets all changes to the "conversation_id" field.
-func (m *ConversationMessageMutation) ResetConversationID() {
-	m.conversation = nil
-}
-
-// SetSenderType sets the "sender_type" field.
-func (m *ConversationMessageMutation) SetSenderType(s string) {
-	m.sender_type = &s
-}
-
-// SenderType returns the value of the "sender_type" field in the mutation.
-func (m *ConversationMessageMutation) SenderType() (r string, exists bool) {
-	v := m.sender_type
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldSenderType returns the old "sender_type" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldSenderType(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldSenderType is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldSenderType requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldSenderType: %w", err)
-	}
-	return oldValue.SenderType, nil
-}
-
-// ResetSenderType resets all changes to the "sender_type" field.
-func (m *ConversationMessageMutation) ResetSenderType() {
-	m.sender_type = nil
-}
-
-// SetSenderID sets the "sender_id" field.
-func (m *ConversationMessageMutation) SetSenderID(i int64) {
-	m.sender = &i
-}
-
-// SenderID returns the value of the "sender_id" field in the mutation.
-func (m *ConversationMessageMutation) SenderID() (r int64, exists bool) {
-	v := m.sender
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldSenderID returns the old "sender_id" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldSenderID(ctx context.Context) (v *int64, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldSenderID is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldSenderID requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldSenderID: %w", err)
-	}
-	return oldValue.SenderID, nil
-}
-
-// ClearSenderID clears the value of the "sender_id" field.
-func (m *ConversationMessageMutation) ClearSenderID() {
-	m.sender = nil
-	m.clearedFields[conversationmessage.FieldSenderID] = struct{}{}
-}
-
-// SenderIDCleared returns if the "sender_id" field was cleared in this mutation.
-func (m *ConversationMessageMutation) SenderIDCleared() bool {
-	_, ok := m.clearedFields[conversationmessage.FieldSenderID]
-	return ok
-}
-
-// ResetSenderID resets all changes to the "sender_id" field.
-func (m *ConversationMessageMutation) ResetSenderID() {
-	m.sender = nil
-	delete(m.clearedFields, conversationmessage.FieldSenderID)
-}
-
-// SetMessageType sets the "message_type" field.
-func (m *ConversationMessageMutation) SetMessageType(s string) {
-	m.message_type = &s
-}
-
-// MessageType returns the value of the "message_type" field in the mutation.
-func (m *ConversationMessageMutation) MessageType() (r string, exists bool) {
-	v := m.message_type
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldMessageType returns the old "message_type" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldMessageType(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldMessageType is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldMessageType requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldMessageType: %w", err)
-	}
-	return oldValue.MessageType, nil
-}
-
-// ResetMessageType resets all changes to the "message_type" field.
-func (m *ConversationMessageMutation) ResetMessageType() {
-	m.message_type = nil
-}
-
-// SetContentFormat sets the "content_format" field.
-func (m *ConversationMessageMutation) SetContentFormat(s string) {
-	m.content_format = &s
-}
-
-// ContentFormat returns the value of the "content_format" field in the mutation.
-func (m *ConversationMessageMutation) ContentFormat() (r string, exists bool) {
-	v := m.content_format
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldContentFormat returns the old "content_format" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldContentFormat(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldContentFormat is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldContentFormat requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldContentFormat: %w", err)
-	}
-	return oldValue.ContentFormat, nil
-}
-
-// ResetContentFormat resets all changes to the "content_format" field.
-func (m *ConversationMessageMutation) ResetContentFormat() {
-	m.content_format = nil
-}
-
-// SetContent sets the "content" field.
-func (m *ConversationMessageMutation) SetContent(s string) {
-	m.content = &s
-}
-
-// Content returns the value of the "content" field in the mutation.
-func (m *ConversationMessageMutation) Content() (r string, exists bool) {
-	v := m.content
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldContent returns the old "content" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldContent(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldContent is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldContent requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldContent: %w", err)
-	}
-	return oldValue.Content, nil
-}
-
-// ResetContent resets all changes to the "content" field.
-func (m *ConversationMessageMutation) ResetContent() {
-	m.content = nil
-}
-
-// SetMetadata sets the "metadata" field.
-func (m *ConversationMessageMutation) SetMetadata(value map[string]interface{}) {
-	m.metadata = &value
-}
-
-// Metadata returns the value of the "metadata" field in the mutation.
-func (m *ConversationMessageMutation) Metadata() (r map[string]interface{}, exists bool) {
-	v := m.metadata
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldMetadata returns the old "metadata" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldMetadata(ctx context.Context) (v map[string]interface{}, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldMetadata is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldMetadata requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldMetadata: %w", err)
-	}
-	return oldValue.Metadata, nil
-}
-
-// ClearMetadata clears the value of the "metadata" field.
-func (m *ConversationMessageMutation) ClearMetadata() {
-	m.metadata = nil
-	m.clearedFields[conversationmessage.FieldMetadata] = struct{}{}
-}
-
-// MetadataCleared returns if the "metadata" field was cleared in this mutation.
-func (m *ConversationMessageMutation) MetadataCleared() bool {
-	_, ok := m.clearedFields[conversationmessage.FieldMetadata]
-	return ok
-}
-
-// ResetMetadata resets all changes to the "metadata" field.
-func (m *ConversationMessageMutation) ResetMetadata() {
-	m.metadata = nil
-	delete(m.clearedFields, conversationmessage.FieldMetadata)
-}
-
-// SetCreatedAt sets the "created_at" field.
-func (m *ConversationMessageMutation) SetCreatedAt(t time.Time) {
-	m.created_at = &t
-}
-
-// CreatedAt returns the value of the "created_at" field in the mutation.
-func (m *ConversationMessageMutation) CreatedAt() (r time.Time, exists bool) {
-	v := m.created_at
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldCreatedAt returns the old "created_at" field's value of the ConversationMessage entity.
-// If the ConversationMessage object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ConversationMessageMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
-	}
-	return oldValue.CreatedAt, nil
-}
-
-// ResetCreatedAt resets all changes to the "created_at" field.
-func (m *ConversationMessageMutation) ResetCreatedAt() {
-	m.created_at = nil
-}
-
-// ClearConversation clears the "conversation" edge to the Conversation entity.
-func (m *ConversationMessageMutation) ClearConversation() {
-	m.clearedconversation = true
-	m.clearedFields[conversationmessage.FieldConversationID] = struct{}{}
-}
-
-// ConversationCleared reports if the "conversation" edge to the Conversation entity was cleared.
-func (m *ConversationMessageMutation) ConversationCleared() bool {
-	return m.clearedconversation
-}
-
-// ConversationIDs returns the "conversation" edge IDs in the mutation.
-// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
-// ConversationID instead. It exists only for internal usage by the builders.
-func (m *ConversationMessageMutation) ConversationIDs() (ids []int64) {
-	if id := m.conversation; id != nil {
-		ids = append(ids, *id)
-	}
-	return
-}
-
-// ResetConversation resets all changes to the "conversation" edge.
-func (m *ConversationMessageMutation) ResetConversation() {
-	m.conversation = nil
-	m.clearedconversation = false
-}
-
-// ClearSender clears the "sender" edge to the User entity.
-func (m *ConversationMessageMutation) ClearSender() {
-	m.clearedsender = true
-	m.clearedFields[conversationmessage.FieldSenderID] = struct{}{}
-}
-
-// SenderCleared reports if the "sender" edge to the User entity was cleared.
-func (m *ConversationMessageMutation) SenderCleared() bool {
-	return m.SenderIDCleared() || m.clearedsender
-}
-
-// SenderIDs returns the "sender" edge IDs in the mutation.
-// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
-// SenderID instead. It exists only for internal usage by the builders.
-func (m *ConversationMessageMutation) SenderIDs() (ids []int64) {
-	if id := m.sender; id != nil {
-		ids = append(ids, *id)
-	}
-	return
-}
-
-// ResetSender resets all changes to the "sender" edge.
-func (m *ConversationMessageMutation) ResetSender() {
-	m.sender = nil
-	m.clearedsender = false
-}
-
-// Where appends a list predicates to the ConversationMessageMutation builder.
-func (m *ConversationMessageMutation) Where(ps ...predicate.ConversationMessage) {
-	m.predicates = append(m.predicates, ps...)
-}
-
-// WhereP appends storage-level predicates to the ConversationMessageMutation builder. Using this method,
-// users can use type-assertion to append predicates that do not depend on any generated package.
-func (m *ConversationMessageMutation) WhereP(ps ...func(*sql.Selector)) {
-	p := make([]predicate.ConversationMessage, len(ps))
-	for i := range ps {
-		p[i] = ps[i]
-	}
-	m.Where(p...)
-}
-
-// Op returns the operation name.
-func (m *ConversationMessageMutation) Op() Op {
-	return m.op
-}
-
-// SetOp allows setting the mutation operation.
-func (m *ConversationMessageMutation) SetOp(op Op) {
-	m.op = op
-}
-
-// Type returns the node type of this mutation (ConversationMessage).
-func (m *ConversationMessageMutation) Type() string {
-	return m.typ
-}
-
-// Fields returns all fields that were changed during this mutation. Note that in
-// order to get all numeric fields that were incremented/decremented, call
-// AddedFields().
-func (m *ConversationMessageMutation) Fields() []string {
-	fields := make([]string, 0, 8)
-	if m.conversation != nil {
-		fields = append(fields, conversationmessage.FieldConversationID)
-	}
-	if m.sender_type != nil {
-		fields = append(fields, conversationmessage.FieldSenderType)
-	}
-	if m.sender != nil {
-		fields = append(fields, conversationmessage.FieldSenderID)
-	}
-	if m.message_type != nil {
-		fields = append(fields, conversationmessage.FieldMessageType)
-	}
-	if m.content_format != nil {
-		fields = append(fields, conversationmessage.FieldContentFormat)
-	}
-	if m.content != nil {
-		fields = append(fields, conversationmessage.FieldContent)
-	}
-	if m.metadata != nil {
-		fields = append(fields, conversationmessage.FieldMetadata)
-	}
-	if m.created_at != nil {
-		fields = append(fields, conversationmessage.FieldCreatedAt)
-	}
-	return fields
-}
-
-// Field returns the value of a field with the given name. The second boolean
-// return value indicates that this field was not set, or was not defined in the
-// schema.
-func (m *ConversationMessageMutation) Field(name string) (ent.Value, bool) {
-	switch name {
-	case conversationmessage.FieldConversationID:
-		return m.ConversationID()
-	case conversationmessage.FieldSenderType:
-		return m.SenderType()
-	case conversationmessage.FieldSenderID:
-		return m.SenderID()
-	case conversationmessage.FieldMessageType:
-		return m.MessageType()
-	case conversationmessage.FieldContentFormat:
-		return m.ContentFormat()
-	case conversationmessage.FieldContent:
-		return m.Content()
-	case conversationmessage.FieldMetadata:
-		return m.Metadata()
-	case conversationmessage.FieldCreatedAt:
-		return m.CreatedAt()
-	}
-	return nil, false
-}
-
-// OldField returns the old value of the field from the database. An error is
-// returned if the mutation operation is not UpdateOne, or the query to the
-// database failed.
-func (m *ConversationMessageMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
-	switch name {
-	case conversationmessage.FieldConversationID:
-		return m.OldConversationID(ctx)
-	case conversationmessage.FieldSenderType:
-		return m.OldSenderType(ctx)
-	case conversationmessage.FieldSenderID:
-		return m.OldSenderID(ctx)
-	case conversationmessage.FieldMessageType:
-		return m.OldMessageType(ctx)
-	case conversationmessage.FieldContentFormat:
-		return m.OldContentFormat(ctx)
-	case conversationmessage.FieldContent:
-		return m.OldContent(ctx)
-	case conversationmessage.FieldMetadata:
-		return m.OldMetadata(ctx)
-	case conversationmessage.FieldCreatedAt:
-		return m.OldCreatedAt(ctx)
-	}
-	return nil, fmt.Errorf("unknown ConversationMessage field %s", name)
-}
-
-// SetField sets the value of a field with the given name. It returns an error if
-// the field is not defined in the schema, or if the type mismatched the field
-// type.
-func (m *ConversationMessageMutation) SetField(name string, value ent.Value) error {
-	switch name {
-	case conversationmessage.FieldConversationID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetConversationID(v)
-		return nil
-	case conversationmessage.FieldSenderType:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetSenderType(v)
-		return nil
-	case conversationmessage.FieldSenderID:
-		v, ok := value.(int64)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetSenderID(v)
-		return nil
-	case conversationmessage.FieldMessageType:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetMessageType(v)
-		return nil
-	case conversationmessage.FieldContentFormat:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetContentFormat(v)
-		return nil
-	case conversationmessage.FieldContent:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetContent(v)
-		return nil
-	case conversationmessage.FieldMetadata:
-		v, ok := value.(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetMetadata(v)
-		return nil
-	case conversationmessage.FieldCreatedAt:
-		v, ok := value.(time.Time)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetCreatedAt(v)
-		return nil
-	}
-	return fmt.Errorf("unknown ConversationMessage field %s", name)
-}
-
-// AddedFields returns all numeric fields that were incremented/decremented during
-// this mutation.
-func (m *ConversationMessageMutation) AddedFields() []string {
-	var fields []string
-	return fields
-}
-
-// AddedField returns the numeric value that was incremented/decremented on a field
-// with the given name. The second boolean return value indicates that this field
-// was not set, or was not defined in the schema.
-func (m *ConversationMessageMutation) AddedField(name string) (ent.Value, bool) {
-	switch name {
-	}
-	return nil, false
-}
-
-// AddField adds the value to the field with the given name. It returns an error if
-// the field is not defined in the schema, or if the type mismatched the field
-// type.
-func (m *ConversationMessageMutation) AddField(name string, value ent.Value) error {
-	switch name {
-	}
-	return fmt.Errorf("unknown ConversationMessage numeric field %s", name)
-}
-
-// ClearedFields returns all nullable fields that were cleared during this
-// mutation.
-func (m *ConversationMessageMutation) ClearedFields() []string {
-	var fields []string
-	if m.FieldCleared(conversationmessage.FieldSenderID) {
-		fields = append(fields, conversationmessage.FieldSenderID)
-	}
-	if m.FieldCleared(conversationmessage.FieldMetadata) {
-		fields = append(fields, conversationmessage.FieldMetadata)
-	}
-	return fields
-}
-
-// FieldCleared returns a boolean indicating if a field with the given name was
-// cleared in this mutation.
-func (m *ConversationMessageMutation) FieldCleared(name string) bool {
-	_, ok := m.clearedFields[name]
-	return ok
-}
-
-// ClearField clears the value of the field with the given name. It returns an
-// error if the field is not defined in the schema.
-func (m *ConversationMessageMutation) ClearField(name string) error {
-	switch name {
-	case conversationmessage.FieldSenderID:
-		m.ClearSenderID()
-		return nil
-	case conversationmessage.FieldMetadata:
-		m.ClearMetadata()
-		return nil
-	}
-	return fmt.Errorf("unknown ConversationMessage nullable field %s", name)
-}
-
-// ResetField resets all changes in the mutation for the field with the given name.
-// It returns an error if the field is not defined in the schema.
-func (m *ConversationMessageMutation) ResetField(name string) error {
-	switch name {
-	case conversationmessage.FieldConversationID:
-		m.ResetConversationID()
-		return nil
-	case conversationmessage.FieldSenderType:
-		m.ResetSenderType()
-		return nil
-	case conversationmessage.FieldSenderID:
-		m.ResetSenderID()
-		return nil
-	case conversationmessage.FieldMessageType:
-		m.ResetMessageType()
-		return nil
-	case conversationmessage.FieldContentFormat:
-		m.ResetContentFormat()
-		return nil
-	case conversationmessage.FieldContent:
-		m.ResetContent()
-		return nil
-	case conversationmessage.FieldMetadata:
-		m.ResetMetadata()
-		return nil
-	case conversationmessage.FieldCreatedAt:
-		m.ResetCreatedAt()
-		return nil
-	}
-	return fmt.Errorf("unknown ConversationMessage field %s", name)
-}
-
-// AddedEdges returns all edge names that were set/added in this mutation.
-func (m *ConversationMessageMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
-	if m.conversation != nil {
-		edges = append(edges, conversationmessage.EdgeConversation)
-	}
-	if m.sender != nil {
-		edges = append(edges, conversationmessage.EdgeSender)
-	}
-	return edges
-}
-
-// AddedIDs returns all IDs (to other nodes) that were added for the given edge
-// name in this mutation.
-func (m *ConversationMessageMutation) AddedIDs(name string) []ent.Value {
-	switch name {
-	case conversationmessage.EdgeConversation:
-		if id := m.conversation; id != nil {
-			return []ent.Value{*id}
-		}
-	case conversationmessage.EdgeSender:
-		if id := m.sender; id != nil {
-			return []ent.Value{*id}
-		}
-	}
-	return nil
-}
-
-// RemovedEdges returns all edge names that were removed in this mutation.
-func (m *ConversationMessageMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
-	return edges
-}
-
-// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
-// the given name in this mutation.
-func (m *ConversationMessageMutation) RemovedIDs(name string) []ent.Value {
-	return nil
-}
-
-// ClearedEdges returns all edge names that were cleared in this mutation.
-func (m *ConversationMessageMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
-	if m.clearedconversation {
-		edges = append(edges, conversationmessage.EdgeConversation)
-	}
-	if m.clearedsender {
-		edges = append(edges, conversationmessage.EdgeSender)
-	}
-	return edges
-}
-
-// EdgeCleared returns a boolean which indicates if the edge with the given name
-// was cleared in this mutation.
-func (m *ConversationMessageMutation) EdgeCleared(name string) bool {
-	switch name {
-	case conversationmessage.EdgeConversation:
-		return m.clearedconversation
-	case conversationmessage.EdgeSender:
-		return m.clearedsender
-	}
-	return false
-}
-
-// ClearEdge clears the value of the edge with the given name. It returns an error
-// if that edge is not defined in the schema.
-func (m *ConversationMessageMutation) ClearEdge(name string) error {
-	switch name {
-	case conversationmessage.EdgeConversation:
-		m.ClearConversation()
-		return nil
-	case conversationmessage.EdgeSender:
-		m.ClearSender()
-		return nil
-	}
-	return fmt.Errorf("unknown ConversationMessage unique edge %s", name)
-}
-
-// ResetEdge resets all changes to the edge with the given name in this mutation.
-// It returns an error if the edge is not defined in the schema.
-func (m *ConversationMessageMutation) ResetEdge(name string) error {
-	switch name {
-	case conversationmessage.EdgeConversation:
-		m.ResetConversation()
-		return nil
-	case conversationmessage.EdgeSender:
-		m.ResetSender()
-		return nil
-	}
-	return fmt.Errorf("unknown ConversationMessage edge %s", name)
-}
-
 // ErrorPassthroughRuleMutation represents an operation that mutates the ErrorPassthroughRule nodes in the graph.
 type ErrorPassthroughRuleMutation struct {
 	config
@@ -32176,6 +29417,8 @@ type ProxyMutation struct {
 	username        *string
 	password        *string
 	status          *string
+	max_accounts    *int
+	addmax_accounts *int
 	clearedFields   map[string]struct{}
 	accounts        map[int64]struct{}
 	removedaccounts map[int64]struct{}
@@ -32702,6 +29945,62 @@ func (m *ProxyMutation) ResetStatus() {
 	m.status = nil
 }
 
+// SetMaxAccounts sets the "max_accounts" field.
+func (m *ProxyMutation) SetMaxAccounts(i int) {
+	m.max_accounts = &i
+	m.addmax_accounts = nil
+}
+
+// MaxAccounts returns the value of the "max_accounts" field in the mutation.
+func (m *ProxyMutation) MaxAccounts() (r int, exists bool) {
+	v := m.max_accounts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMaxAccounts returns the old "max_accounts" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldMaxAccounts(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMaxAccounts is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMaxAccounts requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMaxAccounts: %w", err)
+	}
+	return oldValue.MaxAccounts, nil
+}
+
+// AddMaxAccounts adds i to the "max_accounts" field.
+func (m *ProxyMutation) AddMaxAccounts(i int) {
+	if m.addmax_accounts != nil {
+		*m.addmax_accounts += i
+	} else {
+		m.addmax_accounts = &i
+	}
+}
+
+// AddedMaxAccounts returns the value that was added to the "max_accounts" field in this mutation.
+func (m *ProxyMutation) AddedMaxAccounts() (r int, exists bool) {
+	v := m.addmax_accounts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMaxAccounts resets all changes to the "max_accounts" field.
+func (m *ProxyMutation) ResetMaxAccounts() {
+	m.max_accounts = nil
+	m.addmax_accounts = nil
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *ProxyMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -32790,7 +30089,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 10)
+	fields := make([]string, 0, 11)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -32821,6 +30120,9 @@ func (m *ProxyMutation) Fields() []string {
 	if m.status != nil {
 		fields = append(fields, proxy.FieldStatus)
 	}
+	if m.max_accounts != nil {
+		fields = append(fields, proxy.FieldMaxAccounts)
+	}
 	return fields
 }
 
@@ -32849,6 +30151,8 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.Password()
 	case proxy.FieldStatus:
 		return m.Status()
+	case proxy.FieldMaxAccounts:
+		return m.MaxAccounts()
 	}
 	return nil, false
 }
@@ -32878,6 +30182,8 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldPassword(ctx)
 	case proxy.FieldStatus:
 		return m.OldStatus(ctx)
+	case proxy.FieldMaxAccounts:
+		return m.OldMaxAccounts(ctx)
 	}
 	return nil, fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -32957,6 +30263,13 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetStatus(v)
 		return nil
+	case proxy.FieldMaxAccounts:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMaxAccounts(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -32968,6 +30281,9 @@ func (m *ProxyMutation) AddedFields() []string {
 	if m.addport != nil {
 		fields = append(fields, proxy.FieldPort)
 	}
+	if m.addmax_accounts != nil {
+		fields = append(fields, proxy.FieldMaxAccounts)
+	}
 	return fields
 }
 
@@ -32978,6 +30294,8 @@ func (m *ProxyMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case proxy.FieldPort:
 		return m.AddedPort()
+	case proxy.FieldMaxAccounts:
+		return m.AddedMaxAccounts()
 	}
 	return nil, false
 }
@@ -32993,6 +30311,13 @@ func (m *ProxyMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPort(v)
+		return nil
+	case proxy.FieldMaxAccounts:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMaxAccounts(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy numeric field %s", name)
@@ -33071,6 +30396,9 @@ func (m *ProxyMutation) ResetField(name string) error {
 		return nil
 	case proxy.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case proxy.FieldMaxAccounts:
+		m.ResetMaxAccounts()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
@@ -53688,110 +51016,101 @@ func (m *UsageLogMutation) ResetEdge(name string) error {
 // UserMutation represents an operation that mutates the User nodes in the graph.
 type UserMutation struct {
 	config
-	op                                Op
-	typ                               string
-	id                                *int64
-	created_at                        *time.Time
-	updated_at                        *time.Time
-	deleted_at                        *time.Time
-	email                             *string
-	password_hash                     *string
-	role                              *string
-	balance                           *float64
-	addbalance                        *float64
-	points_balance                    *float64
-	addpoints_balance                 *float64
-	prefer_points_billing             *bool
-	concurrency                       *int
-	addconcurrency                    *int
-	status                            *string
-	username                          *string
-	notes                             *string
-	totp_secret_encrypted             *string
-	totp_enabled                      *bool
-	totp_enabled_at                   *time.Time
-	signup_source                     *string
-	last_login_at                     *time.Time
-	last_active_at                    *time.Time
-	balance_notify_enabled            *bool
-	balance_notify_threshold_type     *string
-	balance_notify_threshold          *float64
-	addbalance_notify_threshold       *float64
-	balance_notify_extra_emails       *string
-	total_recharged                   *float64
-	addtotal_recharged                *float64
-	rpm_limit                         *int
-	addrpm_limit                      *int
-	clearedFields                     map[string]struct{}
-	api_keys                          map[int64]struct{}
-	removedapi_keys                   map[int64]struct{}
-	clearedapi_keys                   bool
-	redeem_codes                      map[int64]struct{}
-	removedredeem_codes               map[int64]struct{}
-	clearedredeem_codes               bool
-	subscriptions                     map[int64]struct{}
-	removedsubscriptions              map[int64]struct{}
-	clearedsubscriptions              bool
-	assigned_subscriptions            map[int64]struct{}
-	removedassigned_subscriptions     map[int64]struct{}
-	clearedassigned_subscriptions     bool
-	announcement_reads                map[int64]struct{}
-	removedannouncement_reads         map[int64]struct{}
-	clearedannouncement_reads         bool
-	conversations                     map[int64]struct{}
-	removedconversations              map[int64]struct{}
-	clearedconversations              bool
-	assigned_conversations            map[int64]struct{}
-	removedassigned_conversations     map[int64]struct{}
-	clearedassigned_conversations     bool
-	sent_conversation_messages        map[int64]struct{}
-	removedsent_conversation_messages map[int64]struct{}
-	clearedsent_conversation_messages bool
-	support_threads                   map[int64]struct{}
-	removedsupport_threads            map[int64]struct{}
-	clearedsupport_threads            bool
-	assigned_support_threads          map[int64]struct{}
-	removedassigned_support_threads   map[int64]struct{}
-	clearedassigned_support_threads   bool
-	sent_support_messages             map[int64]struct{}
-	removedsent_support_messages      map[int64]struct{}
-	clearedsent_support_messages      bool
-	allowed_groups                    map[int64]struct{}
-	removedallowed_groups             map[int64]struct{}
-	clearedallowed_groups             bool
-	usage_logs                        map[int64]struct{}
-	removedusage_logs                 map[int64]struct{}
-	clearedusage_logs                 bool
-	attribute_values                  map[int64]struct{}
-	removedattribute_values           map[int64]struct{}
-	clearedattribute_values           bool
-	promo_code_usages                 map[int64]struct{}
-	removedpromo_code_usages          map[int64]struct{}
-	clearedpromo_code_usages          bool
-	payment_orders                    map[int64]struct{}
-	removedpayment_orders             map[int64]struct{}
-	clearedpayment_orders             bool
-	shop_orders                       map[int64]struct{}
-	removedshop_orders                map[int64]struct{}
-	clearedshop_orders                bool
-	shop_draw_cycles                  map[int64]struct{}
-	removedshop_draw_cycles           map[int64]struct{}
-	clearedshop_draw_cycles           bool
-	shop_balance_ledger               map[int64]struct{}
-	removedshop_balance_ledger        map[int64]struct{}
-	clearedshop_balance_ledger        bool
-	owned_accounts                    map[int64]struct{}
-	removedowned_accounts             map[int64]struct{}
-	clearedowned_accounts             bool
-	auth_identities                   map[int64]struct{}
-	removedauth_identities            map[int64]struct{}
-	clearedauth_identities            bool
-	pending_auth_sessions             map[int64]struct{}
-	removedpending_auth_sessions      map[int64]struct{}
-	clearedpending_auth_sessions      bool
-	done                              bool
-	oldValue                          func(context.Context) (*User, error)
-	predicates                        []predicate.User
+	op                              Op
+	typ                             string
+	id                              *int64
+	created_at                      *time.Time
+	updated_at                      *time.Time
+	deleted_at                      *time.Time
+	email                           *string
+	password_hash                   *string
+	role                            *string
+	balance                         *float64
+	addbalance                      *float64
+	points_balance                  *float64
+	addpoints_balance               *float64
+	prefer_points_billing           *bool
+	concurrency                     *int
+	addconcurrency                  *int
+	status                          *string
+	username                        *string
+	notes                           *string
+	totp_secret_encrypted           *string
+	totp_enabled                    *bool
+	totp_enabled_at                 *time.Time
+	signup_source                   *string
+	last_login_at                   *time.Time
+	last_active_at                  *time.Time
+	balance_notify_enabled          *bool
+	balance_notify_threshold_type   *string
+	balance_notify_threshold        *float64
+	addbalance_notify_threshold     *float64
+	balance_notify_extra_emails     *string
+	total_recharged                 *float64
+	addtotal_recharged              *float64
+	rpm_limit                       *int
+	addrpm_limit                    *int
+	clearedFields                   map[string]struct{}
+	api_keys                        map[int64]struct{}
+	removedapi_keys                 map[int64]struct{}
+	clearedapi_keys                 bool
+	redeem_codes                    map[int64]struct{}
+	removedredeem_codes             map[int64]struct{}
+	clearedredeem_codes             bool
+	subscriptions                   map[int64]struct{}
+	removedsubscriptions            map[int64]struct{}
+	clearedsubscriptions            bool
+	assigned_subscriptions          map[int64]struct{}
+	removedassigned_subscriptions   map[int64]struct{}
+	clearedassigned_subscriptions   bool
+	announcement_reads              map[int64]struct{}
+	removedannouncement_reads       map[int64]struct{}
+	clearedannouncement_reads       bool
+	support_threads                 map[int64]struct{}
+	removedsupport_threads          map[int64]struct{}
+	clearedsupport_threads          bool
+	assigned_support_threads        map[int64]struct{}
+	removedassigned_support_threads map[int64]struct{}
+	clearedassigned_support_threads bool
+	sent_support_messages           map[int64]struct{}
+	removedsent_support_messages    map[int64]struct{}
+	clearedsent_support_messages    bool
+	allowed_groups                  map[int64]struct{}
+	removedallowed_groups           map[int64]struct{}
+	clearedallowed_groups           bool
+	usage_logs                      map[int64]struct{}
+	removedusage_logs               map[int64]struct{}
+	clearedusage_logs               bool
+	attribute_values                map[int64]struct{}
+	removedattribute_values         map[int64]struct{}
+	clearedattribute_values         bool
+	promo_code_usages               map[int64]struct{}
+	removedpromo_code_usages        map[int64]struct{}
+	clearedpromo_code_usages        bool
+	payment_orders                  map[int64]struct{}
+	removedpayment_orders           map[int64]struct{}
+	clearedpayment_orders           bool
+	shop_orders                     map[int64]struct{}
+	removedshop_orders              map[int64]struct{}
+	clearedshop_orders              bool
+	shop_draw_cycles                map[int64]struct{}
+	removedshop_draw_cycles         map[int64]struct{}
+	clearedshop_draw_cycles         bool
+	shop_balance_ledger             map[int64]struct{}
+	removedshop_balance_ledger      map[int64]struct{}
+	clearedshop_balance_ledger      bool
+	owned_accounts                  map[int64]struct{}
+	removedowned_accounts           map[int64]struct{}
+	clearedowned_accounts           bool
+	auth_identities                 map[int64]struct{}
+	removedauth_identities          map[int64]struct{}
+	clearedauth_identities          bool
+	pending_auth_sessions           map[int64]struct{}
+	removedpending_auth_sessions    map[int64]struct{}
+	clearedpending_auth_sessions    bool
+	done                            bool
+	oldValue                        func(context.Context) (*User, error)
+	predicates                      []predicate.User
 }
 
 var _ ent.Mutation = (*UserMutation)(nil)
@@ -55261,168 +52580,6 @@ func (m *UserMutation) ResetAnnouncementReads() {
 	m.removedannouncement_reads = nil
 }
 
-// AddConversationIDs adds the "conversations" edge to the Conversation entity by ids.
-func (m *UserMutation) AddConversationIDs(ids ...int64) {
-	if m.conversations == nil {
-		m.conversations = make(map[int64]struct{})
-	}
-	for i := range ids {
-		m.conversations[ids[i]] = struct{}{}
-	}
-}
-
-// ClearConversations clears the "conversations" edge to the Conversation entity.
-func (m *UserMutation) ClearConversations() {
-	m.clearedconversations = true
-}
-
-// ConversationsCleared reports if the "conversations" edge to the Conversation entity was cleared.
-func (m *UserMutation) ConversationsCleared() bool {
-	return m.clearedconversations
-}
-
-// RemoveConversationIDs removes the "conversations" edge to the Conversation entity by IDs.
-func (m *UserMutation) RemoveConversationIDs(ids ...int64) {
-	if m.removedconversations == nil {
-		m.removedconversations = make(map[int64]struct{})
-	}
-	for i := range ids {
-		delete(m.conversations, ids[i])
-		m.removedconversations[ids[i]] = struct{}{}
-	}
-}
-
-// RemovedConversations returns the removed IDs of the "conversations" edge to the Conversation entity.
-func (m *UserMutation) RemovedConversationsIDs() (ids []int64) {
-	for id := range m.removedconversations {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// ConversationsIDs returns the "conversations" edge IDs in the mutation.
-func (m *UserMutation) ConversationsIDs() (ids []int64) {
-	for id := range m.conversations {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// ResetConversations resets all changes to the "conversations" edge.
-func (m *UserMutation) ResetConversations() {
-	m.conversations = nil
-	m.clearedconversations = false
-	m.removedconversations = nil
-}
-
-// AddAssignedConversationIDs adds the "assigned_conversations" edge to the Conversation entity by ids.
-func (m *UserMutation) AddAssignedConversationIDs(ids ...int64) {
-	if m.assigned_conversations == nil {
-		m.assigned_conversations = make(map[int64]struct{})
-	}
-	for i := range ids {
-		m.assigned_conversations[ids[i]] = struct{}{}
-	}
-}
-
-// ClearAssignedConversations clears the "assigned_conversations" edge to the Conversation entity.
-func (m *UserMutation) ClearAssignedConversations() {
-	m.clearedassigned_conversations = true
-}
-
-// AssignedConversationsCleared reports if the "assigned_conversations" edge to the Conversation entity was cleared.
-func (m *UserMutation) AssignedConversationsCleared() bool {
-	return m.clearedassigned_conversations
-}
-
-// RemoveAssignedConversationIDs removes the "assigned_conversations" edge to the Conversation entity by IDs.
-func (m *UserMutation) RemoveAssignedConversationIDs(ids ...int64) {
-	if m.removedassigned_conversations == nil {
-		m.removedassigned_conversations = make(map[int64]struct{})
-	}
-	for i := range ids {
-		delete(m.assigned_conversations, ids[i])
-		m.removedassigned_conversations[ids[i]] = struct{}{}
-	}
-}
-
-// RemovedAssignedConversations returns the removed IDs of the "assigned_conversations" edge to the Conversation entity.
-func (m *UserMutation) RemovedAssignedConversationsIDs() (ids []int64) {
-	for id := range m.removedassigned_conversations {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// AssignedConversationsIDs returns the "assigned_conversations" edge IDs in the mutation.
-func (m *UserMutation) AssignedConversationsIDs() (ids []int64) {
-	for id := range m.assigned_conversations {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// ResetAssignedConversations resets all changes to the "assigned_conversations" edge.
-func (m *UserMutation) ResetAssignedConversations() {
-	m.assigned_conversations = nil
-	m.clearedassigned_conversations = false
-	m.removedassigned_conversations = nil
-}
-
-// AddSentConversationMessageIDs adds the "sent_conversation_messages" edge to the ConversationMessage entity by ids.
-func (m *UserMutation) AddSentConversationMessageIDs(ids ...int64) {
-	if m.sent_conversation_messages == nil {
-		m.sent_conversation_messages = make(map[int64]struct{})
-	}
-	for i := range ids {
-		m.sent_conversation_messages[ids[i]] = struct{}{}
-	}
-}
-
-// ClearSentConversationMessages clears the "sent_conversation_messages" edge to the ConversationMessage entity.
-func (m *UserMutation) ClearSentConversationMessages() {
-	m.clearedsent_conversation_messages = true
-}
-
-// SentConversationMessagesCleared reports if the "sent_conversation_messages" edge to the ConversationMessage entity was cleared.
-func (m *UserMutation) SentConversationMessagesCleared() bool {
-	return m.clearedsent_conversation_messages
-}
-
-// RemoveSentConversationMessageIDs removes the "sent_conversation_messages" edge to the ConversationMessage entity by IDs.
-func (m *UserMutation) RemoveSentConversationMessageIDs(ids ...int64) {
-	if m.removedsent_conversation_messages == nil {
-		m.removedsent_conversation_messages = make(map[int64]struct{})
-	}
-	for i := range ids {
-		delete(m.sent_conversation_messages, ids[i])
-		m.removedsent_conversation_messages[ids[i]] = struct{}{}
-	}
-}
-
-// RemovedSentConversationMessages returns the removed IDs of the "sent_conversation_messages" edge to the ConversationMessage entity.
-func (m *UserMutation) RemovedSentConversationMessagesIDs() (ids []int64) {
-	for id := range m.removedsent_conversation_messages {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// SentConversationMessagesIDs returns the "sent_conversation_messages" edge IDs in the mutation.
-func (m *UserMutation) SentConversationMessagesIDs() (ids []int64) {
-	for id := range m.sent_conversation_messages {
-		ids = append(ids, id)
-	}
-	return
-}
-
-// ResetSentConversationMessages resets all changes to the "sent_conversation_messages" edge.
-func (m *UserMutation) ResetSentConversationMessages() {
-	m.sent_conversation_messages = nil
-	m.clearedsent_conversation_messages = false
-	m.removedsent_conversation_messages = nil
-}
-
 // AddSupportThreadIDs adds the "support_threads" edge to the SupportThread entity by ids.
 func (m *UserMutation) AddSupportThreadIDs(ids ...int64) {
 	if m.support_threads == nil {
@@ -56834,7 +53991,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 22)
+	edges := make([]string, 0, 19)
 	if m.api_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -56849,15 +54006,6 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.announcement_reads != nil {
 		edges = append(edges, user.EdgeAnnouncementReads)
-	}
-	if m.conversations != nil {
-		edges = append(edges, user.EdgeConversations)
-	}
-	if m.assigned_conversations != nil {
-		edges = append(edges, user.EdgeAssignedConversations)
-	}
-	if m.sent_conversation_messages != nil {
-		edges = append(edges, user.EdgeSentConversationMessages)
 	}
 	if m.support_threads != nil {
 		edges = append(edges, user.EdgeSupportThreads)
@@ -56935,24 +54083,6 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 	case user.EdgeAnnouncementReads:
 		ids := make([]ent.Value, 0, len(m.announcement_reads))
 		for id := range m.announcement_reads {
-			ids = append(ids, id)
-		}
-		return ids
-	case user.EdgeConversations:
-		ids := make([]ent.Value, 0, len(m.conversations))
-		for id := range m.conversations {
-			ids = append(ids, id)
-		}
-		return ids
-	case user.EdgeAssignedConversations:
-		ids := make([]ent.Value, 0, len(m.assigned_conversations))
-		for id := range m.assigned_conversations {
-			ids = append(ids, id)
-		}
-		return ids
-	case user.EdgeSentConversationMessages:
-		ids := make([]ent.Value, 0, len(m.sent_conversation_messages))
-		for id := range m.sent_conversation_messages {
 			ids = append(ids, id)
 		}
 		return ids
@@ -57046,7 +54176,7 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 22)
+	edges := make([]string, 0, 19)
 	if m.removedapi_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -57061,15 +54191,6 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedannouncement_reads != nil {
 		edges = append(edges, user.EdgeAnnouncementReads)
-	}
-	if m.removedconversations != nil {
-		edges = append(edges, user.EdgeConversations)
-	}
-	if m.removedassigned_conversations != nil {
-		edges = append(edges, user.EdgeAssignedConversations)
-	}
-	if m.removedsent_conversation_messages != nil {
-		edges = append(edges, user.EdgeSentConversationMessages)
 	}
 	if m.removedsupport_threads != nil {
 		edges = append(edges, user.EdgeSupportThreads)
@@ -57147,24 +54268,6 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 	case user.EdgeAnnouncementReads:
 		ids := make([]ent.Value, 0, len(m.removedannouncement_reads))
 		for id := range m.removedannouncement_reads {
-			ids = append(ids, id)
-		}
-		return ids
-	case user.EdgeConversations:
-		ids := make([]ent.Value, 0, len(m.removedconversations))
-		for id := range m.removedconversations {
-			ids = append(ids, id)
-		}
-		return ids
-	case user.EdgeAssignedConversations:
-		ids := make([]ent.Value, 0, len(m.removedassigned_conversations))
-		for id := range m.removedassigned_conversations {
-			ids = append(ids, id)
-		}
-		return ids
-	case user.EdgeSentConversationMessages:
-		ids := make([]ent.Value, 0, len(m.removedsent_conversation_messages))
-		for id := range m.removedsent_conversation_messages {
 			ids = append(ids, id)
 		}
 		return ids
@@ -57258,7 +54361,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 22)
+	edges := make([]string, 0, 19)
 	if m.clearedapi_keys {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -57273,15 +54376,6 @@ func (m *UserMutation) ClearedEdges() []string {
 	}
 	if m.clearedannouncement_reads {
 		edges = append(edges, user.EdgeAnnouncementReads)
-	}
-	if m.clearedconversations {
-		edges = append(edges, user.EdgeConversations)
-	}
-	if m.clearedassigned_conversations {
-		edges = append(edges, user.EdgeAssignedConversations)
-	}
-	if m.clearedsent_conversation_messages {
-		edges = append(edges, user.EdgeSentConversationMessages)
 	}
 	if m.clearedsupport_threads {
 		edges = append(edges, user.EdgeSupportThreads)
@@ -57342,12 +54436,6 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedassigned_subscriptions
 	case user.EdgeAnnouncementReads:
 		return m.clearedannouncement_reads
-	case user.EdgeConversations:
-		return m.clearedconversations
-	case user.EdgeAssignedConversations:
-		return m.clearedassigned_conversations
-	case user.EdgeSentConversationMessages:
-		return m.clearedsent_conversation_messages
 	case user.EdgeSupportThreads:
 		return m.clearedsupport_threads
 	case user.EdgeAssignedSupportThreads:
@@ -57406,15 +54494,6 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeAnnouncementReads:
 		m.ResetAnnouncementReads()
-		return nil
-	case user.EdgeConversations:
-		m.ResetConversations()
-		return nil
-	case user.EdgeAssignedConversations:
-		m.ResetAssignedConversations()
-		return nil
-	case user.EdgeSentConversationMessages:
-		m.ResetSentConversationMessages()
 		return nil
 	case user.EdgeSupportThreads:
 		m.ResetSupportThreads()

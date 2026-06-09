@@ -3003,6 +3003,15 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	if account != nil && account.Type == AccountTypeOAuth {
+		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
+		if err != nil {
+			return nil, err
+		}
+		if normalized {
+			body = normalizedBody
+		}
+		reqStream = gjson.GetBytes(body, "stream").Bool()
+
 		if rejectReason := detectOpenAIPassthroughInstructionsRejectReason(reqModel, body); rejectReason != "" {
 			rejectMsg := "OpenAI codex passthrough requires a non-empty instructions field"
 			setOpsUpstreamError(c, http.StatusForbidden, rejectMsg, "")
@@ -3025,15 +3034,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			})
 			return nil, fmt.Errorf("openai passthrough rejected before upstream: %s", rejectReason)
 		}
-
-		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
-		if err != nil {
-			return nil, err
-		}
-		if normalized {
-			body = normalizedBody
-		}
-		reqStream = gjson.GetBytes(body, "stream").Bool()
+	}
+	if finalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String()); finalModel != "" && finalModel != reqModel {
+		upstreamPassthroughModel = finalModel
 	}
 
 	sanitizedBody, sanitized, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
@@ -5977,9 +5980,9 @@ func extractOpenAIModelFromRequestBody(body []byte) string {
 	return strings.TrimSpace(gjson.GetBytes(body, "model").String())
 }
 
-// normalizeOpenAIPassthroughOAuthBody 灏嗛€忎紶 OAuth 璇锋眰浣撴敹鏁涗负鏃ч摼璺叧閿涓猴細
-// 1) 鍒犻櫎 ChatGPT internal API 涓嶆敮鎸佺殑椤跺眰 Responses 鍙傛暟
-// 2) store=false 3) 闈?compact 淇濇寔 stream=true锛沜ompact 寮哄埗 stream=false
+// normalizeOpenAIPassthroughOAuthBody normalizes passthrough OAuth request bodies for legacy routing:
+// 1) remove top-level Responses parameters unsupported by ChatGPT internal API.
+// 2) set store=false; non-compact keeps stream=true, compact forces stream=false.
 func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
@@ -6040,6 +6043,9 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 }
 
 func detectOpenAIPassthroughInstructionsRejectReason(reqModel string, body []byte) string {
+	if codexModelLookupKey(reqModel) == "codex-auto-review" {
+		return ""
+	}
 	model := strings.ToLower(strings.TrimSpace(reqModel))
 	if !strings.Contains(model, "codex") {
 		return ""

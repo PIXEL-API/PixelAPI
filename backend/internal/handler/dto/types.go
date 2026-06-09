@@ -188,6 +188,7 @@ type Account struct {
 	RateMultiplier     float64         `json:"rate_multiplier"`
 	Status             string          `json:"status"`
 	ErrorMessage       string          `json:"error_message"`
+	ErrorSince         *time.Time      `json:"error_since"`
 	LastUsedAt         *time.Time      `json:"last_used_at"`
 	ExpiresAt          *int64          `json:"expires_at"`
 	AutoPauseOnExpired bool            `json:"auto_pause_on_expired"`
@@ -292,16 +293,17 @@ type AccountGroup struct {
 }
 
 type Proxy struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Protocol  string    `json:"protocol"`
-	Host      string    `json:"host"`
-	Port      int       `json:"port"`
-	Username  string    `json:"username"`
-	Password  string    `json:"-"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Protocol    string    `json:"protocol"`
+	Host        string    `json:"host"`
+	Port        int       `json:"port"`
+	Username    string    `json:"username"`
+	Password    string    `json:"-"`
+	Status      string    `json:"status"`
+	MaxAccounts int       `json:"max_accounts"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type ProxyWithAccountCount struct {

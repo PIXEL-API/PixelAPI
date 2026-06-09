@@ -472,7 +472,7 @@ func TestAccountServiceResolveOwnedPublicShareGroup(t *testing.T) {
 	require.Equal(t, int64(11), group.ID)
 }
 
-func TestAccountServiceResolveOwnedPublicShareGroupAllowsHigherLevelFallbackToLowerPool(t *testing.T) {
+func TestAccountServiceResolveOwnedPublicShareGroupRejectsHigherLevelFallbackToLowerPool(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
@@ -481,13 +481,12 @@ func TestAccountServiceResolveOwnedPublicShareGroupAllowsHigherLevelFallbackToLo
 		},
 	}
 
-	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPro})
+	_, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPro})
 
-	require.NoError(t, err)
-	require.Equal(t, int64(10), group.ID)
+	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
 }
 
-func TestAccountServiceResolveOwnedPublicShareGroupTreatsTeamPoolAsPlus(t *testing.T) {
+func TestAccountServiceResolveOwnedPublicShareGroupKeepsTeamPoolStrict(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{
 			groups: []Group{
@@ -496,10 +495,13 @@ func TestAccountServiceResolveOwnedPublicShareGroupTreatsTeamPoolAsPlus(t *testi
 		},
 	}
 
-	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPlus})
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelTeam})
 
 	require.NoError(t, err)
 	require.Equal(t, int64(12), group.ID)
+
+	_, err = svc.resolveOwnedPublicShareGroup(context.Background(), &Account{Platform: PlatformOpenAI, AccountLevel: AccountLevelPlus})
+	require.ErrorIs(t, err, ErrOwnedAccountPublicPoolUnavailable)
 }
 
 func TestAccountServiceResolveOwnedPublicShareGroupRejectsHigherPoolForLowerLevel(t *testing.T) {
@@ -1123,16 +1125,72 @@ func TestAccountServiceManagedGroupIDsKeepsApprovedPublicAccountInPublicPool(t *
 }
 
 func TestAccountServiceDuplicateIdentityKeys(t *testing.T) {
-	t.Run("openai uses stable account and user identity", func(t *testing.T) {
+	t.Run("openai uses organization and user identity when available", func(t *testing.T) {
 		keys := accountDuplicateIdentityKeys(&Account{
 			Platform:    PlatformOpenAI,
 			Type:        AccountTypeOAuth,
 			Credentials: map[string]any{"chatgpt_account_id": "acct", "chatgpt_user_id": "user", "organization_id": "org"},
 		})
 
-		require.Contains(t, keys, ownedAccountDuplicateKey{Name: "openai.chatgpt_account_id", Value: "acct"})
-		require.Contains(t, keys, ownedAccountDuplicateKey{Name: "openai.chatgpt_user_id", Value: "user"})
-		require.NotContains(t, keys, ownedAccountDuplicateKey{Name: "openai.organization_id", Value: "org"})
+		require.Equal(t, []ownedAccountDuplicateKey{{Name: "openai.org_user", Value: "org|user"}}, keys)
+	})
+
+	t.Run("openai team members can share parent account id", func(t *testing.T) {
+		err := ensureOwnedAccountBatchNotDuplicate([]*Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"chatgpt_account_id": "parent-acct", "chatgpt_user_id": "member-a", "organization_id": "team-org"},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"chatgpt_account_id": "parent-acct", "chatgpt_user_id": "member-b", "organization_id": "team-org"},
+			},
+		})
+
+		require.NoError(t, err)
+	})
+
+	t.Run("openai same team member is duplicate", func(t *testing.T) {
+		err := ensureOwnedAccountBatchNotDuplicate([]*Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"chatgpt_account_id": "parent-acct", "chatgpt_user_id": "member-a", "organization_id": "team-org"},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"chatgpt_account_id": "parent-acct", "chatgpt_user_id": "member-a", "organization_id": "team-org"},
+			},
+		})
+
+		require.ErrorIs(t, err, ErrOwnedAccountAlreadyExists)
+	})
+
+	t.Run("openai legacy personal identity still uses user id", func(t *testing.T) {
+		keys := accountDuplicateIdentityKeys(&Account{
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"chatgpt_account_id": "acct", "chatgpt_user_id": "user"},
+		})
+
+		require.Equal(t, []ownedAccountDuplicateKey{{Name: "openai.chatgpt_user_id", Value: "user"}}, keys)
+	})
+
+	t.Run("openai organization alone falls back to email", func(t *testing.T) {
+		keys := accountDuplicateIdentityKeys(&Account{
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Credentials: map[string]any{"organization_id": "org", "email": "USER@Example.COM"},
+		})
+
+		require.Equal(t, []ownedAccountDuplicateKey{{Name: "openai.email", Value: "user@example.com"}}, keys)
 	})
 
 	t.Run("anthropic combines org and account uuid", func(t *testing.T) {
@@ -1239,15 +1297,27 @@ func TestAccountQuotaDashboardWindowCapacityUsesOnlySchedulableAccounts(t *testi
 			Schedulable:      true,
 			RateLimitResetAt: &limitedUntil,
 		},
+		{
+			ID:          6,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Extra: map[string]any{
+				"codex_5h_used_percent": 100.0,
+				"codex_5h_reset_at":     usageReset,
+			},
+		},
 	} {
 		builder.addAccount(account)
 	}
 
 	dashboard := builder.finalize()
 
-	require.Equal(t, 5, dashboard.Totals.AccountCount)
+	require.Equal(t, 6, dashboard.Totals.AccountCount)
 	require.Equal(t, 1, dashboard.Totals.SchedulableAccountCount)
 	require.Equal(t, 1, dashboard.Totals.RateLimitedAccountCount)
+	require.Equal(t, 1, dashboard.Totals.CodexQuotaProtectedCount)
 	require.Equal(t, 2, dashboard.Totals.ErrorAccountCount)
 	require.Equal(t, 1, dashboard.Totals.DisabledAccountCount)
 	require.Len(t, dashboard.Totals.UsageWindows, 2)

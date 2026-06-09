@@ -1146,8 +1146,20 @@ func accountDuplicateIdentityKeys(account *Account) []ownedAccountDuplicateKey {
 		if account.Type != AccountTypeOAuth {
 			return nil
 		}
-		add("openai.chatgpt_account_id", account.GetChatGPTAccountID())
-		add("openai.chatgpt_user_id", account.GetChatGPTUserID())
+		orgID := strings.ToLower(strings.TrimSpace(account.GetOpenAIOrganizationID()))
+		chatGPTUserID := account.GetChatGPTUserID()
+		chatGPTAccountID := account.GetChatGPTAccountID()
+		if orgID != "" {
+			if strings.TrimSpace(chatGPTUserID) != "" {
+				add("openai.org_user", orgID+"|"+strings.TrimSpace(chatGPTUserID))
+			} else if strings.TrimSpace(chatGPTAccountID) != "" {
+				add("openai.org_account", orgID+"|"+strings.TrimSpace(chatGPTAccountID))
+			}
+		} else if strings.TrimSpace(chatGPTUserID) != "" {
+			add("openai.chatgpt_user_id", chatGPTUserID)
+		} else {
+			add("openai.chatgpt_account_id", chatGPTAccountID)
+		}
 		if len(keys) == 0 {
 			addFolded("openai.email", account.GetCredential("email"))
 		}

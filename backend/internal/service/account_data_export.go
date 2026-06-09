@@ -11,14 +11,15 @@ type AccountDataPayload struct {
 }
 
 type AccountDataProxy struct {
-	ProxyKey string `json:"proxy_key"`
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	Status   string `json:"status"`
+	ProxyKey    string `json:"proxy_key"`
+	Name        string `json:"name"`
+	Protocol    string `json:"protocol"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username,omitempty"`
+	Password    string `json:"password,omitempty"`
+	Status      string `json:"status"`
+	MaxAccounts *int   `json:"max_accounts,omitempty"`
 }
 
 type AccountDataAccount struct {
@@ -53,16 +54,18 @@ func BuildAccountDataPayload(accounts []Account, proxies []Proxy, proxyKeyBuilde
 	for i := range proxies {
 		p := proxies[i]
 		key := proxyKeyBuilder(p.Protocol, p.Host, p.Port, p.Username, p.Password)
+		maxAccounts := p.MaxAccounts
 		proxyKeyByID[p.ID] = key
 		dataProxies = append(dataProxies, AccountDataProxy{
-			ProxyKey: key,
-			Name:     p.Name,
-			Protocol: p.Protocol,
-			Host:     p.Host,
-			Port:     p.Port,
-			Username: p.Username,
-			Password: p.Password,
-			Status:   p.Status,
+			ProxyKey:    key,
+			Name:        p.Name,
+			Protocol:    p.Protocol,
+			Host:        p.Host,
+			Port:        p.Port,
+			Username:    p.Username,
+			Password:    p.Password,
+			Status:      p.Status,
+			MaxAccounts: &maxAccounts,
 		})
 	}
 

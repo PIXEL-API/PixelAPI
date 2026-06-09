@@ -239,16 +239,34 @@ func (r *conversationRepository) ListForUser(ctx context.Context, userID int64, 
 	return conversations, paginationResultFromTotal(int64(total), params), nil
 }
 
-func (r *conversationRepository) ListMessages(ctx context.Context, conversationID int64, params pagination.PaginationParams) ([]service.ConversationMessage, *pagination.PaginationResult, error) {
+func (r *conversationRepository) ListMessages(ctx context.Context, conversationID int64, params pagination.PaginationParams, filters service.ConversationMessageListFilters) ([]service.ConversationMessage, *pagination.PaginationResult, error) {
 	if conversationID <= 0 {
+		return nil, nil, service.ErrConversationInputRequired
+	}
+	if filters.BeforeID < 0 {
 		return nil, nil, service.ErrConversationInputRequired
 	}
 	q := r.client.SupportMessage.Query().
 		Where(supportmessage.ThreadIDEQ(conversationID))
+	if filters.BeforeID > 0 {
+		q = q.Where(supportmessage.IDLT(filters.BeforeID))
+	}
 
 	total, err := q.Clone().Count(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if filters.Latest || filters.BeforeID > 0 {
+		items, err := q.
+			Limit(params.Limit()).
+			Order(dbent.Desc(supportmessage.FieldID)).
+			All(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		reverseSupportMessages(items)
+		return supportMessageEntitiesToService(items), paginationResultFromTotal(int64(total), params), nil
 	}
 
 	items, err := q.
@@ -649,6 +667,12 @@ func supportMessageEntitiesToService(models []*dbent.SupportMessage) []service.C
 		}
 	}
 	return out
+}
+
+func reverseSupportMessages(items []*dbent.SupportMessage) {
+	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+		items[left], items[right] = items[right], items[left]
+	}
 }
 
 func applySupportMessageEntityToService(dst *service.ConversationMessage, src *dbent.SupportMessage) {

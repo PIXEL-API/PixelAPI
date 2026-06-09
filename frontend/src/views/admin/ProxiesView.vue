@@ -202,16 +202,18 @@
             <button
               v-if="(value || 0) > 0"
               type="button"
-              class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-primary-700 hover:bg-gray-200 dark:bg-dark-600 dark:text-primary-300 dark:hover:bg-dark-500"
+              :class="proxyAccountUsageClass(row)"
+              :title="proxyAccountUsageTitle(row)"
               @click="openAccountsModal(row)"
             >
-              {{ t('admin.groups.accountsCount', { count: value || 0 }) }}
+              {{ formatProxyAccountUsage(row) }}
             </button>
             <span
               v-else
-              class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-800 dark:bg-dark-600 dark:text-gray-300"
+              :class="proxyAccountUsageClass(row)"
+              :title="proxyAccountUsageTitle(row)"
             >
-              {{ t('admin.groups.accountsCount', { count: 0 }) }}
+              {{ formatProxyAccountUsage(row) }}
             </span>
           </template>
 
@@ -470,6 +472,18 @@
             </button>
           </div>
         </div>
+        <div>
+          <label class="input-label">{{ t('admin.proxies.maxAccounts') }}</label>
+          <input
+            v-model.number="createForm.max_accounts"
+            type="number"
+            min="0"
+            step="1"
+            class="input"
+            :placeholder="t('admin.proxies.maxAccountsPlaceholder')"
+          />
+          <p class="input-hint mt-2">{{ t('admin.proxies.maxAccountsHint') }}</p>
+        </div>
 
       </form>
 
@@ -663,6 +677,18 @@
               <Icon :name="editPasswordVisible ? 'eyeOff' : 'eye'" size="md" />
             </button>
           </div>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.proxies.maxAccounts') }}</label>
+          <input
+            v-model.number="editForm.max_accounts"
+            type="number"
+            min="0"
+            step="1"
+            class="input"
+            :placeholder="t('admin.proxies.maxAccountsPlaceholder')"
+          />
+          <p class="input-hint mt-2">{{ t('admin.proxies.maxAccountsHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.status') }}</label>
@@ -1029,7 +1055,8 @@ const createForm = reactive({
   host: '',
   port: 8080,
   username: '',
-  password: ''
+  password: '',
+  max_accounts: 0
 })
 
 const editForm = reactive({
@@ -1039,6 +1066,7 @@ const editForm = reactive({
   port: 8080,
   username: '',
   password: '',
+  max_accounts: 0,
   status: 'active' as 'active' | 'inactive'
 })
 
@@ -1071,6 +1099,66 @@ const buildProxyQueryFilters = () => ({
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })
+
+const normalizeMaxAccounts = (value: unknown): number => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return Number.NaN
+  return Math.trunc(numeric)
+}
+
+const validateMaxAccounts = (value: unknown, currentCount = 0): number | null => {
+  const maxAccounts = normalizeMaxAccounts(value)
+  if (!Number.isInteger(maxAccounts) || maxAccounts < 0) {
+    appStore.showError(t('admin.proxies.maxAccountsInvalid'))
+    return null
+  }
+  if (maxAccounts > 0 && currentCount > maxAccounts) {
+    appStore.showError(
+      t('admin.proxies.maxAccountsBelowCurrent', { current: currentCount })
+    )
+    return null
+  }
+  return maxAccounts
+}
+
+const proxyMaxAccounts = (proxy: Proxy): number => proxy.max_accounts || 0
+
+const formatProxyAccountUsage = (proxy: Proxy) => {
+  const count = proxy.account_count || 0
+  const maxAccounts = proxyMaxAccounts(proxy)
+  if (maxAccounts <= 0) {
+    return t('admin.proxies.accountUsageUnlimited', { count })
+  }
+  return t('admin.proxies.accountUsageLimited', { count, max: maxAccounts })
+}
+
+const proxyAccountUsageClass = (proxy: Proxy) => {
+  const count = proxy.account_count || 0
+  const maxAccounts = proxyMaxAccounts(proxy)
+  const base = 'inline-flex items-center rounded px-2 py-0.5 text-xs font-medium'
+  if (maxAccounts > 0 && count > maxAccounts) {
+    return `${base} bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/40`
+  }
+  if (maxAccounts > 0 && count === maxAccounts) {
+    return `${base} bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/40`
+  }
+  return `${base} bg-gray-100 text-primary-700 hover:bg-gray-200 dark:bg-dark-600 dark:text-primary-300 dark:hover:bg-dark-500`
+}
+
+const proxyAccountUsageTitle = (proxy: Proxy) => {
+  const count = proxy.account_count || 0
+  const maxAccounts = proxyMaxAccounts(proxy)
+  if (maxAccounts <= 0) {
+    return t('admin.proxies.accountUsageUnlimitedTitle', { count })
+  }
+  if (count > maxAccounts) {
+    return t('admin.proxies.accountUsageExceededTitle', { count, max: maxAccounts })
+  }
+  if (count === maxAccounts) {
+    return t('admin.proxies.accountUsageFullTitle', { count, max: maxAccounts })
+  }
+  return t('admin.proxies.accountUsageLimitedTitle', { count, max: maxAccounts })
+}
 
 const loadProxies = async () => {
   if (abortController) {
@@ -1142,6 +1230,7 @@ const closeCreateModal = () => {
   createForm.port = 8080
   createForm.username = ''
   createForm.password = ''
+  createForm.max_accounts = 0
   createPasswordVisible.value = false
   batchInput.value = ''
   batchParseResult.total = 0
@@ -1258,6 +1347,8 @@ const handleCreateProxy = async () => {
     appStore.showError(t('admin.proxies.portInvalid'))
     return
   }
+  const maxAccounts = validateMaxAccounts(createForm.max_accounts)
+  if (maxAccounts === null) return
   submitting.value = true
   try {
     await adminAPI.proxies.create({
@@ -1266,7 +1357,8 @@ const handleCreateProxy = async () => {
       host: createForm.host.trim(),
       port: createForm.port,
       username: createForm.username.trim() || null,
-      password: createForm.password.trim() || null
+      password: createForm.password.trim() || null,
+      max_accounts: maxAccounts
     })
     appStore.showSuccess(t('admin.proxies.proxyCreated'))
     closeCreateModal()
@@ -1287,6 +1379,7 @@ const handleEdit = (proxy: Proxy) => {
   editForm.port = proxy.port
   editForm.username = proxy.username || ''
   editForm.password = proxy.password || ''
+  editForm.max_accounts = proxy.max_accounts || 0
   editForm.status = proxy.status
   editPasswordVisible.value = false
   editPasswordDirty.value = false
@@ -1314,6 +1407,11 @@ const handleUpdateProxy = async () => {
     appStore.showError(t('admin.proxies.portInvalid'))
     return
   }
+  const maxAccounts = validateMaxAccounts(
+    editForm.max_accounts,
+    editingProxy.value.account_count || 0
+  )
+  if (maxAccounts === null) return
 
   submitting.value = true
   try {
@@ -1323,6 +1421,7 @@ const handleUpdateProxy = async () => {
       host: editForm.host.trim(),
       port: editForm.port,
       username: editForm.username.trim() || null,
+      max_accounts: maxAccounts,
       status: editForm.status
     }
 

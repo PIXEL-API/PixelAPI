@@ -8,16 +8,18 @@ import (
 )
 
 type Proxy struct {
-	ID        int64
-	Name      string
-	Protocol  string
-	Host      string
-	Port      int
-	Username  string
-	Password  string
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID       int64
+	Name     string
+	Protocol string
+	Host     string
+	Port     int
+	Username string
+	Password string
+	Status   string
+	// MaxAccounts controls how many accounts may bind to this proxy. 0 means unlimited.
+	MaxAccounts int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 func (p *Proxy) IsActive() bool {

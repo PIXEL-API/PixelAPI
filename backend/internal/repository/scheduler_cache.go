@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -24,6 +25,7 @@ const (
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
+	defaultSchedulerSnapshotLocalCacheTTL  = 5 * time.Second
 
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
@@ -91,6 +93,16 @@ type schedulerCache struct {
 	rdb            *redis.Client
 	mgetChunkSize  int
 	writeChunkSize int
+	localMu        sync.RWMutex
+	localSnapshots map[string]schedulerLocalSnapshot
+	localBuckets   map[int64]map[string]struct{}
+	localTTL       time.Duration
+}
+
+type schedulerLocalSnapshot struct {
+	activeVersion string
+	expiresAt     time.Time
+	accounts      []*service.Account
 }
 
 func NewSchedulerCache(rdb *redis.Client) service.SchedulerCache {
@@ -108,6 +120,9 @@ func newSchedulerCacheWithChunkSizes(rdb *redis.Client, mgetChunkSize, writeChun
 		rdb:            rdb,
 		mgetChunkSize:  mgetChunkSize,
 		writeChunkSize: writeChunkSize,
+		localSnapshots: make(map[string]schedulerLocalSnapshot),
+		localBuckets:   make(map[int64]map[string]struct{}),
+		localTTL:       defaultSchedulerSnapshotLocalCacheTTL,
 	}
 }
 
@@ -131,6 +146,11 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 	}
 	if err != nil {
 		return nil, false, err
+	}
+
+	cacheKey := bucket.String()
+	if accounts, ok := c.getLocalSnapshot(cacheKey, activeVal); ok {
+		return accounts, true, nil
 	}
 
 	snapshotKey := schedulerSnapshotKey(bucket, activeVal)
@@ -165,6 +185,7 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		accounts = append(accounts, account)
 	}
 
+	c.setLocalSnapshot(cacheKey, activeVal, accounts)
 	return accounts, true, nil
 }
 
@@ -225,6 +246,7 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 		return err
 	}
 
+	c.invalidateLocalSnapshot(bucket.String())
 	return nil
 }
 
@@ -237,6 +259,9 @@ func (c *schedulerCache) clearEmptySnapshot(ctx context.Context, bucket service.
 	args := []any{versionStr, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds}
 
 	_, err := clearEmptySnapshotScript.Run(ctx, c.rdb, keys, args...).Result()
+	if err == nil {
+		c.invalidateLocalSnapshot(bucket.String())
+	}
 	return err
 }
 
@@ -256,7 +281,11 @@ func (c *schedulerCache) SetAccount(ctx context.Context, account *service.Accoun
 	if account == nil || account.ID <= 0 {
 		return nil
 	}
-	return c.writeAccounts(ctx, []service.Account{*account})
+	if err := c.writeAccounts(ctx, []service.Account{*account}); err != nil {
+		return err
+	}
+	c.invalidateLocalSnapshotsForAccountChange(account)
+	return nil
 }
 
 func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) error {
@@ -264,7 +293,11 @@ func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) err
 		return nil
 	}
 	id := strconv.FormatInt(accountID, 10)
-	return c.rdb.Del(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id)).Err()
+	if err := c.rdb.Del(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id)).Err(); err != nil {
+		return err
+	}
+	c.invalidateLocalSnapshotsForAccount(accountID)
+	return nil
 }
 
 func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
@@ -306,7 +339,213 @@ func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]t
 		pipe.Set(ctx, schedulerAccountMetaKey(strconv.FormatInt(ids[i], 10)), metaPayload, 0)
 	}
 	_, err = pipe.Exec(ctx)
+	if err == nil {
+		c.updateLocalSnapshotLastUsed(updates)
+	}
 	return err
+}
+
+func (c *schedulerCache) getLocalSnapshot(cacheKey, activeVersion string) ([]*service.Account, bool) {
+	if c == nil || c.localTTL <= 0 {
+		return nil, false
+	}
+	now := time.Now()
+	c.localMu.RLock()
+	entry, ok := c.localSnapshots[cacheKey]
+	if !ok || entry.activeVersion != activeVersion || now.After(entry.expiresAt) {
+		c.localMu.RUnlock()
+		return nil, false
+	}
+	accounts := cloneAccountPointerSlice(entry.accounts)
+	c.localMu.RUnlock()
+	return accounts, true
+}
+
+func (c *schedulerCache) setLocalSnapshot(cacheKey, activeVersion string, accounts []*service.Account) {
+	if c == nil || c.localTTL <= 0 {
+		return
+	}
+	c.localMu.Lock()
+	c.removeLocalSnapshotLocked(cacheKey)
+	c.localSnapshots[cacheKey] = schedulerLocalSnapshot{
+		activeVersion: activeVersion,
+		expiresAt:     time.Now().Add(c.localTTL),
+		accounts:      cloneAccountPointerSlice(accounts),
+	}
+	c.indexLocalSnapshotLocked(cacheKey, accounts)
+	c.localMu.Unlock()
+}
+
+func (c *schedulerCache) invalidateLocalSnapshot(cacheKey string) {
+	if c == nil {
+		return
+	}
+	c.localMu.Lock()
+	c.removeLocalSnapshotLocked(cacheKey)
+	c.localMu.Unlock()
+}
+
+func (c *schedulerCache) clearLocalSnapshots() {
+	if c == nil {
+		return
+	}
+	c.localMu.Lock()
+	c.localSnapshots = make(map[string]schedulerLocalSnapshot)
+	c.localBuckets = make(map[int64]map[string]struct{})
+	c.localMu.Unlock()
+}
+
+func (c *schedulerCache) updateLocalSnapshotLastUsed(updates map[int64]time.Time) {
+	if c == nil || len(updates) == 0 {
+		return
+	}
+	c.localMu.Lock()
+	affected := make(map[string]struct{})
+	for id := range updates {
+		for cacheKey := range c.localBuckets[id] {
+			affected[cacheKey] = struct{}{}
+		}
+	}
+	for cacheKey := range affected {
+		entry, ok := c.localSnapshots[cacheKey]
+		if !ok {
+			continue
+		}
+		accounts := cloneAccountPointers(entry.accounts)
+		changed := false
+		for _, account := range accounts {
+			if account == nil {
+				continue
+			}
+			if usedAt, ok := updates[account.ID]; ok {
+				account.LastUsedAt = ptrTime(usedAt)
+				changed = true
+			}
+		}
+		if changed {
+			entry.accounts = accounts
+			c.localSnapshots[cacheKey] = entry
+		}
+	}
+	c.localMu.Unlock()
+}
+
+func (c *schedulerCache) invalidateLocalSnapshotsForAccount(accountID int64) {
+	if c == nil || accountID <= 0 {
+		return
+	}
+	c.localMu.Lock()
+	for cacheKey := range c.localBuckets[accountID] {
+		c.removeLocalSnapshotLocked(cacheKey)
+	}
+	delete(c.localBuckets, accountID)
+	c.localMu.Unlock()
+}
+
+func (c *schedulerCache) invalidateLocalSnapshotsForAccountChange(account *service.Account) {
+	if c == nil || account == nil || account.ID <= 0 {
+		return
+	}
+	c.localMu.Lock()
+	for cacheKey := range c.localBuckets[account.ID] {
+		c.removeLocalSnapshotLocked(cacheKey)
+	}
+	for _, cacheKey := range candidateBucketKeysForAccount(account) {
+		c.removeLocalSnapshotLocked(cacheKey)
+	}
+	c.localMu.Unlock()
+}
+
+func (c *schedulerCache) removeLocalSnapshotLocked(cacheKey string) {
+	entry, ok := c.localSnapshots[cacheKey]
+	if !ok {
+		return
+	}
+	for _, account := range entry.accounts {
+		if account == nil {
+			continue
+		}
+		buckets := c.localBuckets[account.ID]
+		delete(buckets, cacheKey)
+		if len(buckets) == 0 {
+			delete(c.localBuckets, account.ID)
+		}
+	}
+	delete(c.localSnapshots, cacheKey)
+}
+
+func (c *schedulerCache) indexLocalSnapshotLocked(cacheKey string, accounts []*service.Account) {
+	for _, account := range accounts {
+		if account == nil || account.ID <= 0 {
+			continue
+		}
+		buckets := c.localBuckets[account.ID]
+		if buckets == nil {
+			buckets = make(map[string]struct{})
+			c.localBuckets[account.ID] = buckets
+		}
+		buckets[cacheKey] = struct{}{}
+	}
+}
+
+func candidateBucketKeysForAccount(account *service.Account) []string {
+	groupIDs := make([]int64, 0, len(account.GroupIDs)+1)
+	groupIDs = append(groupIDs, 0)
+	seenGroups := map[int64]struct{}{0: {}}
+	for _, groupID := range account.GroupIDs {
+		if groupID <= 0 {
+			continue
+		}
+		if _, ok := seenGroups[groupID]; ok {
+			continue
+		}
+		seenGroups[groupID] = struct{}{}
+		groupIDs = append(groupIDs, groupID)
+	}
+
+	platforms := []string{account.Platform}
+	if account.Platform == service.PlatformAntigravity {
+		platforms = append(platforms, service.PlatformAnthropic, service.PlatformGemini)
+	}
+	modes := []string{service.SchedulerModeSingle, service.SchedulerModeForced, service.SchedulerModeMixed}
+
+	out := make([]string, 0, len(groupIDs)*len(platforms)*len(modes))
+	for _, groupID := range groupIDs {
+		for _, platform := range platforms {
+			if platform == "" {
+				continue
+			}
+			for _, mode := range modes {
+				out = append(out, service.SchedulerBucket{GroupID: groupID, Platform: platform, Mode: mode}.String())
+			}
+		}
+	}
+	return out
+}
+
+func cloneAccountPointerSlice(accounts []*service.Account) []*service.Account {
+	if len(accounts) == 0 {
+		return []*service.Account{}
+	}
+	out := make([]*service.Account, len(accounts))
+	copy(out, accounts)
+	return out
+}
+
+func cloneAccountPointers(accounts []*service.Account) []*service.Account {
+	if len(accounts) == 0 {
+		return []*service.Account{}
+	}
+	out := make([]*service.Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account == nil {
+			out = append(out, nil)
+			continue
+		}
+		cloned := *account
+		out = append(out, &cloned)
+	}
+	return out
 }
 
 func (c *schedulerCache) TryLockBucket(ctx context.Context, bucket service.SchedulerBucket, ttl time.Duration) (bool, error) {

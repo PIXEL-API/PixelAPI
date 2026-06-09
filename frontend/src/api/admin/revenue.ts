@@ -9,6 +9,7 @@ export interface RevenueSummaryParams {
   granularity?: RevenueGranularity
   top_limit?: number
   user_id?: number
+  include_breakdowns?: boolean
 }
 
 export interface RevenueShareSettlementParams {
@@ -18,6 +19,33 @@ export interface RevenueShareSettlementParams {
   end_date?: string
   search?: string
   status?: 'all' | 'applied' | 'reversed' | 'frozen'
+}
+
+export type RevenueShareSettlementExportStatus = 'pending' | 'running' | 'completed' | 'failed' | 'canceled'
+
+export interface RevenueShareSettlementExportParams {
+  start_date: string
+  end_date: string
+  timezone?: string
+  search?: string
+  status?: RevenueShareSettlementParams['status']
+}
+
+export interface RevenueShareSettlementExportTask {
+  id: number
+  created_by: number
+  status: RevenueShareSettlementExportStatus
+  total_rows: number
+  exported_rows: number
+  file_count: number
+  file_name?: string
+  file_size_bytes: number
+  error_message?: string
+  created_at: string
+  started_at?: string
+  completed_at?: string
+  expires_at?: string
+  canceled_at?: string
 }
 
 export interface RevenueCashStats {
@@ -166,15 +194,58 @@ export interface RevenueSummary {
   top_share_owners: RevenueShareOwnerBreakdownItem[]
 }
 
+export interface RevenueBreakdowns {
+  top_users: RevenueBreakdownItem[]
+  top_groups: RevenueBreakdownItem[]
+  top_accounts: RevenueBreakdownItem[]
+  top_models: RevenueBreakdownItem[]
+  top_share_owners: RevenueShareOwnerBreakdownItem[]
+}
+
 export const revenueAPI = {
   getSummary(params?: RevenueSummaryParams) {
     return apiClient.get<RevenueSummary>('/admin/revenue/summary', { params })
   },
 
+  getBreakdowns(params?: RevenueSummaryParams) {
+    return apiClient.get<RevenueBreakdowns>('/admin/revenue/breakdowns', { params })
+  },
+
   async listShareSettlements(params?: RevenueShareSettlementParams): Promise<PaginatedResponse<RevenueShareSettlementItem>> {
     const { data } = await apiClient.get<PaginatedResponse<RevenueShareSettlementItem>>('/admin/revenue/share-settlements', { params })
     return data
+  },
+
+  async createShareSettlementExport(params: RevenueShareSettlementExportParams): Promise<RevenueShareSettlementExportTask> {
+    const { data } = await apiClient.post<RevenueShareSettlementExportTask>('/admin/revenue/share-settlements/exports', params)
+    return data
+  },
+
+  async getShareSettlementExport(id: number): Promise<RevenueShareSettlementExportTask> {
+    const { data } = await apiClient.get<RevenueShareSettlementExportTask>(`/admin/revenue/share-settlements/exports/${id}`)
+    return data
+  },
+
+  async cancelShareSettlementExport(id: number): Promise<RevenueShareSettlementExportTask> {
+    const { data } = await apiClient.post<RevenueShareSettlementExportTask>(`/admin/revenue/share-settlements/exports/${id}/cancel`)
+    return data
+  },
+
+  async downloadShareSettlementExport(id: number, filename?: string): Promise<void> {
+    const { data } = await apiClient.get<Blob>(`/admin/revenue/share-settlements/exports/${id}/download`, { responseType: 'blob' })
+    downloadBlob(data, filename || `share-settlements-${id}.csv.gz`)
   }
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 export default revenueAPI

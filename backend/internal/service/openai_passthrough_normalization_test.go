@@ -31,3 +31,25 @@ func TestNormalizeOpenAIPassthroughOAuthBody_CompactRemovesUnsupportedUser(t *te
 	require.False(t, gjson.GetBytes(normalized, "stream").Exists())
 	require.False(t, gjson.GetBytes(normalized, "store").Exists())
 }
+
+func TestNormalizeOpenAIPassthroughOAuthBody_PreservesCodexAutoReviewModel(t *testing.T) {
+	body := []byte(`{"model":"codex-auto-review","input":"hello"}`)
+
+	normalized, changed, err := normalizeOpenAIPassthroughOAuthBody(body, false)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "codex-auto-review", gjson.GetBytes(normalized, "model").String())
+	require.False(t, gjson.GetBytes(normalized, "instructions").Exists())
+	require.True(t, gjson.GetBytes(normalized, "stream").Bool())
+	require.False(t, gjson.GetBytes(normalized, "store").Bool())
+	require.Empty(t, detectOpenAIPassthroughInstructionsRejectReason("codex-auto-review", normalized))
+}
+
+func TestNormalizeOpenAIPassthroughOAuthBody_PreservesCustomCompatibleModel(t *testing.T) {
+	body := []byte(`{"model":"custom-compatible-model","input":"hello","stream":true,"store":false}`)
+
+	normalized, changed, err := normalizeOpenAIPassthroughOAuthBody(body, false)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, "custom-compatible-model", gjson.GetBytes(normalized, "model").String())
+}

@@ -52,6 +52,8 @@ func (Proxy) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default("active"),
+		field.Int("max_accounts").
+			Default(0),
 	}
 }
 

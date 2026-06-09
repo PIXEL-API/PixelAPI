@@ -255,7 +255,7 @@ func TestAdminService_CreateGroupCopyAccounts_RejectsMismatchedOpenAILevelBefore
 	require.Empty(t, repo.bindAccountsAccountIDs)
 }
 
-func TestAdminService_CreateGroupCopyAccounts_AllowsHigherOpenAILevelIntoLowerPool(t *testing.T) {
+func TestAdminService_CreateGroupCopyAccounts_RejectsHigherOpenAILevelIntoLowerPool(t *testing.T) {
 	repo := &groupRepoStubForAdmin{
 		getByIDByID: map[int64]*Group{
 			1: {ID: 1, Name: "Pro Source", Platform: PlatformOpenAI},
@@ -283,11 +283,11 @@ func TestAdminService_CreateGroupCopyAccounts_AllowsHigherOpenAILevelIntoLowerPo
 		CopyAccountsFromGroupIDs: []int64{1},
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, group)
-	require.NotNil(t, repo.created)
-	require.Equal(t, AccountLevelPlus, repo.created.RequiredAccountLevel)
-	require.Equal(t, []int64{101}, repo.bindAccountsAccountIDs)
+	require.Nil(t, group)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "account_level mismatch")
+	require.Nil(t, repo.created)
+	require.Empty(t, repo.bindAccountsAccountIDs)
 }
 
 func TestAdminService_UpdateGroupCopyAccounts_RejectsMismatchedOpenAILevelBeforeClearingBindings(t *testing.T) {
@@ -329,7 +329,7 @@ func TestAdminService_UpdateGroupCopyAccounts_RejectsMismatchedOpenAILevelBefore
 	require.Empty(t, repo.bindAccountsAccountIDs)
 }
 
-func TestAdminService_UpdateGroupCopyAccounts_NormalizesTeamRequiredLevelToPlus(t *testing.T) {
+func TestAdminService_UpdateGroupCopyAccounts_KeepsTeamRequiredLevelStrict(t *testing.T) {
 	existing := &Group{
 		ID:             2,
 		Name:           "Legacy Team Pool",
@@ -350,9 +350,9 @@ func TestAdminService_UpdateGroupCopyAccounts_NormalizesTeamRequiredLevelToPlus(
 
 	require.NoError(t, err)
 	require.NotNil(t, updated)
-	require.Equal(t, AccountLevelPlus, updated.RequiredAccountLevel)
+	require.Equal(t, AccountLevelTeam, updated.RequiredAccountLevel)
 	require.NotNil(t, repo.updated)
-	require.Equal(t, AccountLevelPlus, repo.updated.RequiredAccountLevel)
+	require.Equal(t, AccountLevelTeam, repo.updated.RequiredAccountLevel)
 }
 
 // TestAdminService_UpdateGroup_WithImagePricing 测试更新分组时 ImagePrice 字段正确更新

@@ -15,8 +15,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
-	"github.com/Wei-Shaw/sub2api/ent/conversation"
-	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
@@ -448,51 +446,6 @@ func (_c *UserCreate) AddAnnouncementReads(v ...*AnnouncementRead) *UserCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddAnnouncementReadIDs(ids...)
-}
-
-// AddConversationIDs adds the "conversations" edge to the Conversation entity by IDs.
-func (_c *UserCreate) AddConversationIDs(ids ...int64) *UserCreate {
-	_c.mutation.AddConversationIDs(ids...)
-	return _c
-}
-
-// AddConversations adds the "conversations" edges to the Conversation entity.
-func (_c *UserCreate) AddConversations(v ...*Conversation) *UserCreate {
-	ids := make([]int64, len(v))
-	for i := range v {
-		ids[i] = v[i].ID
-	}
-	return _c.AddConversationIDs(ids...)
-}
-
-// AddAssignedConversationIDs adds the "assigned_conversations" edge to the Conversation entity by IDs.
-func (_c *UserCreate) AddAssignedConversationIDs(ids ...int64) *UserCreate {
-	_c.mutation.AddAssignedConversationIDs(ids...)
-	return _c
-}
-
-// AddAssignedConversations adds the "assigned_conversations" edges to the Conversation entity.
-func (_c *UserCreate) AddAssignedConversations(v ...*Conversation) *UserCreate {
-	ids := make([]int64, len(v))
-	for i := range v {
-		ids[i] = v[i].ID
-	}
-	return _c.AddAssignedConversationIDs(ids...)
-}
-
-// AddSentConversationMessageIDs adds the "sent_conversation_messages" edge to the ConversationMessage entity by IDs.
-func (_c *UserCreate) AddSentConversationMessageIDs(ids ...int64) *UserCreate {
-	_c.mutation.AddSentConversationMessageIDs(ids...)
-	return _c
-}
-
-// AddSentConversationMessages adds the "sent_conversation_messages" edges to the ConversationMessage entity.
-func (_c *UserCreate) AddSentConversationMessages(v ...*ConversationMessage) *UserCreate {
-	ids := make([]int64, len(v))
-	for i := range v {
-		ids[i] = v[i].ID
-	}
-	return _c.AddSentConversationMessageIDs(ids...)
 }
 
 // AddSupportThreadIDs adds the "support_threads" edge to the SupportThread entity by IDs.
@@ -1108,54 +1061,6 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(announcementread.FieldID, field.TypeInt64),
-			},
-		}
-		for _, k := range nodes {
-			edge.Target.Nodes = append(edge.Target.Nodes, k)
-		}
-		_spec.Edges = append(_spec.Edges, edge)
-	}
-	if nodes := _c.mutation.ConversationsIDs(); len(nodes) > 0 {
-		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.O2M,
-			Inverse: false,
-			Table:   user.ConversationsTable,
-			Columns: []string{user.ConversationsColumn},
-			Bidi:    false,
-			Target: &sqlgraph.EdgeTarget{
-				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
-			},
-		}
-		for _, k := range nodes {
-			edge.Target.Nodes = append(edge.Target.Nodes, k)
-		}
-		_spec.Edges = append(_spec.Edges, edge)
-	}
-	if nodes := _c.mutation.AssignedConversationsIDs(); len(nodes) > 0 {
-		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.O2M,
-			Inverse: false,
-			Table:   user.AssignedConversationsTable,
-			Columns: []string{user.AssignedConversationsColumn},
-			Bidi:    false,
-			Target: &sqlgraph.EdgeTarget{
-				IDSpec: sqlgraph.NewFieldSpec(conversation.FieldID, field.TypeInt64),
-			},
-		}
-		for _, k := range nodes {
-			edge.Target.Nodes = append(edge.Target.Nodes, k)
-		}
-		_spec.Edges = append(_spec.Edges, edge)
-	}
-	if nodes := _c.mutation.SentConversationMessagesIDs(); len(nodes) > 0 {
-		edge := &sqlgraph.EdgeSpec{
-			Rel:     sqlgraph.O2M,
-			Inverse: false,
-			Table:   user.SentConversationMessagesTable,
-			Columns: []string{user.SentConversationMessagesColumn},
-			Bidi:    false,
-			Target: &sqlgraph.EdgeTarget{
-				IDSpec: sqlgraph.NewFieldSpec(conversationmessage.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

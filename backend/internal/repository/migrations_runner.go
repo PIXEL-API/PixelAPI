@@ -54,6 +54,7 @@ const nonTransactionalMigrationSuffix = "_notx.sql"
 const paymentOrdersOutTradeNoUniqueMigration = "120_enforce_payment_orders_out_trade_no_unique_notx.sql"
 const paymentOrdersOutTradeNoUniqueIndex = "paymentorder_out_trade_no_unique"
 const ownedAccountIdentityUniqueMigration = "140_owned_account_identity_unique_notx.sql"
+const openAIOwnedAccountOrgIdentityUniqueMigration = "168_openai_owned_account_org_identity_unique_notx.sql"
 
 var ownedAccountIdentityUniqueIndexes = []string{
 	"idx_accounts_owned_openai_chatgpt_account_id_uniq",
@@ -69,6 +70,13 @@ var ownedAccountIdentityUniqueIndexSet = map[string]struct{}{
 	"idx_accounts_owned_anthropic_org_account_uniq":     {},
 	"idx_accounts_owned_gemini_project_uniq":            {},
 	"idx_accounts_owned_antigravity_project_uniq":       {},
+}
+
+var openAIOwnedAccountOrgIdentityUniqueIndexes = []string{
+	"idx_accounts_owned_openai_org_user_uniq",
+	"idx_accounts_owned_openai_org_account_uniq",
+	"idx_accounts_owned_openai_legacy_user_uniq",
+	"idx_accounts_owned_openai_legacy_account_uniq",
 }
 
 type migrationChecksumCompatibilityRule struct {
@@ -281,6 +289,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db *sql.DB, name stri
 		return preparePaymentOrdersOutTradeNoUniqueMigration(ctx, db)
 	case ownedAccountIdentityUniqueMigration:
 		return prepareOwnedAccountIdentityUniqueMigration(ctx, db)
+	case openAIOwnedAccountOrgIdentityUniqueMigration:
+		return prepareOpenAIOwnedAccountOrgIdentityUniqueMigration(ctx, db)
 	default:
 		return nil
 	}
@@ -327,6 +337,34 @@ func prepareOwnedAccountIdentityUniqueMigration(ctx context.Context, db *sql.DB)
 	}
 
 	for _, indexName := range ownedAccountIdentityUniqueIndexes {
+		invalid, err := indexIsInvalid(ctx, db, indexName)
+		if err != nil {
+			return fmt.Errorf("check invalid index %s: %w", indexName, err)
+		}
+		if !invalid {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s", indexName)); err != nil {
+			return fmt.Errorf("drop invalid index %s: %w", indexName, err)
+		}
+	}
+	return nil
+}
+
+func prepareOpenAIOwnedAccountOrgIdentityUniqueMigration(ctx context.Context, db *sql.DB) error {
+	duplicates, err := findDuplicateOpenAIOwnedAccountOrgIdentities(ctx, db)
+	if err != nil {
+		return fmt.Errorf("precheck duplicate OpenAI owned account org identities: %w", err)
+	}
+	if len(duplicates) > 0 {
+		return fmt.Errorf(
+			"duplicate OpenAI owned account org identities block %s; remediate duplicates before retrying: %s",
+			openAIOwnedAccountOrgIdentityUniqueMigration,
+			strings.Join(duplicates, ", "),
+		)
+	}
+
+	for _, indexName := range openAIOwnedAccountOrgIdentityUniqueIndexes {
 		invalid, err := indexIsInvalid(ctx, db, indexName)
 		if err != nil {
 			return fmt.Errorf("check invalid index %s: %w", indexName, err)
@@ -416,6 +454,114 @@ func findDuplicateOwnedAccountIdentities(ctx context.Context, db *sql.DB) ([]str
 			  AND platform = 'antigravity'
 			  AND type = 'oauth'
 			  AND NULLIF(BTRIM(credentials->>'project_id'), '') IS NOT NULL
+		)
+		SELECT
+			identity_name,
+			owner_user_id,
+			COUNT(*) AS duplicate_count,
+			ARRAY_TO_STRING((ARRAY_AGG(id ORDER BY id))[1:5], ',') AS sample_ids
+		FROM identities
+		GROUP BY identity_name, owner_user_id, identity_value
+		HAVING COUNT(*) > 1
+		ORDER BY duplicate_count DESC, identity_name, owner_user_id
+		LIMIT 10
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	duplicates := make([]string, 0, 10)
+	for rows.Next() {
+		var identityName string
+		var ownerUserID int64
+		var duplicateCount int
+		var sampleIDs string
+		if err := rows.Scan(&identityName, &ownerUserID, &duplicateCount, &sampleIDs); err != nil {
+			return nil, err
+		}
+		duplicates = append(duplicates, fmt.Sprintf(
+			"%s owner_user_id=%d count=%d sample_account_ids=%s",
+			identityName,
+			ownerUserID,
+			duplicateCount,
+			sampleIDs,
+		))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return duplicates, nil
+}
+
+func findDuplicateOpenAIOwnedAccountOrgIdentities(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		WITH identities AS (
+			SELECT
+				owner_user_id,
+				'openai.org_user' AS identity_name,
+				LOWER(NULLIF(BTRIM(credentials->>'organization_id'), '')) ||
+					'|' ||
+					NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') AS identity_value,
+				id
+			FROM accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NOT NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NOT NULL
+
+			UNION ALL
+
+			SELECT
+				owner_user_id,
+				'openai.org_account' AS identity_name,
+				LOWER(NULLIF(BTRIM(credentials->>'organization_id'), '')) ||
+					'|' ||
+					NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') AS identity_value,
+				id
+			FROM accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NOT NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') IS NOT NULL
+
+			UNION ALL
+
+			SELECT
+				owner_user_id,
+				'openai.chatgpt_user_id' AS identity_name,
+				NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') AS identity_value,
+				id
+			FROM accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NOT NULL
+
+			UNION ALL
+
+			SELECT
+				owner_user_id,
+				'openai.chatgpt_account_id' AS identity_name,
+				NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') AS identity_value,
+				id
+			FROM accounts
+			WHERE deleted_at IS NULL
+			  AND owner_user_id IS NOT NULL
+			  AND platform = 'openai'
+			  AND type = 'oauth'
+			  AND NULLIF(BTRIM(credentials->>'organization_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_user_id'), '') IS NULL
+			  AND NULLIF(BTRIM(credentials->>'chatgpt_account_id'), '') IS NOT NULL
 		)
 		SELECT
 			identity_name,

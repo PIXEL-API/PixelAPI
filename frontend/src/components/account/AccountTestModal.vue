@@ -208,6 +208,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'test-success', accountId: number): void
 }>()
 
 const terminalRef = ref<HTMLElement | null>(null)
@@ -389,6 +390,7 @@ const startTest = async () => {
 
     const decoder = new TextDecoder()
     let buffer = ''
+    let testSucceeded = false
 
     while (true) {
       const { done, value } = await reader.read()
@@ -404,13 +406,19 @@ const startTest = async () => {
           if (jsonStr) {
             try {
               const event = JSON.parse(jsonStr)
-              handleEvent(event)
+              if (handleEvent(event)) {
+                testSucceeded = true
+              }
             } catch (e) {
               console.error('Failed to parse SSE event:', e)
             }
           }
         }
       }
+    }
+
+    if (testSucceeded && props.account) {
+      emit('test-success', props.account.id)
     }
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -430,7 +438,7 @@ const handleEvent = (event: {
   model?: string
   success?: boolean
   error?: string
-}) => {
+}): boolean => {
   switch (event.type) {
     case 'test_start':
       addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
@@ -457,6 +465,7 @@ const handleEvent = (event: {
       }
       if (event.success) {
         status.value = 'success'
+        return true
       } else {
         status.value = 'error'
         errorMessage.value = event.error || 'Test failed'
@@ -472,6 +481,7 @@ const handleEvent = (event: {
       }
       break
   }
+  return false
 }
 
 const copyOutput = () => {
