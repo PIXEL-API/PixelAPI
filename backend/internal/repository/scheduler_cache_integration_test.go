@@ -149,6 +149,99 @@ func TestSchedulerCacheEmptySnapshotEvictsBucket(t *testing.T) {
 	require.False(t, isMember)
 }
 
+func TestSchedulerCacheCandidateIndexManualBucket(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	bucket := service.SchedulerBucket{GroupID: 18, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	cache := newSchedulerCacheWithOptions(rdb, 128, 256, []string{bucket.String()})
+
+	accounts := make([]service.Account, 0, minSchedulerCandidateShardSize+1)
+	for i := 0; i < minSchedulerCandidateShardSize+1; i++ {
+		accounts = append(accounts, service.Account{
+			ID:          int64(100000 + i),
+			Name:        "candidate-index",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Concurrency: 3,
+			Priority:    i % 10,
+			GroupIDs:    []int64{bucket.GroupID},
+		})
+	}
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, accounts))
+
+	candidateCache, ok := cache.(service.SchedulerCandidateCache)
+	require.True(t, ok)
+	candidates, hit, err := candidateCache.GetCandidateSnapshot(ctx, bucket, 64)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, candidates, 64)
+
+	version, err := rdb.Get(ctx, schedulerBucketKey(schedulerCandidateActivePrefix, bucket)).Result()
+	require.NoError(t, err)
+	shards, err := rdb.HGet(ctx, schedulerCandidateMetaKey(bucket, version), "shards").Int()
+	require.NoError(t, err)
+	require.Greater(t, shards, 1)
+
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, accounts[:1]))
+	candidates, hit, err = candidateCache.GetCandidateSnapshot(ctx, bucket, 64)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.Nil(t, candidates)
+}
+
+func TestSchedulerCacheCandidateIndexManualSmallBucketMisses(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	bucket := service.SchedulerBucket{GroupID: 18, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	cache := newSchedulerCacheWithOptions(rdb, 128, 256, []string{bucket.String()})
+
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{{
+		ID:          42,
+		Name:        "small-index",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 3,
+		GroupIDs:    []int64{bucket.GroupID},
+	}}))
+
+	candidateCache, ok := cache.(service.SchedulerCandidateCache)
+	require.True(t, ok)
+	candidates, hit, err := candidateCache.GetCandidateSnapshot(ctx, bucket, 64)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.Nil(t, candidates)
+}
+
+func TestSchedulerCacheCandidateIndexDisabledBucketMisses(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	enabledBucket := service.SchedulerBucket{GroupID: 18, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	disabledBucket := service.SchedulerBucket{GroupID: 19, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	cache := newSchedulerCacheWithOptions(rdb, 128, 256, []string{enabledBucket.String()})
+
+	require.NoError(t, cache.SetSnapshot(ctx, disabledBucket, []service.Account{{
+		ID:          42,
+		Name:        "disabled-index",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 3,
+		GroupIDs:    []int64{disabledBucket.GroupID},
+	}}))
+
+	candidateCache, ok := cache.(service.SchedulerCandidateCache)
+	require.True(t, ok)
+	candidates, hit, err := candidateCache.GetCandidateSnapshot(ctx, disabledBucket, 64)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.Nil(t, candidates)
+}
+
 func schedulerBucketStrings(buckets []service.SchedulerBucket) []string {
 	out := make([]string, 0, len(buckets))
 	for _, bucket := range buckets {

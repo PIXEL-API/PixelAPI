@@ -373,6 +373,13 @@ gateway:
     # Enable batch load calculation for scheduling
     # 启用调度批量负载计算
     load_batch_enabled: true
+    # Explicit scheduler buckets that use Redis candidate index when bucket size > 5000.
+    # Format: "groupID:platform:mode", e.g. "18:openai:single".
+    # 显式启用 Redis 候选索引的调度桶；仅当桶内账号数 > 5000 时生效。
+    indexed_buckets: []
+    # Max accounts returned by candidate index per scheduling lookup
+    # 候选索引每次调度最多返回的账号数
+    indexed_candidate_limit: 256
     # Slot cleanup interval (duration)
     # 并发槽位清理周期（时间段）
     slot_cleanup_interval: 30s

@@ -1071,6 +1071,10 @@ type GatewaySchedulingConfig struct {
 	SnapshotMGetChunkSize int `mapstructure:"snapshot_mget_chunk_size"`
 	// 快照重建时的缓存写入分块大小
 	SnapshotWriteChunkSize int `mapstructure:"snapshot_write_chunk_size"`
+	// 显式启用 Redis 候选索引的调度桶，格式为 "groupID:platform:mode"。
+	IndexedBuckets []string `mapstructure:"indexed_buckets"`
+	// 候选索引一次最多返回的账号数。
+	IndexedCandidateLimit int `mapstructure:"indexed_candidate_limit"`
 
 	// 过期槽位清理周期（0 表示禁用）
 	SlotCleanupInterval time.Duration `mapstructure:"slot_cleanup_interval"`
@@ -1982,6 +1986,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.scheduling.load_batch_enabled", true)
 	viper.SetDefault("gateway.scheduling.snapshot_mget_chunk_size", 128)
 	viper.SetDefault("gateway.scheduling.snapshot_write_chunk_size", 256)
+	viper.SetDefault("gateway.scheduling.indexed_buckets", []string{})
+	viper.SetDefault("gateway.scheduling.indexed_candidate_limit", 256)
 	viper.SetDefault("gateway.scheduling.slot_cleanup_interval", 30*time.Second)
 	viper.SetDefault("gateway.scheduling.db_fallback_enabled", true)
 	viper.SetDefault("gateway.scheduling.db_fallback_timeout_seconds", 0)
@@ -2849,6 +2855,14 @@ func (c *Config) Validate() error {
 	if c.Gateway.Scheduling.SnapshotWriteChunkSize <= 0 {
 		return fmt.Errorf("gateway.scheduling.snapshot_write_chunk_size must be positive")
 	}
+	for _, rawBucket := range c.Gateway.Scheduling.IndexedBuckets {
+		if !isValidSchedulerBucketString(rawBucket) {
+			return fmt.Errorf("gateway.scheduling.indexed_buckets contains invalid bucket %q", rawBucket)
+		}
+	}
+	if c.Gateway.Scheduling.IndexedCandidateLimit <= 0 {
+		return fmt.Errorf("gateway.scheduling.indexed_candidate_limit must be positive")
+	}
 	if c.Gateway.Scheduling.SlotCleanupInterval < 0 {
 		return fmt.Errorf("gateway.scheduling.slot_cleanup_interval must be non-negative")
 	}
@@ -2900,6 +2914,17 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")
 	}
 	return nil
+}
+
+func isValidSchedulerBucketString(raw string) bool {
+	parts := strings.Split(raw, ":")
+	if len(parts) != 3 {
+		return false
+	}
+	if _, err := strconv.ParseInt(parts[0], 10, 64); err != nil {
+		return false
+	}
+	return strings.TrimSpace(parts[1]) != "" && strings.TrimSpace(parts[2]) != ""
 }
 
 func normalizeStringSlice(values []string) []string {

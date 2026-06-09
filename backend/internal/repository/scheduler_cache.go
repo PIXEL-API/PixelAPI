@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -13,19 +14,27 @@ import (
 )
 
 const (
-	schedulerBucketSetKey       = "sched:buckets"
-	schedulerOutboxWatermarkKey = "sched:outbox:watermark"
-	schedulerAccountPrefix      = "sched:acc:"
-	schedulerAccountMetaPrefix  = "sched:meta:"
-	schedulerActivePrefix       = "sched:active:"
-	schedulerReadyPrefix        = "sched:ready:"
-	schedulerVersionPrefix      = "sched:ver:"
-	schedulerSnapshotPrefix     = "sched:"
-	schedulerLockPrefix         = "sched:lock:"
+	schedulerBucketSetKey          = "sched:buckets"
+	schedulerOutboxWatermarkKey    = "sched:outbox:watermark"
+	schedulerAccountPrefix         = "sched:acc:"
+	schedulerAccountMetaPrefix     = "sched:meta:"
+	schedulerActivePrefix          = "sched:active:"
+	schedulerReadyPrefix           = "sched:ready:"
+	schedulerVersionPrefix         = "sched:ver:"
+	schedulerSnapshotPrefix        = "sched:"
+	schedulerLockPrefix            = "sched:lock:"
+	schedulerCandidateIndexPrefix  = "schedidx:v1:"
+	schedulerCandidateActivePrefix = "schedidx:active:"
+	schedulerCandidateReadyPrefix  = "schedidx:ready:"
+	schedulerCandidateMetaPrefix   = "schedidx:meta:"
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
 	defaultSchedulerSnapshotLocalCacheTTL  = 5 * time.Second
+	defaultSchedulerCandidateLimit         = 256
+	defaultSchedulerCandidateShardTarget   = 512
+	maxSchedulerCandidateShards            = 128
+	minSchedulerCandidateShardSize         = 5000
 
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
@@ -87,12 +96,51 @@ redis.call('SREM', KEYS[3], ARGV[2])
 
 return 1
 `)
+	activateCandidateIndexScript = redis.NewScript(`
+local currentActive = redis.call('GET', KEYS[1])
+local newVersion = tonumber(ARGV[1])
+
+if currentActive ~= false then
+	local curVersion = tonumber(currentActive)
+	if curVersion and newVersion < curVersion then
+		return {0, currentActive}
+	end
+end
+
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SET', KEYS[2], '1')
+
+if currentActive == false then
+	return {1, ''}
+end
+return {1, currentActive}
+`)
+	clearCandidateIndexScript = redis.NewScript(`
+local currentActive = redis.call('GET', KEYS[1])
+local clearVersion = tonumber(ARGV[1])
+
+if currentActive ~= false then
+	local curVersion = tonumber(currentActive)
+	if curVersion and clearVersion and curVersion > clearVersion then
+		return {0, currentActive}
+	end
+end
+
+redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
+
+if currentActive == false then
+	return {1, ''}
+end
+return {1, currentActive}
+`)
 )
 
 type schedulerCache struct {
 	rdb            *redis.Client
 	mgetChunkSize  int
 	writeChunkSize int
+	indexedBuckets map[string]struct{}
 	localMu        sync.RWMutex
 	localSnapshots map[string]schedulerLocalSnapshot
 	localBuckets   map[int64]map[string]struct{}
@@ -110,16 +158,27 @@ func NewSchedulerCache(rdb *redis.Client) service.SchedulerCache {
 }
 
 func newSchedulerCacheWithChunkSizes(rdb *redis.Client, mgetChunkSize, writeChunkSize int) service.SchedulerCache {
+	return newSchedulerCacheWithOptions(rdb, mgetChunkSize, writeChunkSize, nil)
+}
+
+func newSchedulerCacheWithOptions(rdb *redis.Client, mgetChunkSize, writeChunkSize int, indexedBuckets []string) service.SchedulerCache {
 	if mgetChunkSize <= 0 {
 		mgetChunkSize = defaultSchedulerSnapshotMGetChunkSize
 	}
 	if writeChunkSize <= 0 {
 		writeChunkSize = defaultSchedulerSnapshotWriteChunkSize
 	}
+	indexed := make(map[string]struct{}, len(indexedBuckets))
+	for _, raw := range indexedBuckets {
+		if bucket, ok := service.ParseSchedulerBucket(raw); ok {
+			indexed[bucket.String()] = struct{}{}
+		}
+	}
 	return &schedulerCache{
 		rdb:            rdb,
 		mgetChunkSize:  mgetChunkSize,
 		writeChunkSize: writeChunkSize,
+		indexedBuckets: indexed,
 		localSnapshots: make(map[string]schedulerLocalSnapshot),
 		localBuckets:   make(map[int64]map[string]struct{}),
 		localTTL:       defaultSchedulerSnapshotLocalCacheTTL,
@@ -241,11 +300,17 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 	keys := []string{activeKey, readyKey, schedulerBucketSetKey, snapshotKey}
 	args := []any{versionStr, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds}
 
-	_, err = activateSnapshotScript.Run(ctx, c.rdb, keys, args...).Result()
+	activated, err := activateSnapshotScript.Run(ctx, c.rdb, keys, args...).Int()
 	if err != nil {
 		return err
 	}
+	if activated == 0 {
+		return nil
+	}
 
+	if err := c.setCandidateIndex(ctx, bucket, versionStr, accounts); err != nil {
+		return err
+	}
 	c.invalidateLocalSnapshot(bucket.String())
 	return nil
 }
@@ -258,11 +323,100 @@ func (c *schedulerCache) clearEmptySnapshot(ctx context.Context, bucket service.
 	keys := []string{activeKey, readyKey, schedulerBucketSetKey}
 	args := []any{versionStr, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds}
 
-	_, err := clearEmptySnapshotScript.Run(ctx, c.rdb, keys, args...).Result()
-	if err == nil {
+	activated, err := clearEmptySnapshotScript.Run(ctx, c.rdb, keys, args...).Int()
+	if err == nil && activated == 1 {
+		_ = c.clearCandidateIndex(ctx, bucket, versionStr)
 		c.invalidateLocalSnapshot(bucket.String())
 	}
 	return err
+}
+
+func (c *schedulerCache) GetCandidateSnapshot(ctx context.Context, bucket service.SchedulerBucket, limit int) ([]*service.Account, bool, error) {
+	if c == nil || !c.isCandidateIndexEnabled(bucket) {
+		return nil, false, nil
+	}
+	if limit <= 0 {
+		limit = defaultSchedulerCandidateLimit
+	}
+
+	readyVal, err := c.rdb.Get(ctx, schedulerBucketKey(schedulerCandidateReadyPrefix, bucket)).Result()
+	if err == redis.Nil {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if readyVal != "1" {
+		return nil, false, nil
+	}
+
+	version, err := c.rdb.Get(ctx, schedulerBucketKey(schedulerCandidateActivePrefix, bucket)).Result()
+	if err == redis.Nil {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	activeVersion, err := c.rdb.Get(ctx, schedulerBucketKey(schedulerActivePrefix, bucket)).Result()
+	if err == redis.Nil {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if activeVersion != version {
+		return nil, false, nil
+	}
+
+	shards := 1
+	size := 0
+	if raw, err := c.rdb.HGet(ctx, schedulerCandidateMetaKey(bucket, version), "shards").Result(); err == nil {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+			shards = parsed
+		}
+	} else if err != redis.Nil {
+		return nil, false, err
+	}
+	if raw, err := c.rdb.HGet(ctx, schedulerCandidateMetaKey(bucket, version), "size").Result(); err == nil {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+			size = parsed
+		}
+	} else if err != redis.Nil {
+		return nil, false, err
+	}
+
+	ids, err := c.readCandidateIDs(ctx, bucket, version, shards, size, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(ids) == 0 {
+		return nil, false, nil
+	}
+
+	keys := make([]string, 0, len(ids))
+	for _, id := range ids {
+		keys = append(keys, schedulerAccountMetaKey(id))
+	}
+	values, err := c.mgetChunked(ctx, keys)
+	if err != nil {
+		return nil, false, err
+	}
+
+	accounts := make([]*service.Account, 0, len(values))
+	for _, val := range values {
+		if val == nil {
+			continue
+		}
+		account, err := decodeCachedAccount(val)
+		if err != nil {
+			return nil, false, err
+		}
+		accounts = append(accounts, account)
+	}
+	if len(accounts) == 0 {
+		return nil, false, nil
+	}
+	return accounts, true, nil
 }
 
 func (c *schedulerCache) GetAccount(ctx context.Context, accountID int64) (*service.Account, error) {
@@ -591,6 +745,229 @@ func (c *schedulerCache) GetOutboxWatermark(ctx context.Context) (int64, error) 
 
 func (c *schedulerCache) SetOutboxWatermark(ctx context.Context, id int64) error {
 	return c.rdb.Set(ctx, schedulerOutboxWatermarkKey, strconv.FormatInt(id, 10), 0).Err()
+}
+
+func (c *schedulerCache) isCandidateIndexEnabled(bucket service.SchedulerBucket) bool {
+	if c == nil || len(c.indexedBuckets) == 0 {
+		return false
+	}
+	_, ok := c.indexedBuckets[bucket.String()]
+	return ok
+}
+
+func (c *schedulerCache) setCandidateIndex(ctx context.Context, bucket service.SchedulerBucket, version string, accounts []service.Account) error {
+	if c == nil || !c.isCandidateIndexEnabled(bucket) {
+		return nil
+	}
+	if len(accounts) == 0 {
+		return c.clearCandidateIndex(ctx, bucket, version)
+	}
+	if len(accounts) <= minSchedulerCandidateShardSize {
+		return c.clearCandidateIndex(ctx, bucket, version)
+	}
+
+	shards := schedulerCandidateShardCount(len(accounts))
+	membersByKey := make(map[string][]redis.Z, shards)
+	for idx, account := range accounts {
+		if account.ID <= 0 {
+			continue
+		}
+		key := schedulerCandidateIndexKey(bucket, version, shards, idx)
+		membersByKey[key] = append(membersByKey[key], redis.Z{
+			Score:  float64(idx),
+			Member: strconv.FormatInt(account.ID, 10),
+		})
+	}
+
+	pipe := c.rdb.Pipeline()
+	for key, members := range membersByKey {
+		for start := 0; start < len(members); start += c.writeChunkSize {
+			end := start + c.writeChunkSize
+			if end > len(members) {
+				end = len(members)
+			}
+			pipe.ZAdd(ctx, key, members[start:end]...)
+		}
+	}
+	metaKey := schedulerCandidateMetaKey(bucket, version)
+	pipe.HSet(ctx, metaKey, map[string]any{
+		"size":   len(accounts),
+		"shards": shards,
+	})
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+
+	activeKey := schedulerBucketKey(schedulerCandidateActivePrefix, bucket)
+	readyKey := schedulerBucketKey(schedulerCandidateReadyPrefix, bucket)
+	result, err := activateCandidateIndexScript.Run(ctx, c.rdb, []string{activeKey, readyKey}, version).Slice()
+	if err != nil {
+		return err
+	}
+	activated := false
+	if len(result) > 0 {
+		switch val := result[0].(type) {
+		case int64:
+			activated = val == 1
+		case int:
+			activated = val == 1
+		case string:
+			activated = val == "1"
+		}
+	}
+	if !activated {
+		_ = c.expireCandidateIndex(ctx, bucket, version)
+		return nil
+	}
+	if len(result) > 1 {
+		if oldVersion, _ := result[1].(string); oldVersion != "" && oldVersion != version {
+			_ = c.expireCandidateIndex(ctx, bucket, oldVersion)
+		}
+	}
+	return nil
+}
+
+func (c *schedulerCache) clearCandidateIndex(ctx context.Context, bucket service.SchedulerBucket, version string) error {
+	if c == nil || !c.isCandidateIndexEnabled(bucket) {
+		return nil
+	}
+	activeKey := schedulerBucketKey(schedulerCandidateActivePrefix, bucket)
+	readyKey := schedulerBucketKey(schedulerCandidateReadyPrefix, bucket)
+	result, err := clearCandidateIndexScript.Run(ctx, c.rdb, []string{activeKey, readyKey}, version).Slice()
+	if err != nil {
+		return err
+	}
+	cleared := false
+	if len(result) > 0 {
+		switch val := result[0].(type) {
+		case int64:
+			cleared = val == 1
+		case int:
+			cleared = val == 1
+		case string:
+			cleared = val == "1"
+		}
+	}
+	if len(result) > 1 {
+		if oldVersion, _ := result[1].(string); oldVersion != "" {
+			_ = c.expireCandidateIndex(ctx, bucket, oldVersion)
+		}
+	}
+	if !cleared && version != "" {
+		_ = c.expireCandidateIndex(ctx, bucket, version)
+	}
+	return nil
+}
+
+func (c *schedulerCache) expireCandidateIndex(ctx context.Context, bucket service.SchedulerBucket, version string) error {
+	shards := 1
+	if raw, err := c.rdb.HGet(ctx, schedulerCandidateMetaKey(bucket, version), "shards").Result(); err == nil {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+			shards = parsed
+		}
+	}
+	pipe := c.rdb.Pipeline()
+	pipe.Expire(ctx, schedulerCandidateMetaKey(bucket, version), snapshotGraceTTLSeconds*time.Second)
+	if shards <= 1 {
+		pipe.Expire(ctx, schedulerCandidateIndexBaseKey(bucket, version), snapshotGraceTTLSeconds*time.Second)
+	} else {
+		for shard := 0; shard < shards; shard++ {
+			pipe.Expire(ctx, schedulerCandidateShardKey(bucket, version, shard), snapshotGraceTTLSeconds*time.Second)
+		}
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (c *schedulerCache) readCandidateIDs(ctx context.Context, bucket service.SchedulerBucket, version string, shards int, size int, limit int) ([]string, error) {
+	if shards <= 1 {
+		return c.readCandidateIDsFromZSet(ctx, schedulerCandidateIndexBaseKey(bucket, version), size, limit)
+	}
+	seen := make(map[string]struct{}, limit)
+	ids := make([]string, 0, limit)
+	perShard := limit / 4
+	if perShard < 16 {
+		perShard = 16
+	}
+	if perShard > limit {
+		perShard = limit
+	}
+	startShard := int(time.Now().UnixNano() % int64(shards))
+	for offset := 0; offset < shards && len(ids) < limit; offset++ {
+		shard := (startShard + offset) % shards
+		part, err := c.readCandidateIDsFromZSet(ctx, schedulerCandidateShardKey(bucket, version, shard), schedulerCandidateShardSize(size, shards, shard), perShard)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range part {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+			if len(ids) >= limit {
+				break
+			}
+		}
+	}
+	return ids, nil
+}
+
+func (c *schedulerCache) readCandidateIDsFromZSet(ctx context.Context, key string, size int, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if size <= limit {
+		return c.rdb.ZRange(ctx, key, 0, int64(limit-1)).Result()
+	}
+	start := rand.Intn(size - limit + 1)
+	stop := start + limit - 1
+	return c.rdb.ZRange(ctx, key, int64(start), int64(stop)).Result()
+}
+
+func schedulerCandidateShardCount(size int) int {
+	if size <= minSchedulerCandidateShardSize {
+		return 1
+	}
+	shards := 1
+	for shards < maxSchedulerCandidateShards && size/shards > defaultSchedulerCandidateShardTarget {
+		shards *= 2
+	}
+	return shards
+}
+
+func schedulerCandidateShardSize(size int, shards int, shard int) int {
+	if size <= 0 || shards <= 0 || shard < 0 || shard >= shards {
+		return 0
+	}
+	base := size / shards
+	if shard < size%shards {
+		return base + 1
+	}
+	return base
+}
+
+func schedulerCandidateIndexKey(bucket service.SchedulerBucket, version string, shards int, index int) string {
+	if shards <= 1 {
+		return schedulerCandidateIndexBaseKey(bucket, version)
+	}
+	shard := index % shards
+	if shard < 0 {
+		shard = -shard
+	}
+	return schedulerCandidateShardKey(bucket, version, shard)
+}
+
+func schedulerCandidateIndexBaseKey(bucket service.SchedulerBucket, version string) string {
+	return fmt.Sprintf("%s%d:%s:%s:v%s", schedulerCandidateIndexPrefix, bucket.GroupID, bucket.Platform, bucket.Mode, version)
+}
+
+func schedulerCandidateShardKey(bucket service.SchedulerBucket, version string, shard int) string {
+	return fmt.Sprintf("%s:s%d", schedulerCandidateIndexBaseKey(bucket, version), shard)
+}
+
+func schedulerCandidateMetaKey(bucket service.SchedulerBucket, version string) string {
+	return fmt.Sprintf("%s%d:%s:%s:v%s", schedulerCandidateMetaPrefix, bucket.GroupID, bucket.Platform, bucket.Mode, version)
 }
 
 func schedulerBucketKey(prefix string, bucket service.SchedulerBucket) string {
