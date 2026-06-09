@@ -246,12 +246,6 @@ const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
 const isAdmin = computed(() => authStore.isAdmin)
 const isDark = ref(document.documentElement.classList.contains('dark'))
-const conversationUnreadCount = computed(() =>
-  isAdmin.value
-    ? conversationNotificationStore.adminUnreadCount
-    : conversationNotificationStore.userUnreadCount
-)
-
 // Track which parent nav groups are expanded
 const expandedGroups = ref<Set<string>>(new Set())
 
@@ -895,9 +889,9 @@ function handleMenuItemClick(item: NavItem, event?: MouseEvent) {
 }
 
 function navUnreadCount(item: NavItem): number {
-  return item.path === '/admin/conversations' || item.path === '/conversations'
-    ? conversationUnreadCount.value
-    : 0
+  if (item.path === '/admin/conversations') return conversationNotificationStore.adminUnreadCount
+  if (item.path === '/conversations') return conversationNotificationStore.userUnreadCount
+  return 0
 }
 
 function isActive(path: string): boolean {
@@ -967,11 +961,14 @@ watch(
 watch(
   () => [authStore.isAuthenticated, authStore.isAdmin] as const,
   ([authenticated, admin]) => {
+    conversationNotificationStore.stopPolling()
     if (!authenticated) {
-      conversationNotificationStore.stopPolling()
       return
     }
     conversationNotificationStore.startPolling(admin ? 'admin' : 'user')
+    if (admin) {
+      conversationNotificationStore.startPolling('user')
+    }
   },
   { immediate: true }
 )

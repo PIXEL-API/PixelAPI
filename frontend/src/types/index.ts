@@ -463,6 +463,11 @@ export interface ConversationMessage {
   created_at: string
 }
 
+export interface ConversationMessageListOptions extends FetchOptions {
+  beforeId?: number
+  latest?: boolean
+}
+
 export interface ConversationListFilters {
   kind?: ConversationKind | ''
   status?: ConversationStatus | ''
@@ -844,6 +849,7 @@ export interface Proxy {
   username: string | null
   password?: string | null
   status: 'active' | 'inactive'
+  max_accounts: number
   account_count?: number // Number of accounts using this proxy
   latency_ms?: number
   latency_status?: 'success' | 'failed'
@@ -971,6 +977,7 @@ export interface Account {
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
   status: AccountStatus
   error_message: string | null
+  error_since: string | null
   last_used_at: string | null
   expires_at: number | null
   auto_pause_on_expired: boolean
@@ -1078,6 +1085,7 @@ export interface AccountQuotaSummary {
   active_account_count: number
   schedulable_account_count: number
   rate_limited_account_count: number
+  codex_quota_protected_account_count: number
   error_account_count: number
   disabled_account_count: number
   quota_account_count: number
@@ -1097,6 +1105,7 @@ export interface AccountQuotaGroupSummary {
   active_account_count: number
   schedulable_account_count: number
   rate_limited_account_count: number
+  codex_quota_protected_account_count: number
   error_account_count: number
   disabled_account_count: number
   quota_account_count: number
@@ -1284,6 +1293,7 @@ export interface CreateProxyRequest {
   port: number
   username?: string | null
   password?: string | null
+  max_accounts?: number
 }
 
 export interface UpdateProxyRequest {
@@ -1294,6 +1304,7 @@ export interface UpdateProxyRequest {
   username?: string | null
   password?: string | null
   status?: 'active' | 'inactive'
+  max_accounts?: number
 }
 
 export interface AdminDataPayload {
@@ -1313,6 +1324,7 @@ export interface AdminDataProxy {
   username?: string | null
   password?: string | null
   status: 'active' | 'inactive'
+  max_accounts?: number
 }
 
 export interface AdminDataAccount {

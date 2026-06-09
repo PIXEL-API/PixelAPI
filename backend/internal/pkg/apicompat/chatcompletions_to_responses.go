@@ -166,6 +166,14 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 			items = append(items, ResponsesInputItem{Role: "assistant", Content: partsJSON})
 		}
 	}
+	if len(items) == 0 && strings.TrimSpace(m.ReasoningContent) != "" && len(m.ToolCalls) == 0 {
+		parts := []ResponsesContentPart{{Type: "output_text", Text: m.ReasoningContent}}
+		partsJSON, err := json.Marshal(parts)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, ResponsesInputItem{Role: "assistant", Content: partsJSON})
+	}
 
 	// Emit one function_call item per tool_call.
 	for _, tc := range m.ToolCalls {

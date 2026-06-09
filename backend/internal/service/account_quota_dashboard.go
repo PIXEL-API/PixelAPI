@@ -26,39 +26,41 @@ type UserAccountQuotaPoolDashboard struct {
 }
 
 type AccountQuotaSummary struct {
-	Platform                string                       `json:"platform"`
-	Type                    string                       `json:"type"`
-	AccountCount            int                          `json:"account_count"`
-	ActiveAccountCount      int                          `json:"active_account_count"`
-	SchedulableAccountCount int                          `json:"schedulable_account_count"`
-	RateLimitedAccountCount int                          `json:"rate_limited_account_count"`
-	ErrorAccountCount       int                          `json:"error_account_count"`
-	DisabledAccountCount    int                          `json:"disabled_account_count"`
-	QuotaAccountCount       int                          `json:"quota_account_count"`
-	UnlimitedAccountCount   int                          `json:"unlimited_account_count"`
-	Total                   AccountQuotaDimensionSummary `json:"total"`
-	Daily                   AccountQuotaDimensionSummary `json:"daily"`
-	Weekly                  AccountQuotaDimensionSummary `json:"weekly"`
-	UsageWindows            []AccountUsageWindowSummary  `json:"usage_windows,omitempty"`
+	Platform                 string                       `json:"platform"`
+	Type                     string                       `json:"type"`
+	AccountCount             int                          `json:"account_count"`
+	ActiveAccountCount       int                          `json:"active_account_count"`
+	SchedulableAccountCount  int                          `json:"schedulable_account_count"`
+	RateLimitedAccountCount  int                          `json:"rate_limited_account_count"`
+	CodexQuotaProtectedCount int                          `json:"codex_quota_protected_account_count"`
+	ErrorAccountCount        int                          `json:"error_account_count"`
+	DisabledAccountCount     int                          `json:"disabled_account_count"`
+	QuotaAccountCount        int                          `json:"quota_account_count"`
+	UnlimitedAccountCount    int                          `json:"unlimited_account_count"`
+	Total                    AccountQuotaDimensionSummary `json:"total"`
+	Daily                    AccountQuotaDimensionSummary `json:"daily"`
+	Weekly                   AccountQuotaDimensionSummary `json:"weekly"`
+	UsageWindows             []AccountUsageWindowSummary  `json:"usage_windows,omitempty"`
 }
 
 type AccountQuotaGroupSummary struct {
-	GroupID                 *int64                       `json:"group_id"`
-	GroupName               string                       `json:"group_name"`
-	GroupStatus             string                       `json:"group_status"`
-	Platform                string                       `json:"platform"`
-	AccountCount            int                          `json:"account_count"`
-	ActiveAccountCount      int                          `json:"active_account_count"`
-	SchedulableAccountCount int                          `json:"schedulable_account_count"`
-	RateLimitedAccountCount int                          `json:"rate_limited_account_count"`
-	ErrorAccountCount       int                          `json:"error_account_count"`
-	DisabledAccountCount    int                          `json:"disabled_account_count"`
-	QuotaAccountCount       int                          `json:"quota_account_count"`
-	UnlimitedAccountCount   int                          `json:"unlimited_account_count"`
-	Total                   AccountQuotaDimensionSummary `json:"total"`
-	Daily                   AccountQuotaDimensionSummary `json:"daily"`
-	Weekly                  AccountQuotaDimensionSummary `json:"weekly"`
-	UsageWindows            []AccountUsageWindowSummary  `json:"usage_windows,omitempty"`
+	GroupID                  *int64                       `json:"group_id"`
+	GroupName                string                       `json:"group_name"`
+	GroupStatus              string                       `json:"group_status"`
+	Platform                 string                       `json:"platform"`
+	AccountCount             int                          `json:"account_count"`
+	ActiveAccountCount       int                          `json:"active_account_count"`
+	SchedulableAccountCount  int                          `json:"schedulable_account_count"`
+	RateLimitedAccountCount  int                          `json:"rate_limited_account_count"`
+	CodexQuotaProtectedCount int                          `json:"codex_quota_protected_account_count"`
+	ErrorAccountCount        int                          `json:"error_account_count"`
+	DisabledAccountCount     int                          `json:"disabled_account_count"`
+	QuotaAccountCount        int                          `json:"quota_account_count"`
+	UnlimitedAccountCount    int                          `json:"unlimited_account_count"`
+	Total                    AccountQuotaDimensionSummary `json:"total"`
+	Daily                    AccountQuotaDimensionSummary `json:"daily"`
+	Weekly                   AccountQuotaDimensionSummary `json:"weekly"`
+	UsageWindows             []AccountUsageWindowSummary  `json:"usage_windows,omitempty"`
 }
 
 type AccountQuotaDimensionSummary struct {
@@ -488,22 +490,23 @@ func (a *accountQuotaGroupSummaryAccumulator) finalize() AccountQuotaGroupSummar
 	}
 	summary := a.core.finalize()
 	return AccountQuotaGroupSummary{
-		GroupID:                 cloneInt64Ptr(a.groupID),
-		GroupName:               a.groupName,
-		GroupStatus:             a.groupStatus,
-		Platform:                summary.Platform,
-		AccountCount:            summary.AccountCount,
-		ActiveAccountCount:      summary.ActiveAccountCount,
-		SchedulableAccountCount: summary.SchedulableAccountCount,
-		RateLimitedAccountCount: summary.RateLimitedAccountCount,
-		ErrorAccountCount:       summary.ErrorAccountCount,
-		DisabledAccountCount:    summary.DisabledAccountCount,
-		QuotaAccountCount:       summary.QuotaAccountCount,
-		UnlimitedAccountCount:   summary.UnlimitedAccountCount,
-		Total:                   summary.Total,
-		Daily:                   summary.Daily,
-		Weekly:                  summary.Weekly,
-		UsageWindows:            summary.UsageWindows,
+		GroupID:                  cloneInt64Ptr(a.groupID),
+		GroupName:                a.groupName,
+		GroupStatus:              a.groupStatus,
+		Platform:                 summary.Platform,
+		AccountCount:             summary.AccountCount,
+		ActiveAccountCount:       summary.ActiveAccountCount,
+		SchedulableAccountCount:  summary.SchedulableAccountCount,
+		RateLimitedAccountCount:  summary.RateLimitedAccountCount,
+		CodexQuotaProtectedCount: summary.CodexQuotaProtectedCount,
+		ErrorAccountCount:        summary.ErrorAccountCount,
+		DisabledAccountCount:     summary.DisabledAccountCount,
+		QuotaAccountCount:        summary.QuotaAccountCount,
+		UnlimitedAccountCount:    summary.UnlimitedAccountCount,
+		Total:                    summary.Total,
+		Daily:                    summary.Daily,
+		Weekly:                   summary.Weekly,
+		UsageWindows:             summary.UsageWindows,
 	}
 }
 
@@ -578,6 +581,8 @@ func (a *accountQuotaSummaryAccumulator) addAccountWithSchedulability(account Ac
 		a.summary.DisabledAccountCount++
 	} else if account.IsRateLimitedAt(now) || account.IsOverloadedAt(now) || isAccountTemporarilyUnschedulable(account, now) {
 		a.summary.RateLimitedAccountCount++
+	} else if account.IsCodexQuotaProtectionActiveAt(now) {
+		a.summary.CodexQuotaProtectedCount++
 	}
 	if schedulable {
 		a.summary.SchedulableAccountCount++

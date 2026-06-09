@@ -565,6 +565,18 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 		}
 	}
 
+	// Codex auto-review is the hidden request model; published billing uses GPT-5.3-Codex.
+	for _, candidate := range lookupCandidates {
+		if candidate == "codex-auto-review" {
+			if pricing, ok := s.pricingData["gpt-5.3-codex"]; ok {
+				logger.With(zap.String("component", "service.pricing")).
+					Info("[Pricing] OpenAI billing matched codex-auto-review -> gpt-5.3-codex")
+				return pricing
+			}
+			return s.matchOpenAIModel("gpt-5.3-codex")
+		}
+	}
+
 	// 2. 处理常见的模型名称变体
 	// claude-opus-4-5-20251101 -> claude-opus-4.5-20251101
 	for _, candidate := range lookupCandidates {

@@ -49,9 +49,90 @@
             @keyup.enter="resetAndLoad"
           />
         </div>
+        <button
+          type="button"
+          class="btn btn-secondary h-10 gap-2"
+          :disabled="exportCreating || isExportActive"
+          :title="t('admin.revenue.shareSettlements.exportCurrentFilter')"
+          @click="createExport"
+        >
+          <Icon
+            :name="exportCreating ? 'refresh' : 'download'"
+            size="md"
+            :class="exportCreating ? 'animate-spin' : ''"
+          />
+          <span class="hidden sm:inline">
+            {{ exportCreating ? t('admin.revenue.shareSettlements.exporting') : t('admin.revenue.shareSettlements.export') }}
+          </span>
+        </button>
         <button type="button" class="btn btn-secondary h-10" :disabled="loading" @click="loadSettlements">
           <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
         </button>
+      </div>
+    </div>
+
+    <div
+      v-if="exportTask"
+      class="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-700 dark:bg-dark-800/70"
+    >
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.revenue.shareSettlements.exportTask') }}
+            </span>
+            <span class="rounded-full px-2.5 py-1 text-xs font-medium" :class="exportStatusClass(exportTask.status)">
+              {{ exportStatusLabel(exportTask.status) }}
+            </span>
+            <span v-if="exportTask.file_name" class="truncate text-xs text-gray-500 dark:text-gray-400">
+              {{ exportTask.file_name }}
+            </span>
+          </div>
+          <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700">
+            <div
+              class="h-full rounded-full bg-emerald-600 transition-all"
+              :style="{ width: `${exportProgressPercent}%` }"
+            />
+          </div>
+          <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+            <span>
+              {{ t('admin.revenue.shareSettlements.exportProgress', {
+                done: formatInteger(exportTask.exported_rows),
+                total: formatInteger(exportTask.total_rows)
+              }) }}
+            </span>
+            <span v-if="exportTask.file_count">
+              {{ t('admin.revenue.shareSettlements.exportFiles', { count: exportTask.file_count }) }}
+            </span>
+            <span v-if="exportTask.file_size_bytes">
+              {{ formatFileSize(exportTask.file_size_bytes) }}
+            </span>
+          </div>
+          <p v-if="exportTask.status === 'failed' && exportTask.error_message" class="mt-2 text-xs text-rose-600 dark:text-rose-300">
+            {{ exportTask.error_message }}
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            v-if="exportTask.status === 'completed'"
+            type="button"
+            class="btn btn-primary h-9 gap-2"
+            :disabled="exportDownloading"
+            @click="downloadExport"
+          >
+            <Icon name="download" size="sm" />
+            <span>{{ t('admin.revenue.shareSettlements.exportDownload') }}</span>
+          </button>
+          <button
+            v-if="isExportActive"
+            type="button"
+            class="btn btn-secondary h-9 gap-2"
+            @click="cancelExport"
+          >
+            <Icon name="x" size="sm" />
+            <span>{{ t('admin.revenue.shareSettlements.exportCancel') }}</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -181,13 +262,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import { revenueAPI } from '@/api/admin/revenue'
-import type { RevenueShareSettlementItem, RevenueShareSettlementParams } from '@/api/admin/revenue'
+import type {
+  RevenueShareSettlementExportStatus,
+  RevenueShareSettlementExportTask,
+  RevenueShareSettlementItem,
+  RevenueShareSettlementParams
+} from '@/api/admin/revenue'
 import { useAppStore } from '@/stores/app'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 
@@ -208,6 +294,10 @@ const selectedRangeDays = ref<RangeDays | null>(rangeDays.value)
 const status = ref<SettlementStatus>('all')
 const search = ref('')
 const loading = ref(false)
+const exportCreating = ref(false)
+const exportDownloading = ref(false)
+const exportPolling = ref(false)
+const exportTask = ref<RevenueShareSettlementExportTask | null>(null)
 const items = ref<RevenueShareSettlementItem[]>([])
 const pagination = reactive({
   page: 1,
@@ -226,6 +316,21 @@ const percentFormatter = computed(() => new Intl.NumberFormat(locale.value, {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2
 }))
+
+const integerFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+  maximumFractionDigits: 0
+}))
+
+const isExportActive = computed(() => exportTask.value?.status === 'pending' || exportTask.value?.status === 'running')
+
+const exportProgressPercent = computed(() => {
+  const task = exportTask.value
+  if (!task) return 0
+  if (task.total_rows <= 0) return task.status === 'completed' ? 100 : 0
+  return Math.max(0, Math.min(100, Math.round((task.exported_rows / task.total_rows) * 100)))
+})
+
+let exportPollTimer: number | null = null
 
 async function loadSettlements() {
   if (!validateDateRange()) return
@@ -249,6 +354,83 @@ async function loadSettlements() {
     appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.shareSettlements.errors', t('admin.revenue.shareSettlements.loadFailed')))
   } finally {
     loading.value = false
+  }
+}
+
+async function createExport() {
+  if (!validateDateRange()) return
+  exportCreating.value = true
+  try {
+    exportTask.value = await revenueAPI.createShareSettlementExport({
+      start_date: startDate.value,
+      end_date: endDate.value,
+      timezone: getBrowserTimezone(),
+      status: status.value,
+      search: search.value.trim() || undefined
+    })
+    appStore.showSuccess(t('admin.revenue.shareSettlements.exportCreated'))
+    startExportPolling()
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.shareSettlements.errors', t('admin.revenue.shareSettlements.exportCreateFailed')))
+  } finally {
+    exportCreating.value = false
+  }
+}
+
+async function refreshExportTask(showError = false) {
+  if (!exportTask.value || exportPolling.value) return
+  exportPolling.value = true
+  try {
+    exportTask.value = await revenueAPI.getShareSettlementExport(exportTask.value.id)
+    if (!isExportActive.value) {
+      stopExportPolling()
+    }
+  } catch (err: unknown) {
+    stopExportPolling()
+    if (showError) {
+      appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.shareSettlements.errors', t('admin.revenue.shareSettlements.exportLoadFailed')))
+    }
+  } finally {
+    exportPolling.value = false
+  }
+}
+
+async function cancelExport() {
+  if (!exportTask.value || !isExportActive.value) return
+  try {
+    exportTask.value = await revenueAPI.cancelShareSettlementExport(exportTask.value.id)
+    stopExportPolling()
+    appStore.showSuccess(t('admin.revenue.shareSettlements.exportCanceledToast'))
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.shareSettlements.errors', t('admin.revenue.shareSettlements.exportCancelFailed')))
+  }
+}
+
+async function downloadExport() {
+  if (!exportTask.value || exportTask.value.status !== 'completed') return
+  exportDownloading.value = true
+  try {
+    await revenueAPI.downloadShareSettlementExport(exportTask.value.id, exportTask.value.file_name)
+    appStore.showSuccess(t('admin.revenue.shareSettlements.exportDownloaded'))
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.shareSettlements.errors', t('admin.revenue.shareSettlements.exportDownloadFailed')))
+  } finally {
+    exportDownloading.value = false
+  }
+}
+
+function startExportPolling() {
+  stopExportPolling()
+  if (!isExportActive.value) return
+  exportPollTimer = window.setInterval(() => {
+    void refreshExportTask()
+  }, 2000)
+}
+
+function stopExportPolling() {
+  if (exportPollTimer !== null) {
+    window.clearInterval(exportPollTimer)
+    exportPollTimer = null
   }
 }
 
@@ -331,6 +513,22 @@ function formatPercent(value: number): string {
   return percentFormatter.value.format(Number.isFinite(value) ? value : 0)
 }
 
+function formatInteger(value: number): string {
+  return integerFormatter.value.format(Number.isFinite(value) ? value : 0)
+}
+
+function formatFileSize(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index++
+  }
+  return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+}
+
 function formatDateTime(value: string): string {
   const parsed = Date.parse(value)
   if (!Number.isFinite(parsed)) return '--'
@@ -349,6 +547,29 @@ function statusLabel(value: string): string {
   return translated === key ? value : translated
 }
 
+function exportStatusLabel(value: RevenueShareSettlementExportStatus): string {
+  const key = `admin.revenue.shareSettlements.exportStatus.${value}`
+  const translated = t(key)
+  return translated === key ? value : translated
+}
+
+function exportStatusClass(value: RevenueShareSettlementExportStatus): string {
+  switch (value) {
+    case 'pending':
+      return 'bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
+    case 'running':
+      return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+    case 'completed':
+      return 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+    case 'failed':
+      return 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'
+    case 'canceled':
+      return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
+    default:
+      return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
+  }
+}
+
 function statusClass(value: string): string {
   switch (value) {
     case 'applied':
@@ -362,7 +583,19 @@ function statusClass(value: string): string {
   }
 }
 
+function getBrowserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
 onMounted(() => {
   void loadSettlements()
+})
+
+onUnmounted(() => {
+  stopExportPolling()
 })
 </script>

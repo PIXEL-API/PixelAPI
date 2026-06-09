@@ -18,7 +18,7 @@ type conversationRepoStub struct {
 	getNoticeBySourceFunc   func(context.Context, int64, string, string) (*Conversation, error)
 	listFunc                func(context.Context, pagination.PaginationParams, ConversationListFilters) ([]Conversation, *pagination.PaginationResult, error)
 	listForUserFunc         func(context.Context, int64, pagination.PaginationParams, ConversationListFilters) ([]Conversation, *pagination.PaginationResult, error)
-	listMessagesFunc        func(context.Context, int64, pagination.PaginationParams) ([]ConversationMessage, *pagination.PaginationResult, error)
+	listMessagesFunc        func(context.Context, int64, pagination.PaginationParams, ConversationMessageListFilters) ([]ConversationMessage, *pagination.PaginationResult, error)
 	markReadFunc            func(context.Context, int64, string, *int64) (*Conversation, error)
 	updateStatusFunc        func(context.Context, int64, string) (*Conversation, error)
 	updateAssigneeFunc      func(context.Context, int64, *int64) (*Conversation, error)
@@ -75,9 +75,9 @@ func (s *conversationRepoStub) ListForUser(ctx context.Context, userID int64, pa
 	return nil, &pagination.PaginationResult{}, nil
 }
 
-func (s *conversationRepoStub) ListMessages(ctx context.Context, conversationID int64, params pagination.PaginationParams) ([]ConversationMessage, *pagination.PaginationResult, error) {
+func (s *conversationRepoStub) ListMessages(ctx context.Context, conversationID int64, params pagination.PaginationParams, filters ConversationMessageListFilters) ([]ConversationMessage, *pagination.PaginationResult, error) {
 	if s.listMessagesFunc != nil {
-		return s.listMessagesFunc(ctx, conversationID, params)
+		return s.listMessagesFunc(ctx, conversationID, params, filters)
 	}
 	return nil, &pagination.PaginationResult{}, nil
 }
@@ -528,7 +528,7 @@ func TestConversationUserScopedOperationsRejectOtherUserConversation(t *testing.
 			require.Equal(t, int64(10), id)
 			return nil, repoErr
 		},
-		listMessagesFunc: func(context.Context, int64, pagination.PaginationParams) ([]ConversationMessage, *pagination.PaginationResult, error) {
+		listMessagesFunc: func(context.Context, int64, pagination.PaginationParams, ConversationMessageListFilters) ([]ConversationMessage, *pagination.PaginationResult, error) {
 			t.Fatal("ListMessages must not be called before user ownership is verified")
 			return nil, nil, nil
 		},
@@ -543,7 +543,7 @@ func TestConversationUserScopedOperationsRejectOtherUserConversation(t *testing.
 	}
 	svc := NewConversationService(repo, &conversationUserRepoStub{})
 
-	_, _, err := svc.ListMessagesForUser(context.Background(), 1, 10, pagination.PaginationParams{Page: 1, PageSize: 20})
+	_, _, err := svc.ListMessagesForUser(context.Background(), 1, 10, pagination.PaginationParams{Page: 1, PageSize: 20}, ConversationMessageListFilters{})
 	require.ErrorIs(t, err, repoErr)
 
 	_, err = svc.MarkReadForUser(context.Background(), 1, 10, nil)
@@ -576,7 +576,7 @@ func TestConversationUserScopedOperationsRequirePositiveUserID(t *testing.T) {
 	_, err = svc.GetForUser(context.Background(), 0, 10)
 	require.ErrorIs(t, err, ErrConversationInputRequired)
 
-	_, _, err = svc.ListMessagesForUser(context.Background(), 0, 10, pagination.PaginationParams{Page: 1, PageSize: 20})
+	_, _, err = svc.ListMessagesForUser(context.Background(), 0, 10, pagination.PaginationParams{Page: 1, PageSize: 20}, ConversationMessageListFilters{})
 	require.ErrorIs(t, err, ErrConversationInputRequired)
 
 	_, err = svc.MarkReadForUser(context.Background(), 0, 10, nil)
@@ -608,6 +608,34 @@ func TestConversationMarkReadForUserPassesReadUntilMessageID(t *testing.T) {
 	svc := NewConversationService(repo, &conversationUserRepoStub{})
 
 	_, err := svc.MarkReadForUser(context.Background(), 1, 10, &readUntilMessageID)
+
+	require.NoError(t, err)
+}
+
+func TestConversationListMessagesForUserPassesCursorFilters(t *testing.T) {
+	repo := &conversationRepoStub{
+		getByIDForUserFunc: func(_ context.Context, userID, id int64) (*Conversation, error) {
+			require.Equal(t, int64(1), userID)
+			require.Equal(t, int64(10), id)
+			return &Conversation{ID: id, UserID: userID, Kind: ConversationKindTicket, Status: ConversationStatusOpen}, nil
+		},
+		listMessagesFunc: func(_ context.Context, conversationID int64, params pagination.PaginationParams, filters ConversationMessageListFilters) ([]ConversationMessage, *pagination.PaginationResult, error) {
+			require.Equal(t, int64(10), conversationID)
+			require.Equal(t, 50, params.PageSize)
+			require.Equal(t, int64(99), filters.BeforeID)
+			require.True(t, filters.Latest)
+			return []ConversationMessage{}, &pagination.PaginationResult{}, nil
+		},
+	}
+	svc := NewConversationService(repo, &conversationUserRepoStub{})
+
+	_, _, err := svc.ListMessagesForUser(
+		context.Background(),
+		1,
+		10,
+		pagination.PaginationParams{Page: 1, PageSize: 50},
+		ConversationMessageListFilters{BeforeID: 99, Latest: true},
+	)
 
 	require.NoError(t, err)
 }

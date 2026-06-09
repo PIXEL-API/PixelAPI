@@ -17,8 +17,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitordailyrollup"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorhistory"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
-	"github.com/Wei-Shaw/sub2api/ent/conversation"
-	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
@@ -737,117 +735,6 @@ func init() {
 	channelmonitorrequesttemplate.DefaultBodyOverrideMode = channelmonitorrequesttemplateDescBodyOverrideMode.Default.(string)
 	// channelmonitorrequesttemplate.BodyOverrideModeValidator is a validator for the "body_override_mode" field. It is called by the builders before save.
 	channelmonitorrequesttemplate.BodyOverrideModeValidator = channelmonitorrequesttemplateDescBodyOverrideMode.Validators[0].(func(string) error)
-	conversationMixin := schema.Conversation{}.Mixin()
-	conversationMixinFields0 := conversationMixin[0].Fields()
-	_ = conversationMixinFields0
-	conversationFields := schema.Conversation{}.Fields()
-	_ = conversationFields
-	// conversationDescCreatedAt is the schema descriptor for created_at field.
-	conversationDescCreatedAt := conversationMixinFields0[0].Descriptor()
-	// conversation.DefaultCreatedAt holds the default value on creation for the created_at field.
-	conversation.DefaultCreatedAt = conversationDescCreatedAt.Default.(func() time.Time)
-	// conversationDescUpdatedAt is the schema descriptor for updated_at field.
-	conversationDescUpdatedAt := conversationMixinFields0[1].Descriptor()
-	// conversation.DefaultUpdatedAt holds the default value on creation for the updated_at field.
-	conversation.DefaultUpdatedAt = conversationDescUpdatedAt.Default.(func() time.Time)
-	// conversation.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
-	conversation.UpdateDefaultUpdatedAt = conversationDescUpdatedAt.UpdateDefault.(func() time.Time)
-	// conversationDescSubject is the schema descriptor for subject field.
-	conversationDescSubject := conversationFields[1].Descriptor()
-	// conversation.SubjectValidator is a validator for the "subject" field. It is called by the builders before save.
-	conversation.SubjectValidator = func() func(string) error {
-		validators := conversationDescSubject.Validators
-		fns := [...]func(string) error{
-			validators[0].(func(string) error),
-			validators[1].(func(string) error),
-		}
-		return func(subject string) error {
-			for _, fn := range fns {
-				if err := fn(subject); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}()
-	// conversationDescStatus is the schema descriptor for status field.
-	conversationDescStatus := conversationFields[2].Descriptor()
-	// conversation.DefaultStatus holds the default value on creation for the status field.
-	conversation.DefaultStatus = conversationDescStatus.Default.(string)
-	// conversation.StatusValidator is a validator for the "status" field. It is called by the builders before save.
-	conversation.StatusValidator = conversationDescStatus.Validators[0].(func(string) error)
-	// conversationDescKind is the schema descriptor for kind field.
-	conversationDescKind := conversationFields[3].Descriptor()
-	// conversation.DefaultKind holds the default value on creation for the kind field.
-	conversation.DefaultKind = conversationDescKind.Default.(string)
-	// conversation.KindValidator is a validator for the "kind" field. It is called by the builders before save.
-	conversation.KindValidator = conversationDescKind.Validators[0].(func(string) error)
-	// conversationDescPriority is the schema descriptor for priority field.
-	conversationDescPriority := conversationFields[4].Descriptor()
-	// conversation.DefaultPriority holds the default value on creation for the priority field.
-	conversation.DefaultPriority = conversationDescPriority.Default.(string)
-	// conversation.PriorityValidator is a validator for the "priority" field. It is called by the builders before save.
-	conversation.PriorityValidator = conversationDescPriority.Validators[0].(func(string) error)
-	// conversationDescType is the schema descriptor for type field.
-	conversationDescType := conversationFields[5].Descriptor()
-	// conversation.DefaultType holds the default value on creation for the type field.
-	conversation.DefaultType = conversationDescType.Default.(string)
-	// conversation.TypeValidator is a validator for the "type" field. It is called by the builders before save.
-	conversation.TypeValidator = conversationDescType.Validators[0].(func(string) error)
-	// conversationDescSource is the schema descriptor for source field.
-	conversationDescSource := conversationFields[6].Descriptor()
-	// conversation.DefaultSource holds the default value on creation for the source field.
-	conversation.DefaultSource = conversationDescSource.Default.(string)
-	// conversation.SourceValidator is a validator for the "source" field. It is called by the builders before save.
-	conversation.SourceValidator = conversationDescSource.Validators[0].(func(string) error)
-	// conversationDescSourceID is the schema descriptor for source_id field.
-	conversationDescSourceID := conversationFields[7].Descriptor()
-	// conversation.DefaultSourceID holds the default value on creation for the source_id field.
-	conversation.DefaultSourceID = conversationDescSourceID.Default.(string)
-	// conversation.SourceIDValidator is a validator for the "source_id" field. It is called by the builders before save.
-	conversation.SourceIDValidator = conversationDescSourceID.Validators[0].(func(string) error)
-	// conversationDescLastMessageSenderType is the schema descriptor for last_message_sender_type field.
-	conversationDescLastMessageSenderType := conversationFields[11].Descriptor()
-	// conversation.DefaultLastMessageSenderType holds the default value on creation for the last_message_sender_type field.
-	conversation.DefaultLastMessageSenderType = conversationDescLastMessageSenderType.Default.(string)
-	// conversation.LastMessageSenderTypeValidator is a validator for the "last_message_sender_type" field. It is called by the builders before save.
-	conversation.LastMessageSenderTypeValidator = conversationDescLastMessageSenderType.Validators[0].(func(string) error)
-	// conversationDescLastMessageExcerpt is the schema descriptor for last_message_excerpt field.
-	conversationDescLastMessageExcerpt := conversationFields[12].Descriptor()
-	// conversation.DefaultLastMessageExcerpt holds the default value on creation for the last_message_excerpt field.
-	conversation.DefaultLastMessageExcerpt = conversationDescLastMessageExcerpt.Default.(string)
-	// conversation.LastMessageExcerptValidator is a validator for the "last_message_excerpt" field. It is called by the builders before save.
-	conversation.LastMessageExcerptValidator = conversationDescLastMessageExcerpt.Validators[0].(func(string) error)
-	// conversationDescLastMessageAt is the schema descriptor for last_message_at field.
-	conversationDescLastMessageAt := conversationFields[13].Descriptor()
-	// conversation.DefaultLastMessageAt holds the default value on creation for the last_message_at field.
-	conversation.DefaultLastMessageAt = conversationDescLastMessageAt.Default.(func() time.Time)
-	conversationmessageFields := schema.ConversationMessage{}.Fields()
-	_ = conversationmessageFields
-	// conversationmessageDescSenderType is the schema descriptor for sender_type field.
-	conversationmessageDescSenderType := conversationmessageFields[1].Descriptor()
-	// conversationmessage.SenderTypeValidator is a validator for the "sender_type" field. It is called by the builders before save.
-	conversationmessage.SenderTypeValidator = conversationmessageDescSenderType.Validators[0].(func(string) error)
-	// conversationmessageDescMessageType is the schema descriptor for message_type field.
-	conversationmessageDescMessageType := conversationmessageFields[3].Descriptor()
-	// conversationmessage.DefaultMessageType holds the default value on creation for the message_type field.
-	conversationmessage.DefaultMessageType = conversationmessageDescMessageType.Default.(string)
-	// conversationmessage.MessageTypeValidator is a validator for the "message_type" field. It is called by the builders before save.
-	conversationmessage.MessageTypeValidator = conversationmessageDescMessageType.Validators[0].(func(string) error)
-	// conversationmessageDescContentFormat is the schema descriptor for content_format field.
-	conversationmessageDescContentFormat := conversationmessageFields[4].Descriptor()
-	// conversationmessage.DefaultContentFormat holds the default value on creation for the content_format field.
-	conversationmessage.DefaultContentFormat = conversationmessageDescContentFormat.Default.(string)
-	// conversationmessage.ContentFormatValidator is a validator for the "content_format" field. It is called by the builders before save.
-	conversationmessage.ContentFormatValidator = conversationmessageDescContentFormat.Validators[0].(func(string) error)
-	// conversationmessageDescContent is the schema descriptor for content field.
-	conversationmessageDescContent := conversationmessageFields[5].Descriptor()
-	// conversationmessage.ContentValidator is a validator for the "content" field. It is called by the builders before save.
-	conversationmessage.ContentValidator = conversationmessageDescContent.Validators[0].(func(string) error)
-	// conversationmessageDescCreatedAt is the schema descriptor for created_at field.
-	conversationmessageDescCreatedAt := conversationmessageFields[7].Descriptor()
-	// conversationmessage.DefaultCreatedAt holds the default value on creation for the created_at field.
-	conversationmessage.DefaultCreatedAt = conversationmessageDescCreatedAt.Default.(func() time.Time)
 	errorpassthroughruleMixin := schema.ErrorPassthroughRule{}.Mixin()
 	errorpassthroughruleMixinFields0 := errorpassthroughruleMixin[0].Fields()
 	_ = errorpassthroughruleMixinFields0
@@ -1528,6 +1415,10 @@ func init() {
 	proxy.DefaultStatus = proxyDescStatus.Default.(string)
 	// proxy.StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	proxy.StatusValidator = proxyDescStatus.Validators[0].(func(string) error)
+	// proxyDescMaxAccounts is the schema descriptor for max_accounts field.
+	proxyDescMaxAccounts := proxyFields[7].Descriptor()
+	// proxy.DefaultMaxAccounts holds the default value on creation for the max_accounts field.
+	proxy.DefaultMaxAccounts = proxyDescMaxAccounts.Default.(int)
 	redeemcodeFields := schema.RedeemCode{}.Fields()
 	_ = redeemcodeFields
 	// redeemcodeDescCode is the schema descriptor for code field.

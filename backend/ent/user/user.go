@@ -75,12 +75,6 @@ const (
 	EdgeAssignedSubscriptions = "assigned_subscriptions"
 	// EdgeAnnouncementReads holds the string denoting the announcement_reads edge name in mutations.
 	EdgeAnnouncementReads = "announcement_reads"
-	// EdgeConversations holds the string denoting the conversations edge name in mutations.
-	EdgeConversations = "conversations"
-	// EdgeAssignedConversations holds the string denoting the assigned_conversations edge name in mutations.
-	EdgeAssignedConversations = "assigned_conversations"
-	// EdgeSentConversationMessages holds the string denoting the sent_conversation_messages edge name in mutations.
-	EdgeSentConversationMessages = "sent_conversation_messages"
 	// EdgeSupportThreads holds the string denoting the support_threads edge name in mutations.
 	EdgeSupportThreads = "support_threads"
 	// EdgeAssignedSupportThreads holds the string denoting the assigned_support_threads edge name in mutations.
@@ -148,27 +142,6 @@ const (
 	AnnouncementReadsInverseTable = "announcement_reads"
 	// AnnouncementReadsColumn is the table column denoting the announcement_reads relation/edge.
 	AnnouncementReadsColumn = "user_id"
-	// ConversationsTable is the table that holds the conversations relation/edge.
-	ConversationsTable = "conversations"
-	// ConversationsInverseTable is the table name for the Conversation entity.
-	// It exists in this package in order to avoid circular dependency with the "conversation" package.
-	ConversationsInverseTable = "conversations"
-	// ConversationsColumn is the table column denoting the conversations relation/edge.
-	ConversationsColumn = "user_id"
-	// AssignedConversationsTable is the table that holds the assigned_conversations relation/edge.
-	AssignedConversationsTable = "conversations"
-	// AssignedConversationsInverseTable is the table name for the Conversation entity.
-	// It exists in this package in order to avoid circular dependency with the "conversation" package.
-	AssignedConversationsInverseTable = "conversations"
-	// AssignedConversationsColumn is the table column denoting the assigned_conversations relation/edge.
-	AssignedConversationsColumn = "assigned_admin_id"
-	// SentConversationMessagesTable is the table that holds the sent_conversation_messages relation/edge.
-	SentConversationMessagesTable = "conversation_messages"
-	// SentConversationMessagesInverseTable is the table name for the ConversationMessage entity.
-	// It exists in this package in order to avoid circular dependency with the "conversationmessage" package.
-	SentConversationMessagesInverseTable = "conversation_messages"
-	// SentConversationMessagesColumn is the table column denoting the sent_conversation_messages relation/edge.
-	SentConversationMessagesColumn = "sender_id"
 	// SupportThreadsTable is the table that holds the support_threads relation/edge.
 	SupportThreadsTable = "support_threads"
 	// SupportThreadsInverseTable is the table name for the SupportThread entity.
@@ -581,48 +554,6 @@ func ByAnnouncementReads(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption
 	}
 }
 
-// ByConversationsCount orders the results by conversations count.
-func ByConversationsCount(opts ...sql.OrderTermOption) OrderOption {
-	return func(s *sql.Selector) {
-		sqlgraph.OrderByNeighborsCount(s, newConversationsStep(), opts...)
-	}
-}
-
-// ByConversations orders the results by conversations terms.
-func ByConversations(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
-	return func(s *sql.Selector) {
-		sqlgraph.OrderByNeighborTerms(s, newConversationsStep(), append([]sql.OrderTerm{term}, terms...)...)
-	}
-}
-
-// ByAssignedConversationsCount orders the results by assigned_conversations count.
-func ByAssignedConversationsCount(opts ...sql.OrderTermOption) OrderOption {
-	return func(s *sql.Selector) {
-		sqlgraph.OrderByNeighborsCount(s, newAssignedConversationsStep(), opts...)
-	}
-}
-
-// ByAssignedConversations orders the results by assigned_conversations terms.
-func ByAssignedConversations(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
-	return func(s *sql.Selector) {
-		sqlgraph.OrderByNeighborTerms(s, newAssignedConversationsStep(), append([]sql.OrderTerm{term}, terms...)...)
-	}
-}
-
-// BySentConversationMessagesCount orders the results by sent_conversation_messages count.
-func BySentConversationMessagesCount(opts ...sql.OrderTermOption) OrderOption {
-	return func(s *sql.Selector) {
-		sqlgraph.OrderByNeighborsCount(s, newSentConversationMessagesStep(), opts...)
-	}
-}
-
-// BySentConversationMessages orders the results by sent_conversation_messages terms.
-func BySentConversationMessages(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
-	return func(s *sql.Selector) {
-		sqlgraph.OrderByNeighborTerms(s, newSentConversationMessagesStep(), append([]sql.OrderTerm{term}, terms...)...)
-	}
-}
-
 // BySupportThreadsCount orders the results by support_threads count.
 func BySupportThreadsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -865,27 +796,6 @@ func newAnnouncementReadsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(AnnouncementReadsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, AnnouncementReadsTable, AnnouncementReadsColumn),
-	)
-}
-func newConversationsStep() *sqlgraph.Step {
-	return sqlgraph.NewStep(
-		sqlgraph.From(Table, FieldID),
-		sqlgraph.To(ConversationsInverseTable, FieldID),
-		sqlgraph.Edge(sqlgraph.O2M, false, ConversationsTable, ConversationsColumn),
-	)
-}
-func newAssignedConversationsStep() *sqlgraph.Step {
-	return sqlgraph.NewStep(
-		sqlgraph.From(Table, FieldID),
-		sqlgraph.To(AssignedConversationsInverseTable, FieldID),
-		sqlgraph.Edge(sqlgraph.O2M, false, AssignedConversationsTable, AssignedConversationsColumn),
-	)
-}
-func newSentConversationMessagesStep() *sqlgraph.Step {
-	return sqlgraph.NewStep(
-		sqlgraph.From(Table, FieldID),
-		sqlgraph.To(SentConversationMessagesInverseTable, FieldID),
-		sqlgraph.Edge(sqlgraph.O2M, false, SentConversationMessagesTable, SentConversationMessagesColumn),
 	)
 }
 func newSupportThreadsStep() *sqlgraph.Step {

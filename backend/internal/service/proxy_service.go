@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrProxyNotFound = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
-	ErrProxyInUse    = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
+	ErrProxyNotFound             = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
+	ErrProxyInUse                = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
+	ErrProxyAccountLimitExceeded = infraerrors.Conflict("PROXY_ACCOUNT_LIMIT_EXCEEDED", "proxy account binding limit exceeded")
 )
 
 type ProxyRepository interface {
@@ -33,23 +34,25 @@ type ProxyRepository interface {
 
 // CreateProxyRequest 创建代理请求
 type CreateProxyRequest struct {
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Name        string `json:"name"`
+	Protocol    string `json:"protocol"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	MaxAccounts int    `json:"max_accounts"`
 }
 
 // UpdateProxyRequest 更新代理请求
 type UpdateProxyRequest struct {
-	Name     *string `json:"name"`
-	Protocol *string `json:"protocol"`
-	Host     *string `json:"host"`
-	Port     *int    `json:"port"`
-	Username *string `json:"username"`
-	Password *string `json:"password"`
-	Status   *string `json:"status"`
+	Name        *string `json:"name"`
+	Protocol    *string `json:"protocol"`
+	Host        *string `json:"host"`
+	Port        *int    `json:"port"`
+	Username    *string `json:"username"`
+	Password    *string `json:"password"`
+	Status      *string `json:"status"`
+	MaxAccounts *int    `json:"max_accounts"`
 }
 
 // ProxyService 代理管理服务
@@ -66,15 +69,19 @@ func NewProxyService(proxyRepo ProxyRepository) *ProxyService {
 
 // Create 创建代理
 func (s *ProxyService) Create(ctx context.Context, req CreateProxyRequest) (*Proxy, error) {
+	if req.MaxAccounts < 0 {
+		return nil, infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
+	}
 	// 创建代理
 	proxy := &Proxy{
-		Name:     req.Name,
-		Protocol: req.Protocol,
-		Host:     req.Host,
-		Port:     req.Port,
-		Username: req.Username,
-		Password: req.Password,
-		Status:   StatusActive,
+		Name:        req.Name,
+		Protocol:    req.Protocol,
+		Host:        req.Host,
+		Port:        req.Port,
+		Username:    req.Username,
+		Password:    req.Password,
+		Status:      StatusActive,
+		MaxAccounts: req.MaxAccounts,
 	}
 
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
@@ -145,6 +152,12 @@ func (s *ProxyService) Update(ctx context.Context, id int64, req UpdateProxyRequ
 
 	if req.Status != nil {
 		proxy.Status = *req.Status
+	}
+	if req.MaxAccounts != nil {
+		if *req.MaxAccounts < 0 {
+			return nil, infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
+		}
+		proxy.MaxAccounts = *req.MaxAccounts
 	}
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {

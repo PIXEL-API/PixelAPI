@@ -39,6 +39,7 @@ type Account struct {
 	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
 	Status             string
 	ErrorMessage       string
+	ErrorSince         *time.Time
 	LastUsedAt         *time.Time
 	ExpiresAt          *time.Time
 	AutoPauseOnExpired bool
@@ -176,20 +177,13 @@ func NormalizeOpenAISharedPoolAccountLevel(level string) string {
 	switch NormalizeAccountLevel(level) {
 	case AccountLevelUnknown:
 		return AccountLevelFree
-	case AccountLevelTeam:
-		return AccountLevelPlus
 	default:
 		return NormalizeAccountLevel(level)
 	}
 }
 
 func NormalizeOpenAISharedPoolRequiredLevel(level string) string {
-	switch NormalizeRequiredAccountLevel(level) {
-	case AccountLevelTeam:
-		return AccountLevelPlus
-	default:
-		return NormalizeRequiredAccountLevel(level)
-	}
+	return NormalizeRequiredAccountLevel(level)
 }
 
 func OpenAISharedPoolLevelRank(level string) int {
@@ -200,6 +194,8 @@ func OpenAISharedPoolLevelRank(level string) int {
 		return 2
 	case AccountLevelPro:
 		return 3
+	case AccountLevelTeam:
+		return 4
 	default:
 		return 0
 	}
@@ -213,7 +209,7 @@ func CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel string) bool {
 	account := NormalizeOpenAISharedPoolAccountLevel(accountLevel)
 	accountRank := OpenAISharedPoolLevelRank(account)
 	requiredRank := OpenAISharedPoolLevelRank(required)
-	return accountRank > 0 && requiredRank > 0 && accountRank >= requiredRank
+	return accountRank > 0 && requiredRank > 0 && account == required
 }
 
 func OpenAISharedPoolAllowedAccountLevels(requiredLevel string) []string {

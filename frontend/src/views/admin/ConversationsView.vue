@@ -156,9 +156,15 @@
               </div>
             </div>
 
-            <div ref="messagePaneRef" class="min-h-[18rem] flex-1 space-y-3 overflow-y-auto bg-gray-50/70 p-4 dark:bg-dark-900/40">
+            <div ref="messagePaneRef" class="min-h-[18rem] flex-1 space-y-3 overflow-y-auto bg-gray-50/70 p-4 dark:bg-dark-900/40" @scroll="handleMessagePaneScroll">
               <div v-if="messagesLoading" class="space-y-3">
                 <div v-for="index in 4" :key="index" class="h-20 animate-pulse rounded-xl bg-white dark:bg-dark-700"></div>
+              </div>
+              <div v-if="!messagesLoading && (hasOlderMessages || loadingOlderMessages)" class="flex justify-center">
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="loadingOlderMessages" @click="loadOlderMessages">
+                  <Icon name="arrowUp" size="sm" class="mr-1" />
+                  {{ loadingOlderMessages ? t('common.loading') : t('conversations.loadEarlier') }}
+                </button>
               </div>
               <div
                 v-for="message in messages"
@@ -301,6 +307,8 @@ const messages = ref<ConversationMessage[]>([])
 const unreadCount = computed(() => conversationNotificationStore.adminUnreadCount)
 const loading = ref(false)
 const messagesLoading = ref(false)
+const loadingOlderMessages = ref(false)
+const hasOlderMessages = ref(false)
 const sending = ref(false)
 const creating = ref(false)
 const assigning = ref(false)
@@ -315,7 +323,9 @@ let conversationRequestSeq = 0
 let messageRequestSeq = 0
 
 const REFRESH_INTERVAL_MS = 5000
+const MESSAGE_PAGE_SIZE = 50
 const MESSAGE_BOTTOM_THRESHOLD_PX = 96
+const MESSAGE_TOP_THRESHOLD_PX = 64
 
 const pagination = reactive({
   page: 1,
@@ -495,6 +505,7 @@ async function loadConversations(options: { silent?: boolean } = {}): Promise<vo
     if (selectedConversation.value && !result.items.some((item) => item.id === selectedConversation.value?.id)) {
       selectedConversation.value = null
       messages.value = []
+      hasOlderMessages.value = false
     }
   } catch (error) {
     if (!options.silent) {
@@ -523,18 +534,31 @@ function scrollMessagePaneToBottom(): void {
   pane.scrollTo({ top: pane.scrollHeight })
 }
 
-async function loadMessages(conversation: Conversation, options: { silent?: boolean, refreshUnread?: boolean } = {}): Promise<void> {
+function mergeMessages(current: ConversationMessage[], incoming: ConversationMessage[]): ConversationMessage[] {
+  const byId = new Map<number, ConversationMessage>()
+  for (const message of current) {
+    byId.set(message.id, message)
+  }
+  for (const message of incoming) {
+    byId.set(message.id, message)
+  }
+  return Array.from(byId.values()).sort((left, right) => left.id - right.id)
+}
+
+async function loadMessages(conversation: Conversation, options: { silent?: boolean, refreshUnread?: boolean, replace?: boolean } = {}): Promise<void> {
   const requestSeq = ++messageRequestSeq
   if (!options.silent) messagesLoading.value = true
   try {
-    const result = await adminAPI.conversations.listMessages(conversation.id, 1, 100)
+    const result = await adminAPI.conversations.listMessages(conversation.id, 1, MESSAGE_PAGE_SIZE, { latest: true })
     if (requestSeq !== messageRequestSeq || selectedConversation.value?.id !== conversation.id) return
+    const previousLastMessageId = messages.value.at(-1)?.id
+    const latestMessageId = result.items.at(-1)?.id
     const shouldScrollToBottom = !options.silent || (
-      result.items.length !== messages.value.length && isMessagePaneNearBottom()
+      latestMessageId !== previousLastMessageId && isMessagePaneNearBottom()
     )
-    messages.value = result.items
-    const lastVisibleMessageId = result.items.at(-1)?.id
-    const readConversation = await adminAPI.conversations.markRead(conversation.id, lastVisibleMessageId)
+    messages.value = options.replace ? result.items : mergeMessages(messages.value, result.items)
+    hasOlderMessages.value = messages.value.length < result.total
+    const readConversation = await adminAPI.conversations.markRead(conversation.id)
     if (requestSeq !== messageRequestSeq || selectedConversation.value?.id !== conversation.id) return
     updateConversationInList(readConversation)
     if (options.refreshUnread !== false) await loadUnreadCount()
@@ -553,11 +577,47 @@ async function loadMessages(conversation: Conversation, options: { silent?: bool
   }
 }
 
+async function loadOlderMessages(): Promise<void> {
+  if (!selectedConversation.value || loadingOlderMessages.value || !hasOlderMessages.value) return
+  const oldestMessageId = messages.value[0]?.id
+  if (!oldestMessageId) return
+
+  const conversationID = selectedConversation.value.id
+  const pane = messagePaneRef.value
+  const previousScrollHeight = pane?.scrollHeight ?? 0
+  const previousScrollTop = pane?.scrollTop ?? 0
+  loadingOlderMessages.value = true
+  try {
+    const result = await adminAPI.conversations.listMessages(conversationID, 1, MESSAGE_PAGE_SIZE, {
+      beforeId: oldestMessageId
+    })
+    if (selectedConversation.value?.id !== conversationID) return
+    messages.value = mergeMessages(messages.value, result.items)
+    hasOlderMessages.value = result.total > result.items.length
+    await nextTick()
+    if (pane) {
+      pane.scrollTop = pane.scrollHeight - previousScrollHeight + previousScrollTop
+    }
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.conversations.loadMessagesFailed')))
+  } finally {
+    loadingOlderMessages.value = false
+  }
+}
+
+function handleMessagePaneScroll(): void {
+  const pane = messagePaneRef.value
+  if (!pane || pane.scrollTop > MESSAGE_TOP_THRESHOLD_PX) return
+  void loadOlderMessages()
+}
+
 async function selectConversation(conversation: Conversation): Promise<void> {
   selectedConversation.value = conversation
   syncSelectionForms(conversation)
+  messages.value = []
+  hasOlderMessages.value = false
   replyContent.value = ''
-  await loadMessages(conversation)
+  await loadMessages(conversation, { replace: true })
 }
 
 function handleSearchInput(): void {
@@ -639,7 +699,9 @@ async function createConversation(): Promise<void> {
     updateConversationInList(conversation)
     selectedConversation.value = conversation
     syncSelectionForms(conversation)
-    await loadMessages(conversation, { refreshUnread: false })
+    messages.value = []
+    hasOlderMessages.value = false
+    await loadMessages(conversation, { refreshUnread: false, replace: true })
     await loadUnreadCount()
     appStore.showSuccess(t('admin.conversations.createSuccess'))
   } catch (error) {
@@ -675,8 +737,7 @@ async function markSelectedRead(): Promise<void> {
   if (!selectedConversation.value) return
   markingRead.value = true
   try {
-    const lastVisibleMessageId = messages.value.at(-1)?.id
-    const conversation = await adminAPI.conversations.markRead(selectedConversation.value.id, lastVisibleMessageId)
+    const conversation = await adminAPI.conversations.markRead(selectedConversation.value.id)
     updateConversationInList(conversation)
     await loadUnreadCount()
   } catch (error) {

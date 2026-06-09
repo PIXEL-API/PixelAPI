@@ -2913,12 +2913,12 @@ const requiredAccountLevelOptions = computed(() => [
   { value: "free", label: t("admin.accounts.accountLevel.free") },
   { value: "plus", label: t("admin.accounts.accountLevel.plus") },
   { value: "pro", label: t("admin.accounts.accountLevel.pro") },
+  { value: "team", label: t("admin.accounts.accountLevel.team") },
 ]);
 
 const requiredAccountLevelLabel = (level?: Exclude<AccountLevel, "unknown"> | "") => {
   if (!level) return "";
-  const normalizedLevel = level === "team" ? "plus" : level;
-  return t(`admin.accounts.accountLevel.${normalizedLevel}`);
+  return t(`admin.accounts.accountLevel.${level}`);
 };
 
 // 降级分组选项（创建时）- 仅包含 anthropic 平台且未启用 claude_code_only 的分组
@@ -3660,9 +3660,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.platform = group.platform;
   editForm.required_account_level =
     group.platform === "openai"
-      ? group.required_account_level === "team"
-        ? "plus"
-        : group.required_account_level || ""
+      ? group.required_account_level || ""
       : "";
   editForm.rate_multiplier = group.rate_multiplier;
   editForm.is_exclusive = group.is_exclusive;

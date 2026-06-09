@@ -345,23 +345,38 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if existingID, ok := proxyKeyToID[key]; ok {
 			proxyKeyToID[key] = existingID
 			result.ProxyReused++
-			if normalizedStatus != "" {
-				if proxy, getErr := h.adminService.GetProxy(ctx, existingID); getErr == nil && proxy != nil && proxy.Status != normalizedStatus {
-					_, _ = h.adminService.UpdateProxy(ctx, existingID, &service.UpdateProxyInput{
-						Status: normalizedStatus,
-					})
+			if normalizedStatus != "" || item.MaxAccounts != nil {
+				if proxy, getErr := h.adminService.GetProxy(ctx, existingID); getErr == nil && proxy != nil {
+					updateInput := &service.UpdateProxyInput{}
+					if normalizedStatus != "" && proxy.Status != normalizedStatus {
+						updateInput.Status = normalizedStatus
+					}
+					if item.MaxAccounts != nil && proxy.MaxAccounts != *item.MaxAccounts {
+						updateInput.MaxAccounts = item.MaxAccounts
+					}
+					if updateInput.Status != "" || updateInput.MaxAccounts != nil {
+						if _, updateErr := h.adminService.UpdateProxy(ctx, existingID, updateInput); updateErr != nil {
+							result.Errors = append(result.Errors, DataImportError{
+								Kind:     "proxy",
+								Name:     item.Name,
+								ProxyKey: key,
+								Message:  "update proxy failed: " + updateErr.Error(),
+							})
+						}
+					}
 				}
 			}
 			continue
 		}
 
 		created, createErr := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
-			Name:     defaultProxyName(item.Name),
-			Protocol: item.Protocol,
-			Host:     item.Host,
-			Port:     item.Port,
-			Username: item.Username,
-			Password: item.Password,
+			Name:        defaultProxyName(item.Name),
+			Protocol:    item.Protocol,
+			Host:        item.Host,
+			Port:        item.Port,
+			Username:    item.Username,
+			Password:    item.Password,
+			MaxAccounts: dataProxyMaxAccounts(item),
 		})
 		if createErr != nil {
 			result.ProxyFailed++
@@ -655,6 +670,9 @@ func validateDataProxy(item DataProxy) error {
 	if item.Port <= 0 || item.Port > 65535 {
 		return errors.New("proxy port is invalid")
 	}
+	if item.MaxAccounts != nil && *item.MaxAccounts < 0 {
+		return errors.New("proxy max_accounts must be >= 0")
+	}
 	switch item.Protocol {
 	case "http", "https", "socks5", "socks5h":
 	default:
@@ -724,6 +742,13 @@ func defaultProxyName(name string) string {
 		return "imported-proxy"
 	}
 	return name
+}
+
+func dataProxyMaxAccounts(item DataProxy) int {
+	if item.MaxAccounts == nil {
+		return 0
+	}
+	return *item.MaxAccounts
 }
 
 // enrichCredentialsFromIDToken performs best-effort extraction of user info fields

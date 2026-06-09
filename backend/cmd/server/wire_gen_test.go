@@ -62,6 +62,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // groupRateSchedule
 		tokenRefreshSvc,
 		accountExpirySvc,
+		nil, // accountErrorCleanup
 		subscriptionExpirySvc,
 		subsiteMaintenanceSvc,
 		&service.UsageCleanupService{},

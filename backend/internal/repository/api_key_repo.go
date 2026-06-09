@@ -286,31 +286,33 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 	// 存在唯一键约束 生成tombstone key 用来释放原key，长度远小于 128，满足 schema 限制
 	tombstoneKey := fmt.Sprintf("__deleted__%d__%d", id, time.Now().UnixNano())
-	// 显式软删除：避免依赖 Hook 行为，确保 deleted_at 一定被设置。
-	affected, err := r.client.APIKey.Update().
-		Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).
-		SetKey(tombstoneKey).
-		SetDeletedAt(time.Now()).
-		Save(ctx)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return service.ErrAPIKeyNotFound
-		}
-		return err
-	}
-	if affected == 0 {
-		exists, err := r.client.APIKey.Query().
-			Where(apikey.IDEQ(id)).
-			Exist(mixins.SkipSoftDelete(ctx))
+	return r.withTx(ctx, func(txCtx context.Context, client *dbent.Client) error {
+		// 显式软删除：避免依赖 Hook 行为，确保 deleted_at 一定被设置。
+		affected, err := client.APIKey.Update().
+			Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).
+			SetKey(tombstoneKey).
+			SetDeletedAt(time.Now()).
+			Save(txCtx)
 		if err != nil {
+			if dbent.IsNotFound(err) {
+				return service.ErrAPIKeyNotFound
+			}
 			return err
 		}
-		if exists {
-			return nil
+		if affected == 0 {
+			exists, err := client.APIKey.Query().
+				Where(apikey.IDEQ(id)).
+				Exist(mixins.SkipSoftDelete(txCtx))
+			if err != nil {
+				return err
+			}
+			if exists {
+				return nil
+			}
+			return service.ErrAPIKeyNotFound
 		}
-		return service.ErrAPIKeyNotFound
-	}
-	return nil
+		return nil
+	})
 }
 
 func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {

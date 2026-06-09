@@ -161,6 +161,14 @@ func TestResolveOpenAICompactForwardModel(t *testing.T) {
 			expectedModel: "gpt-5.4",
 		},
 		{
+			name: "codex auto review without compact mapping keeps original model",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			model:         "codex-auto-review",
+			expectedModel: "codex-auto-review",
+		},
+		{
 			name: "exact compact mapping overrides model",
 			account: &Account{
 				Credentials: map[string]any{

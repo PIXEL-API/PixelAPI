@@ -172,6 +172,27 @@ func (_u *ProxyUpdate) SetNillableStatus(v *string) *ProxyUpdate {
 	return _u
 }
 
+// SetMaxAccounts sets the "max_accounts" field.
+func (_u *ProxyUpdate) SetMaxAccounts(v int) *ProxyUpdate {
+	_u.mutation.ResetMaxAccounts()
+	_u.mutation.SetMaxAccounts(v)
+	return _u
+}
+
+// SetNillableMaxAccounts sets the "max_accounts" field if the given value is not nil.
+func (_u *ProxyUpdate) SetNillableMaxAccounts(v *int) *ProxyUpdate {
+	if v != nil {
+		_u.SetMaxAccounts(*v)
+	}
+	return _u
+}
+
+// AddMaxAccounts adds value to the "max_accounts" field.
+func (_u *ProxyUpdate) AddMaxAccounts(v int) *ProxyUpdate {
+	_u.mutation.AddMaxAccounts(v)
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdate) AddAccountIDs(ids ...int64) *ProxyUpdate {
 	_u.mutation.AddAccountIDs(ids...)
@@ -340,6 +361,12 @@ func (_u *ProxyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(proxy.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.MaxAccounts(); ok {
+		_spec.SetField(proxy.FieldMaxAccounts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedMaxAccounts(); ok {
+		_spec.AddField(proxy.FieldMaxAccounts, field.TypeInt, value)
 	}
 	if _u.mutation.AccountsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -549,6 +576,27 @@ func (_u *ProxyUpdateOne) SetNillableStatus(v *string) *ProxyUpdateOne {
 	return _u
 }
 
+// SetMaxAccounts sets the "max_accounts" field.
+func (_u *ProxyUpdateOne) SetMaxAccounts(v int) *ProxyUpdateOne {
+	_u.mutation.ResetMaxAccounts()
+	_u.mutation.SetMaxAccounts(v)
+	return _u
+}
+
+// SetNillableMaxAccounts sets the "max_accounts" field if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillableMaxAccounts(v *int) *ProxyUpdateOne {
+	if v != nil {
+		_u.SetMaxAccounts(*v)
+	}
+	return _u
+}
+
+// AddMaxAccounts adds value to the "max_accounts" field.
+func (_u *ProxyUpdateOne) AddMaxAccounts(v int) *ProxyUpdateOne {
+	_u.mutation.AddMaxAccounts(v)
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdateOne) AddAccountIDs(ids ...int64) *ProxyUpdateOne {
 	_u.mutation.AddAccountIDs(ids...)
@@ -747,6 +795,12 @@ func (_u *ProxyUpdateOne) sqlSave(ctx context.Context) (_node *Proxy, err error)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(proxy.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.MaxAccounts(); ok {
+		_spec.SetField(proxy.FieldMaxAccounts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedMaxAccounts(); ok {
+		_spec.AddField(proxy.FieldMaxAccounts, field.TypeInt, value)
 	}
 	if _u.mutation.AccountsCleared() {
 		edge := &sqlgraph.EdgeSpec{

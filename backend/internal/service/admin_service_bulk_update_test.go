@@ -556,7 +556,7 @@ func TestAdminServiceBulkUpdateAccounts_PreservesClearLoadFactorIntent(t *testin
 	require.Equal(t, 0, *repo.bulkUpdateUpdate.LoadFactor)
 }
 
-func TestAdminService_BulkUpdateAccounts_AllowsHigherOpenAILevelIntoLowerPool(t *testing.T) {
+func TestAdminService_BulkUpdateAccounts_RejectsHigherOpenAILevelIntoLowerPool(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
 		getByIDsAccounts: []*Account{
 			{
@@ -587,9 +587,10 @@ func TestAdminService_BulkUpdateAccounts_AllowsHigherOpenAILevelIntoLowerPool(t 
 		SkipMixedChannelCheck: true,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, 1, result.Success)
-	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
-	require.Equal(t, []int64{20}, repo.boundGroupIDs[1])
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Equal(t, 400, infraerrors.Code(err))
+	require.Contains(t, err.Error(), "account_level mismatch")
+	require.Empty(t, repo.bulkUpdateIDs)
+	require.Empty(t, repo.boundGroupIDs)
 }

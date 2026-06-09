@@ -50,6 +50,19 @@ func TestGetModelPricing_Gpt53CodexSparkUsesGpt51CodexPricing(t *testing.T) {
 	require.Same(t, sparkPricing, got)
 }
 
+func TestGetModelPricing_CodexAutoReviewUsesGpt53CodexPricing(t *testing.T) {
+	gpt53CodexPricing := &LiteLLMModelPricing{InputCostPerToken: 1.75e-6}
+
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"gpt-5.3-codex": gpt53CodexPricing,
+		},
+	}
+
+	require.Same(t, gpt53CodexPricing, svc.GetModelPricing("codex-auto-review"))
+	require.Same(t, gpt53CodexPricing, svc.GetModelPricing("models/codex-auto-review"))
+}
+
 func TestGetModelPricing_NormalizesOpenAIModelAliasSpelling(t *testing.T) {
 	sparkPricing := &LiteLLMModelPricing{InputCostPerToken: 1}
 	miniPricing := &LiteLLMModelPricing{InputCostPerToken: 2}

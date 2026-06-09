@@ -36,7 +36,10 @@ func TestConversationRepositoryRejectsInvalidScopedInputsBeforeDB(t *testing.T) 
 	_, _, err = repo.ListForUser(context.Background(), 0, pagination.PaginationParams{Page: 1, PageSize: 20}, service.ConversationListFilters{})
 	require.ErrorIs(t, err, service.ErrConversationInputRequired)
 
-	_, _, err = repo.ListMessages(context.Background(), 0, pagination.PaginationParams{Page: 1, PageSize: 20})
+	_, _, err = repo.ListMessages(context.Background(), 0, pagination.PaginationParams{Page: 1, PageSize: 20}, service.ConversationMessageListFilters{})
+	require.ErrorIs(t, err, service.ErrConversationInputRequired)
+
+	_, _, err = repo.ListMessages(context.Background(), 1, pagination.PaginationParams{Page: 1, PageSize: 20}, service.ConversationMessageListFilters{BeforeID: -1})
 	require.ErrorIs(t, err, service.ErrConversationInputRequired)
 
 	_, err = repo.MarkRead(context.Background(), 0, service.ConversationSenderTypeUser, nil)

@@ -9,6 +9,7 @@ import type {
   Conversation,
   ConversationListFilters,
   ConversationMessage,
+  ConversationMessageListOptions,
   CreateConversationRequest
 } from '@/types'
 
@@ -48,14 +49,17 @@ export async function listMessages(
   id: number,
   page: number = 1,
   pageSize: number = 100,
-  options?: {
-    signal?: AbortSignal
-  }
+  options?: ConversationMessageListOptions
 ): Promise<BasePaginationResponse<ConversationMessage>> {
   const { data } = await apiClient.get<BasePaginationResponse<ConversationMessage>>(
     `/conversations/${id}/messages`,
     {
-      params: { page, page_size: pageSize },
+      params: {
+        page,
+        page_size: pageSize,
+        before_id: options?.beforeId || undefined,
+        latest: options?.latest ? 1 : undefined
+      },
       signal: options?.signal
     }
   )

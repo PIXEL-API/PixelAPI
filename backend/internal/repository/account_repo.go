@@ -165,6 +165,11 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	account.ID = created.ID
 	account.CreatedAt = created.CreatedAt
 	account.UpdatedAt = created.UpdatedAt
+	if account.Status == service.StatusError {
+		if err := r.syncAccountErrorSince(ctx, account.ID, account.Status); err != nil {
+			return err
+		}
+	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account create failed: account=%d err=%v", account.ID, err)
 	}
@@ -435,6 +440,9 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 		return translateAccountPersistenceError(err, service.ErrAccountNotFound)
 	}
 	account.UpdatedAt = updated.UpdatedAt
+	if err := r.syncAccountErrorSince(ctx, account.ID, account.Status); err != nil {
+		return err
+	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account update failed: account=%d err=%v", account.ID, err)
 	}
@@ -495,6 +503,91 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account delete failed: account=%d err=%v", id, err)
 	}
 	return nil
+}
+
+func (r *accountRepository) DeleteStaleErrorAccounts(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT id
+		FROM accounts
+		WHERE status = $1
+			AND error_since IS NOT NULL
+			AND error_since <= $2
+			AND deleted_at IS NULL
+		ORDER BY error_since ASC, id ASC
+		LIMIT $3
+	`, service.StatusError, cutoff, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	ids := make([]int64, 0, limit)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var deleted int64
+	for _, id := range ids {
+		removed, err := r.deleteStaleErrorAccount(ctx, id, cutoff)
+		if err != nil {
+			return deleted, err
+		}
+		if removed {
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func (r *accountRepository) deleteStaleErrorAccount(ctx context.Context, id int64, cutoff time.Time) (bool, error) {
+	groupIDs, err := r.loadAccountGroupIDs(ctx, id)
+	if err != nil {
+		return false, err
+	}
+
+	result, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET deleted_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1
+			AND status = $2
+			AND error_since IS NOT NULL
+			AND error_since <= $3
+			AND deleted_at IS NULL
+	`, id, service.StatusError, cutoff)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		return false, nil
+	}
+	if _, err := r.sql.ExecContext(ctx, "DELETE FROM scheduled_test_plans WHERE account_id = $1", id); err != nil {
+		return false, err
+	}
+
+	r.deleteSchedulerAccountSnapshot(ctx, id)
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue stale error account delete failed: account=%d err=%v", id, err)
+	}
+	return true, nil
 }
 
 func (r *accountRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Account, *pagination.PaginationResult, error) {
@@ -1069,11 +1162,15 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 }
 
 func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg string) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetStatus(service.StatusError).
-		SetErrorMessage(errorMsg).
-		Save(ctx)
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET status = $2,
+			error_message = $3,
+			error_since = COALESCE(error_since, NOW()),
+			updated_at = NOW()
+		WHERE id = $1
+			AND deleted_at IS NULL
+	`, id, service.StatusError, errorMsg)
 	if err != nil {
 		return err
 	}
@@ -1153,11 +1250,15 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 }
 
 func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetStatus(service.StatusActive).
-		SetErrorMessage("").
-		Save(ctx)
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET status = $2,
+			error_message = '',
+			error_since = NULL,
+			updated_at = NOW()
+		WHERE id = $1
+			AND deleted_at IS NULL
+	`, id, service.StatusActive)
 	if err != nil {
 		return err
 	}
@@ -1166,6 +1267,28 @@ func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 	}
 	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
+}
+
+func (r *accountRepository) syncAccountErrorSince(ctx context.Context, id int64, status string) error {
+	if status == service.StatusError {
+		_, err := r.sql.ExecContext(ctx, `
+			UPDATE accounts
+			SET error_since = COALESCE(error_since, NOW())
+			WHERE id = $1
+				AND status = $2
+				AND deleted_at IS NULL
+		`, id, service.StatusError)
+		return err
+	}
+
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET error_since = NULL
+		WHERE id = $1
+			AND error_since IS NOT NULL
+			AND deleted_at IS NULL
+	`, id)
+	return err
 }
 
 func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID int64, priority int) error {
@@ -1822,6 +1945,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		setClauses = append(setClauses, "status = $"+itoa(idx))
 		args = append(args, *updates.Status)
 		idx++
+		if *updates.Status == service.StatusError {
+			setClauses = append(setClauses, "error_since = COALESCE(error_since, NOW())")
+		} else {
+			setClauses = append(setClauses, "error_since = NULL")
+		}
 	}
 	if updates.Schedulable != nil {
 		setClauses = append(setClauses, "schedulable = $"+itoa(idx))
@@ -1998,12 +2126,19 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	if err != nil {
 		return nil, err
 	}
+	errorSinceByAccount, err := r.loadAccountErrorSince(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	outAccounts := make([]service.Account, 0, len(accounts))
 	for _, acc := range accounts {
 		out := accountEntityToService(acc)
 		if out == nil {
 			continue
+		}
+		if errorSince, ok := errorSinceByAccount[acc.ID]; ok {
+			out.ErrorSince = errorSince
 		}
 		if acc.ProxyID != nil {
 			if proxy, ok := proxyMap[*acc.ProxyID]; ok {
@@ -2023,6 +2158,38 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	}
 
 	return outAccounts, nil
+}
+
+func (r *accountRepository) loadAccountErrorSince(ctx context.Context, accountIDs []int64) (map[int64]*time.Time, error) {
+	out := make(map[int64]*time.Time)
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT id, error_since
+		FROM accounts
+		WHERE id = ANY($1)
+			AND error_since IS NOT NULL
+	`, pq.Array(accountIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		var errorSince time.Time
+		if err := rows.Scan(&id, &errorSince); err != nil {
+			return nil, err
+		}
+		value := errorSince
+		out[id] = &value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func tempUnschedulablePredicate() dbpredicate.Account {

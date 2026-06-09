@@ -155,6 +155,17 @@ func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpirySe
 	return svc
 }
 
+// ProvideAccountErrorCleanupService creates and starts AccountErrorCleanupService.
+func ProvideAccountErrorCleanupService(accountRepo AccountRepository) *AccountErrorCleanupService {
+	cleanupRepo, ok := accountRepo.(AccountErrorCleanupRepository)
+	if !ok {
+		return nil
+	}
+	svc := NewAccountErrorCleanupService(cleanupRepo, time.Minute)
+	svc.Start()
+	return svc
+}
+
 // ProvideSubscriptionExpiryService creates and starts SubscriptionExpiryService.
 func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository) *SubscriptionExpiryService {
 	svc := NewSubscriptionExpiryService(userSubRepo, time.Minute)
@@ -644,6 +655,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUpdateService,
 	ProvideTokenRefreshService,
 	ProvideAccountExpiryService,
+	ProvideAccountErrorCleanupService,
 	ProvideSubscriptionExpiryService,
 	ProvideSubsiteMaintenanceService,
 	ProvideTimingWheelService,

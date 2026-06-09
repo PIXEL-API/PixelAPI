@@ -120,6 +120,10 @@ func (h *ConversationHandler) ListMessages(c *gin.Context) {
 		userID,
 		id,
 		pagination.PaginationParams{Page: page, PageSize: pageSize},
+		service.ConversationMessageListFilters{
+			BeforeID: parseInt64Query(c.Query("before_id")),
+			Latest:   parseBoolQuery(c.Query("latest")),
+		},
 	)
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -217,4 +221,15 @@ func bindOptionalMarkReadRequest(c *gin.Context) (MarkConversationReadRequest, b
 		}
 	}
 	return req, true
+}
+
+func parseInt64Query(v string) int64 {
+	if v == "" {
+		return 0
+	}
+	id, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return -1
+	}
+	return id
 }

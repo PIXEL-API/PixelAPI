@@ -30,7 +30,7 @@
       </div>
     </div>
 
-    <div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+    <div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
       <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
         <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.totalAccounts') }}</div>
         <div class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ totals.account_count }}</div>
@@ -42,6 +42,10 @@
       <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
         <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.rateLimitedAccounts') }}</div>
         <div class="mt-1 text-lg font-semibold text-amber-600 dark:text-amber-300">{{ totals.rate_limited_account_count }}</div>
+      </div>
+      <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
+        <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.codexQuotaProtectedAccounts') }}</div>
+        <div class="mt-1 text-lg font-semibold text-yellow-600 dark:text-yellow-300">{{ totals.codex_quota_protected_account_count }}</div>
       </div>
       <div class="rounded-md bg-gray-50 p-2 dark:bg-dark-700/60">
         <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.quotaDashboard.exceptionAccounts') }}</div>
@@ -140,7 +144,7 @@
                 :style="{ width: `${segment.percent}%` }"
               />
             </div>
-            <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300 sm:grid-cols-4">
+            <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300 sm:grid-cols-5">
               <span
                 v-for="segment in accountStatusSegments(summary)"
                 :key="`${segment.key}:legend`"
@@ -219,6 +223,7 @@
               <div v-if="hasAvailabilityIssues(summary)" class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.quotaDashboard.issueMeta', {
                   limited: summary.rate_limited_account_count,
+                  protected: summary.codex_quota_protected_account_count,
                   error: summary.error_account_count,
                   disabled: summary.disabled_account_count
                 }) }}
@@ -339,6 +344,7 @@ const totals = computed<AccountQuotaSummary>(() => props.dashboard?.totals ?? {
   active_account_count: 0,
   schedulable_account_count: 0,
   rate_limited_account_count: 0,
+  codex_quota_protected_account_count: 0,
   error_account_count: 0,
   disabled_account_count: 0,
   quota_account_count: 0,
@@ -475,6 +481,7 @@ function groupName(summary: AccountQuotaGroupSummary): string {
 function hasAvailabilityIssues(summary: AccountQuotaSummary | AccountQuotaGroupSummary): boolean {
   return (
     summary.rate_limited_account_count > 0 ||
+    summary.codex_quota_protected_account_count > 0 ||
     summary.error_account_count > 0 ||
     summary.disabled_account_count > 0
   )
@@ -494,6 +501,12 @@ function accountStatusSegments(summary: AccountQuotaGroupSummary): AccountStatus
       label: t('admin.accounts.quotaDashboard.rateLimitedCount', { count: summary.rate_limited_account_count }),
       count: summary.rate_limited_account_count,
       class: 'bg-amber-500'
+    },
+    {
+      key: 'codexQuotaProtected',
+      label: t('admin.accounts.quotaDashboard.codexQuotaProtectedCount', { count: summary.codex_quota_protected_account_count }),
+      count: summary.codex_quota_protected_account_count,
+      class: 'bg-yellow-400'
     },
     {
       key: 'error',

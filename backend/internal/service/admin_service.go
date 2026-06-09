@@ -388,22 +388,24 @@ type BulkUpdateAccountsResult struct {
 }
 
 type CreateProxyInput struct {
-	Name     string
-	Protocol string
-	Host     string
-	Port     int
-	Username string
-	Password string
+	Name        string
+	Protocol    string
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	MaxAccounts int
 }
 
 type UpdateProxyInput struct {
-	Name     string
-	Protocol string
-	Host     string
-	Port     int
-	Username string
-	Password string
-	Status   string
+	Name        string
+	Protocol    string
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	Status      string
+	MaxAccounts *int
 }
 
 type GenerateRedeemCodesInput struct {
@@ -872,12 +874,84 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 	if user.Role == "admin" {
 		return errors.New("cannot delete admin user")
 	}
-	if err := s.userRepo.Delete(ctx, id); err != nil {
-		logger.LegacyPrintf("service.admin", "delete user failed: user_id=%d err=%v", id, err)
+
+	apiKeys, err := s.listUserAPIKeysForDeletion(ctx, id)
+	if err != nil {
 		return err
 	}
+
+	if s.entClient != nil {
+		tx, err := s.entClient.Tx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		opCtx := dbent.NewTxContext(ctx, tx)
+		if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	} else {
+		if err := s.deleteUserWithAPIKeys(ctx, id, apiKeys); err != nil {
+			return err
+		}
+	}
+
 	if s.authCacheInvalidator != nil {
+		for _, key := range apiKeys {
+			if keyValue := strings.TrimSpace(key.Key); keyValue != "" {
+				s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, keyValue)
+			}
+		}
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) listUserAPIKeysForDeletion(ctx context.Context, userID int64) ([]APIKey, error) {
+	if s.apiKeyRepo == nil {
+		return nil, nil
+	}
+
+	const pageSize = 1000
+	keys := make([]APIKey, 0)
+	for page := 1; ; page++ {
+		batch, result, err := s.apiKeyRepo.ListByUserID(ctx, userID, pagination.PaginationParams{
+			Page:      page,
+			PageSize:  pageSize,
+			SortBy:    "id",
+			SortOrder: pagination.SortOrderAsc,
+		}, APIKeyListFilters{})
+		if err != nil {
+			return nil, fmt.Errorf("list user api keys: %w", err)
+		}
+		keys = append(keys, batch...)
+		if len(batch) == 0 || len(batch) < pageSize || result == nil || int64(len(keys)) >= result.Total {
+			break
+		}
+	}
+	return keys, nil
+}
+
+func (s *adminServiceImpl) deleteUserWithAPIKeys(ctx context.Context, userID int64, apiKeys []APIKey) error {
+	if s.apiKeyRepo != nil {
+		for _, key := range apiKeys {
+			if key.ID <= 0 {
+				continue
+			}
+			if err := s.apiKeyRepo.Delete(ctx, key.ID); err != nil {
+				logger.LegacyPrintf("service.admin", "delete user api key failed: user_id=%d api_key_id=%d err=%v", userID, key.ID, err)
+				return fmt.Errorf("delete user api key %d: %w", key.ID, err)
+			}
+		}
+	}
+
+	if err := s.userRepo.Delete(ctx, userID); err != nil {
+		logger.LegacyPrintf("service.admin", "delete user failed: user_id=%d err=%v", userID, err)
+		return err
 	}
 	return nil
 }
@@ -1546,7 +1620,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
 	if !IsValidRequiredAccountLevel(input.RequiredAccountLevel) {
-		return nil, errors.New("required_account_level must be empty, free, plus, or pro")
+		return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
 	}
 
 	platform := input.Platform
@@ -1804,7 +1878,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.RequiredAccountLevel != nil {
 		if !IsValidRequiredAccountLevel(*input.RequiredAccountLevel) {
-			return nil, errors.New("required_account_level must be empty, free, plus, or pro")
+			return nil, errors.New("required_account_level must be empty, free, plus, pro, or team")
 		}
 		group.RequiredAccountLevel = NormalizeRequiredAccountLevel(*input.RequiredAccountLevel)
 	}
@@ -2377,6 +2451,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
 		return nil, err
 	}
+	if input.ProxyID != nil && *input.ProxyID > 0 {
+		if err := s.ensureProxyAccountCapacity(ctx, *input.ProxyID, 1); err != nil {
+			return nil, err
+		}
+	}
 
 	account := &Account{
 		Name:          input.Name,
@@ -2526,6 +2605,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		account.AccountLevel = NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
 	}
 	if input.ProxyID != nil {
+		if err := s.ensureAccountProxyCapacityForUpdate(ctx, account, input.ProxyID); err != nil {
+			return nil, err
+		}
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *input.ProxyID == 0 {
 			account.ProxyID = nil
@@ -2752,6 +2834,25 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier < 0 {
 			return nil, infraerrors.BadRequest("ACCOUNT_BULK_UPDATE_INVALID", "rate_multiplier must be >= 0")
+		}
+	}
+	if input.ProxyID != nil && *input.ProxyID > 0 {
+		accounts, err := loadPreflightAccounts()
+		if err != nil {
+			return nil, err
+		}
+		var additional int64
+		for _, account := range accounts {
+			if account == nil {
+				continue
+			}
+			if account.ProxyID != nil && *account.ProxyID == *input.ProxyID {
+				continue
+			}
+			additional++
+		}
+		if err := s.ensureProxyAccountCapacity(ctx, *input.ProxyID, additional); err != nil {
+			return nil, err
 		}
 	}
 	if len(input.Extra) > 0 {
@@ -3240,15 +3341,89 @@ func (s *adminServiceImpl) GetProxiesByIDs(ctx context.Context, ids []int64) ([]
 	return s.proxyRepo.ListByIDs(ctx, ids)
 }
 
+func proxyAccountLimitExceededError(proxyID, current, limit, additional int64) error {
+	return infraerrors.Conflict(
+		"PROXY_ACCOUNT_LIMIT_EXCEEDED",
+		fmt.Sprintf("proxy %d account binding limit exceeded: %d/%d accounts would be bound; choose another proxy or raise the limit", proxyID, current+additional, limit),
+	)
+}
+
+func proxyAccountLimitBelowCurrentError(proxyID, current int64) error {
+	return infraerrors.BadRequest(
+		"PROXY_ACCOUNT_LIMIT_BELOW_CURRENT",
+		fmt.Sprintf("proxy %d already has %d bound accounts; max_accounts cannot be lower than current count unless set to 0", proxyID, current),
+	)
+}
+
+func validateProxyMaxAccountsValue(maxAccounts int) error {
+	if maxAccounts < 0 {
+		return infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) ensureProxyAccountCapacity(ctx context.Context, proxyID int64, additional int64) error {
+	if proxyID <= 0 || additional <= 0 {
+		return nil
+	}
+	proxy, err := s.proxyRepo.GetByID(ctx, proxyID)
+	if err != nil {
+		return fmt.Errorf("get proxy: %w", err)
+	}
+	if proxy.MaxAccounts <= 0 {
+		return nil
+	}
+	current, err := s.proxyRepo.CountAccountsByProxyID(ctx, proxyID)
+	if err != nil {
+		return fmt.Errorf("count proxy accounts: %w", err)
+	}
+	limit := int64(proxy.MaxAccounts)
+	if current+additional > limit {
+		return proxyAccountLimitExceededError(proxyID, current, limit, additional)
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) ensureAccountProxyCapacityForUpdate(ctx context.Context, account *Account, proxyID *int64) error {
+	if proxyID == nil || *proxyID <= 0 {
+		return nil
+	}
+	if account != nil && account.ProxyID != nil && *account.ProxyID == *proxyID {
+		return nil
+	}
+	return s.ensureProxyAccountCapacity(ctx, *proxyID, 1)
+}
+
+func (s *adminServiceImpl) ensureProxyMaxAccountsCanBeSaved(ctx context.Context, proxyID int64, maxAccounts int) error {
+	if err := validateProxyMaxAccountsValue(maxAccounts); err != nil {
+		return err
+	}
+	if maxAccounts == 0 {
+		return nil
+	}
+	current, err := s.proxyRepo.CountAccountsByProxyID(ctx, proxyID)
+	if err != nil {
+		return fmt.Errorf("count proxy accounts: %w", err)
+	}
+	if current > int64(maxAccounts) {
+		return proxyAccountLimitBelowCurrentError(proxyID, current)
+	}
+	return nil
+}
+
 func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyInput) (*Proxy, error) {
+	if err := validateProxyMaxAccountsValue(input.MaxAccounts); err != nil {
+		return nil, err
+	}
 	proxy := &Proxy{
-		Name:     input.Name,
-		Protocol: input.Protocol,
-		Host:     input.Host,
-		Port:     input.Port,
-		Username: input.Username,
-		Password: input.Password,
-		Status:   StatusActive,
+		Name:        input.Name,
+		Protocol:    input.Protocol,
+		Host:        input.Host,
+		Port:        input.Port,
+		Username:    input.Username,
+		Password:    input.Password,
+		Status:      StatusActive,
+		MaxAccounts: input.MaxAccounts,
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
 		return nil, err
@@ -3284,6 +3459,12 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	}
 	if input.Status != "" {
 		proxy.Status = input.Status
+	}
+	if input.MaxAccounts != nil {
+		if err := s.ensureProxyMaxAccountsCanBeSaved(ctx, id, *input.MaxAccounts); err != nil {
+			return nil, err
+		}
+		proxy.MaxAccounts = *input.MaxAccounts
 	}
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
@@ -3864,7 +4045,7 @@ func (s *adminServiceImpl) validateAccountLevelGroupBinding(ctx context.Context,
 		if !CanOpenAIAccountJoinSharedPool(level, required) {
 			return infraerrors.BadRequest(
 				"ACCOUNT_GROUP_BINDING_INVALID",
-				fmt.Sprintf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s or lower", NormalizeOpenAISharedPoolAccountLevel(level), group.Name, required),
+				fmt.Sprintf("account_level mismatch: OpenAI account level %s cannot bind to group %s requiring %s", NormalizeOpenAISharedPoolAccountLevel(level), group.Name, required),
 			)
 		}
 	}
@@ -4067,7 +4248,7 @@ func (s *adminServiceImpl) normalizeAccountIDsForGroupBinding(ctx context.Contex
 		}
 		accountLevel := NormalizeAccountLevel(account.AccountLevel)
 		if requiresLevelCheck && account.Platform == PlatformOpenAI && !CanOpenAIAccountJoinSharedPool(accountLevel, requiredLevel) {
-			return nil, fmt.Errorf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s or lower", account.Name, NormalizeOpenAISharedPoolAccountLevel(accountLevel), group.Name, requiredLevel)
+			return nil, fmt.Errorf("account_level mismatch: OpenAI account %s level %s cannot bind to group %s requiring %s", account.Name, NormalizeOpenAISharedPoolAccountLevel(accountLevel), group.Name, requiredLevel)
 		}
 		filtered = append(filtered, accountID)
 	}

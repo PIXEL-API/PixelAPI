@@ -20,8 +20,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitordailyrollup"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorhistory"
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
-	"github.com/Wei-Shaw/sub2api/ent/conversation"
-	"github.com/Wei-Shaw/sub2api/ent/conversationmessage"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
@@ -434,60 +432,6 @@ func (f TraverseChannelMonitorRequestTemplate) Traverse(ctx context.Context, q e
 		return f(ctx, q)
 	}
 	return fmt.Errorf("unexpected query type %T. expect *ent.ChannelMonitorRequestTemplateQuery", q)
-}
-
-// The ConversationFunc type is an adapter to allow the use of ordinary function as a Querier.
-type ConversationFunc func(context.Context, *ent.ConversationQuery) (ent.Value, error)
-
-// Query calls f(ctx, q).
-func (f ConversationFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
-	if q, ok := q.(*ent.ConversationQuery); ok {
-		return f(ctx, q)
-	}
-	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ConversationQuery", q)
-}
-
-// The TraverseConversation type is an adapter to allow the use of ordinary function as Traverser.
-type TraverseConversation func(context.Context, *ent.ConversationQuery) error
-
-// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
-func (f TraverseConversation) Intercept(next ent.Querier) ent.Querier {
-	return next
-}
-
-// Traverse calls f(ctx, q).
-func (f TraverseConversation) Traverse(ctx context.Context, q ent.Query) error {
-	if q, ok := q.(*ent.ConversationQuery); ok {
-		return f(ctx, q)
-	}
-	return fmt.Errorf("unexpected query type %T. expect *ent.ConversationQuery", q)
-}
-
-// The ConversationMessageFunc type is an adapter to allow the use of ordinary function as a Querier.
-type ConversationMessageFunc func(context.Context, *ent.ConversationMessageQuery) (ent.Value, error)
-
-// Query calls f(ctx, q).
-func (f ConversationMessageFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
-	if q, ok := q.(*ent.ConversationMessageQuery); ok {
-		return f(ctx, q)
-	}
-	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ConversationMessageQuery", q)
-}
-
-// The TraverseConversationMessage type is an adapter to allow the use of ordinary function as Traverser.
-type TraverseConversationMessage func(context.Context, *ent.ConversationMessageQuery) error
-
-// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
-func (f TraverseConversationMessage) Intercept(next ent.Querier) ent.Querier {
-	return next
-}
-
-// Traverse calls f(ctx, q).
-func (f TraverseConversationMessage) Traverse(ctx context.Context, q ent.Query) error {
-	if q, ok := q.(*ent.ConversationMessageQuery); ok {
-		return f(ctx, q)
-	}
-	return fmt.Errorf("unexpected query type %T. expect *ent.ConversationMessageQuery", q)
 }
 
 // The ErrorPassthroughRuleFunc type is an adapter to allow the use of ordinary function as a Querier.
@@ -1354,10 +1298,6 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.ChannelMonitorHistoryQuery, predicate.ChannelMonitorHistory, channelmonitorhistory.OrderOption]{typ: ent.TypeChannelMonitorHistory, tq: q}, nil
 	case *ent.ChannelMonitorRequestTemplateQuery:
 		return &query[*ent.ChannelMonitorRequestTemplateQuery, predicate.ChannelMonitorRequestTemplate, channelmonitorrequesttemplate.OrderOption]{typ: ent.TypeChannelMonitorRequestTemplate, tq: q}, nil
-	case *ent.ConversationQuery:
-		return &query[*ent.ConversationQuery, predicate.Conversation, conversation.OrderOption]{typ: ent.TypeConversation, tq: q}, nil
-	case *ent.ConversationMessageQuery:
-		return &query[*ent.ConversationMessageQuery, predicate.ConversationMessage, conversationmessage.OrderOption]{typ: ent.TypeConversationMessage, tq: q}, nil
 	case *ent.ErrorPassthroughRuleQuery:
 		return &query[*ent.ErrorPassthroughRuleQuery, predicate.ErrorPassthroughRule, errorpassthroughrule.OrderOption]{typ: ent.TypeErrorPassthroughRule, tq: q}, nil
 	case *ent.GroupQuery:

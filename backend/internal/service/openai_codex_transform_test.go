@@ -857,6 +857,7 @@ func TestNormalizeCodexModel_RemovedModelsFallbackToSupportedTargets(t *testing.
 		"gpt-5.2-codex":      "gpt-5.2",
 		"codex-mini-latest":  "gpt-5.3-codex",
 		"gpt-5-codex":        "gpt-5.3-codex",
+		"codex-auto-review":  "codex-auto-review",
 	}
 
 	for input, expected := range cases {

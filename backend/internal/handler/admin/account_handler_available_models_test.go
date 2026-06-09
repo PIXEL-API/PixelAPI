@@ -102,4 +102,12 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefau
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.NotEmpty(t, resp.Data)
 	require.NotEqual(t, "gpt-5", resp.Data[0].ID)
+	var foundCodexAutoReview bool
+	for _, model := range resp.Data {
+		if model.ID == "codex-auto-review" {
+			foundCodexAutoReview = true
+			break
+		}
+	}
+	require.True(t, foundCodexAutoReview)
 }
