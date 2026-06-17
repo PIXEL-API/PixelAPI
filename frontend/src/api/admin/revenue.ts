@@ -91,6 +91,19 @@ export interface RevenueProfitStats {
   estimated_net_margin: number
 }
 
+export interface RevenuePlatformLedgerStats {
+  user_count: number
+  total_user_balance: number
+  positive_user_balance: number
+  balance_gt_0_1: number
+  negative_user_balance: number
+  positive_balance_user_count: number
+  balance_gt_0_1_user_count: number
+  pending_withdrawal_amount: number
+  pending_withdrawal_fee: number
+  pending_withdrawal_net_amount: number
+}
+
 export interface RevenueTrendPoint {
   date: string
   paid_amount: number
@@ -186,6 +199,7 @@ export interface RevenueSummary {
   usage: RevenueUsageStats
   adjustments: RevenueAdjustmentStats
   profit: RevenueProfitStats
+  platform_ledger: RevenuePlatformLedgerStats
   trend: RevenueTrendPoint[]
   top_users: RevenueBreakdownItem[]
   top_groups: RevenueBreakdownItem[]

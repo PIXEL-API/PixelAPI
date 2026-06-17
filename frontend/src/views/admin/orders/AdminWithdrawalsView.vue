@@ -75,6 +75,14 @@
     </div>
 
     <BaseDialog :show="!!receiptTarget" title="收款码快照" width="narrow" @close="closeReceipt">
+      <template #title-extra>
+        <span
+          v-if="receiptTarget"
+          class="inline-flex min-w-0 items-center rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300"
+        >
+          待提现金额 ${{ receiptTarget.amount.toFixed(2) }}
+        </span>
+      </template>
       <div v-if="receiptTarget" class="space-y-4">
         <div class="flex min-h-64 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-gray-50 dark:border-dark-700 dark:bg-dark-900/50">
           <div v-if="receiptLoading" class="flex flex-col items-center gap-2 text-gray-400 dark:text-gray-500">

@@ -87,6 +87,8 @@ export interface User {
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
   points_balance?: number // User points balance for API usage and store purchases
+  load_factor_credits_balance?: number // Remaining non-refundable load-factor credits
+  load_factor_credits_used_total?: number // Total consumed load-factor credits
   prefer_points_billing?: boolean // Whether model calls should use points before balance
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
@@ -190,6 +192,12 @@ export interface UserAffiliateDetail {
   inviter_bound_at?: string | null
   invite_reward_expires_at?: string | null
   aff_count: number
+  aff_weekly_limit: number
+  aff_weekly_used: number
+  aff_weekly_remaining: number
+  aff_weekly_window_start?: string | null
+  aff_code_expires_at?: string | null
+  aff_code_auto_rotate: boolean
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
@@ -286,6 +294,7 @@ export interface PublicSettings {
   channel_monitor_enabled: boolean
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
+  user_account_import_limit?: number
   affiliate_enabled: boolean
 }
 
@@ -848,6 +857,7 @@ export interface Proxy {
   port: number
   username: string | null
   password?: string | null
+  owner_user_id?: number | null
   status: 'active' | 'inactive'
   max_accounts: number
   account_count?: number // Number of accounts using this proxy
@@ -970,8 +980,10 @@ export interface Account {
   share_mode?: AccountShareMode | string
   share_status?: AccountShareStatus | string
   share_policy_id?: number | null
+  account_share_mode_listing_id?: number | null
   concurrency: number
   load_factor?: number | null
+  load_factor_paid_ceiling?: number
   current_concurrency?: number // Real-time concurrency count from Redis
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
@@ -1424,6 +1436,27 @@ export interface UsageLog {
   subscription?: UserSubscription
 }
 
+export type BalanceLedgerDirection = 'debit' | 'credit'
+
+export interface UserBalanceLedgerEntry {
+  id: number
+  user_id: number
+  user?: {
+    id: number
+    email: string
+    username?: string
+    status?: string
+  } | null
+  direction: BalanceLedgerDirection
+  amount: string
+  reason: string
+  ref_type: string
+  ref_id: number | null
+  balance_after: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export interface UsageLogAccountSummary {
   id: number
   name: string
@@ -1564,6 +1597,8 @@ export interface UsageStatsResponse {
   total_input_tokens: number
   total_output_tokens: number
   total_cache_tokens: number
+  total_cache_creation_tokens: number
+  total_cache_read_tokens: number
   total_tokens: number
   total_cost: number // 标准计费
   total_actual_cost: number // 实际扣除
@@ -1763,6 +1798,17 @@ export interface UsageQueryParams {
   sort_order?: 'asc' | 'desc'
 }
 
+export interface UserBalanceLedgerQueryParams {
+  page?: number
+  page_size?: number
+  direction?: BalanceLedgerDirection | ''
+  reason?: string
+  start_date?: string
+  end_date?: string
+  sort_order?: 'asc' | 'desc'
+  exact_total?: boolean
+}
+
 // ==================== Account Usage Statistics ====================
 
 export interface AccountUsageHistory {
@@ -1772,7 +1818,9 @@ export interface AccountUsageHistory {
   tokens: number
   cost: number
   actual_cost: number // Account cost (account multiplier)
-  user_cost: number // User/API key billed cost (group multiplier)
+  request_user_cost: number // Request billed cost (group multiplier)
+  hourly_cost: number // Net hourly fee (prepay minus refunds)
+  user_cost: number // Total user billed cost (request + hourly)
 }
 
 export interface AccountUsageSummary {
@@ -1780,17 +1828,23 @@ export interface AccountUsageSummary {
   actual_days_used: number
   total_cost: number // Account cost (account multiplier)
   total_user_cost: number
+  total_request_user_cost: number
+  total_hourly_cost: number
   total_standard_cost: number
   total_requests: number
   total_tokens: number
   avg_daily_cost: number // Account cost
   avg_daily_user_cost: number
+  avg_daily_request_user_cost: number
+  avg_daily_hourly_cost: number
   avg_daily_requests: number
   avg_daily_tokens: number
   avg_duration_ms: number
   today: {
     date: string
     cost: number
+    request_user_cost: number
+    hourly_cost: number
     user_cost: number
     requests: number
     tokens: number
@@ -1799,6 +1853,8 @@ export interface AccountUsageSummary {
     date: string
     label: string
     cost: number
+    request_user_cost: number
+    hourly_cost: number
     user_cost: number
     requests: number
   } | null
@@ -1807,6 +1863,8 @@ export interface AccountUsageSummary {
     label: string
     requests: number
     cost: number
+    request_user_cost: number
+    hourly_cost: number
     user_cost: number
   } | null
 }

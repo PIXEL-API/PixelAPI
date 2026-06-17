@@ -14,12 +14,15 @@
         <div ref="dialogRef" :class="['modal-content', widthClasses]" @click.stop>
           <!-- Header -->
           <div class="modal-header">
-            <h3 :id="dialogId" class="modal-title">
-              {{ title }}
-            </h3>
+            <div class="flex min-w-0 flex-1 items-center gap-3">
+              <h3 :id="dialogId" class="modal-title">
+                {{ title }}
+              </h3>
+              <slot name="title-extra"></slot>
+            </div>
             <button
               @click="emit('close')"
-              class="-mr-2 rounded-xl p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-dark-300"
+              class="-mr-2 ml-3 rounded-xl p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-dark-300"
               aria-label="Close modal"
             >
               <Icon name="x" size="md" />
@@ -41,6 +44,10 @@
   </Teleport>
 </template>
 
+<script lang="ts">
+let bodyScrollLockCount = 0
+</script>
+
 <script setup lang="ts">
 import { computed, watch, onMounted, onUnmounted, ref, nextTick } from 'vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -52,6 +59,23 @@ const dialogId = `modal-title-${++dialogIdCounter}`
 // 焦点管理
 const dialogRef = ref<HTMLElement | null>(null)
 let previousActiveElement: HTMLElement | null = null
+let hasBodyScrollLock = false
+
+function lockBodyScroll(): void {
+  if (hasBodyScrollLock) return
+  hasBodyScrollLock = true
+  bodyScrollLockCount += 1
+  document.body.classList.add('modal-open')
+}
+
+function unlockBodyScroll(): void {
+  if (!hasBodyScrollLock) return
+  hasBodyScrollLock = false
+  bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1)
+  if (bodyScrollLockCount === 0) {
+    document.body.classList.remove('modal-open')
+  }
+}
 
 type DialogWidth = 'narrow' | 'normal' | 'wide' | 'extra-wide' | 'full'
 
@@ -115,8 +139,7 @@ watch(
     if (isOpen) {
       // 保存当前焦点元素
       previousActiveElement = document.activeElement as HTMLElement
-      // 使用CSS类而不是直接操作style,更易于管理多个对话框
-      document.body.classList.add('modal-open')
+      lockBodyScroll()
 
       // 等待DOM更新后设置焦点到对话框
       await nextTick()
@@ -127,7 +150,7 @@ watch(
         firstFocusable?.focus()
       }
     } else {
-      document.body.classList.remove('modal-open')
+      unlockBodyScroll()
       // 恢复之前的焦点
       if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
         previousActiveElement.focus()
@@ -144,7 +167,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleEscape)
-  // 确保组件卸载时移除滚动锁定
-  document.body.classList.remove('modal-open')
+  unlockBodyScroll()
 })
 </script>

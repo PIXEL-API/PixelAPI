@@ -108,6 +108,18 @@
             </div>
           </div>
 
+          <div class="mt-4 grid gap-3 md:grid-cols-2">
+            <div class="rounded-lg border border-gray-200 px-3 py-2 dark:border-dark-700">
+              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('affiliate.weeklyQuota') }}</p>
+              <p class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ weeklyQuotaText }}</p>
+            </div>
+            <div class="rounded-lg border border-gray-200 px-3 py-2 dark:border-dark-700">
+              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('affiliate.codePolicy.title') }}</p>
+              <p class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ codePolicyText }}</p>
+              <p class="mt-0.5 text-xs text-gray-400 dark:text-dark-500">{{ codeExpiryText }}</p>
+            </div>
+          </div>
+
           <div class="mt-5 rounded-xl border border-primary-200 bg-primary-50 p-4 dark:border-primary-900/40 dark:bg-primary-900/20">
             <p class="text-sm font-medium text-primary-800 dark:text-primary-200">{{ t('affiliate.tips.title') }}</p>
             <ul class="mt-2 space-y-1 text-sm text-primary-700 dark:text-primary-300">
@@ -236,6 +248,31 @@ const periodIncomeTitle = computed(() => {
   if (periodPreset.value === 'yesterday') return t('affiliate.stats.yesterdayQuota')
   if (periodPreset.value === 'last7') return t('affiliate.stats.last7Quota')
   return t('affiliate.stats.periodQuota')
+})
+
+const weeklyQuotaText = computed(() => {
+  const used = detail.value?.aff_weekly_used ?? 0
+  const limit = detail.value?.aff_weekly_limit ?? 0
+  const remaining = detail.value?.aff_weekly_remaining ?? Math.max(0, limit - used)
+  return t('affiliate.weeklyQuotaText', { used, limit, remaining })
+})
+
+const codePolicyText = computed(() => {
+  if (!detail.value) return ''
+  return detail.value.aff_code_auto_rotate
+    ? t('affiliate.codePolicy.rotateWeekly')
+    : t('affiliate.codePolicy.keepCode')
+})
+
+const codeExpiryText = computed(() => {
+  if (!detail.value) return ''
+  if (!detail.value.aff_code_auto_rotate) {
+    return t('affiliate.codePolicy.noExpiry')
+  }
+  const expiresAt = formatDateTime(detail.value.aff_code_expires_at)
+  return expiresAt
+    ? t('affiliate.codePolicy.expiresAt', { time: expiresAt })
+    : t('affiliate.codePolicy.expiresUnknown')
 })
 
 const sortedInvitees = computed(() => {

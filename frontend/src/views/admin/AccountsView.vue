@@ -183,6 +183,9 @@
           <template #cell-select="{ row }">
             <input type="checkbox" :checked="isSelected(row.id)" @change="toggleSel(row.id)" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
           </template>
+          <template #cell-id="{ value }">
+            <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
+          </template>
           <template #cell-name="{ row, value }">
             <div class="flex flex-col">
               <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
@@ -508,6 +511,7 @@ type AccountSortState = {
   sort_order: AccountSortOrder
 }
 const ACCOUNT_SORTABLE_KEYS = new Set([
+  'id',
   'name',
   'status',
   'schedulable',
@@ -1162,6 +1166,7 @@ const allColumns = computed(() => {
   const c = [
     { key: 'select', label: '', sortable: false },
     { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
+    { key: 'id', label: t('admin.accounts.columns.id'), sortable: true },
     { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false },
     { key: 'share_scope', label: t('admin.accounts.columns.shareScope'), sortable: false },
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
@@ -1524,15 +1529,19 @@ const accountMatchesCurrentFilters = (account: Account) => {
     const isRateLimited = Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now
     const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
     const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
+    const codexQuotaResetAt = account.codex_quota_protection_reset_at ? new Date(account.codex_quota_protection_reset_at).getTime() : Number.NaN
+    const isCodexQuotaProtected = Number.isFinite(codexQuotaResetAt) && codexQuotaResetAt > now
 
     if (filters.status === 'active') {
-      if (account.status !== 'active' || isRateLimited || isTempUnschedulable || !account.schedulable) return false
+      if (account.status !== 'active' || isRateLimited || isTempUnschedulable || isCodexQuotaProtected || !account.schedulable) return false
     } else if (filters.status === 'rate_limited') {
       if (account.status !== 'active' || !isRateLimited || isTempUnschedulable) return false
     } else if (filters.status === 'temp_unschedulable') {
-      if (account.status !== 'active' || !isTempUnschedulable) return false
+      if (account.status !== 'active' || !isTempUnschedulable || isCodexQuotaProtected) return false
+    } else if (filters.status === 'codex_quota_protected') {
+      if (account.status !== 'active' || !isCodexQuotaProtected || isRateLimited) return false
     } else if (filters.status === 'unschedulable') {
-      if (account.status !== 'active' || account.schedulable || isRateLimited || isTempUnschedulable) return false
+      if (account.status !== 'active' || account.schedulable || isRateLimited || isTempUnschedulable || isCodexQuotaProtected) return false
     } else if (account.status !== filters.status) {
       return false
     }
@@ -1781,7 +1790,7 @@ onMounted(async () => {
   load()
   try {
     const [p, fp, g] = await Promise.all([
-      adminAPI.proxies.getAll(),
+      adminAPI.proxies.getAllWithCount(),
       loadAccountFilterProxies(),
       adminAPI.groups.getAll()
     ])

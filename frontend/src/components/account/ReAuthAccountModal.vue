@@ -281,6 +281,19 @@ const isManualInputMethod = computed(() => {
   return isOpenAILike.value || isGemini.value || isAntigravity.value || oauthFlowRef.value?.inputMethod === 'manual'
 })
 
+function toPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {}
+}
+
+function mergeAccountRecord(current: unknown, updates?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...toPlainRecord(current),
+    ...(updates || {})
+  }
+}
+
 const canExchangeCode = computed(() => {
   const authCode = oauthFlowRef.value?.authCode || ''
   const sessionId = currentSessionId.value
@@ -374,8 +387,8 @@ const handleExchangeCode = async () => {
     if (!tokenInfo) return
 
     // Build credentials and extra info
-    const credentials = oauthClient.buildCredentials(tokenInfo)
-    const extra = oauthClient.buildExtraInfo(tokenInfo)
+    const credentials = mergeAccountRecord(props.account.credentials, oauthClient.buildCredentials(tokenInfo))
+    const extra = mergeAccountRecord(props.account.extra, oauthClient.buildExtraInfo(tokenInfo))
 
     try {
       // Update account with new credentials
@@ -414,7 +427,7 @@ const handleExchangeCode = async () => {
     })
     if (!tokenInfo) return
 
-    const credentials = geminiOAuth.buildCredentials(tokenInfo)
+    const credentials = mergeAccountRecord(props.account.credentials, geminiOAuth.buildCredentials(tokenInfo))
 
     try {
       await accountAPI.value.update(props.account.id, {
@@ -448,7 +461,7 @@ const handleExchangeCode = async () => {
     })
     if (!tokenInfo) return
 
-    const credentials = antigravityOAuth.buildCredentials(tokenInfo)
+    const credentials = mergeAccountRecord(props.account.credentials, antigravityOAuth.buildCredentials(tokenInfo))
 
     try {
       await accountAPI.value.update(props.account.id, {
@@ -477,12 +490,13 @@ const handleExchangeCode = async () => {
       const tokenInfo = await claudeOAuth.exchangeAuthCode(addMethod.value, props.account.proxy_id)
       if (!tokenInfo) return
 
-      const extra = claudeOAuth.buildExtraInfo(tokenInfo)
+      const credentials = mergeAccountRecord(props.account.credentials, tokenInfo as Record<string, unknown>)
+      const extra = mergeAccountRecord(props.account.extra, claudeOAuth.buildExtraInfo(tokenInfo))
 
       // Update account with new credentials and type
       await accountAPI.value.update(props.account.id, {
         type: addMethod.value, // Update type based on selected method
-        credentials: tokenInfo,
+        credentials,
         extra
       })
 
@@ -512,12 +526,13 @@ const handleCookieAuth = async (sessionKey: string) => {
     const tokenInfo = await claudeOAuth.cookieAuth(addMethod.value, sessionKey, props.account.proxy_id)
     if (!tokenInfo) return
 
-    const extra = claudeOAuth.buildExtraInfo(tokenInfo)
+    const credentials = mergeAccountRecord(props.account.credentials, tokenInfo as Record<string, unknown>)
+    const extra = mergeAccountRecord(props.account.extra, claudeOAuth.buildExtraInfo(tokenInfo))
 
     // Update account with new credentials and type
     await accountAPI.value.update(props.account.id, {
       type: addMethod.value, // Update type based on selected method
-      credentials: tokenInfo,
+      credentials,
       extra
     })
 

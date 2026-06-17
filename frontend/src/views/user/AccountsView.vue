@@ -8,7 +8,7 @@
             class="btn btn-secondary"
             :disabled="loading"
             :title="t('common.refresh')"
-            @click="loadAccounts"
+            @click="refreshAccountsPage"
           >
             <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
           </button>
@@ -34,7 +34,7 @@
             <Icon name="upload" size="md" class="mr-2" />
             {{ t('userAccounts.importAccounts') }}
           </button>
-          <button type="button" class="btn btn-primary" @click="showCreateModal = true">
+          <button type="button" class="btn btn-primary" @click="openCreateModal">
             <Icon name="plus" size="md" class="mr-2" />
             {{ t('userAccounts.createAccount') }}
           </button>
@@ -194,10 +194,17 @@
 
           <template #cell-share="{ row }">
             <div class="flex flex-col gap-1">
-              <span :class="shareModeBadgeClass(row.share_mode)">
+              <span
+                v-if="isAccountShareModeOnly(row)"
+                :class="accountShareModeOnlyBadgeClass()"
+                :title="t('userAccounts.accountShareModeOnlyHint')"
+              >
+                {{ t('userAccounts.accountShareModeOnly') }}
+              </span>
+              <span v-else :class="shareModeBadgeClass(row.share_mode)">
                 {{ shareModeLabel(row.share_mode) }}
               </span>
-              <div v-if="row.share_mode === 'public'" class="flex items-center gap-1">
+              <div v-if="!isAccountShareModeOnly(row) && row.share_mode === 'public'" class="flex items-center gap-1">
                 <span :class="shareStatusBadgeClass(row.share_status)" :title="shareStatusTitle(row)">
                   {{ shareStatusLabel(row.share_status) }}
                 </span>
@@ -364,7 +371,7 @@
               :title="t('userAccounts.noAccountsYet')"
               :description="t('userAccounts.createFirstAccount')"
               :action-text="t('userAccounts.createAccount')"
-              @action="showCreateModal = true"
+              @action="openCreateModal"
             />
           </template>
         </DataTable>
@@ -384,10 +391,10 @@
 
     <CreateAccountModal
       :show="showCreateModal"
-      :proxies="[]"
+      :proxies="userProxies"
       :groups="modalGroups"
       account-scope="user"
-      :allow-proxy="false"
+      :allow-proxy="true"
       :allow-billing-rate="false"
       @close="showCreateModal = false"
       @created="handleAccountCreated"
@@ -416,6 +423,7 @@
       :allow-proxy="false"
       :allow-billing-rate="false"
       :allow-base-url="false"
+      :has-account-share-mode-only="selectedHasAccountShareModeOnly"
       @close="showBulkEditModal = false"
       @updated="handleBulkAccountsUpdated"
     />
@@ -499,9 +507,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { accountsAPI, userGroupsAPI } from '@/api'
+import { accountsAPI, accountShareAPI, userGroupsAPI } from '@/api'
 import type { AccountBatchTask, UserAccountVerifyLevelTarget } from '@/api/accounts'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useTableSelection } from '@/composables/useTableSelection'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -527,17 +536,22 @@ import ReAuthAccountModal from '@/components/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/account/AccountTestModal.vue'
 import UserAccountActionMenu from '@/components/account/UserAccountActionMenu.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
-import type { Account, AccountPlatform, AccountType, AdminGroup, Group, WindowStats } from '@/types'
+import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
+import type { Account, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
+import { extractApiErrorMessage } from '@/utils/apiError'
 
 type UserAccountStatus = 'active' | 'disabled'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
+const userProxies = ref<Proxy[]>([])
+const userProxiesLoading = ref(false)
 const loading = ref(false)
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
@@ -619,6 +633,7 @@ const selectedPlatforms = computed<AccountPlatform[]>(() => [
 const selectedTypes = computed<AccountType[]>(() => [
   ...new Set(selectedAccounts.value.map((account) => account.type))
 ])
+const selectedHasAccountShareModeOnly = computed(() => selectedAccounts.value.some(isAccountShareModeOnly))
 
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false, class: 'w-10' },
@@ -664,10 +679,7 @@ const typeFilterOptions = computed(() => [
 ])
 
 const statusFilterOptions = computed(() => [
-  { value: '', label: t('userAccounts.allStatus') },
-  { value: 'active', label: t('userAccounts.status.active') },
-  { value: 'disabled', label: t('userAccounts.status.disabled') },
-  { value: 'error', label: t('userAccounts.status.error') }
+  ...ACCOUNT_STATUS_FILTER_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))
 ])
 
 const groupFilterOptions = computed(() => [
@@ -897,6 +909,12 @@ function shareModeLabel(mode?: string): string {
   return mode === 'public' ? t('userAccounts.publicMode') : t('userAccounts.privateMode')
 }
 
+function isAccountShareModeOnly(account: Account): boolean {
+  return Number(account.account_share_mode_listing_id || 0) > 0 ||
+    account.extra?.account_share_mode === true ||
+    account.extra?.account_share_mode === 'true'
+}
+
 function shareStatusLabel(status?: string): string {
   switch (status) {
     case 'pending':
@@ -932,7 +950,7 @@ function shareStatusTitle(row: Account): string {
 }
 
 function canRevalidatePublicShare(row: Account): boolean {
-  return row.share_mode === 'public' && row.share_status !== 'approved'
+  return !isAccountShareModeOnly(row) && row.share_mode === 'public' && row.share_status !== 'approved'
 }
 
 function shareModeBadgeClass(mode?: string): string {
@@ -940,6 +958,10 @@ function shareModeBadgeClass(mode?: string): string {
   return mode === 'public'
     ? `${base} bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300`
     : `${base} bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-dark-200`
+}
+
+function accountShareModeOnlyBadgeClass(): string {
+  return 'inline-flex w-fit rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
 }
 
 function shareStatusBadgeClass(status?: string): string {
@@ -991,12 +1013,45 @@ async function loadAccounts(): Promise<void> {
   }
 }
 
+async function refreshCurrentUserBalance(): Promise<void> {
+  try {
+    await authStore.refreshUser()
+  } catch (error) {
+    console.error('Failed to refresh current user balance:', error)
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
+  }
+}
+
+async function refreshAccountsPage(): Promise<void> {
+  const balanceRefresh = refreshCurrentUserBalance()
+  await loadAccounts()
+  await balanceRefresh
+}
+
 async function loadGroups(): Promise<void> {
   try {
     groups.value = await userGroupsAPI.getAvailable()
   } catch (error) {
     console.error('Failed to load available groups:', error)
   }
+}
+
+async function loadUserProxies(force = false): Promise<void> {
+  if (userProxiesLoading.value || (!force && userProxies.value.length > 0)) return
+  userProxiesLoading.value = true
+  try {
+    userProxies.value = await accountShareAPI.listProxies()
+  } catch (error) {
+    console.error('Failed to load user proxies:', error)
+    appStore.showError(extractApiErrorMessage(error, t('userAccounts.importProxyLoadFailed')))
+  } finally {
+    userProxiesLoading.value = false
+  }
+}
+
+function openCreateModal(): void {
+  showCreateModal.value = true
+  void loadUserProxies()
 }
 
 function onFilterChange(): void {

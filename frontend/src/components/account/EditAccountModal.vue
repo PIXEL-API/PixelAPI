@@ -28,7 +28,19 @@
 
       <div v-if="isUserScope">
         <label class="input-label">{{ t('userAccounts.shareMode') }}</label>
-        <div class="grid grid-cols-2 gap-2">
+        <div
+          v-if="isAccountShareModeOnly"
+          class="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800/70 dark:bg-emerald-900/20 dark:text-emerald-200"
+        >
+          <div class="flex items-center gap-2 font-medium">
+            <Icon name="lock" size="sm" />
+            <span>{{ t('userAccounts.accountShareModeOnly') }}</span>
+          </div>
+          <p class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
+            {{ t('userAccounts.accountShareModeOnlyHint') }}
+          </p>
+        </div>
+        <div v-else class="grid grid-cols-2 gap-2">
           <button
             type="button"
             :class="[
@@ -1299,23 +1311,43 @@
 
       <div v-if="canManageProxy">
         <label class="input-label">{{ t('admin.accounts.proxy') }}</label>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <ProxySelector v-model="form.proxy_id" :proxies="proxies" :hide-endpoint="hideProxyEndpoint" />
       </div>
 
-      <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
-            @input="normalizeConcurrencyInput" />
+          <input
+            v-model.number="form.concurrency"
+            type="number"
+            :min="isUserScope ? PERSONAL_ACCOUNT_MIN_CONCURRENCY : 1"
+            :max="isUserScope ? PERSONAL_ACCOUNT_MAX_CONCURRENCY : undefined"
+            step="1"
+            class="input"
+            @input="normalizeConcurrencyInput"
+          />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
-          <input v-model.number="form.load_factor" type="number" min="1"
-            class="input" :placeholder="String(form.concurrency || 1)"
-            @input="form.load_factor = (form.load_factor &amp;&amp; form.load_factor >= 1) ? form.load_factor : null" />
-          <p class="input-hint">{{ t('admin.accounts.loadFactorHint') }}</p>
+          <input
+            v-model.number="form.load_factor"
+            type="number"
+            :min="isUserScope ? PERSONAL_ACCOUNT_MIN_LOAD_FACTOR : 1"
+            :max="isUserScope ? PERSONAL_ACCOUNT_MAX_LOAD_FACTOR : undefined"
+            step="1"
+            class="input"
+            :placeholder="String(isUserScope ? PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR : (form.concurrency || 1))"
+            @input="normalizeLoadFactorInput"
+          />
+          <p v-if="isUserScope" class="input-hint">
+            {{ t('userAccounts.loadFactorCreditsPreview', { paid: userLoadFactorPaidCeiling, cost: userLoadFactorCreditCost, balance: userLoadFactorCreditsBalance }) }}
+          </p>
+          <p v-else class="input-hint">{{ t('admin.accounts.loadFactorHint') }}</p>
+          <p v-if="isUserScope && userLoadFactorCreditsInsufficient" class="mt-1 text-xs text-red-600 dark:text-red-400">
+            {{ t('userAccounts.loadFactorCreditsInsufficient') }}
+          </p>
         </div>
-        <div>
+        <div v-if="!isUserScope">
           <label class="input-label">{{ t('admin.accounts.priority') }}</label>
           <input
             v-model.number="form.priority"
@@ -2215,12 +2247,17 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
 import {
   PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED,
-  PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
+  PERSONAL_ACCOUNT_MAX_CONCURRENCY,
+  PERSONAL_ACCOUNT_MIN_CONCURRENCY,
   PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE,
   PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE,
+  PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR,
+  PERSONAL_ACCOUNT_MAX_LOAD_FACTOR,
+  PERSONAL_ACCOUNT_MIN_LOAD_FACTOR,
   PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
-  applyPersonalAccountTemplate,
-  buildPersonalAccountModelMapping
+  buildPersonalAccountModelMapping,
+  normalizePersonalAccountConcurrency,
+  normalizePersonalAccountLoadFactor
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
@@ -2249,6 +2286,7 @@ interface Props {
   accountScope?: AccountApiScope
   allowProxy?: boolean
   allowBillingRate?: boolean
+  hideProxyEndpoint?: boolean
 }
 
 const props = defineProps<Props>()
@@ -2262,8 +2300,16 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const accountScope = computed(() => props.accountScope ?? 'admin')
 const isUserScope = computed(() => accountScope.value === 'user')
+const isAccountShareModeOnly = computed(() => {
+  const account = props.account
+  if (!isUserScope.value || !account) return false
+  return Number(account.account_share_mode_listing_id || 0) > 0 ||
+    account.extra?.account_share_mode === true ||
+    account.extra?.account_share_mode === 'true'
+})
 const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
+const hideProxyEndpoint = computed(() => props.hideProxyEndpoint === true)
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
@@ -2524,18 +2570,43 @@ const accountLevelOptions = computed(() => [
   { value: 'team', label: t('admin.accounts.accountLevel.team') }
 ])
 
+const userLoadFactorCreditsBalance = computed(() => Math.max(0, Number(authStore.user?.load_factor_credits_balance || 0)))
+const userLoadFactorPaidCeiling = computed(() => {
+  const ceiling = Number(props.account?.load_factor_paid_ceiling || PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR)
+  if (!Number.isFinite(ceiling)) {
+    return PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR
+  }
+  return Math.max(PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR, Math.trunc(ceiling))
+})
+const userLoadFactorTarget = computed(() => normalizePersonalAccountLoadFactor(form.load_factor))
+const userLoadFactorCreditCost = computed(() => {
+  if (!isUserScope.value) {
+    return 0
+  }
+  return Math.max(0, userLoadFactorTarget.value - userLoadFactorPaidCeiling.value)
+})
+const userLoadFactorCreditsInsufficient = computed(() => userLoadFactorCreditCost.value > userLoadFactorCreditsBalance.value)
+
 const normalizeConcurrencyInput = () => {
   if (isUserScope.value) {
-    form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+    form.concurrency = normalizePersonalAccountConcurrency(form.concurrency)
     return
   }
   form.concurrency = Math.max(1, form.concurrency || 1)
 }
 
+const normalizeLoadFactorInput = () => {
+  if (isUserScope.value) {
+    form.load_factor = normalizePersonalAccountLoadFactor(form.load_factor)
+    return
+  }
+  form.load_factor = form.load_factor && form.load_factor >= 1 ? form.load_factor : null
+}
+
 const applyUserScopeConcurrencyTemplate = () => {
   if (isUserScope.value) {
-    form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
-    form.load_factor = null
+    form.concurrency = normalizePersonalAccountConcurrency(form.concurrency)
+    form.load_factor = normalizePersonalAccountLoadFactor(form.load_factor)
     return
   }
 }
@@ -2622,8 +2693,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.share_mode = newAccount.share_mode === 'public' ? 'public' : 'private'
   form.account_level = newAccount.platform === 'openai' ? (newAccount.account_level || 'unknown') : 'unknown'
   form.proxy_id = newAccount.proxy_id
-  form.concurrency = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : newAccount.concurrency
-  form.load_factor = isUserScope.value ? null : (newAccount.load_factor ?? null)
+  form.concurrency = isUserScope.value
+    ? normalizePersonalAccountConcurrency(newAccount.concurrency)
+    : newAccount.concurrency
+  form.load_factor = isUserScope.value
+    ? normalizePersonalAccountLoadFactor(newAccount.load_factor ?? PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR)
+    : (newAccount.load_factor ?? null)
   form.priority = isUserScope.value
     ? (newAccount.priority > 0 ? newAccount.priority : PERSONAL_ACCOUNT_DEFAULT_PRIORITY)
     : newAccount.priority
@@ -2687,18 +2762,20 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       })
       if (newAccount.type === 'oauth') {
         codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
-        codex5hLimitPercent.value = normalizeCodexQuotaLimitInput(
-          Number(extra?.codex_5h_limit_percent ?? newAccount.codex_5h_limit_percent ?? CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
-        )
-        codex7dLimitPercent.value = normalizeCodexQuotaLimitInput(
-          Number(extra?.codex_7d_limit_percent ?? newAccount.codex_7d_limit_percent ?? CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
-        )
       }
       const credentials = newAccount.credentials as Record<string, unknown> | undefined
       const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
       if (compactMappings && typeof compactMappings === 'object') {
         openAICompactModelMappings.value = Object.entries(compactMappings).map(([from, to]) => ({ from, to }))
       }
+    }
+    if (newAccount.type === 'oauth') {
+      codex5hLimitPercent.value = normalizeCodexQuotaLimitInput(
+        Number(extra?.codex_5h_limit_percent ?? newAccount.codex_5h_limit_percent ?? CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
+      )
+      codex7dLimitPercent.value = normalizeCodexQuotaLimitInput(
+        Number(extra?.codex_7d_limit_percent ?? newAccount.codex_7d_limit_percent ?? CODEX_QUOTA_DEFAULT_LIMIT_PERCENT)
+      )
     }
   }
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
@@ -3388,24 +3465,15 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
   if (isUserScope.value) {
     delete next.group_ids
     delete next.status
-    next.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
-    next.load_factor = 0
-    if (typeof next.priority !== 'number' || Number(next.priority) <= 0) {
-      next.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+    delete next.proxy_id
+    next.concurrency = normalizePersonalAccountConcurrency(next.concurrency)
+    next.load_factor = normalizePersonalAccountLoadFactor(next.load_factor)
+    if (isAccountShareModeOnly.value) {
+      delete next.share_mode
     }
-    next.auto_pause_on_expired = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
-    const currentCredentials =
-      (next.credentials as Record<string, unknown>) ||
-      (props.account?.credentials as Record<string, unknown>) ||
-      {}
-    const currentExtra =
-      (next.extra as Record<string, unknown>) ||
-      (props.account?.extra as Record<string, unknown>) ||
-      {}
-    applyCodexQuotaLimitExtra(currentExtra)
-    const templated = applyPersonalAccountTemplate(props.account?.platform || 'anthropic', currentCredentials, currentExtra)
-    next.credentials = templated.credentials
-    next.extra = templated.extra
+    delete next.priority
+    delete next.rate_multiplier
+    delete next.auto_pause_on_expired
   }
   return next
 }
@@ -3417,6 +3485,11 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
     const updatedAccount = isUserScope.value
       ? await accountsAPI.update(accountID, payload as UpdateAccountRequest)
       : await adminAPI.accounts.update(accountID, payload)
+    if (isUserScope.value) {
+      await authStore.refreshUser().catch((error) => {
+        console.error('Failed to refresh user after load factor update:', error)
+      })
+    }
     appStore.showSuccess(isUserScope.value ? t('userAccounts.accountUpdatedSuccess') : t('admin.accounts.accountUpdated'))
     emit('updated', updatedAccount)
     handleClose()
@@ -3450,6 +3523,10 @@ const handleSubmit = async () => {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
   }
+  if (isUserScope.value && userLoadFactorCreditsInsufficient.value) {
+    appStore.showError(t('userAccounts.loadFactorCreditsInsufficient'))
+    return
+  }
 
   const updatePayload: Record<string, unknown> = { ...form }
   if (isUserScope.value || props.account.platform !== 'openai') {
@@ -3463,27 +3540,16 @@ const handleSubmit = async () => {
     if (form.expires_at === null) {
       updatePayload.expires_at = 0
     }
-    // load_factor: 空值/NaN/0/负数 时发送 0（后端约定 <= 0 = 清除）
-    const lf = form.load_factor
-    if (lf == null || Number.isNaN(lf) || lf <= 0) {
-      updatePayload.load_factor = 0
+    if (isUserScope.value) {
+      updatePayload.load_factor = userLoadFactorTarget.value
+    } else {
+      // load_factor: 空值/NaN/0/负数 时发送 0（后端约定 <= 0 = 清除）
+      const lf = form.load_factor
+      if (lf == null || Number.isNaN(lf) || lf <= 0) {
+        updatePayload.load_factor = 0
+      }
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
-
-    if (isUserScope.value) {
-      updatePayload.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
-      updatePayload.priority = Math.max(1, Number(form.priority) || PERSONAL_ACCOUNT_DEFAULT_PRIORITY)
-      updatePayload.auto_pause_on_expired = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
-      const templated = applyPersonalAccountTemplate(
-        props.account.platform,
-        (props.account.credentials as Record<string, unknown>) || {},
-        (props.account.extra as Record<string, unknown>) || {}
-      )
-      updatePayload.credentials = templated.credentials
-      updatePayload.extra = templated.extra
-      await submitUpdateAccount(accountID, updatePayload)
-      return
-    }
 
     // For apikey type, handle credentials update
     if (props.account.type === 'apikey') {
@@ -3675,7 +3741,7 @@ const handleSubmit = async () => {
     }
 
     // OpenAI OAuth: persist model mapping to credentials
-    if (props.account.platform === 'openai' && props.account.type === 'oauth') {
+    if (!isUserScope.value && props.account.platform === 'openai' && props.account.type === 'oauth') {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
@@ -3704,7 +3770,7 @@ const handleSubmit = async () => {
 
     // Antigravity: persist model mapping to credentials (applies to all antigravity types)
     // Antigravity 只支持映射模式
-    if (props.account.platform === 'antigravity') {
+    if (!isUserScope.value && props.account.platform === 'antigravity') {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
@@ -3727,7 +3793,7 @@ const handleSubmit = async () => {
     }
 
     // For antigravity accounts, handle mixed_scheduling and allow_overages in extra
-    if (props.account.platform === 'antigravity') {
+    if (!isUserScope.value && props.account.platform === 'antigravity') {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (mixedScheduling.value) {
@@ -3748,13 +3814,15 @@ const handleSubmit = async () => {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
 
-      // Window cost limit settings
-      if (windowCostEnabled.value && windowCostLimit.value != null && windowCostLimit.value > 0) {
-        newExtra.window_cost_limit = windowCostLimit.value
-        newExtra.window_cost_sticky_reserve = windowCostStickyReserve.value ?? 10
-      } else {
-        delete newExtra.window_cost_limit
-        delete newExtra.window_cost_sticky_reserve
+      if (!isUserScope.value) {
+        // Window cost limit settings
+        if (windowCostEnabled.value && windowCostLimit.value != null && windowCostLimit.value > 0) {
+          newExtra.window_cost_limit = windowCostLimit.value
+          newExtra.window_cost_sticky_reserve = windowCostStickyReserve.value ?? 10
+        } else {
+          delete newExtra.window_cost_limit
+          delete newExtra.window_cost_sticky_reserve
+        }
       }
 
       // Session limit settings
@@ -3855,36 +3923,40 @@ const handleSubmit = async () => {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
-      if (props.account.type === 'oauth') {
-        newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
-        newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
-      } else if (props.account.type === 'apikey') {
-        newExtra.openai_apikey_responses_websockets_v2_mode = openaiAPIKeyResponsesWebSocketV2Mode.value
-        newExtra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
-      }
-      delete newExtra.responses_websockets_v2_enabled
-      delete newExtra.openai_ws_enabled
-      if (openaiPassthroughEnabled.value) {
-        newExtra.openai_passthrough = true
-      } else {
-        delete newExtra.openai_passthrough
-        delete newExtra.openai_oauth_passthrough
-      }
-      if (openAICompactMode.value === 'auto') {
-        delete newExtra.openai_compact_mode
-      } else {
-        newExtra.openai_compact_mode = openAICompactMode.value
+      if (!isUserScope.value) {
+        if (props.account.type === 'oauth') {
+          newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
+          newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
+        } else if (props.account.type === 'apikey') {
+          newExtra.openai_apikey_responses_websockets_v2_mode = openaiAPIKeyResponsesWebSocketV2Mode.value
+          newExtra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
+        }
+        delete newExtra.responses_websockets_v2_enabled
+        delete newExtra.openai_ws_enabled
+        if (openaiPassthroughEnabled.value) {
+          newExtra.openai_passthrough = true
+        } else {
+          delete newExtra.openai_passthrough
+          delete newExtra.openai_oauth_passthrough
+        }
+        if (openAICompactMode.value === 'auto') {
+          delete newExtra.openai_compact_mode
+        } else {
+          newExtra.openai_compact_mode = openAICompactMode.value
+        }
       }
 
       if (props.account.type === 'oauth') {
         applyCodexQuotaLimitExtra(newExtra)
-        if (codexCLIOnlyEnabled.value) {
-          newExtra.codex_cli_only = true
-        } else if (hadCodexCLIOnlyEnabled) {
-          // 关闭时显式写 false，避免 extra 为空被后端忽略导致旧值无法清除
-          newExtra.codex_cli_only = false
-        } else {
-          delete newExtra.codex_cli_only
+        if (!isUserScope.value) {
+          if (codexCLIOnlyEnabled.value) {
+            newExtra.codex_cli_only = true
+          } else if (hadCodexCLIOnlyEnabled) {
+            // 关闭时显式写 false，避免 extra 为空被后端忽略导致旧值无法清除
+            newExtra.codex_cli_only = false
+          } else {
+            delete newExtra.codex_cli_only
+          }
         }
       }
 

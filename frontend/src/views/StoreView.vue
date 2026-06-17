@@ -86,16 +86,37 @@
                   </h2>
                 </div>
                 <span class="shrink-0 rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-dark-300">
-                  {{ product.stock_unlimited ? t('store.drawProductBadge') : t('store.stock', { count: product.stock }) }}
+                  {{ stockBadgeText(product) }}
                 </span>
               </div>
-              <p class="mt-3 line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-gray-500 dark:text-dark-400">
-                {{ product.description || t('store.noDescription') }}
-              </p>
+              <div
+                class="store-description"
+                :class="{ 'store-description-interactive': productDescription(product) }"
+                :tabindex="productDescription(product) ? 0 : undefined"
+                :aria-describedby="productDescription(product) ? `store-product-description-${product.id}` : undefined"
+              >
+                <p class="line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-gray-500 dark:text-dark-400">
+                  {{ productDescriptionPreview(product) }}
+                </p>
+                <div
+                  v-if="productDescription(product)"
+                  :id="`store-product-description-${product.id}`"
+                  class="store-description-popover"
+                  role="tooltip"
+                >
+                  {{ productDescription(product) }}
+                </div>
+              </div>
               <div v-if="isDrawProduct(product)" class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800">
                 <div class="flex justify-between gap-3">
                   <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawProgress') }}</span>
                   <span class="font-semibold text-gray-900 dark:text-white">{{ drawProgressText(product) }}</span>
+                </div>
+              </div>
+              <div v-else-if="isLoadFactorCreditsProduct(product)" class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800">
+                <div class="flex justify-between gap-3">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.loadFactorCreditsPerUnit') }}</span>
+                  <span class="font-semibold text-emerald-600 dark:text-emerald-300">+{{ product.load_factor_credits_per_unit }}</span>
                 </div>
               </div>
               <div class="mt-4 flex items-end justify-between gap-3">
@@ -154,6 +175,12 @@
                   <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawRewardRange') }}</span>
                   <span class="text-right font-medium text-gray-900 dark:text-white">
                     {{ drawRewardRangeText }}
+                  </span>
+                </div>
+                <div v-if="isCheckoutLoadFactorCreditsProduct" class="mt-2 flex justify-between gap-3">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.loadFactorCreditsAwarded') }}</span>
+                  <span class="text-right font-medium text-emerald-600 dark:text-emerald-300">
+                    +{{ checkoutLoadFactorCreditsAmount }}
                   </span>
                 </div>
                 <div v-if="isCheckoutDrawProduct" class="mt-2 flex justify-between gap-3">
@@ -267,9 +294,15 @@
                     {{ formatDrawReward(completedOrder) }}
                   </span>
                 </div>
+                <div v-if="completedOrder.load_factor_credits_awarded > 0" class="mt-2 flex justify-between gap-3">
+                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.loadFactorCreditsAwarded') }}</span>
+                  <span class="font-medium text-emerald-600 dark:text-emerald-300">
+                    +{{ completedOrder.load_factor_credits_awarded }}
+                  </span>
+                </div>
               </div>
 
-              <div v-if="completedOrder.draw_reward_amount === null || completedOrder.draw_reward_amount === undefined">
+              <div v-if="shouldShowDeliveredCards(completedOrder)">
                 <div class="mb-2 flex items-center justify-between gap-3">
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</label>
                   <button
@@ -369,6 +402,7 @@ const checkoutMaxQuantity = computed(() => {
   if (!product) return 1
   if (isDrawProduct(product)) return 1
   const maxPurchase = product.max_purchase > 0 ? product.max_purchase : product.stock
+  if (product.stock_unlimited) return Math.max(checkoutMinQuantity.value, maxPurchase || checkoutMinQuantity.value)
   return Math.max(checkoutMinQuantity.value, Math.min(product.stock, maxPurchase))
 })
 const checkoutAmount = computed(() => {
@@ -378,6 +412,12 @@ const checkoutAmount = computed(() => {
 })
 const visibleMethods = computed(() => getVisibleMethods(checkout.value?.methods || {}))
 const isCheckoutDrawProduct = computed(() => isDrawProduct(checkoutProduct.value || null))
+const isCheckoutLoadFactorCreditsProduct = computed(() => isLoadFactorCreditsProduct(checkoutProduct.value || null))
+const checkoutLoadFactorCreditsAmount = computed(() => {
+  const product = checkoutProduct.value
+  if (!product || !isLoadFactorCreditsProduct(product)) return 0
+  return Math.max(0, Number(product.load_factor_credits_per_unit || 0)) * Math.max(checkoutMinQuantity.value, quantity.value || checkoutMinQuantity.value)
+})
 const drawRewardRangeText = computed(() => {
   const config = checkoutProduct.value?.draw_config
   if (!config) return ''
@@ -446,11 +486,33 @@ function amountFitsMethod(amount: number, method: string): boolean {
 }
 
 function isProductPurchasable(product: StoreProduct): boolean {
-  return isDrawProduct(product) || product.stock > 0
+  return isDrawProduct(product) || isLoadFactorCreditsProduct(product) || product.stock > 0
+}
+
+function stockBadgeText(product: StoreProduct): string {
+  if (isLoadFactorCreditsProduct(product)) return t('store.loadFactorCreditsProductBadge')
+  if (isDrawProduct(product)) return t('store.drawProductBadge')
+  return t('store.stock', { count: product.stock })
+}
+
+function productDescription(product: StoreProduct): string {
+  return product.description?.trim() || ''
+}
+
+function productDescriptionPreview(product: StoreProduct): string {
+  return productDescription(product) || t('store.noDescription')
 }
 
 function isDrawProduct(product: StoreProduct | null): boolean {
   return product?.product_type === 'balance_draw' || product?.product_type === 'points_draw'
+}
+
+function isLoadFactorCreditsProduct(product: StoreProduct | null): boolean {
+  return product?.product_type === 'load_factor_credits'
+}
+
+function shouldShowDeliveredCards(order: StoreOrder): boolean {
+  return order.load_factor_credits_awarded <= 0 && (order.draw_reward_amount === null || order.draw_reward_amount === undefined)
 }
 
 function drawRewardUnit(productType?: string | null): string {
@@ -572,6 +634,7 @@ async function submitCheckout() {
       if (authStore.user) {
         const drawReward = Number(storeOrder.draw_reward_amount || 0)
         const rewardIsPoints = storeOrder.draw_reward_type === 'points' || storeOrder.product_type === 'points_draw'
+        const loadFactorCreditsAwarded = Number(storeOrder.load_factor_credits_awarded || 0)
         if (payMethod.value === 'balance') {
           authStore.user.balance = Math.max(0, currentBalance.value - storeOrder.total_amount + (rewardIsPoints ? 0 : drawReward))
           if (rewardIsPoints && drawReward > 0) {
@@ -582,6 +645,9 @@ async function submitCheckout() {
           if (!rewardIsPoints && drawReward > 0) {
             authStore.user.balance = currentBalance.value + drawReward
           }
+        }
+        if (loadFactorCreditsAwarded > 0) {
+          authStore.user.load_factor_credits_balance = Number(authStore.user.load_factor_credits_balance || 0) + loadFactorCreditsAwarded
         }
       }
       appStore.showSuccess(t('store.purchaseSuccess'))
@@ -661,6 +727,9 @@ async function handlePaymentSuccess() {
     try {
       const order = await waitForDeliveredOrder(activeShopOrderId.value)
       showCompletedOrder(order)
+      if (order.load_factor_credits_awarded > 0) {
+        await authStore.refreshUser()
+      }
     } catch (err: unknown) {
       appStore.showError(extractI18nErrorMessage(err, t, 'store.errors', t('common.error')))
     }
@@ -702,7 +771,7 @@ async function waitForDeliveredOrder(orderId: number): Promise<StoreOrder> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const { data } = await storeAPI.getOrder(orderId)
     latest = data
-    if (data.status === 'completed' && (data.delivered_cards.length > 0 || data.delivered_files.length > 0)) {
+    if (data.status === 'completed' && (data.delivered_cards.length > 0 || data.delivered_files.length > 0 || data.load_factor_credits_awarded > 0 || data.draw_reward_amount !== null && data.draw_reward_amount !== undefined)) {
       return data
     }
     await new Promise(resolve => setTimeout(resolve, 700))
@@ -767,6 +836,60 @@ onMounted(async () => {
 .dark .store-product-card {
   border-color: rgb(55 65 81);
   background: rgb(17 24 39);
+}
+
+.store-description {
+  position: relative;
+  margin-top: 0.75rem;
+  outline: none;
+}
+
+.store-description-interactive {
+  cursor: help;
+}
+
+.store-description-interactive:focus-visible {
+  border-radius: 0.375rem;
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.45);
+}
+
+.store-description-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 30;
+  max-height: 14rem;
+  overflow-y: auto;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(209 213 219);
+  background: rgb(17 24 39);
+  padding: 0.75rem;
+  color: white;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(0.25rem);
+  visibility: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 18px 35px rgb(15 23 42 / 0.22);
+  transition: opacity 150ms ease, transform 150ms ease, visibility 150ms ease;
+}
+
+.dark .store-description-popover {
+  border-color: rgb(75 85 99);
+  background: rgb(31 41 55);
+  box-shadow: 0 18px 35px rgb(0 0 0 / 0.4);
+}
+
+.store-description:hover .store-description-popover,
+.store-description:focus .store-description-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
 }
 
 .store-pay-option {

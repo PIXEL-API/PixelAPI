@@ -33,7 +33,7 @@ import adminPaymentAPI from './payment'
 import revenueAPI from './revenue'
 import affiliatesAPI from './affiliates'
 import accountSharePoliciesAPI from './accountSharePolicies'
-import subsitesAPI from './subsites'
+import accountShareModePolicyAPI from './accountShareModePolicy'
 import riskControlAPI from './riskControl'
 
 /**
@@ -70,7 +70,7 @@ export const adminAPI = {
   revenue: revenueAPI,
   affiliates: affiliatesAPI,
   accountSharePolicies: accountSharePoliciesAPI,
-  subsites: subsitesAPI,
+  accountShareModePolicy: accountShareModePolicyAPI,
   riskControl: riskControlAPI
 }
 
@@ -105,7 +105,7 @@ export {
   revenueAPI,
   affiliatesAPI,
   accountSharePoliciesAPI,
-  subsitesAPI,
+  accountShareModePolicyAPI,
   riskControlAPI
 }
 
@@ -118,4 +118,4 @@ export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'
 export type { TLSFingerprintProfile, CreateProfileRequest, UpdateProfileRequest } from './tlsFingerprintProfile'
 export type { RevenueBreakdowns, RevenueSummary, RevenueSummaryParams } from './revenue'
 export type { AccountSharePolicy } from './accountSharePolicies'
-export type { Subsite, AccountLease, ResetSubsiteSecretResult } from './subsites'
+export type { AccountShareModePolicy } from './accountShareModePolicy'

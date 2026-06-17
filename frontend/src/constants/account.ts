@@ -14,6 +14,19 @@ export const QUOTA_RESET_MODE_ROLLING = 'rolling' as const
 export const QUOTA_RESET_MODE_FIXED = 'fixed' as const
 export type QuotaResetMode = typeof QUOTA_RESET_MODE_ROLLING | typeof QUOTA_RESET_MODE_FIXED
 
+/** Account status filter values shared by admin and user account tables. */
+export const ACCOUNT_STATUS_FILTER_OPTIONS = [
+  { value: '', labelKey: 'admin.accounts.allStatus' },
+  { value: 'active', labelKey: 'admin.accounts.status.active' },
+  { value: 'codex_quota_protected', labelKey: 'admin.accounts.status.codexQuotaProtected' },
+  { value: 'rate_limited', labelKey: 'admin.accounts.status.rateLimited' },
+  { value: 'temp_unschedulable', labelKey: 'admin.accounts.status.tempUnschedulable' },
+  { value: 'unschedulable', labelKey: 'admin.accounts.status.unschedulable' },
+  { value: 'inactive', labelKey: 'admin.accounts.status.inactive' },
+  { value: 'disabled', labelKey: 'admin.accounts.status.disabled' },
+  { value: 'error', labelKey: 'admin.accounts.status.error' }
+] as const
+
 /** Vertex AI location options for Service Account accounts */
 export const VERTEX_LOCATION_OPTIONS = [
   {

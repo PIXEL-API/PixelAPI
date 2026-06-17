@@ -173,6 +173,16 @@
           </section>
 
           <section class="card p-5">
+            <h3 class="mb-4 text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.revenue.sections.platformLedger') }}</h3>
+            <div class="divide-y divide-gray-100 dark:divide-dark-700">
+              <div v-for="row in platformLedgerRows" :key="row.key" class="flex items-center justify-between gap-4 py-3">
+                <span class="text-sm text-gray-500 dark:text-gray-400">{{ row.label }}</span>
+                <span class="text-right text-sm font-medium text-gray-900 dark:text-white">{{ row.value }}</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card p-5">
             <h3 class="mb-4 text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.revenue.sections.adjustments') }}</h3>
             <div class="divide-y divide-gray-100 dark:divide-dark-700">
               <div v-for="row in adjustmentRows" :key="row.key" class="flex items-center justify-between gap-4 py-3">
@@ -580,6 +590,27 @@ const usageRows = computed(() => {
     { key: 'account-cost', label: t('admin.revenue.fields.accountCost'), value: formatAmount(data.account_cost) },
     { key: 'requests', label: t('admin.revenue.fields.requests'), value: formatInteger(data.requests) },
     { key: 'tokens', label: t('admin.revenue.fields.tokens'), value: formatInteger(data.total_tokens) }
+  ]
+})
+
+const platformLedgerRows = computed(() => {
+  const data = summary.value?.platform_ledger
+  if (!data) return []
+  return [
+    { key: 'user-count', label: t('admin.revenue.fields.platformUserCount'), value: formatInteger(data.user_count) },
+    { key: 'total-user-balance', label: t('admin.revenue.fields.totalUserBalance'), value: formatAmount(data.total_user_balance) },
+    { key: 'positive-user-balance', label: t('admin.revenue.fields.positiveUserBalance'), value: formatAmount(data.positive_user_balance) },
+    { key: 'balance-gt-point-one', label: t('admin.revenue.fields.balanceGtPointOne'), value: formatAmount(data.balance_gt_0_1) },
+    { key: 'negative-user-balance', label: t('admin.revenue.fields.negativeUserBalance'), value: formatAmount(data.negative_user_balance) },
+    { key: 'positive-balance-user-count', label: t('admin.revenue.fields.positiveBalanceUserCount'), value: formatInteger(data.positive_balance_user_count) },
+    { key: 'balance-gt-point-one-user-count', label: t('admin.revenue.fields.balanceGtPointOneUserCount'), value: formatInteger(data.balance_gt_0_1_user_count) },
+    { key: 'pending-withdrawal-amount', label: t('admin.revenue.fields.pendingWithdrawalAmount'), value: formatAmount(data.pending_withdrawal_amount) },
+    { key: 'pending-withdrawal-fee', label: t('admin.revenue.fields.pendingWithdrawalFee'), value: formatAmount(data.pending_withdrawal_fee) },
+    {
+      key: 'balance-gt-point-one-with-pending-withdrawal',
+      label: t('admin.revenue.fields.balanceGtPointOneWithPendingWithdrawal'),
+      value: formatAmount(data.balance_gt_0_1 + data.pending_withdrawal_amount)
+    }
   ]
 })
 

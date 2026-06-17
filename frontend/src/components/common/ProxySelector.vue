@@ -38,7 +38,7 @@
             />
           </div>
           <button
-            v-if="proxies.length > 0"
+            v-if="canTest && proxies.length > 0"
             type="button"
             @click.stop="handleBatchTest"
             :disabled="batchTesting"
@@ -68,6 +68,7 @@
         <div class="select-options">
           <!-- No Proxy option -->
           <div
+            v-if="allowEmpty"
             @click="selectOption(null)"
             :class="['select-option', modelValue === null && 'select-option-selected']"
           >
@@ -79,18 +80,20 @@
           <div
             v-for="proxy in filteredProxies"
             :key="proxy.id"
-            @click="selectOption(proxy.id)"
-            :class="['select-option', modelValue === proxy.id && 'select-option-selected']"
+            @click="selectProxyOption(proxy)"
+            :aria-disabled="isProxyOptionDisabled(proxy)"
+            :class="[
+              'select-option',
+              modelValue === proxy.id && 'select-option-selected',
+              isProxyOptionDisabled(proxy) && 'select-option-disabled'
+            ]"
+            :title="isProxyOptionDisabled(proxy) ? proxyUsageTitle(proxy) : undefined"
           >
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
                 <span class="truncate font-medium">{{ proxy.name }}</span>
-                <!-- Account count badge -->
-                <span
-                  v-if="proxy.account_count !== undefined"
-                  class="inline-flex flex-shrink-0 items-center rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 dark:bg-dark-600 dark:text-gray-400"
-                >
-                  {{ proxy.account_count }}
+                <span v-if="proxy.owner_user_id" class="proxy-owner-badge">
+                  {{ t('admin.proxies.userOwned') }}
                 </span>
                 <!-- Test result badges -->
                 <template v-if="testResults[proxy.id]">
@@ -113,13 +116,24 @@
                   </span>
                 </template>
               </div>
-              <div class="truncate text-xs text-gray-500 dark:text-gray-400">
-                {{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }}
+              <div
+                v-if="!hideEndpoint || proxy.account_count !== undefined"
+                class="flex min-w-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400"
+              >
+                <span v-if="!hideEndpoint" class="truncate">{{ formatProxyEndpoint(proxy) }}</span>
+                <span
+                  v-if="proxy.account_count !== undefined"
+                  :class="proxyUsageBadgeClass(proxy)"
+                  :title="proxyUsageTitle(proxy)"
+                >
+                  {{ formatProxyUsage(proxy) }}
+                </span>
               </div>
             </div>
 
             <!-- Individual test button -->
             <button
+              v-if="canTest"
               type="button"
               @click.stop="handleTestProxy(proxy)"
               :disabled="testingProxyIds.has(proxy.id)"
@@ -162,6 +176,10 @@
             {{ t('common.noOptionsFound') }}
           </div>
         </div>
+
+        <div v-if="$slots.actions" class="select-actions">
+          <slot name="actions" :close="closeDropdown"></slot>
+        </div>
       </div>
     </Transition>
   </div>
@@ -190,10 +208,18 @@ interface Props {
   modelValue: number | null
   proxies: Proxy[]
   disabled?: boolean
+  allowEmpty?: boolean
+  canTest?: boolean
+  hideEndpoint?: boolean
+  disableFull?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  disabled: false
+  disabled: false,
+  allowEmpty: true,
+  canTest: true,
+  hideEndpoint: false,
+  disableFull: false
 })
 
 const emit = defineEmits<{
@@ -217,11 +243,69 @@ const selectedProxy = computed(() => {
 
 const selectedLabel = computed(() => {
   if (!selectedProxy.value) {
-    return t('admin.accounts.noProxy')
+    return props.allowEmpty ? t('admin.accounts.noProxy') : t('common.selectOption')
   }
   const proxy = selectedProxy.value
-  return `${proxy.name} (${proxy.protocol}://${proxy.host}:${proxy.port})`
+  const usage = proxy.account_count !== undefined ? ` · ${formatProxyUsage(proxy)}` : ''
+  return props.hideEndpoint ? `${proxy.name}${usage}` : `${proxy.name} (${formatProxyEndpoint(proxy)}${usage})`
 })
+
+const normalizeProxyAccountCount = (proxy: Proxy): number => proxy.account_count || 0
+
+const normalizeProxyMaxAccounts = (proxy: Proxy): number => proxy.max_accounts || 0
+
+const isProxyAccountFull = (proxy: Proxy): boolean => {
+  const maxAccounts = normalizeProxyMaxAccounts(proxy)
+  return maxAccounts > 0 && normalizeProxyAccountCount(proxy) >= maxAccounts
+}
+
+const isProxyOptionDisabled = (proxy: Proxy): boolean =>
+  props.disableFull && isProxyAccountFull(proxy)
+
+const formatProxyEndpoint = (proxy: Proxy): string =>
+  `${proxy.protocol}://${proxy.host}:${proxy.port}`
+
+const formatProxyUsage = (proxy: Proxy): string => {
+  const count = normalizeProxyAccountCount(proxy)
+  const maxAccounts = normalizeProxyMaxAccounts(proxy)
+  if (maxAccounts <= 0) {
+    return t('admin.proxies.accountUsageUnlimited', { count })
+  }
+  return t('admin.proxies.accountUsageLimited', { count, max: maxAccounts })
+}
+
+const proxyUsageTitle = (proxy: Proxy): string => {
+  const count = normalizeProxyAccountCount(proxy)
+  const maxAccounts = normalizeProxyMaxAccounts(proxy)
+  if (maxAccounts <= 0) {
+    return t('admin.proxies.accountUsageUnlimitedTitle', { count })
+  }
+  if (count > maxAccounts) {
+    return t('admin.proxies.accountUsageExceededTitle', { count, max: maxAccounts })
+  }
+  if (count === maxAccounts) {
+    return t('admin.proxies.accountUsageFullTitle', { count, max: maxAccounts })
+  }
+  return t('admin.proxies.accountUsageLimitedTitle', { count, max: maxAccounts })
+}
+
+const proxyUsageBadgeClass = (proxy: Proxy): string => {
+  const count = normalizeProxyAccountCount(proxy)
+  const maxAccounts = normalizeProxyMaxAccounts(proxy)
+  const base =
+    'inline-flex flex-shrink-0 items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-semibold leading-4 shadow-sm'
+
+  if (maxAccounts <= 0) {
+    return `${base} border-gray-200 bg-gray-100 text-gray-600 dark:border-dark-500 dark:bg-dark-600 dark:text-gray-300`
+  }
+  if (count > maxAccounts) {
+    return `${base} border-red-200 bg-red-100 text-red-700 dark:border-red-800/60 dark:bg-red-900/30 dark:text-red-300`
+  }
+  if (count === maxAccounts) {
+    return `${base} border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/30 dark:text-amber-300`
+  }
+  return `${base} border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-900/30 dark:text-emerald-300`
+}
 
 const filteredProxies = computed(() => {
   if (!searchQuery.value) {
@@ -247,11 +331,21 @@ const toggle = () => {
 
 const selectOption = (value: number | null) => {
   emit('update:modelValue', value)
+  closeDropdown()
+}
+
+const selectProxyOption = (proxy: Proxy) => {
+  if (isProxyOptionDisabled(proxy)) return
+  selectOption(proxy.id)
+}
+
+const closeDropdown = () => {
   isOpen.value = false
   searchQuery.value = ''
 }
 
 const handleTestProxy = async (proxy: Proxy) => {
+  if (!props.canTest) return
   if (testingProxyIds.has(proxy.id)) return
 
   testingProxyIds.add(proxy.id)
@@ -269,6 +363,7 @@ const handleTestProxy = async (proxy: Proxy) => {
 }
 
 const handleBatchTest = async () => {
+  if (!props.canTest) return
   if (batchTesting.value || props.proxies.length === 0) return
 
   batchTesting.value = true
@@ -295,15 +390,13 @@ const handleBatchTest = async () => {
 
 const handleClickOutside = (event: MouseEvent) => {
   if (containerRef.value && !containerRef.value.contains(event.target as Node)) {
-    isOpen.value = false
-    searchQuery.value = ''
+    closeDropdown()
   }
 }
 
 const handleEscape = (event: KeyboardEvent) => {
   if (event.key === 'Escape' && isOpen.value) {
-    isOpen.value = false
-    searchQuery.value = ''
+    closeDropdown()
   }
 }
 
@@ -396,6 +489,11 @@ onUnmounted(() => {
   @apply text-primary-700 dark:text-primary-300;
 }
 
+.select-option-disabled {
+  @apply cursor-not-allowed opacity-60;
+  @apply hover:bg-transparent dark:hover:bg-transparent;
+}
+
 .select-option-label {
   @apply truncate;
 }
@@ -403,6 +501,14 @@ onUnmounted(() => {
 .select-empty {
   @apply px-4 py-8 text-center text-sm;
   @apply text-gray-500 dark:text-dark-400;
+}
+
+.select-actions {
+  @apply border-t border-gray-100 bg-gray-50/80 p-2 dark:border-dark-700 dark:bg-dark-900/60;
+}
+
+.proxy-owner-badge {
+  @apply inline-flex flex-shrink-0 items-center rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold leading-4 text-sky-700 dark:border-sky-800/70 dark:bg-sky-900/30 dark:text-sky-300;
 }
 
 .test-btn {

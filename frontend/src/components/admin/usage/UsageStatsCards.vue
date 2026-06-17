@@ -19,6 +19,10 @@
           {{ t('usage.in') }}: {{ formatTokens(stats?.total_input_tokens || 0) }} /
           {{ t('usage.out') }}: {{ formatTokens(stats?.total_output_tokens || 0) }}
         </p>
+        <p class="text-xs text-gray-500">
+          {{ t('admin.usage.cacheReadTokens') }}: {{ formatTokens(stats?.total_cache_read_tokens || 0) }} /
+          {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(stats?.total_input_tokens, stats?.total_cache_read_tokens) }}
+        </p>
       </div>
     </div>
     <div class="card p-4 flex items-center gap-3">
@@ -50,6 +54,7 @@
 import { useI18n } from 'vue-i18n'
 import type { AdminUsageStatsResponse } from '@/api/admin/usage'
 import Icon from '@/components/icons/Icon.vue'
+import { formatCacheHitRate } from '@/utils/formatters'
 
 defineProps<{ stats: AdminUsageStatsResponse | null }>()
 

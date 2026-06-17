@@ -107,17 +107,29 @@
           :class="groupCardClass(groupHealth(summary))"
         >
           <div class="flex items-start justify-between gap-3">
-            <div class="flex min-w-0 items-center gap-2">
+            <div class="flex min-w-0 items-start gap-2">
               <PlatformIcon :platform="platformIconValue(summary.platform)" size="sm" />
               <div class="min-w-0">
                 <div class="truncate text-sm font-semibold text-gray-900 dark:text-white">
                   {{ groupName(summary) }}
                 </div>
-                <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{ platformLabel(summary.platform) }} · {{ t('admin.accounts.quotaDashboard.accountMeta', {
+                <div class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                  {{ platformLabel(summary.platform) }} · {{ t('admin.accounts.quotaDashboard.accountBaseMeta', {
                     total: summary.account_count,
-                    active: summary.active_account_count,
-                    schedulable: summary.schedulable_account_count
+                    active: summary.active_account_count
+                  }) }}
+                </div>
+                <div class="mt-1 text-xs font-semibold text-teal-700 dark:text-teal-300">
+                  {{ t('admin.accounts.quotaDashboard.schedulableCount', { count: summary.schedulable_account_count }) }}
+                </div>
+                <div
+                  v-if="groupConcurrencyCapacity(summary)"
+                  class="mt-0.5 text-xs font-semibold"
+                  :class="groupConcurrencyCapacityClass(groupConcurrencyCapacity(summary)!)"
+                >
+                  {{ t('admin.accounts.quotaDashboard.concurrencyAvailable', {
+                    available: groupConcurrencyAvailable(groupConcurrencyCapacity(summary)!),
+                    total: groupConcurrencyCapacity(summary)!.concurrency_max
                   }) }}
                 </div>
               </div>
@@ -144,15 +156,20 @@
                 :style="{ width: `${segment.percent}%` }"
               />
             </div>
-            <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300 sm:grid-cols-5">
-              <span
-                v-for="segment in accountStatusSegments(summary)"
+            <div class="mt-2 grid grid-cols-[repeat(auto-fit,minmax(4.5rem,1fr))] gap-x-4 gap-y-1.5 text-[11px] text-gray-600 dark:text-gray-300">
+              <div
+                v-for="segment in accountStatusLegendSegments(summary)"
                 :key="`${segment.key}:legend`"
-                class="inline-flex min-w-0 items-center gap-1.5"
+                class="min-w-0"
               >
-                <span class="h-2.5 w-2.5 shrink-0 rounded" :class="segment.class"></span>
-                <span class="truncate">{{ segment.label }}</span>
-              </span>
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <span class="h-2.5 w-2.5 shrink-0 rounded" :class="segment.class"></span>
+                  <span class="truncate">{{ segment.legendLabel }}</span>
+                </div>
+                <div class="mt-0.5 pl-4 font-semibold text-gray-700 dark:text-gray-200">
+                  {{ segment.count }}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -305,6 +322,11 @@ import {
   type AccountQuotaGroupHealth
 } from '@/utils/accountQuotaHealth'
 
+interface GroupConcurrencyCapacity {
+  concurrency_used: number
+  concurrency_max: number
+}
+
 const props = defineProps<{
   dashboard: AccountQuotaDashboard | null
   loading: boolean
@@ -314,6 +336,7 @@ const props = defineProps<{
   subtitle?: string
   emptyMessage?: string
   loadFailedMessage?: string
+  groupCapacityById?: Record<number, GroupConcurrencyCapacity>
 }>()
 
 const emit = defineEmits<{
@@ -369,6 +392,7 @@ type GroupHealth = AccountQuotaGroupHealth
 interface AccountStatusSegment {
   key: string
   label: string
+  legendLabel: string
   count: number
   percent: number
   class: string
@@ -493,30 +517,35 @@ function accountStatusSegments(summary: AccountQuotaGroupSummary): AccountStatus
     {
       key: 'schedulable',
       label: t('admin.accounts.quotaDashboard.schedulableCount', { count: summary.schedulable_account_count }),
+      legendLabel: t('admin.accounts.quotaDashboard.schedulableShort'),
       count: summary.schedulable_account_count,
       class: 'bg-teal-400'
     },
     {
       key: 'rateLimited',
       label: t('admin.accounts.quotaDashboard.rateLimitedCount', { count: summary.rate_limited_account_count }),
+      legendLabel: t('admin.accounts.quotaDashboard.rateLimitedShort'),
       count: summary.rate_limited_account_count,
       class: 'bg-amber-500'
     },
     {
       key: 'codexQuotaProtected',
       label: t('admin.accounts.quotaDashboard.codexQuotaProtectedCount', { count: summary.codex_quota_protected_account_count }),
+      legendLabel: t('admin.accounts.quotaDashboard.codexQuotaProtectedShort'),
       count: summary.codex_quota_protected_account_count,
       class: 'bg-yellow-400'
     },
     {
       key: 'error',
       label: t('admin.accounts.quotaDashboard.errorCount', { count: summary.error_account_count }),
+      legendLabel: t('admin.accounts.quotaDashboard.errorShort'),
       count: summary.error_account_count,
       class: 'bg-red-500'
     },
     {
       key: 'disabled',
       label: t('admin.accounts.quotaDashboard.disabledCount', { count: summary.disabled_account_count }),
+      legendLabel: t('admin.accounts.quotaDashboard.disabledShort'),
       count: summary.disabled_account_count,
       class: 'bg-slate-400'
     }
@@ -528,6 +557,27 @@ function accountStatusSegments(summary: AccountQuotaGroupSummary): AccountStatus
       ...segment,
       percent: total > 0 ? Math.max((segment.count / total) * 100, 0) : 0
     }))
+}
+
+function accountStatusLegendSegments(summary: AccountQuotaGroupSummary): AccountStatusSegment[] {
+  return accountStatusSegments(summary).filter(segment => segment.key !== 'schedulable')
+}
+
+function groupConcurrencyCapacity(summary: AccountQuotaGroupSummary): GroupConcurrencyCapacity | null {
+  if (!summary.group_id) return null
+  return props.groupCapacityById?.[summary.group_id] ?? null
+}
+
+function groupConcurrencyAvailable(capacity: GroupConcurrencyCapacity): number {
+  return Math.max(capacity.concurrency_max - capacity.concurrency_used, 0)
+}
+
+function groupConcurrencyCapacityClass(capacity: GroupConcurrencyCapacity): string {
+  if (capacity.concurrency_max <= 0) return 'text-gray-500 dark:text-gray-400'
+  const available = groupConcurrencyAvailable(capacity)
+  if (available <= 0) return 'text-red-600 dark:text-red-300'
+  if (available / capacity.concurrency_max <= 0.2) return 'text-amber-600 dark:text-amber-300'
+  return 'text-emerald-700 dark:text-emerald-300'
 }
 
 function groupHealth(summary: AccountQuotaGroupSummary): GroupHealth {

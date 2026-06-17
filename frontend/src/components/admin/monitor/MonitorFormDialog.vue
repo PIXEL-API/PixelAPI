@@ -85,10 +85,17 @@
         <input v-model="form.group_name" type="text" class="input" :placeholder="t('admin.channelMonitor.form.groupNamePlaceholder')" />
       </div>
 
-      <div>
-        <label class="input-label">{{ t('admin.channelMonitor.form.intervalSeconds') }} <span class="text-red-500">*</span></label>
-        <input v-model.number="form.interval_seconds" type="number" min="15" max="3600" required class="input" />
-        <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.intervalSecondsHint') }}</p>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="input-label">{{ t('admin.channelMonitor.form.intervalSeconds') }} <span class="text-red-500">*</span></label>
+          <input v-model.number="form.interval_seconds" type="number" min="15" max="3600" required class="input" />
+          <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.intervalSecondsHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.channelMonitor.form.jitterSeconds') }}</label>
+          <input v-model.number="form.jitter_seconds" type="number" min="0" :max="maxJitterSeconds" class="input" />
+          <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.jitterSecondsHint', { max: maxJitterSeconds }) }}</p>
+        </div>
       </div>
 
       <div class="flex items-center justify-between">
@@ -230,6 +237,7 @@ interface MonitorForm {
   extra_models: string[]
   group_name: string
   interval_seconds: number
+  jitter_seconds: number
   enabled: boolean
   // 高级设置快照
   template_id: number | null
@@ -247,6 +255,7 @@ const form = reactive<MonitorForm>({
   extra_models: [],
   group_name: '',
   interval_seconds: systemDefaultInterval.value,
+  jitter_seconds: 0,
   enabled: true,
   template_id: null,
   extra_headers: {},
@@ -312,6 +321,8 @@ const providerOptions = computed<ProviderOption[]>(() => [
   { value: PROVIDER_GEMINI, label: t('monitorCommon.providers.gemini') },
 ])
 
+const maxJitterSeconds = computed(() => Math.max(0, Number(form.interval_seconds || 0) - 15))
+
 // Clear api_key whenever provider changes to avoid cross-provider key mismatch.
 // Editing mode loads api_key='' via loadFromMonitor and only sets it on user
 // typing, so clearing on provider change is always a safe no-op until the user
@@ -331,6 +342,7 @@ function resetForm() {
   form.extra_models = []
   form.group_name = ''
   form.interval_seconds = systemDefaultInterval.value
+  form.jitter_seconds = 0
   form.enabled = true
   form.template_id = null
   form.extra_headers = {}
@@ -347,6 +359,7 @@ function loadFromMonitor(m: ChannelMonitor) {
   form.extra_models = [...(m.extra_models || [])]
   form.group_name = m.group_name || ''
   form.interval_seconds = m.interval_seconds || systemDefaultInterval.value
+  form.jitter_seconds = m.jitter_seconds ?? 0
   form.enabled = m.enabled
   form.template_id = m.template_id ?? null
   form.extra_headers = { ...(m.extra_headers || {}) }
@@ -411,6 +424,7 @@ function buildPayload(): CreateParams {
     group_name: form.group_name.trim(),
     enabled: form.enabled,
     interval_seconds: form.interval_seconds,
+    jitter_seconds: form.jitter_seconds,
     template_id: form.template_id,
     extra_headers: form.extra_headers,
     body_override_mode: form.body_override_mode,
@@ -426,6 +440,10 @@ async function handleSubmit() {
   }
   if (!form.primary_model.trim()) {
     appStore.showError(t('admin.channelMonitor.primaryModelRequired'))
+    return
+  }
+  if (form.jitter_seconds < 0 || form.jitter_seconds > maxJitterSeconds.value) {
+    appStore.showError(t('admin.channelMonitor.form.jitterSecondsInvalid', { max: maxJitterSeconds.value }))
     return
   }
 

@@ -75,6 +75,8 @@ export async function importAccount(accountData: CreateAccountRequest): Promise<
 
 export interface ImportCredentialContentsRequest {
   contents: string[]
+  platform?: Account['platform']
+  account_level?: Account['account_level']
   share_mode?: 'private' | 'public'
   concurrency?: number
   load_factor?: number | null
@@ -313,6 +315,11 @@ export async function refreshCredentialsAccount(id: number): Promise<Account> {
   return data.account
 }
 
+export async function recoverState(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/accounts/${id}/recover-state`)
+  return data
+}
+
 export async function setPrivacy(id: number): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/accounts/${id}/set-privacy`)
   return data
@@ -548,6 +555,7 @@ export const accountsAPI = {
   getBatchTodayStats,
   testAccount,
   refreshCredentials,
+  recoverState,
   setPrivacy,
   generateAnthropicOAuthUrl,
   exchangeAnthropicOAuthCode,

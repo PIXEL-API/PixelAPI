@@ -233,6 +233,20 @@ const pricingItems = computed(() => {
         value: formatPrice(pricing.cache_read_price, tokenScale),
       },
     )
+    if (pricing.image_input_price != null && pricing.image_input_price > 0) {
+      items.push({
+        key: 'imageInput',
+        label: t(prefixKey('imageInputPrice')),
+        value: formatPrice(pricing.image_input_price, tokenScale),
+      })
+    }
+    if (pricing.image_cache_read_price != null && pricing.image_cache_read_price > 0) {
+      items.push({
+        key: 'imageCacheRead',
+        label: t(prefixKey('imageCacheReadPrice')),
+        value: formatPrice(pricing.image_cache_read_price, tokenScale),
+      })
+    }
     if (pricing.image_output_price != null && pricing.image_output_price > 0) {
       items.push({
         key: 'imageOutput',
@@ -285,6 +299,8 @@ function effectivePriceSummary(group: UserAvailableGroup): string {
       `${t(prefixKey('outputPrice'))} ${formatEffectivePrice(pricing.output_price, tokenScale, rate)}`,
       `${t(prefixKey('cacheWritePrice'))} ${formatEffectivePrice(pricing.cache_write_price, tokenScale, rate)}`,
       `${t(prefixKey('cacheReadPrice'))} ${formatEffectivePrice(pricing.cache_read_price, tokenScale, rate)}`,
+      `${t(prefixKey('imageInputPrice'))} ${formatEffectivePrice(pricing.image_input_price, tokenScale, rate)}`,
+      `${t(prefixKey('imageCacheReadPrice'))} ${formatEffectivePrice(pricing.image_cache_read_price, tokenScale, rate)}`,
     ].join(' · ')
   }
   if (pricing.billing_mode === BILLING_MODE_PER_REQUEST) {

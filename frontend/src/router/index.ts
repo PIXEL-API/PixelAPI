@@ -206,6 +206,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/account-share',
+    name: 'AccountShare',
+    component: () => import('@/views/user/AccountShareView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Account Plaza',
+      titleKey: 'accountShare.title',
+      descriptionKey: 'accountShare.description'
+    }
+  },
+  {
     path: '/usage',
     name: 'Usage',
     component: () => import('@/views/user/UsageView.vue'),
@@ -499,16 +511,6 @@ const routes: RouteRecordRaw[] = [
       title: 'Account Management',
       titleKey: 'admin.accounts.title',
       descriptionKey: 'admin.accounts.description'
-    }
-  },
-  {
-    path: '/admin/subsites',
-    name: 'AdminSubsites',
-    component: () => import('@/views/admin/SubsitesView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Subsite Management'
     }
   },
   {

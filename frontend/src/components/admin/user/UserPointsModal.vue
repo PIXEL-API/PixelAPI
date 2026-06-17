@@ -14,7 +14,7 @@
       <div>
         <label class="input-label">{{ operation === 'add' ? t('admin.users.addPointsAmount') : t('admin.users.deductPointsAmount') }}</label>
         <div class="relative flex gap-2">
-          <input v-model.number="form.amount" type="number" step="0.01" min="0.01" required class="input flex-1" />
+          <input v-model.number="form.amount" type="number" step="any" min="0" required class="input flex-1" />
           <button v-if="operation === 'subtract'" type="button" @click="fillAllPoints" class="btn btn-secondary whitespace-nowrap">{{ t('admin.users.deductAllPoints') }}</button>
         </div>
       </div>
@@ -90,7 +90,7 @@ function calculateNewPoints() {
 
 async function handlePointsSubmit() {
   if (!props.user) return
-  if (!form.amount || form.amount <= 0) {
+  if (!Number.isFinite(form.amount) || form.amount <= 0) {
     appStore.showError(t('admin.users.amountRequired'))
     return
   }

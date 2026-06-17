@@ -7,6 +7,8 @@ import { apiClient } from './client'
 import type {
   UsageLog,
   UsageQueryParams,
+  UserBalanceLedgerEntry,
+  UserBalanceLedgerQueryParams,
   UsageStatsResponse,
   PaginatedResponse,
   TrendDataPoint,
@@ -159,6 +161,17 @@ export async function query(
   config: { signal?: AbortSignal } = {}
 ): Promise<PaginatedResponse<UsageLog>> {
   const { data } = await apiClient.get<PaginatedResponse<UsageLog>>('/usage', {
+    ...config,
+    params
+  })
+  return data
+}
+
+export async function queryBalanceLedger(
+  params: UserBalanceLedgerQueryParams,
+  config: { signal?: AbortSignal } = {}
+): Promise<PaginatedResponse<UserBalanceLedgerEntry>> {
+  const { data } = await apiClient.get<PaginatedResponse<UserBalanceLedgerEntry>>('/usage/balance-ledger', {
     ...config,
     params
   })
@@ -338,6 +351,7 @@ export const usageAPI = {
   list,
   query,
   getStats,
+  queryBalanceLedger,
   getStatsByDateRange,
   getByDateRange,
   getById,

@@ -4,8 +4,9 @@ import { nextTick } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { query, getStatsByDateRange, list, showError, showWarning, showSuccess, showInfo } = vi.hoisted(() => ({
+const { query, queryBalanceLedger, getStatsByDateRange, list, showError, showWarning, showSuccess, showInfo } = vi.hoisted(() => ({
   query: vi.fn(),
+  queryBalanceLedger: vi.fn(),
   getStatsByDateRange: vi.fn(),
   list: vi.fn(),
   showError: vi.fn(),
@@ -30,6 +31,7 @@ const messages: Record<string, string> = {
   'usage.rate': 'Rate',
   'usage.original': 'Original',
   'usage.billed': 'Billed',
+  'usage.cacheHitRate': 'Cache Hit Rate',
   'usage.allApiKeys': 'All API Keys',
   'usage.apiKeyFilter': 'API Key',
   'usage.model': 'Model',
@@ -41,11 +43,24 @@ const messages: Record<string, string> = {
   'usage.duration': 'Duration',
   'usage.time': 'Time',
   'usage.userAgent': 'User Agent',
+  'usage.balanceLedger.reasons.account_share_income': 'Shared account income',
+  'usage.balanceLedger.reasons.invite_share_income': 'Invite share income',
+  'usage.balanceLedger.reasons.redeem_code': 'Recharge',
+  'usage.balanceLedger.reasons.admin_adjustment': 'Admin balance adjustment',
+  'usage.balanceLedger.labels.consumer': 'Consumer',
+  'usage.balanceLedger.labels.apiKey': 'API Key',
+  'usage.balanceLedger.labels.account': 'Account',
+  'usage.balanceLedger.labels.requestId': 'Request',
+  'usage.balanceLedger.labels.notes': 'Notes',
+  'usage.balanceLedger.labels.operation': 'Operation',
+  'usage.balanceLedger.labels.code': 'Code',
+  'usage.balanceLedger.labels.reference': 'Reference ID',
 }
 
 vi.mock('@/api', () => ({
   usageAPI: {
     query,
+    queryBalanceLedger,
     getStatsByDateRange,
   },
   keysAPI: {
@@ -75,6 +90,7 @@ const TablePageLayoutStub = {
 describe('user UsageView tooltip', () => {
   beforeEach(() => {
     query.mockReset()
+    queryBalanceLedger.mockReset()
     getStatsByDateRange.mockReset()
     list.mockReset()
     showError.mockReset()
@@ -256,6 +272,14 @@ describe('user UsageView tooltip', () => {
     await setupState.exportToCSV()
 
     expect(exportedBlob).not.toBeNull()
+    const csvText = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsText(exportedBlob!)
+    })
+    expect(csvText).toContain('Cache Hit Rate')
+    expect(csvText).toContain('98.6%')
     const hasSortedExportQuery = query.mock.calls.some((call) => {
       const params = call[0] as Record<string, unknown> | undefined
       const config = call[1]
@@ -273,5 +297,78 @@ describe('user UsageView tooltip', () => {
     window.URL.createObjectURL = originalCreateObjectURL
     window.URL.revokeObjectURL = originalRevokeObjectURL
     clickSpy.mockRestore()
+  })
+
+  it('formats balance ledger income reasons and exact decimal amounts', async () => {
+    query.mockResolvedValue({
+      items: [],
+      total: 0,
+      pages: 0,
+    })
+    getStatsByDateRange.mockResolvedValue({
+      total_requests: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      avg_duration_ms: 0,
+    })
+    list.mockResolvedValue({ items: [] })
+
+    const wrapper = mount(UsageView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          TablePageLayout: TablePageLayoutStub,
+          Pagination: true,
+          EmptyState: true,
+          Select: true,
+          DateRangePicker: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    const row = {
+      id: 1,
+      user_id: 2,
+      direction: 'credit',
+      amount: '0.1234567891',
+      reason: 'account_share_income',
+      ref_type: 'usage_log',
+      ref_id: 3,
+      balance_after: '10.0000000001',
+      metadata: {
+        consumer_user_id: 9,
+        api_key_id: 8,
+        account_id: 7,
+        request_id: 'req-income',
+      },
+      created_at: '2026-06-16T00:00:00Z',
+    }
+
+    expect(setupState.getLedgerReasonLabel('account_share_income')).toBe('Shared account income')
+    expect(setupState.getLedgerReasonLabel('invite_share_income')).toBe('Invite share income')
+    expect(setupState.getLedgerReasonLabel('redeem_code')).toBe('Recharge')
+    expect(setupState.formatLedgerAmount(row)).toBe('+$0.1234567891')
+    expect(setupState.formatLedgerCurrency(row.balance_after)).toBe('$10.0000000001')
+    expect(setupState.getLedgerRemark(row)).toBe('Consumer: 9 · API Key: 8 · Account: 7 · Request: req-income')
+
+    const adminRow = {
+      ...row,
+      id: 2,
+      reason: 'admin_adjustment',
+      ref_type: 'redeem_code',
+      ref_id: 88,
+      metadata: {
+        notes: 'manual top-up',
+        operation: 'add',
+        code: 'ADJUST-88',
+      },
+    }
+    expect(setupState.getLedgerReasonLabel('admin_adjustment')).toBe('Admin balance adjustment')
+    expect(setupState.getLedgerRemark(adminRow)).toBe('Notes: manual top-up · Operation: add · Code: ADJUST-88 · Reference ID: 88')
   })
 })

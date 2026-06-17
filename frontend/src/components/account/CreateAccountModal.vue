@@ -377,11 +377,30 @@
 
       <div v-if="form.platform === 'openai'">
         <label class="input-label">{{ t('admin.accounts.accountLevel.label') }}</label>
-        <div class="input flex min-h-[42px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
+        <div v-if="isUserScope" class="grid gap-2 sm:grid-cols-4">
+          <button
+            v-for="option in userOpenAIAccountLevelOptions"
+            :key="option.value"
+            type="button"
+            :class="[
+              'flex min-h-[76px] flex-col justify-center rounded-lg border px-3 py-2 text-left transition-colors',
+              form.account_level === option.value
+                ? 'border-primary-400 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:bg-dark-700'
+            ]"
+            @click="form.account_level = option.value"
+          >
+            <span class="text-sm font-semibold">{{ option.label }}</span>
+            <span class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ option.description }}</span>
+          </button>
+        </div>
+        <div v-else class="input flex min-h-[42px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
           <span>{{ t('admin.accounts.accountLevel.unknown') }}</span>
           <span class="text-xs text-gray-400 dark:text-dark-400">{{ t('admin.accounts.accountLevel.autoDetected') }}</span>
         </div>
-        <p class="input-hint">{{ t('admin.accounts.accountLevel.autoDetectedHint') }}</p>
+        <p class="input-hint">
+          {{ isUserScope ? t('userAccounts.importAccountLevelHint') : t('admin.accounts.accountLevel.autoDetectedHint') }}
+        </p>
       </div>
 
       <!-- Account Type Selection (Gemini) -->
@@ -2487,33 +2506,64 @@
       </div>
 
       <div v-if="canManageProxy">
-        <label class="input-label">{{ t('admin.accounts.proxy') }}</label>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <label class="input-label mb-0">
+            {{ isUserScope ? t('userAccounts.importProxy') : t('admin.accounts.proxy') }}
+          </label>
+          <div v-if="showUserProxyActions" class="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-sky-300 hover:bg-sky-50 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200 dark:hover:border-sky-500/70 dark:hover:bg-sky-900/20"
+              @click="openProxyPurchase"
+            >
+              <Icon name="externalLink" size="xs" />
+              {{ t('userAccounts.proxyActionBuyTitle') }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2.5 py-1.5 text-xs font-medium text-primary-700 hover:border-primary-300 hover:bg-primary-100 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-300 dark:hover:bg-primary-500/20"
+              :aria-expanded="showUserProxyCreatePanel"
+              data-testid="create-open-user-proxy-panel"
+              @click="openUserProxyCreatePanel"
+            >
+              <Icon name="plus" size="xs" />
+              {{ t('userAccounts.proxyActionAddTitle') }}
+            </button>
+          </div>
+        </div>
+        <ProxySelector v-model="form.proxy_id" :proxies="proxyOptions" :can-test="!isUserScope" />
+        <p v-if="isUserScope" class="input-hint">
+          {{ proxyOptions.length > 0 ? t('userAccounts.importProxyHint') : t('userAccounts.importProxyEmpty') }}
+        </p>
+        <UserProxyQuickCreatePanel
+          v-if="showUserProxyCreatePanel"
+          class="mt-4"
+          @created="handleUserProxyCreated"
+          @cancel="closeUserProxyCreatePanel"
+        />
       </div>
 
-      <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
           <input
             v-model.number="form.concurrency"
             type="number"
-            min="1"
-            :readonly="isUserScope"
-            :class="[
-              'input',
-              isUserScope && 'cursor-not-allowed bg-gray-50 text-gray-500 dark:bg-dark-800 dark:text-dark-400'
-            ]"
+            :min="isUserScope ? PERSONAL_ACCOUNT_MIN_CONCURRENCY : 1"
+            :max="isUserScope ? PERSONAL_ACCOUNT_MAX_CONCURRENCY : undefined"
+            step="1"
+            class="input"
             @input="normalizeConcurrencyInput"
           />
         </div>
-        <div>
+        <div v-if="!isUserScope">
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
           <input v-model.number="form.load_factor" type="number" min="1"
             class="input" :placeholder="String(form.concurrency || 1)"
             @input="form.load_factor = (form.load_factor &amp;&amp; form.load_factor >= 1) ? form.load_factor : null" />
           <p class="input-hint">{{ t('admin.accounts.loadFactorHint') }}</p>
         </div>
-        <div>
+        <div v-if="!isUserScope">
           <label class="input-label">{{ t('admin.accounts.priority') }}</label>
           <input
             v-model.number="form.priority"
@@ -3218,15 +3268,20 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
+import UserProxyQuickCreatePanel from '@/components/user/UserProxyQuickCreatePanel.vue'
 import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
 import {
   PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED,
   PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
+  PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR,
+  PERSONAL_ACCOUNT_MAX_CONCURRENCY,
+  PERSONAL_ACCOUNT_MIN_CONCURRENCY,
   PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE,
   PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE,
   PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
   applyPersonalAccountTemplate,
-  buildPersonalAccountModelMapping
+  buildPersonalAccountModelMapping,
+  normalizePersonalAccountConcurrency
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
@@ -3295,7 +3350,6 @@ const emit = defineEmits<{
 const appStore = useAppStore()
 const accountScope = computed(() => props.accountScope ?? 'admin')
 const isUserScope = computed(() => accountScope.value === 'user')
-const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 
 // OAuth composables
@@ -3605,16 +3659,99 @@ const form = reactive({
   credentials: {} as Record<string, unknown>,
   proxy_id: null as number | null,
   concurrency: PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
-  load_factor: null as number | null,
+  load_factor: PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR as number | null,
   priority: 1,
   rate_multiplier: 1,
   group_ids: [] as number[],
   expires_at: null as number | null
 })
 
+type UserOpenAIAccountLevelOption = {
+  value: Exclude<AccountLevel, 'unknown'>
+  label: string
+  description: string
+}
+
+const userOpenAIAccountLevelOptions = computed<UserOpenAIAccountLevelOption[]>(() => [
+  {
+    value: 'free',
+    label: t('admin.accounts.accountLevel.free'),
+    description: t('userAccounts.importLevelFree')
+  },
+  {
+    value: 'plus',
+    label: t('admin.accounts.accountLevel.plus'),
+    description: t('userAccounts.importLevelPlus')
+  },
+  {
+    value: 'pro',
+    label: t('admin.accounts.accountLevel.pro'),
+    description: t('userAccounts.importLevelPro')
+  },
+  {
+    value: 'team',
+    label: t('admin.accounts.accountLevel.team'),
+    description: t('userAccounts.importLevelTeam')
+  }
+])
+
+const userOpenAIProxyLoginRequired = computed(() =>
+  isUserScope.value &&
+  form.platform === 'openai' &&
+  form.account_level === 'pro'
+)
+
+const canManageProxy = computed(() =>
+  props.allowProxy !== false && (!isUserScope.value || userOpenAIProxyLoginRequired.value)
+)
+
+const PROXY_PURCHASE_URL = 'https://www.seekproxy.com/user/reg?invite_id=105978'
+const showUserProxyCreatePanel = ref(false)
+const createdUserProxies = ref<Proxy[]>([])
+
+const proxyOptions = computed(() => {
+  const byId = new Map<number, Proxy>()
+  for (const proxy of props.proxies) {
+    byId.set(proxy.id, proxy)
+  }
+  for (const proxy of createdUserProxies.value) {
+    byId.set(proxy.id, proxy)
+  }
+  return Array.from(byId.values())
+})
+
+const showUserProxyActions = computed(() => isUserScope.value && canManageProxy.value)
+
+function openProxyPurchase(): void {
+  window.open(PROXY_PURCHASE_URL, '_blank', 'noopener,noreferrer')
+}
+
+function openUserProxyCreatePanel(): void {
+  showUserProxyCreatePanel.value = true
+}
+
+function closeUserProxyCreatePanel(): void {
+  showUserProxyCreatePanel.value = false
+}
+
+function upsertCreatedUserProxy(proxy: Proxy): void {
+  const index = createdUserProxies.value.findIndex(item => item.id === proxy.id)
+  if (index >= 0) {
+    createdUserProxies.value[index] = { ...createdUserProxies.value[index], ...proxy }
+    return
+  }
+  createdUserProxies.value = [proxy, ...createdUserProxies.value]
+}
+
+function handleUserProxyCreated(proxy: Proxy): void {
+  upsertCreatedUserProxy(proxy)
+  form.proxy_id = proxy.id
+  showUserProxyCreatePanel.value = false
+}
+
 const normalizeConcurrencyInput = () => {
   if (isUserScope.value) {
-    form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+    form.concurrency = normalizePersonalAccountConcurrency(form.concurrency)
     return
   }
   form.concurrency = Math.max(1, form.concurrency || 1)
@@ -3622,7 +3759,7 @@ const normalizeConcurrencyInput = () => {
 
 const applyOpenAIPlusConcurrencyDefaults = () => {
   if (isUserScope.value) {
-    form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+    form.concurrency = normalizePersonalAccountConcurrency(form.concurrency)
     return
   }
   const isOpenAIPlusForm = form.platform === 'openai' && form.account_level === 'plus'
@@ -3688,7 +3825,7 @@ watch(
       if (isUserScope.value) {
         form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
         form.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
-        form.load_factor = null
+        form.load_factor = PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR
         autoPauseOnExpired.value = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
         openAICompactMode.value = PERSONAL_ACCOUNT_DEFAULT_OPENAI_COMPACT_MODE
         openaiOAuthResponsesWebSocketV2Mode.value = PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE
@@ -3765,7 +3902,7 @@ watch(
       antigravityAccountType.value = 'oauth'
       form.type = 'oauth'
       form.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
-      form.load_factor = null
+      form.load_factor = PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR
       form.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
       autoPauseOnExpired.value = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
       modelRestrictionMode.value = 'whitelist'
@@ -3837,6 +3974,18 @@ watch(
 
     geminiOAuth.resetState()
     antigravityOAuth.resetState()
+  }
+)
+
+watch(
+  userOpenAIProxyLoginRequired,
+  (required) => {
+    if (!required) {
+      form.proxy_id = null
+      showUserProxyCreatePanel.value = false
+      openaiOAuth.resetState()
+      oauthFlowRef.value?.reset()
+    }
   }
 )
 
@@ -4165,7 +4314,7 @@ const sanitizeCreatePayload = (payload: CreateAccountRequest): CreateAccountRequ
   }
   if (isUserScope.value) {
     delete next.group_ids
-    next.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
+    next.concurrency = normalizePersonalAccountConcurrency(next.concurrency)
     next.load_factor = undefined
     next.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
     next.auto_pause_on_expired = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
@@ -4221,11 +4370,13 @@ const resetForm = () => {
   form.credentials = {}
   form.proxy_id = null
   form.concurrency = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : DEFAULT_ACCOUNT_CONCURRENCY
-  form.load_factor = null
+  form.load_factor = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR : null
   form.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
   form.rate_multiplier = 1
   form.group_ids = []
   form.expires_at = null
+  showUserProxyCreatePanel.value = false
+  createdUserProxies.value = []
   accountCategory.value = 'oauth-based'
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
@@ -4509,6 +4660,16 @@ const handleSubmit = async () => {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
+  if (isUserScope.value && form.platform === 'openai') {
+    if (form.account_level === 'unknown') {
+      appStore.showError(t('userAccounts.importAccountLevelRequired'))
+      return
+    }
+    if (userOpenAIProxyLoginRequired.value && !form.proxy_id) {
+      appStore.showError(t('userAccounts.importProxyRequired'))
+      return
+    }
+  }
 
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
@@ -4721,6 +4882,14 @@ const goBackToBasicInfo = () => {
 
 const handleGenerateUrl = async () => {
   if (form.platform === 'openai') {
+    if (isUserScope.value && form.account_level === 'unknown') {
+      appStore.showError(t('userAccounts.importAccountLevelRequired'))
+      return
+    }
+    if (userOpenAIProxyLoginRequired.value && !form.proxy_id) {
+      appStore.showError(t('userAccounts.importProxyRequired'))
+      return
+    }
     await openaiOAuth.generateAuthUrl(form.proxy_id)
   } else if (form.platform === 'gemini') {
     await geminiOAuth.generateAuthUrl(
@@ -4812,7 +4981,7 @@ const createAccountAndFinish = async (
     name: form.name,
     notes: form.notes,
     platform,
-    account_level: 'unknown',
+    account_level: platform === 'openai' ? form.account_level : 'unknown',
     type,
     credentials,
     extra: finalExtra,
@@ -4880,6 +5049,7 @@ const handleOpenAIExchange = async (authCode: string) => {
         name: form.name,
         notes: form.notes,
         platform: 'openai',
+        account_level: form.account_level,
         type: 'oauth',
         credentials,
         extra,
@@ -4977,6 +5147,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
             name: accountName,
             notes: form.notes,
             platform: 'openai',
+            account_level: form.account_level,
             type: 'oauth',
             credentials,
             extra,

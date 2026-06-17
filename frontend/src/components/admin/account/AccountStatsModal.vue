@@ -62,7 +62,9 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.stats.accumulatedCost') }}
               <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.total_user_cost) }} ·
+                ({{ t('usage.userBilledTotal') }}: ${{ formatCost(stats.summary.total_user_cost) }} /
+                {{ t('usage.requestBilled') }}: ${{ formatCost(stats.summary.total_request_user_cost) }} /
+                {{ t('usage.hourlyBilled') }}: ${{ formatCost(stats.summary.total_hourly_cost) }} /
                 {{ t('admin.accounts.stats.standardCost') }}: ${{
                   formatCost(stats.summary.total_standard_cost)
                 }})
@@ -116,7 +118,9 @@
                 })
               }}
               <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.avg_daily_user_cost) }})
+                ({{ t('usage.userBilledTotal') }}: ${{ formatCost(stats.summary.avg_daily_user_cost) }} /
+                {{ t('usage.requestBilled') }}: ${{ formatCost(stats.summary.avg_daily_request_user_cost) }} /
+                {{ t('usage.hourlyBilled') }}: ${{ formatCost(stats.summary.avg_daily_hourly_cost) }})
               </span>
             </p>
           </div>
@@ -174,9 +178,21 @@
                 >
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.today?.user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.today?.request_user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.today?.hourly_cost || 0) }}</span
                 >
               </div>
               <div class="flex items-center justify-between">
@@ -224,9 +240,21 @@
                 >
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_cost_day?.user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.highest_cost_day?.request_user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.highest_cost_day?.hourly_cost || 0) }}</span
                 >
               </div>
               <div class="flex items-center justify-between">
@@ -278,9 +306,21 @@
                 >
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_request_day?.user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.highest_request_day?.request_user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.highest_request_day?.hourly_cost || 0) }}</span
                 >
               </div>
             </div>
@@ -386,6 +426,24 @@
                 }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.today?.cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilledTotal') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.today?.user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.requestBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.today?.request_user_cost || 0) }}</span
+                >
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.hourlyBilled') }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >${{ formatCost(stats.summary.today?.hourly_cost || 0) }}</span
                 >
               </div>
             </div>
@@ -523,13 +581,23 @@ const trendChartData = computed(() => {
         yAxisID: 'y'
       },
       {
-        label: t('usage.userBilled') + ' (USD)',
-        data: stats.value.history.map((h) => h.user_cost),
+        label: t('usage.requestBilled') + ' (USD)',
+        data: stats.value.history.map((h) => h.request_user_cost),
         borderColor: '#10b981',
         backgroundColor: 'rgba(16, 185, 129, 0.08)',
         fill: false,
         tension: 0.3,
         borderDash: [5, 5],
+        yAxisID: 'y'
+      },
+      {
+        label: t('usage.hourlyBilled') + ' (USD)',
+        data: stats.value.history.map((h) => h.hourly_cost),
+        borderColor: '#a855f7',
+        backgroundColor: 'rgba(168, 85, 247, 0.08)',
+        fill: false,
+        tension: 0.3,
+        borderDash: [2, 4],
         yAxisID: 'y'
       },
       {

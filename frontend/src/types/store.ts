@@ -8,7 +8,7 @@ export type StoreOrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled' | 
 export type StorePayMethod = 'balance' | 'points' | 'payment'
 export type StoreCategoryStatus = 'active' | 'inactive'
 export type StoreProductStatus = 'active' | 'inactive'
-export type StoreProductType = 'card_key' | 'balance_draw' | 'points_draw'
+export type StoreProductType = 'card_key' | 'balance_draw' | 'points_draw' | 'load_factor_credits'
 
 export interface StoreDrawConfig {
   enabled: boolean
@@ -59,6 +59,7 @@ export interface StoreProduct {
   allow_balance_payment: boolean
   allow_points_payment: boolean
   allow_platform_payment: boolean
+  load_factor_credits_per_unit: number
   draw_config?: StoreDrawConfig | null
   draw_progress?: StoreDrawProgress | null
   stock_unlimited?: boolean
@@ -111,6 +112,7 @@ export interface StoreOrder {
   status: StoreOrderStatus
   delivered_cards: string[]
   delivered_files: StoreDeliveredFile[]
+  load_factor_credits_awarded: number
   draw_reward_amount?: number | null
   draw_reward_type?: 'balance' | 'points' | null
   draw_cycle_id?: number | null
@@ -178,6 +180,7 @@ export interface UpsertStoreProductRequest {
   allow_balance_payment?: boolean
   allow_points_payment?: boolean
   allow_platform_payment?: boolean
+  load_factor_credits_per_unit?: number
   draw_config?: StoreDrawConfig | null
 }
 

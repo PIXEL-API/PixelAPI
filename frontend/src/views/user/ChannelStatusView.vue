@@ -28,6 +28,7 @@
         :loading="quotaPoolLoading"
         :error="quotaPoolError"
         :show-summary-breakdown="false"
+        :group-capacity-by-id="groupCapacityById"
         :title="t('channelStatus.quotaPool.platformTitle')"
         :subtitle="t('channelStatus.quotaPool.platformSubtitle')"
         :empty-message="t('channelStatus.quotaPool.platformEmpty')"
@@ -62,6 +63,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { getQuotaDashboard as fetchQuotaPoolDashboard } from '@/api/accounts'
 import {
   list as listChannelMonitorViews,
+  capacitySummary as fetchChannelCapacitySummary,
   status as fetchChannelMonitorDetail,
   type UserMonitorView,
   type UserMonitorDetail,
@@ -92,6 +94,7 @@ const loading = ref(false)
 const quotaPoolDashboard = ref<UserAccountQuotaPoolDashboard | null>(null)
 const quotaPoolLoading = ref(false)
 const quotaPoolError = ref(false)
+const groupCapacityById = ref<Record<number, { concurrency_used: number; concurrency_max: number }>>({})
 const currentWindow = ref<MonitorWindow>('7d')
 const detailCache = reactive<Record<number, UserMonitorDetail>>({})
 const showDetail = ref(false)
@@ -158,9 +161,22 @@ async function reloadQuotaPool(silent = false) {
   if (!silent) quotaPoolLoading.value = true
   quotaPoolError.value = false
   try {
-    const dashboard = await fetchQuotaPoolDashboard({ signal: ctrl.signal })
+    const [dashboard, capacity] = await Promise.all([
+      fetchQuotaPoolDashboard({ signal: ctrl.signal }),
+      fetchChannelCapacitySummary({ signal: ctrl.signal })
+    ])
     if (ctrl.signal.aborted || quotaPoolAbortController !== ctrl) return
     quotaPoolDashboard.value = dashboard
+    groupCapacityById.value = capacity.items.reduce<Record<number, { concurrency_used: number; concurrency_max: number }>>(
+      (acc, item) => {
+        acc[item.group_id] = {
+          concurrency_used: item.concurrency_used,
+          concurrency_max: item.concurrency_max,
+        }
+        return acc
+      },
+      {}
+    )
   } catch (err: unknown) {
     const e = err as { name?: string; code?: string }
     if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return

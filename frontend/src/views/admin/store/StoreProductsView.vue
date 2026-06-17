@@ -98,6 +98,10 @@
               <label class="input-label">{{ t('admin.store.purchaseLimit') }}</label>
               <input v-model.number="form.purchase_limit" class="input" type="number" min="0" :disabled="isDrawProduct" />
             </div>
+            <div v-if="isLoadFactorCreditsProduct">
+              <label class="input-label">{{ t('admin.store.loadFactorCreditsPerUnit') }}</label>
+              <input v-model.number="form.load_factor_credits_per_unit" class="input" type="number" min="1" step="1" required />
+            </div>
             <div v-if="isDrawProduct">
               <label class="input-label">{{ t('admin.store.drawMinAmount') }}</label>
               <input v-model.number="form.draw_config.min_amount" class="input" type="number" min="0.01" step="0.01" required />
@@ -177,6 +181,7 @@ const form = reactive({
   allow_platform_payment: true,
   product_type: 'card_key' as StoreProductType,
   balance_only: false,
+  load_factor_credits_per_unit: 0,
   draw_config: {
     enabled: false,
     min_amount: 1,
@@ -209,8 +214,10 @@ const productTypeOptions = computed(() => [
   { value: 'card_key', label: t('admin.store.productTypes.cardKey') },
   { value: 'balance_draw', label: t('admin.store.productTypes.balanceDraw') },
   { value: 'points_draw', label: t('admin.store.productTypes.pointsDraw') },
+  { value: 'load_factor_credits', label: t('admin.store.productTypes.loadFactorCredits') },
 ])
 const isDrawProduct = computed(() => form.product_type === 'balance_draw' || form.product_type === 'points_draw')
+const isLoadFactorCreditsProduct = computed(() => form.product_type === 'load_factor_credits')
 const drawTargetAmount = computed(() => Math.round(form.price * form.draw_config.guarantee_count * form.draw_config.return_rate * 100) / 100)
 const isPointsDrawProduct = computed(() => form.product_type === 'points_draw')
 const drawTargetAmountText = computed(() => isPointsDrawProduct.value
@@ -229,6 +236,7 @@ function categoryName(id?: number | null) {
 function productTypeLabel(value?: string) {
   if (value === 'balance_draw') return t('admin.store.productTypes.balanceDraw')
   if (value === 'points_draw') return t('admin.store.productTypes.pointsDraw')
+  if (value === 'load_factor_credits') return t('admin.store.productTypes.loadFactorCredits')
   return t('admin.store.productTypes.cardKey')
 }
 function paymentMethodsText(product: StoreProduct) {
@@ -265,6 +273,7 @@ function resetForm() {
   form.allow_platform_payment = true
   form.product_type = 'card_key'
   form.balance_only = false
+  form.load_factor_credits_per_unit = 0
   form.draw_config.enabled = false
   form.draw_config.min_amount = 1
   form.draw_config.max_amount = 5
@@ -288,6 +297,7 @@ function openEdit(product: StoreProduct) {
   form.allow_balance_payment = product.allow_balance_payment !== false
   form.allow_points_payment = product.allow_points_payment === true
   form.allow_platform_payment = product.allow_platform_payment !== false
+  form.load_factor_credits_per_unit = Number(product.load_factor_credits_per_unit || 0)
   form.draw_config.enabled = product.draw_config?.enabled ?? (form.product_type === 'balance_draw' || form.product_type === 'points_draw')
   form.draw_config.min_amount = product.draw_config?.min_amount ?? 1
   form.draw_config.max_amount = product.draw_config?.max_amount ?? 5
@@ -322,6 +332,10 @@ async function submitForm() {
     appStore.showError(paymentMethodError.value)
     return
   }
+  if (isLoadFactorCreditsProduct.value && (!Number.isFinite(form.load_factor_credits_per_unit) || form.load_factor_credits_per_unit <= 0)) {
+    appStore.showError(t('admin.store.loadFactorCreditsPerUnitRequired'))
+    return
+  }
   saving.value = true
   try {
     const payload = {
@@ -341,6 +355,7 @@ async function submitForm() {
       allow_platform_payment: form.allow_platform_payment,
       product_type: form.product_type,
       balance_only: isDrawProduct.value,
+      load_factor_credits_per_unit: isLoadFactorCreditsProduct.value ? Math.trunc(form.load_factor_credits_per_unit) : 0,
       draw_config: isDrawProduct.value
         ? { ...form.draw_config, enabled: true }
         : { enabled: false, min_amount: 0, max_amount: 0, guarantee_count: 0, return_rate: 1 },

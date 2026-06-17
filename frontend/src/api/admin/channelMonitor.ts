@@ -26,6 +26,7 @@ export interface ChannelMonitor {
   group_name: string
   enabled: boolean
   interval_seconds: number
+  jitter_seconds: number
   last_checked_at: string | null
   created_by: number
   created_at: string
@@ -77,6 +78,7 @@ export interface CreateParams {
   group_name?: string
   enabled?: boolean
   interval_seconds: number
+  jitter_seconds?: number
   template_id?: number | null
   extra_headers?: Record<string, string>
   body_override_mode?: BodyOverrideMode

@@ -17,6 +17,8 @@
         {{ warning }}
       </div>
 
+      <slot name="controls" />
+
       <div class="grid grid-cols-2 gap-2 rounded-lg bg-gray-100 p-1 dark:bg-dark-800">
         <button
           type="button"
@@ -51,7 +53,7 @@
           class="input min-h-64 resize-y font-mono text-xs leading-5"
           :placeholder="t('userAccounts.importTextPlaceholder')"
         />
-        <p class="input-hint">{{ t('userAccounts.importTextHint') }}</p>
+        <p class="input-hint">{{ textHint || t('userAccounts.importTextHint') }}</p>
       </div>
 
       <div v-else class="space-y-3">
@@ -140,7 +142,7 @@
           class="btn btn-primary"
           type="submit"
           :form="formId"
-          :disabled="importing"
+          :disabled="importing || submitDisabled"
         >
           <Icon v-if="!importing" name="upload" size="sm" class="mr-2" />
           {{ importing ? t('userAccounts.importing') : t('userAccounts.importButton') }}
@@ -164,6 +166,8 @@ interface Props {
   hint: string
   warning: string
   formId?: string
+  submitDisabled?: boolean
+  textHint?: string
   importer: (contents: string[]) => Promise<ImportCredentialContentsResponse>
 }
 
@@ -186,7 +190,8 @@ interface CredentialImportResult {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  formId: 'credential-import-form'
+  formId: 'credential-import-form',
+  submitDisabled: false
 })
 const emit = defineEmits<Emits>()
 
@@ -343,7 +348,7 @@ async function handleImport(): Promise<void> {
       appStore.showSuccess(t('userAccounts.importSuccess', params))
     }
   } catch (error: any) {
-    appStore.showError(error?.message || error?.response?.data?.message || error?.response?.data?.detail || t('userAccounts.importFailed'))
+    appStore.showError(error?.response?.data?.message || error?.response?.data?.detail || error?.message || t('userAccounts.importFailed'))
   } finally {
     importing.value = false
   }

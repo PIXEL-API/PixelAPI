@@ -189,6 +189,28 @@ export async function updatePoints(
 }
 
 /**
+ * Update user load-factor credits
+ * @param id - User ID
+ * @param amount - Credits amount
+ * @param operation - Operation type ('set', 'add', 'subtract')
+ * @param notes - Optional notes for the adjustment
+ * @returns Updated user
+ */
+export async function updateLoadFactorCredits(
+  id: number,
+  amount: number,
+  operation: 'set' | 'add' | 'subtract' = 'set',
+  notes?: string
+): Promise<AdminUser> {
+  const { data } = await apiClient.post<AdminUser>(`/admin/users/${id}/load-factor-credits`, {
+    amount,
+    operation,
+    notes: notes || ''
+  })
+  return data
+}
+
+/**
  * Update user concurrency
  * @param id - User ID
  * @param concurrency - New concurrency limit
@@ -327,6 +349,7 @@ export const usersAPI = {
   delete: deleteUser,
   updateBalance,
   updatePoints,
+  updateLoadFactorCredits,
   updateConcurrency,
   toggleStatus,
   getUserApiKeys,

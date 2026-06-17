@@ -239,7 +239,7 @@
           :columns="columns"
           :data="users"
           :loading="loading"
-          :actions-count="7"
+          :actions-count="9"
           :server-side-sort="true"
           default-sort-key="created_at"
           default-sort-order="desc"
@@ -422,6 +422,26 @@
                 @click.stop="handleAddPoints(row)"
                 class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20"
                 :title="t('admin.users.addPoints')"
+              >
+                {{ t('common.add') }}
+              </button>
+            </div>
+          </template>
+
+          <template #cell-load_factor_credits_balance="{ row }">
+            <div class="flex items-center gap-2">
+              <div>
+                <span class="font-medium text-gray-900 dark:text-white">
+                  {{ Math.max(0, Number(row.load_factor_credits_balance || 0)) }}
+                </span>
+                <p class="text-xs text-gray-500 dark:text-dark-400">
+                  {{ t('admin.users.loadFactorCreditsUsed') }} {{ Math.max(0, Number(row.load_factor_credits_used_total || 0)) }}
+                </p>
+              </div>
+              <button
+                @click.stop="handleAddLoadFactorCredits(row)"
+                class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20"
+                :title="t('admin.users.addLoadFactorCredits')"
               >
                 {{ t('common.add') }}
               </button>
@@ -624,6 +644,24 @@
                 {{ t('admin.users.deductPoints') }}
               </button>
 
+              <!-- Add Load Factor Credits -->
+              <button
+                @click="handleAddLoadFactorCredits(user); closeActionMenu()"
+                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+              >
+                <Icon name="lightbulb" size="sm" class="text-emerald-500" :stroke-width="2" />
+                {{ t('admin.users.addLoadFactorCredits') }}
+              </button>
+
+              <!-- Deduct Load Factor Credits -->
+              <button
+                @click="handleDeductLoadFactorCredits(user); closeActionMenu()"
+                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+              >
+                <Icon name="minus" size="sm" class="text-amber-500" :stroke-width="2" />
+                {{ t('admin.users.deductLoadFactorCredits') }}
+              </button>
+
               <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
 
               <!-- Delete (not for admin) -->
@@ -648,6 +686,7 @@
     <UserAllowedGroupsModal :show="showAllowedGroupsModal" :user="allowedGroupsUser" @close="closeAllowedGroupsModal" @success="loadUsers" />
     <UserBalanceModal :show="showBalanceModal" :user="balanceUser" :operation="balanceOperation" @close="closeBalanceModal" @success="loadUsers" />
     <UserPointsModal :show="showPointsModal" :user="pointsUser" :operation="pointsOperation" @close="closePointsModal" @success="loadUsers" />
+    <UserLoadFactorCreditsModal :show="showLoadFactorCreditsModal" :user="loadFactorCreditsUser" :operation="loadFactorCreditsOperation" @close="closeLoadFactorCreditsModal" @success="loadUsers" />
     <UserBalanceHistoryModal :show="showBalanceHistoryModal" :user="balanceHistoryUser" @close="closeBalanceHistoryModal" @deposit="handleDepositFromHistory" @withdraw="handleWithdrawFromHistory" />
     <GroupReplaceModal :show="showGroupReplaceModal" :user="groupReplaceUser" :old-group="groupReplaceOldGroup" :all-groups="allGroups" @close="closeGroupReplaceModal" @success="loadUsers" />
     <UserAttributesConfigModal :show="showAttributesModal" @close="handleAttributesModalClose" />
@@ -683,6 +722,7 @@ import UserApiKeysModal from '@/components/admin/user/UserApiKeysModal.vue'
 import UserAllowedGroupsModal from '@/components/admin/user/UserAllowedGroupsModal.vue'
 import UserBalanceModal from '@/components/admin/user/UserBalanceModal.vue'
 import UserPointsModal from '@/components/admin/user/UserPointsModal.vue'
+import UserLoadFactorCreditsModal from '@/components/admin/user/UserLoadFactorCreditsModal.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
 import GroupReplaceModal from '@/components/admin/user/GroupReplaceModal.vue'
 
@@ -747,6 +787,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'subscriptions', label: t('admin.users.columns.subscriptions'), sortable: false },
   { key: 'balance', label: t('admin.users.columns.balance'), sortable: true },
   { key: 'points_balance', label: t('admin.users.columns.points'), sortable: true },
+  { key: 'load_factor_credits_balance', label: t('admin.users.columns.loadFactorCredits'), sortable: true },
   { key: 'usage', label: t('admin.users.columns.usage'), sortable: false },
   { key: 'concurrency', label: t('admin.users.columns.concurrency'), sortable: true },
   { key: 'status', label: t('admin.users.columns.status'), sortable: true },
@@ -843,7 +884,7 @@ const searchQuery = ref('')
 const USER_SORT_STORAGE_KEY = 'admin-users-table-sort'
 const loadInitialSortState = (): { sort_by: string; sort_order: 'asc' | 'desc' } => {
   const fallback = { sort_by: 'created_at', sort_order: 'desc' as 'asc' | 'desc' }
-  const sortable = new Set(['email', 'id', 'username', 'role', 'balance', 'points_balance', 'concurrency', 'status', 'last_used_at', 'last_active_at', 'created_at'])
+  const sortable = new Set(['email', 'id', 'username', 'role', 'balance', 'points_balance', 'load_factor_credits_balance', 'concurrency', 'status', 'last_used_at', 'last_active_at', 'created_at'])
   try {
     const raw = localStorage.getItem(USER_SORT_STORAGE_KEY)
     if (!raw) return fallback
@@ -1164,6 +1205,11 @@ const showPointsModal = ref(false)
 const pointsUser = ref<AdminUser | null>(null)
 const pointsOperation = ref<'add' | 'subtract'>('add')
 
+// Load-factor credits adjustment modal state
+const showLoadFactorCreditsModal = ref(false)
+const loadFactorCreditsUser = ref<AdminUser | null>(null)
+const loadFactorCreditsOperation = ref<'add' | 'subtract'>('add')
+
 // Balance History modal state
 const showBalanceHistoryModal = ref(false)
 const balanceHistoryUser = ref<AdminUser | null>(null)
@@ -1438,6 +1484,23 @@ const handleDeductPoints = (user: AdminUser) => {
 const closePointsModal = () => {
   showPointsModal.value = false
   pointsUser.value = null
+}
+
+const handleAddLoadFactorCredits = (user: AdminUser) => {
+  loadFactorCreditsUser.value = user
+  loadFactorCreditsOperation.value = 'add'
+  showLoadFactorCreditsModal.value = true
+}
+
+const handleDeductLoadFactorCredits = (user: AdminUser) => {
+  loadFactorCreditsUser.value = user
+  loadFactorCreditsOperation.value = 'subtract'
+  showLoadFactorCreditsModal.value = true
+}
+
+const closeLoadFactorCreditsModal = () => {
+  showLoadFactorCreditsModal.value = false
+  loadFactorCreditsUser.value = null
 }
 
 const handleBalanceHistory = (user: AdminUser) => {

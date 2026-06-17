@@ -128,6 +128,7 @@
           :limit-percent="openAICodex7dLimitPercent"
           color="emerald"
         />
+        <OpenAIQuotaResetCell :account="account" />
       </div>
       <div v-else-if="loading" class="space-y-1.5">
         <div class="flex items-center gap-1">
@@ -141,7 +142,10 @@
           <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
         </div>
       </div>
-      <div v-else class="text-xs text-gray-400">-</div>
+      <div v-else>
+        <div class="text-xs text-gray-400">-</div>
+        <OpenAIQuotaResetCell :account="account" class="mt-1" />
+      </div>
     </template>
 
     <!-- Antigravity OAuth accounts: fetch usage from API -->
@@ -472,6 +476,7 @@ import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
+import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 
 type UsageLoader = (id: number, source?: 'passive' | 'active') => Promise<AccountUsageInfo>
 

@@ -377,7 +377,6 @@ export interface SystemSettings {
   table_default_page_size: number;
   table_page_size_options: number[];
   backend_mode_enabled: boolean;
-  master_data_plane_enabled: boolean;
   custom_menu_items: CustomMenuItem[];
   custom_endpoints: CustomEndpoint[];
   // SMTP settings
@@ -479,6 +478,9 @@ export interface SystemSettings {
   enable_fingerprint_unification: boolean;
   enable_metadata_passthrough: boolean;
   enable_cch_signing: boolean;
+  enable_claude_oauth_system_prompt_injection: boolean;
+  claude_oauth_system_prompt: string;
+  claude_oauth_system_prompt_blocks: string;
   openai_clean_relay_enabled: boolean;
   enable_anthropic_cache_ttl_1h_injection: boolean;
   web_search_emulation_enabled?: boolean;
@@ -542,12 +544,15 @@ export interface SystemSettings {
 
   // Available Channels feature switch
   available_channels_enabled: boolean;
+  user_account_import_limit: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
 
   // Risk control feature switch
   risk_control_enabled: boolean;
+  cyber_session_block_enabled: boolean;
+  cyber_session_block_ttl_seconds: number;
 
   // OpenAI fast/flex policy
   openai_fast_policy_settings?: OpenAIFastPolicySettings;
@@ -623,7 +628,6 @@ export interface UpdateSettingsRequest {
   table_default_page_size?: number;
   table_page_size_options?: number[];
   backend_mode_enabled?: boolean;
-  master_data_plane_enabled?: boolean;
   custom_menu_items?: CustomMenuItem[];
   custom_endpoints?: CustomEndpoint[];
   smtp_host?: string;
@@ -705,6 +709,9 @@ export interface UpdateSettingsRequest {
   enable_fingerprint_unification?: boolean;
   enable_metadata_passthrough?: boolean;
   enable_cch_signing?: boolean;
+  enable_claude_oauth_system_prompt_injection?: boolean;
+  claude_oauth_system_prompt?: string;
+  claude_oauth_system_prompt_blocks?: string;
   openai_clean_relay_enabled?: boolean;
   enable_anthropic_cache_ttl_1h_injection?: boolean;
   // Payment configuration
@@ -764,12 +771,15 @@ export interface UpdateSettingsRequest {
 
   // Available Channels feature switch
   available_channels_enabled?: boolean;
+  user_account_import_limit?: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;
 
   // Risk control feature switch
   risk_control_enabled?: boolean;
+  cyber_session_block_enabled?: boolean;
+  cyber_session_block_ttl_seconds?: number;
 
   // OpenAI fast/flex policy
   openai_fast_policy_settings?: OpenAIFastPolicySettings;

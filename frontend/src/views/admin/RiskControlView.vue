@@ -181,7 +181,12 @@
                 <template v-else>
                   <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50 dark:hover:bg-dark-700/60">
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(row.created_at) }}</td>
-                    <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ row.group_name || '-' }}</td>
+                    <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
+                      <div>{{ row.group_name || '-' }}</div>
+                      <div v-if="row.scope_type === 'account_share_mode'" class="text-xs text-gray-400">
+                        {{ accountShareLogMeta(row) }}
+                      </div>
+                    </td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ row.user_email || '-' }}</div>
                       <div v-if="row.user_id" class="text-xs text-gray-400">UID {{ row.user_id }}</div>
@@ -275,18 +280,30 @@
                 </div>
                 <Toggle v-model="configForm.enabled" />
               </div>
+              <div class="flex items-center justify-between rounded-lg border border-gray-100 p-4 dark:border-dark-700">
+                <div>
+                  <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.cyberPreflight') }}</p>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.cyberPreflightHint') }}</p>
+                </div>
+                <Toggle v-model="configForm.cyber_preflight_enabled" />
+              </div>
               <div>
                 <label class="input-label">{{ t('admin.riskControl.mode') }}</label>
                 <Select v-model="configForm.mode" :options="modeOptions" />
                 <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ modeDescription(configForm.mode) }}</p>
               </div>
               <div>
+                <label class="input-label">{{ t('admin.riskControl.provider') }}</label>
+                <Select v-model="configForm.provider" :options="providerOptions" @change="onProviderChange" />
+                <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ providerHint }}</p>
+              </div>
+              <div>
                 <label class="input-label">{{ t('admin.riskControl.baseUrl') }}</label>
-                <input v-model.trim="configForm.base_url" type="url" class="input" placeholder="https://api.openai.com" />
+                <input v-model.trim="configForm.base_url" type="url" class="input" :placeholder="isZhipuProvider ? 'https://open.bigmodel.cn' : 'https://api.openai.com'" />
               </div>
               <div>
                 <label class="input-label">{{ t('admin.riskControl.model') }}</label>
-                <input v-model.trim="configForm.model" type="text" class="input" placeholder="omni-moderation-latest" />
+                <input v-model.trim="configForm.model" type="text" class="input" :placeholder="isZhipuProvider ? 'moderation' : 'omni-moderation-latest'" />
               </div>
               <div>
                 <label class="input-label">{{ t('admin.riskControl.timeoutMs') }}</label>
@@ -425,6 +442,7 @@
                     ></textarea>
                     <div
                       class="mt-3 rounded-lg border border-dashed border-gray-200 bg-white p-3 dark:border-dark-700 dark:bg-dark-800"
+                      :class="auditTestImagesDisabled ? 'opacity-60' : ''"
                       @dragover.prevent
                       @drop.prevent="handleModerationImageDrop"
                     >
@@ -433,13 +451,15 @@
                           <Icon name="upload" size="md" class="mt-0.5 text-gray-400" />
                           <div>
                             <p class="text-sm font-medium text-gray-800 dark:text-gray-100">{{ t('admin.riskControl.auditTestImages') }}</p>
-                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.auditTestImagesHint') }}</p>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                              {{ auditTestImagesDisabled ? t('admin.riskControl.zhipuImageUnsupported') : t('admin.riskControl.auditTestImagesHint') }}
+                            </p>
                           </div>
                         </div>
-                        <label class="btn btn-secondary inline-flex cursor-pointer items-center gap-2">
+                        <label class="btn btn-secondary inline-flex items-center gap-2" :class="auditTestImagesDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'">
                           <Icon name="plus" size="sm" />
                           {{ t('admin.riskControl.addAuditTestImage') }}
-                          <input type="file" accept="image/*" multiple class="sr-only" @change="handleModerationImageUpload" />
+                          <input type="file" accept="image/*" multiple class="sr-only" :disabled="auditTestImagesDisabled" @change="handleModerationImageUpload" />
                         </label>
                       </div>
                       <div v-if="moderationTestImages.length > 0" class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -628,6 +648,123 @@
                 <p v-if="filteredGroups.length === 0" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.noGroups') }}</p>
               </div>
             </div>
+
+            <div class="rounded-xl border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.accountShareScope') }}</h3>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.accountShareScopeHint') }}</p>
+                </div>
+                <Toggle v-model="configForm.account_share_mode_scope.enabled" :disabled="configForm.all_groups" />
+              </div>
+              <p v-if="configForm.all_groups" class="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+                {{ t('admin.riskControl.accountShareAllGroupsNotice') }}
+              </p>
+              <div v-else class="mt-4 space-y-4" :class="!configForm.account_share_mode_scope.enabled ? 'opacity-60' : ''">
+                <div class="inline-flex rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
+                  <button
+                    type="button"
+                    class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+                    :class="configForm.account_share_mode_scope.all ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-800 dark:text-white' : 'text-gray-500 dark:text-gray-400'"
+                    :disabled="!configForm.account_share_mode_scope.enabled"
+                    @click="configForm.account_share_mode_scope.all = true"
+                  >
+                    {{ t('admin.riskControl.accountShareAll') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+                    :class="!configForm.account_share_mode_scope.all ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-800 dark:text-white' : 'text-gray-500 dark:text-gray-400'"
+                    :disabled="!configForm.account_share_mode_scope.enabled"
+                    @click="configForm.account_share_mode_scope.all = false"
+                  >
+                    {{ t('admin.riskControl.accountShareSelected') }}
+                  </button>
+                </div>
+
+                <div v-if="configForm.account_share_mode_scope.enabled && !configForm.account_share_mode_scope.all" class="space-y-3">
+                  <div class="flex flex-col gap-2 sm:flex-row">
+                    <div class="relative flex-1">
+                      <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input v-model.trim="accountShareListingSearch" type="search" class="input pl-9" :placeholder="t('admin.riskControl.searchAccountShareListings')" />
+                    </div>
+                    <button type="button" class="btn btn-secondary inline-flex items-center justify-center gap-2" :disabled="accountShareListingsLoading" @click="loadAccountShareListings">
+                      <Icon name="refresh" size="sm" :class="accountShareListingsLoading ? 'animate-spin' : ''" />
+                      {{ t('admin.riskControl.refreshListings') }}
+                    </button>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                    <span class="inline-flex rounded-md bg-gray-100 px-2 py-1 dark:bg-dark-700">
+                      {{ t('admin.riskControl.accountShareSelectedCount', { count: selectedAccountShareListingCount }) }}
+                    </span>
+                  </div>
+                  <div class="grid max-h-[420px] grid-cols-1 gap-3 overflow-y-auto pr-1 xl:grid-cols-2">
+                    <button
+                      v-for="listing in filteredAccountShareListings"
+                      :key="listing.id"
+                      type="button"
+                      class="flex min-h-28 items-start justify-between gap-3 rounded-lg border p-4 text-left transition-colors"
+                      :class="isAccountShareListingSelected(listing.id) ? 'border-primary-300 bg-primary-50 dark:border-primary-700 dark:bg-primary-900/20' : 'border-gray-100 hover:bg-gray-50 dark:border-dark-700 dark:hover:bg-dark-700/60'"
+                      @click="toggleAccountShareListing(listing.id)"
+                    >
+                      <span class="min-w-0 flex-1">
+                        <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ listing.account_name || `#${listing.id}` }}</span>
+                        <span class="mt-1 block truncate text-xs text-gray-500 dark:text-gray-400">
+                          {{ t('admin.riskControl.accountShareOwner', { owner: listing.owner_username || listing.owner_user_id }) }}
+                        </span>
+                        <span class="mt-2 flex flex-wrap gap-1.5">
+                          <span class="inline-flex rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300">{{ listing.status }}</span>
+                          <span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:bg-sky-900/20 dark:text-sky-300">{{ t('admin.riskControl.accountShareRate', { rate: listing.rate_multiplier }) }}</span>
+                          <span class="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">{{ listing.active_seats }}/{{ listing.seat_limit }}</span>
+                        </span>
+                        <span class="mt-2 block truncate text-xs text-gray-400">{{ (listing.allowed_models || []).join(', ') || '-' }}</span>
+                      </span>
+                      <span
+                        class="mt-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border"
+                        :class="isAccountShareListingSelected(listing.id) ? 'border-primary-500 bg-primary-500 text-white' : 'border-gray-300 text-transparent dark:border-dark-500'"
+                      >
+                        <Icon name="check" size="xs" :stroke-width="2" />
+                      </span>
+                    </button>
+                    <p v-if="filteredAccountShareListings.length === 0" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.noAccountShareListings') }}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="activeSettingsTab === 'cyberRules'" class="space-y-5">
+            <div class="flex flex-col gap-3 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+              <span>{{ t('admin.riskControl.cyberRules.notice') }}</span>
+              <button type="button" class="btn btn-secondary inline-flex shrink-0 items-center justify-center gap-2" @click="resetCyberPreflightRules">
+                <Icon name="refresh" size="sm" />
+                {{ t('admin.riskControl.cyberRules.resetDefaults') }}
+              </button>
+            </div>
+            <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
+              <div
+                v-for="rule in cyberRuleFields"
+                :key="rule.key"
+                class="rounded-lg border border-gray-100 p-4 dark:border-dark-700"
+              >
+                <div class="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <label class="text-sm font-semibold text-gray-900 dark:text-white">{{ rule.label }}</label>
+                    <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ rule.hint }}</p>
+                  </div>
+                  <span class="shrink-0 rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-500 dark:bg-dark-700 dark:text-gray-300">
+                    {{ t('admin.riskControl.cyberRules.count', { count: configForm.cyber_preflight_rules[rule.key].length }) }}
+                  </span>
+                </div>
+                <textarea
+                  class="input font-mono text-sm leading-6"
+                  :rows="rule.rows"
+                  :value="cyberRuleText(rule.key)"
+                  :placeholder="t('admin.riskControl.cyberRules.placeholder')"
+                  @input="onCyberRuleInput(rule.key, $event)"
+                ></textarea>
+              </div>
+            </div>
           </div>
 
           <div v-else-if="activeSettingsTab === 'runtime'" class="grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -799,6 +936,9 @@
               <span v-if="inputDetailRow.group_name" class="inline-flex rounded-md bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
                 {{ inputDetailRow.group_name }}
               </span>
+              <span v-if="inputDetailRow.scope_type === 'account_share_mode'" class="inline-flex rounded-md bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                {{ accountShareLogMeta(inputDetailRow) }}
+              </span>
             </div>
             <pre class="mt-4 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailText }}</pre>
           </div>
@@ -825,12 +965,16 @@ import Toggle from '@/components/common/Toggle.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import { adminAPI } from '@/api/admin'
 import type {
+  ContentModerationAccountShareModeScope,
   ContentModerationAPIKeyStatus,
   ContentModerationConfig,
+  ContentModerationCyberPreflightRules,
   ContentModerationLog,
+  ContentModerationProvider,
   ContentModerationRuntimeStatus,
   ContentModerationTestAuditResult,
   ModerationMode,
+  RiskControlAccountShareListing,
   UpdateContentModerationConfig,
 } from '@/api/admin/riskControl'
 import type { AdminGroup, SelectOption } from '@/types'
@@ -838,7 +982,8 @@ import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
 
-type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'retention'
+type SettingsTab = 'basic' | 'scope' | 'cyberRules' | 'runtime' | 'response' | 'retention'
+type CyberRuleKey = keyof ContentModerationCyberPreflightRules
 type WorkerSlotState = 'active' | 'idle' | 'disabled'
 type APIKeysWriteMode = 'append' | 'replace'
 type OverviewIcon = 'shield' | 'key' | 'users' | 'document'
@@ -873,11 +1018,15 @@ const statusLoading = ref(false)
 const apiKeyTesting = ref(false)
 const hashActionLoading = ref(false)
 const unbanningUserID = ref<number | null>(null)
+const accountShareListingsLoading = ref(false)
 const settingsOpen = ref(false)
 const activeSettingsTab = ref<SettingsTab>('basic')
 const groupSearch = ref('')
+const accountShareListingSearch = ref('')
 const flaggedHashInput = ref('')
 const groups = ref<AdminGroup[]>([])
+const accountShareListings = ref<RiskControlAccountShareListing[]>([])
+const defaultCyberPreflightRules = ref<ContentModerationCyberPreflightRules>(createEmptyCyberPreflightRules())
 const logs = ref<ContentModerationLog[]>([])
 const status = ref<ContentModerationRuntimeStatus | null>(null)
 const testedApiKeyStatuses = ref<ContentModerationAPIKeyStatus[]>([])
@@ -891,7 +1040,10 @@ let statusTimer: number | null = null
 
 const configForm = reactive({
   enabled: false,
+  cyber_preflight_enabled: false,
+  cyber_preflight_rules: createEmptyCyberPreflightRules(),
   mode: 'pre_block' as ModerationMode,
+  provider: 'openai' as ContentModerationProvider,
   base_url: 'https://api.openai.com',
   model: 'omni-moderation-latest',
   api_keys_text: '',
@@ -919,6 +1071,12 @@ const configForm = reactive({
   hit_retention_days: 180,
   non_hit_retention_days: 3,
   pre_hash_check_enabled: false,
+  account_share_mode_scope: {
+    enabled: false,
+    all: false,
+    platforms: ['openai'],
+    listing_ids: [] as number[],
+  } as ContentModerationAccountShareModeScope,
 })
 
 const pagination = reactive({
@@ -940,6 +1098,7 @@ const filters = reactive({
 const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
   { id: 'basic', label: t('admin.riskControl.tabs.basic') },
   { id: 'scope', label: t('admin.riskControl.tabs.scope') },
+  { id: 'cyberRules', label: t('admin.riskControl.tabs.cyberRules') },
   { id: 'runtime', label: t('admin.riskControl.tabs.runtime') },
   { id: 'response', label: t('admin.riskControl.tabs.response') },
   { id: 'retention', label: t('admin.riskControl.tabs.retention') },
@@ -949,6 +1108,22 @@ const modeOptions = computed<SelectOption[]>(() => [
   { value: 'pre_block', label: t('admin.riskControl.modePreBlock') },
   { value: 'observe', label: t('admin.riskControl.modeObserve') },
   { value: 'off', label: t('admin.riskControl.modeOff') },
+])
+
+const providerOptions = computed<SelectOption[]>(() => [
+  { value: 'openai', label: t('admin.riskControl.providerOpenAI') },
+  { value: 'zhipu', label: t('admin.riskControl.providerZhipu') },
+])
+
+const cyberRuleFields = computed<Array<{ key: CyberRuleKey; label: string; hint: string; rows: number }>>(() => [
+  { key: 'standalone_block_markers', label: t('admin.riskControl.cyberRules.standaloneBlockMarkers'), hint: t('admin.riskControl.cyberRules.standaloneBlockMarkersHint'), rows: 5 },
+  { key: 'hard_markers', label: t('admin.riskControl.cyberRules.hardMarkers'), hint: t('admin.riskControl.cyberRules.hardMarkersHint'), rows: 6 },
+  { key: 'offensive_intent_markers', label: t('admin.riskControl.cyberRules.offensiveIntentMarkers'), hint: t('admin.riskControl.cyberRules.offensiveIntentMarkersHint'), rows: 6 },
+  { key: 'credential_abuse_intent_markers', label: t('admin.riskControl.cyberRules.credentialAbuseIntentMarkers'), hint: t('admin.riskControl.cyberRules.credentialAbuseIntentMarkersHint'), rows: 5 },
+  { key: 'technique_markers', label: t('admin.riskControl.cyberRules.techniqueMarkers'), hint: t('admin.riskControl.cyberRules.techniqueMarkersHint'), rows: 6 },
+  { key: 'credential_markers', label: t('admin.riskControl.cyberRules.credentialMarkers'), hint: t('admin.riskControl.cyberRules.credentialMarkersHint'), rows: 5 },
+  { key: 'target_markers', label: t('admin.riskControl.cyberRules.targetMarkers'), hint: t('admin.riskControl.cyberRules.targetMarkersHint'), rows: 4 },
+  { key: 'defensive_markers', label: t('admin.riskControl.cyberRules.defensiveMarkers'), hint: t('admin.riskControl.cyberRules.defensiveMarkersHint'), rows: 6 },
 ])
 
 const resultOptions = computed<SelectOption[]>(() => [
@@ -986,6 +1161,38 @@ const filteredGroups = computed(() => {
     return group.name.toLowerCase().includes(keyword) || String(group.platform).toLowerCase().includes(keyword)
   })
 })
+
+const filteredAccountShareListings = computed(() => {
+  const keyword = accountShareListingSearch.value.trim().toLowerCase()
+  if (!keyword) return accountShareListings.value
+  return accountShareListings.value.filter((listing) => {
+    const haystack = [
+      listing.account_name,
+      listing.owner_username,
+      listing.status,
+      listing.account_level,
+      listing.allowed_models?.join(' '),
+      String(listing.id),
+      String(listing.account_id),
+      String(listing.owner_user_id),
+    ].join(' ').toLowerCase()
+    return haystack.includes(keyword)
+  })
+})
+
+const selectedAccountShareListingCount = computed(() => configForm.account_share_mode_scope.listing_ids.length)
+
+const selectedAccountShareListingIDs = computed(() => new Set(configForm.account_share_mode_scope.listing_ids))
+
+const isZhipuProvider = computed(() => configForm.provider === 'zhipu')
+
+const providerHint = computed(() => (
+  isZhipuProvider.value
+    ? t('admin.riskControl.providerZhipuHint')
+    : t('admin.riskControl.providerOpenAIHint')
+))
+
+const auditTestImagesDisabled = computed(() => isZhipuProvider.value)
 
 const inputApiKeyCount = computed(() => parseApiKeys(configForm.api_keys_text).length)
 
@@ -1162,9 +1369,80 @@ const runtimeBadgeClass = computed(() => {
   return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300'
 })
 
+function createEmptyCyberPreflightRules(): ContentModerationCyberPreflightRules {
+  return {
+    standalone_block_markers: [],
+    hard_markers: [],
+    offensive_intent_markers: [],
+    credential_abuse_intent_markers: [],
+    technique_markers: [],
+    credential_markers: [],
+    target_markers: [],
+    defensive_markers: [],
+  }
+}
+
+function normalizeCyberPreflightRules(rules?: Partial<ContentModerationCyberPreflightRules>): ContentModerationCyberPreflightRules {
+  const empty = createEmptyCyberPreflightRules()
+  return {
+    standalone_block_markers: normalizeCyberRuleValues(rules?.standalone_block_markers ?? empty.standalone_block_markers),
+    hard_markers: normalizeCyberRuleValues(rules?.hard_markers ?? empty.hard_markers),
+    offensive_intent_markers: normalizeCyberRuleValues(rules?.offensive_intent_markers ?? empty.offensive_intent_markers),
+    credential_abuse_intent_markers: normalizeCyberRuleValues(rules?.credential_abuse_intent_markers ?? empty.credential_abuse_intent_markers),
+    technique_markers: normalizeCyberRuleValues(rules?.technique_markers ?? empty.technique_markers),
+    credential_markers: normalizeCyberRuleValues(rules?.credential_markers ?? empty.credential_markers),
+    target_markers: normalizeCyberRuleValues(rules?.target_markers ?? empty.target_markers),
+    defensive_markers: normalizeCyberRuleValues(rules?.defensive_markers ?? empty.defensive_markers),
+  }
+}
+
+function normalizeCyberRuleValues(values: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    const normalized = String(value || '').trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    out.push(normalized)
+  }
+  return out
+}
+
+function parseCyberRuleText(value: string): string[] {
+  return normalizeCyberRuleValues(String(value || '').split(/\r?\n/))
+}
+
+function cyberRuleText(key: CyberRuleKey): string {
+  return (configForm.cyber_preflight_rules[key] || []).join('\n')
+}
+
+function onCyberRuleInput(key: CyberRuleKey, event: Event) {
+  const target = event.target as HTMLTextAreaElement | null
+  configForm.cyber_preflight_rules[key] = parseCyberRuleText(target?.value || '')
+}
+
+function resetCyberPreflightRules() {
+  configForm.cyber_preflight_rules = normalizeCyberPreflightRules(defaultCyberPreflightRules.value)
+}
+
+function normalizeAccountShareModeScope(scope?: ContentModerationAccountShareModeScope): ContentModerationAccountShareModeScope {
+  return {
+    enabled: Boolean(scope?.enabled),
+    all: Boolean(scope?.all),
+    platforms: Array.isArray(scope?.platforms) && scope.platforms.length > 0 ? [...scope.platforms] : ['openai'],
+    listing_ids: Array.isArray(scope?.listing_ids)
+      ? Array.from(new Set(scope.listing_ids.filter((id) => Number.isFinite(id) && id > 0)))
+      : [],
+  }
+}
+
 function applyConfig(config: ContentModerationConfig) {
   configForm.enabled = config.enabled
+  configForm.cyber_preflight_enabled = config.cyber_preflight_enabled ?? false
+  configForm.cyber_preflight_rules = normalizeCyberPreflightRules(config.cyber_preflight_rules)
+  defaultCyberPreflightRules.value = normalizeCyberPreflightRules(config.cyber_preflight_default_rules)
   configForm.mode = config.mode
+  configForm.provider = config.provider || 'openai'
   configForm.base_url = config.base_url || 'https://api.openai.com'
   configForm.model = config.model || 'omni-moderation-latest'
   configForm.api_keys_text = ''
@@ -1195,18 +1473,21 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.hit_retention_days = config.hit_retention_days || 180
   configForm.non_hit_retention_days = Math.min(Math.max(config.non_hit_retention_days || 3, 1), 3)
   configForm.pre_hash_check_enabled = config.pre_hash_check_enabled ?? false
+  configForm.account_share_mode_scope = normalizeAccountShareModeScope(config.account_share_mode_scope)
 }
 
 async function loadAll() {
   loading.value = true
   try {
-    const [config, groupItems, runtimeStatus] = await Promise.all([
+    const [config, groupItems, runtimeStatus, listingResult] = await Promise.all([
       adminAPI.riskControl.getConfig(),
       adminAPI.groups.getAll(),
       adminAPI.riskControl.getStatus(),
+      adminAPI.riskControl.listAccountShareListings({ page: 1, page_size: 100 }),
     ])
     applyConfig(config)
     groups.value = groupItems
+    accountShareListings.value = listingResult.items
     status.value = runtimeStatus
     if (Array.isArray(runtimeStatus.api_key_statuses)) {
       configForm.api_key_statuses = [...runtimeStatus.api_key_statuses]
@@ -1238,12 +1519,27 @@ async function loadStatus(silent = true) {
   }
 }
 
+async function loadAccountShareListings() {
+  accountShareListingsLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.listAccountShareListings({ page: 1, page_size: 100 })
+    accountShareListings.value = result.items
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.accountShareListingsFailed')))
+  } finally {
+    accountShareListingsLoading.value = false
+  }
+}
+
 async function saveConfig() {
   saving.value = true
   try {
     const payload: UpdateContentModerationConfig = {
       enabled: configForm.enabled,
+      cyber_preflight_enabled: configForm.cyber_preflight_enabled,
+      cyber_preflight_rules: normalizeCyberPreflightRules(configForm.cyber_preflight_rules),
       mode: configForm.mode,
+      provider: configForm.provider,
       base_url: configForm.base_url,
       model: configForm.model,
       timeout_ms: Number(configForm.timeout_ms) || 3000,
@@ -1264,6 +1560,7 @@ async function saveConfig() {
       hit_retention_days: Number(configForm.hit_retention_days) || 180,
       non_hit_retention_days: Math.min(Math.max(Number(configForm.non_hit_retention_days) || 3, 1), 3),
       pre_hash_check_enabled: configForm.pre_hash_check_enabled,
+      account_share_mode_scope: normalizeAccountShareModeScope(configForm.account_share_mode_scope),
     }
     const keys = parseApiKeys(configForm.api_keys_text)
     if (!payload.clear_api_key && configForm.api_keys_mode === 'replace' && keys.length === 0) {
@@ -1425,10 +1722,15 @@ async function testApiKeys(useInputKeys: boolean) {
     appStore.showError(t('admin.riskControl.apiKeyTestNoInput'))
     return
   }
+  if (isZhipuProvider.value && moderationTestImages.value.length > 0) {
+    appStore.showError(t('admin.riskControl.zhipuImageUnsupported'))
+    return
+  }
   apiKeyTesting.value = true
   try {
     const result = await adminAPI.riskControl.testAPIKeys({
       api_keys: keys,
+      provider: configForm.provider,
       base_url: configForm.base_url,
       model: configForm.model,
       timeout_ms: Number(configForm.timeout_ms) || 3000,
@@ -1508,6 +1810,10 @@ async function handleModerationImagePaste(event: ClipboardEvent) {
 
 async function addModerationTestFiles(files: FileList | File[] | null) {
   if (!files) return
+  if (auditTestImagesDisabled.value) {
+    appStore.showError(t('admin.riskControl.zhipuImageUnsupported'))
+    return
+  }
   const items = Array.from(files).filter((file) => file.type.startsWith('image/'))
   for (const file of items) {
     if (moderationTestImages.value.length >= maxModerationTestImages) {
@@ -1544,6 +1850,42 @@ function toggleGroup(groupID: number) {
   }
 }
 
+function onProviderChange(provider: string | number | boolean | null) {
+  const nextProvider = String(provider || 'openai') as ContentModerationProvider
+  configForm.provider = nextProvider
+  if (nextProvider === 'zhipu') {
+    if (configForm.base_url === '' || configForm.base_url === 'https://api.openai.com') {
+      configForm.base_url = 'https://open.bigmodel.cn'
+    }
+    if (configForm.model === '' || configForm.model === 'omni-moderation-latest') {
+      configForm.model = 'moderation'
+    }
+    moderationTestImages.value = []
+  } else {
+    if (configForm.base_url === '' || configForm.base_url === 'https://open.bigmodel.cn') {
+      configForm.base_url = 'https://api.openai.com'
+    }
+    if (configForm.model === '' || configForm.model === 'moderation') {
+      configForm.model = 'omni-moderation-latest'
+    }
+  }
+  moderationTestResult.value = null
+}
+
+function toggleAccountShareListing(listingID: number) {
+  const ids = configForm.account_share_mode_scope.listing_ids
+  const index = ids.indexOf(listingID)
+  if (index >= 0) {
+    ids.splice(index, 1)
+  } else {
+    ids.push(listingID)
+  }
+}
+
+function isAccountShareListingSelected(listingID: number): boolean {
+  return selectedAccountShareListingIDs.value.has(listingID)
+}
+
 function isGroupSelected(groupID: number): boolean {
   return configForm.group_ids.includes(groupID)
 }
@@ -1563,6 +1905,7 @@ function modeDescription(mode: ModerationMode): string {
 }
 
 function resultLabel(row: ContentModerationLog): string {
+  if (row.action === 'cyber_preflight_block') return t('admin.riskControl.action.cyberPreflightBlock')
   if (row.action === 'block') return t('admin.riskControl.action.block')
   if (row.action === 'error' || row.error) return t('admin.riskControl.action.error')
   if (row.flagged) return t('admin.riskControl.result.hit')
@@ -1570,6 +1913,7 @@ function resultLabel(row: ContentModerationLog): string {
 }
 
 function resultBadgeClass(row: ContentModerationLog): string {
+  if (row.action === 'cyber_preflight_block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
@@ -1670,6 +2014,14 @@ function parseApiKeys(value: string): string[] {
 function violationCountText(row: ContentModerationLog): string {
   if (!row.flagged) return '-'
   return t('admin.riskControl.violationCount', { count: row.violation_count || 1 })
+}
+
+function accountShareLogMeta(row: ContentModerationLog): string {
+  const parts: string[] = []
+  if (row.account_share_listing_id) parts.push(`Listing ${row.account_share_listing_id}`)
+  if (row.account_id) parts.push(`Account ${row.account_id}`)
+  if (row.consumer_user_id) parts.push(`Consumer ${row.consumer_user_id}`)
+  return parts.join(' / ') || t('admin.riskControl.accountShareMode')
 }
 
 function normalizeDateTimeLocal(value: string): string | undefined {

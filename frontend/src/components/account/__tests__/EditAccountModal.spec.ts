@@ -18,7 +18,11 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
-    isSimpleMode: true
+    isSimpleMode: true,
+    user: {
+      load_factor_credits_balance: 100
+    },
+    refreshUser: vi.fn().mockResolvedValue(undefined)
   })
 }))
 
@@ -136,6 +140,9 @@ function buildAccount() {
         'gpt-5.2': 'gpt-5.2'
       }
     },
+    credentials_status: {
+      has_api_key: true
+    },
     extra: {},
     proxy_id: null,
     concurrency: 1,
@@ -203,8 +210,19 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.type = 'oauth'
     account.credentials = {
-      access_token: 'oauth-token'
+      access_token: 'oauth-token',
+      model_mapping: {
+        'custom-model': 'custom-target'
+      }
     }
+    account.extra = {
+      openai_compact_mode: 'force_off',
+      openai_passthrough: true,
+      codex_5h_limit_percent: 60
+    }
+    account.concurrency = 9
+    account.load_factor = 10
+    account.load_factor_paid_ceiling = 10
     updateAccountMock.mockReset()
     updateUserAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
@@ -213,10 +231,23 @@ describe('EditAccountModal', () => {
 
     const wrapper = mountModal(account)
     await wrapper.setProps({ accountScope: 'user' })
+    const concurrencyInput = wrapper.get('input[type="number"][min="3"][max="50"]')
+    await concurrencyInput.setValue('12')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateUserAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('account_level')
+    const payload = updateUserAccountMock.mock.calls[0]?.[1]
+    expect(payload).not.toHaveProperty('account_level')
+    expect(payload?.concurrency).toBe(12)
+    expect(payload?.load_factor).toBe(10)
+    expect(payload).not.toHaveProperty('priority')
+    expect(payload).not.toHaveProperty('auto_pause_on_expired')
+    expect(payload?.credentials?.model_mapping).toEqual({
+      'custom-model': 'custom-target'
+    })
+    expect(payload?.extra?.openai_compact_mode).toBe('force_off')
+    expect(payload?.extra?.openai_passthrough).toBe(true)
+    expect(payload?.extra?.codex_5h_limit_percent).toBe(60)
   })
 
   it('submits OpenAI compact mode and compact-only model mapping', async () => {

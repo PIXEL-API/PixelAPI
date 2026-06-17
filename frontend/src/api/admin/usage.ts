@@ -4,7 +4,15 @@
  */
 
 import { apiClient } from '../client'
-import type { AdminUsageLog, UsageQueryParams, PaginatedResponse, UsageRequestType } from '@/types'
+import type {
+  AdminUsageLog,
+  BalanceLedgerDirection,
+  PaginatedResponse,
+  UsageQueryParams,
+  UsageRequestType,
+  UserBalanceLedgerEntry,
+  UserBalanceLedgerQueryParams
+} from '@/types'
 import type { EndpointStat } from '@/types'
 
 // ==================== Types ====================
@@ -14,6 +22,8 @@ export interface AdminUsageStatsResponse {
   total_input_tokens: number
   total_output_tokens: number
   total_cache_tokens: number
+  total_cache_creation_tokens: number
+  total_cache_read_tokens: number
   total_tokens: number
   total_cost: number
   total_actual_cost: number
@@ -85,6 +95,15 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
   sort_order?: 'asc' | 'desc'
 }
 
+export interface AdminBalanceLedgerQueryParams extends UserBalanceLedgerQueryParams {
+  user_id?: number
+  direction?: BalanceLedgerDirection | ''
+  ref_type?: string
+  ref_id?: number
+  timezone?: string
+  exact_total?: boolean
+}
+
 // ==================== API Functions ====================
 
 /**
@@ -97,6 +116,17 @@ export async function list(
   options?: { signal?: AbortSignal }
 ): Promise<PaginatedResponse<AdminUsageLog>> {
   const { data } = await apiClient.get<PaginatedResponse<AdminUsageLog>>('/admin/usage', {
+    params,
+    signal: options?.signal
+  })
+  return data
+}
+
+export async function listBalanceLedger(
+  params: AdminBalanceLedgerQueryParams,
+  options?: { signal?: AbortSignal }
+): Promise<PaginatedResponse<UserBalanceLedgerEntry>> {
+  const { data } = await apiClient.get<PaginatedResponse<UserBalanceLedgerEntry>>('/admin/usage/balance-ledger', {
     params,
     signal: options?.signal
   })
@@ -198,6 +228,7 @@ export async function cancelCleanupTask(taskId: number): Promise<{ id: number; s
 
 export const adminUsageAPI = {
   list,
+  listBalanceLedger,
   getStats,
   searchUsers,
   searchApiKeys,

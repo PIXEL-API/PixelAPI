@@ -167,6 +167,118 @@
     </section>
 
     <section class="card p-5">
+      <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+            {{ t('admin.revenue.sharePolicy.modePolicyTitle') }}
+          </h3>
+          <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-500 dark:text-gray-400">
+            {{ t('admin.revenue.sharePolicy.modePolicyDescription') }}
+          </p>
+        </div>
+        <span
+          class="rounded-full px-2.5 py-1 text-xs font-medium"
+          :class="modePolicy?.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
+        >
+          {{ modePolicy?.enabled ? t('common.enabled') : t('common.disabled') }}
+        </span>
+      </div>
+
+      <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+          <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
+            {{ t('admin.revenue.sharePolicy.modeCurrentPolicy') }}
+          </h4>
+          <dl class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.platformShare') }}
+              </dt>
+              <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
+                {{ modePolicy ? formatPolicyPercent(modePolicy.platform_share_ratio) : '--' }}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.ownerShare') }}
+              </dt>
+              <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
+                {{ modePolicy ? formatPolicyPercent(modePolicy.owner_share_ratio) : '--' }}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.version') }}
+              </dt>
+              <dd class="mt-1 text-sm text-gray-900 dark:text-white">
+                {{ modePolicy ? modePolicy.version : '--' }}
+              </dd>
+            </div>
+          </dl>
+          <p class="mt-5 text-xs leading-5 text-gray-500 dark:text-gray-400">
+            {{ t('admin.revenue.sharePolicy.modePolicyHint') }}
+          </p>
+        </div>
+
+        <form class="rounded-lg border border-gray-200 p-4 dark:border-dark-700" @submit.prevent="saveModePolicy">
+          <div class="flex items-center justify-between gap-3">
+            <h4 class="text-sm font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.revenue.sharePolicy.modeGlobalConfig') }}
+            </h4>
+            <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+              <input v-model="modePolicyForm.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
+              {{ t('admin.revenue.sharePolicy.enabled') }}
+            </label>
+          </div>
+
+          <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.modePlatformSharePercent') }}
+              </label>
+              <div class="relative">
+                <input
+                  v-model="modePolicyForm.platformSharePercent"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  class="input w-full pr-10"
+                  @blur="normalizeModePolicyPercent"
+                />
+                <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-gray-400">%</span>
+              </div>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.modePlatformShareHint') }}
+              </p>
+            </div>
+
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.modeOwnerSharePercent') }}
+              </label>
+              <div class="input flex h-10 items-center bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-gray-300">
+                {{ formatPercentFromNumber(modeOwnerSharePercent) }}
+              </div>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.revenue.sharePolicy.modeOwnerShareHint') }}
+              </p>
+            </div>
+          </div>
+
+          <div class="mt-5 flex flex-col gap-2 border-t border-gray-100 pt-4 dark:border-dark-700 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+              {{ t('admin.revenue.sharePolicy.modeSaveHint') }}
+            </p>
+            <button type="submit" class="btn btn-primary h-10" :disabled="savingModePolicy">
+              {{ savingModePolicy ? t('common.saving') : t('admin.revenue.sharePolicy.savePolicy') }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card p-5">
       <div class="mb-4 flex items-center justify-between gap-3">
         <h3 class="text-base font-semibold text-gray-900 dark:text-white">
           {{ t('admin.revenue.sharePolicy.history') }}
@@ -298,6 +410,8 @@ import Icon from '@/components/icons/Icon.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import { accountSharePoliciesAPI } from '@/api/admin/accountSharePolicies'
 import type { AccountSharePolicy } from '@/api/admin/accountSharePolicies'
+import { accountShareModePolicyAPI } from '@/api/admin/accountShareModePolicy'
+import type { AccountShareModePolicy } from '@/api/admin/accountShareModePolicy'
 import { getSettings, updateSettings } from '@/api/admin/settings'
 import { useAppStore } from '@/stores/app'
 import { extractI18nErrorMessage } from '@/utils/apiError'
@@ -308,7 +422,9 @@ const appStore = useAppStore()
 const loading = ref(false)
 const saving = ref(false)
 const savingCommission = ref(false)
+const savingModePolicy = ref(false)
 const policies = ref<AccountSharePolicy[]>([])
+const modePolicy = ref<AccountShareModePolicy | null>(null)
 const form = reactive({
   ownerSharePercent: 70 as number | string,
   inviteSharePercent: 0 as number | string,
@@ -316,6 +432,10 @@ const form = reactive({
 })
 const commissionForm = reactive({
   ratePercent: 0.5 as number | string
+})
+const modePolicyForm = reactive({
+  platformSharePercent: 10 as number | string,
+  enabled: true
 })
 
 const effectivePolicy = computed(() => {
@@ -339,20 +459,31 @@ const normalizedInviteSharePercentValue = computed(() => {
 
 const platformSharePercent = computed(() => clampPercent(100 - normalizedOwnerSharePercentValue.value - normalizedInviteSharePercentValue.value))
 
+const normalizedModePlatformSharePercentValue = computed(() => {
+  const value = Number(modePolicyForm.platformSharePercent)
+  if (!Number.isFinite(value)) return 0
+  return clampPercent(value)
+})
+
+const modeOwnerSharePercent = computed(() => clampPercent(100 - normalizedModePlatformSharePercentValue.value))
+
 async function loadPolicies() {
   loading.value = true
   try {
-    const [result, settings] = await Promise.all([
+    const [result, settings, modePolicyResult] = await Promise.all([
       accountSharePoliciesAPI.list(1, 50, {
         scope_type: 'global',
         sort_by: 'effective_at',
         sort_order: 'desc'
       }),
-      getSettings()
+      getSettings(),
+      accountShareModePolicyAPI.get('openai')
     ])
     policies.value = [...result.items].sort(comparePolicyByEffectiveAtDesc)
+    modePolicy.value = modePolicyResult
     commissionForm.ratePercent = roundPercent((settings.user_private_group_commission_rate ?? 0) * 100)
     syncFormFromPolicy()
+    syncModePolicyForm()
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.sharePolicy.errors', t('admin.revenue.sharePolicy.loadFailed')))
   } finally {
@@ -413,6 +544,31 @@ async function savePolicy() {
   }
 }
 
+async function saveModePolicy() {
+  const platformValue = Number(modePolicyForm.platformSharePercent)
+  if (!Number.isFinite(platformValue) || platformValue < 0 || platformValue > 100) {
+    appStore.showError(t('admin.revenue.sharePolicy.invalidModeRatio'))
+    return
+  }
+
+  const normalizedPlatformValue = clampPercent(platformValue)
+  savingModePolicy.value = true
+  try {
+    modePolicy.value = await accountShareModePolicyAPI.update({
+      platform: 'openai',
+      platform_share_ratio: normalizedPlatformValue / 100,
+      owner_share_ratio: (100 - normalizedPlatformValue) / 100,
+      enabled: modePolicyForm.enabled
+    })
+    syncModePolicyForm()
+    appStore.showSuccess(t('admin.revenue.sharePolicy.saved'))
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'admin.revenue.sharePolicy.errors', t('admin.revenue.sharePolicy.saveFailed')))
+  } finally {
+    savingModePolicy.value = false
+  }
+}
+
 function syncFormFromPolicy() {
   const target = editablePolicy.value
   if (!target) {
@@ -424,6 +580,16 @@ function syncFormFromPolicy() {
   form.ownerSharePercent = roundPercent(target.owner_share_ratio * 100)
   form.inviteSharePercent = roundPercent((target.invite_share_ratio ?? 0) * 100)
   form.enabled = target.enabled
+}
+
+function syncModePolicyForm() {
+  if (!modePolicy.value) {
+    modePolicyForm.platformSharePercent = 10
+    modePolicyForm.enabled = true
+    return
+  }
+  modePolicyForm.platformSharePercent = roundPercent(modePolicy.value.platform_share_ratio * 100)
+  modePolicyForm.enabled = modePolicy.value.enabled
 }
 
 function normalizeFormPercent() {
@@ -448,6 +614,15 @@ function normalizeCommissionPercent() {
     commissionForm.ratePercent = 0
   } else {
     commissionForm.ratePercent = roundPercent(clampPercent(value))
+  }
+}
+
+function normalizeModePolicyPercent() {
+  const value = Number(modePolicyForm.platformSharePercent)
+  if (!Number.isFinite(value)) {
+    modePolicyForm.platformSharePercent = 10
+  } else {
+    modePolicyForm.platformSharePercent = roundPercent(clampPercent(value))
   }
 }
 

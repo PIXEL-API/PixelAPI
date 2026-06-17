@@ -15,6 +15,10 @@ export interface AffiliateAdminEntry {
   aff_code_custom: boolean
   aff_rebate_rate_percent?: number | null
   aff_count: number
+  aff_weekly_limit: number
+  aff_weekly_used: number
+  aff_code_auto_rotate: boolean
+  aff_code_expires_at?: string | null
 }
 
 export interface ListAffiliateUsersParams {
@@ -25,6 +29,8 @@ export interface ListAffiliateUsersParams {
 
 export interface UpdateAffiliateUserRequest {
   aff_code?: string
+  aff_weekly_limit?: number
+  aff_code_auto_rotate?: boolean
   aff_rebate_rate_percent?: number | null
   /** Set true to explicitly clear the per-user rate (sets it to NULL). */
   clear_rebate_rate?: boolean
@@ -84,6 +90,13 @@ export async function lookupUsers(q: string): Promise<SimpleUser[]> {
   return data
 }
 
+export async function getUserSettings(userId: number): Promise<AffiliateAdminEntry> {
+  const { data } = await apiClient.get<AffiliateAdminEntry>(
+    `/admin/affiliates/users/${userId}`,
+  )
+  return data
+}
+
 export async function updateUserSettings(
   userId: number,
   payload: UpdateAffiliateUserRequest,
@@ -138,6 +151,7 @@ export async function extendInviteRewards(
 export const affiliatesAPI = {
   listUsers,
   lookupUsers,
+  getUserSettings,
   updateUserSettings,
   clearUserSettings,
   batchSetRate,

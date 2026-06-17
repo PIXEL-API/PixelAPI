@@ -2,7 +2,7 @@
   <AppLayout>
     <TablePageLayout>
       <template #actions>
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div v-if="activeTab === 'requests'" class="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <!-- Total Requests -->
           <div class="card p-4">
           <div class="flex items-center gap-3">
@@ -39,6 +39,10 @@
               <p class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('usage.in') }}: {{ formatTokens(usageStats?.total_input_tokens || 0) }} /
                 {{ t('usage.out') }}: {{ formatTokens(usageStats?.total_output_tokens || 0) }}
+              </p>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.usage.cacheReadTokens') }}: {{ formatTokens(usageStats?.total_cache_read_tokens || 0) }} /
+                {{ t('usage.cacheHitRate') }}: {{ formatCacheHitRate(usageStats?.total_input_tokens, usageStats?.total_cache_read_tokens) }}
               </p>
             </div>
           </div>
@@ -88,8 +92,32 @@
 
       <template #filters>
         <div class="card">
+          <div class="border-b border-gray-200 p-2 dark:border-dark-700 sm:p-3">
+            <div class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-800 sm:inline-grid sm:w-auto">
+              <button
+                type="button"
+                class="min-h-11 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                :class="activeTab === 'requests'
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
+                @click="switchUsageTab('requests')"
+              >
+                {{ t('usage.tabs.requests') }}
+              </button>
+              <button
+                type="button"
+                class="min-h-11 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                :class="activeTab === 'balanceLedger'
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-700 dark:text-white'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'"
+                @click="switchUsageTab('balanceLedger')"
+              >
+                {{ t('usage.tabs.balanceLedger') }}
+              </button>
+            </div>
+          </div>
           <div class="px-6 py-4">
-          <div class="flex flex-wrap items-end gap-4">
+          <div v-if="activeTab === 'requests'" class="flex flex-wrap items-end gap-4">
             <!-- API Key Filter -->
             <div class="min-w-[180px]">
               <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>
@@ -144,12 +172,47 @@
               </button>
             </div>
           </div>
+          <div v-else class="flex flex-wrap items-end gap-4">
+            <div>
+              <label class="input-label">{{ t('usage.timeRange') }}</label>
+              <DateRangePicker
+                v-model:start-date="startDate"
+                v-model:end-date="endDate"
+                @change="onDateRangeChange"
+              />
+            </div>
+            <div class="min-w-[160px]">
+              <label class="input-label">{{ t('usage.balanceLedger.direction') }}</label>
+              <Select
+                v-model="ledgerFilters.direction"
+                :options="ledgerDirectionOptions"
+                @change="applyFilters"
+              />
+            </div>
+            <div class="min-w-[220px]">
+              <label class="input-label">{{ t('usage.balanceLedger.reason') }}</label>
+              <Select
+                v-model="ledgerFilters.reason"
+                :options="ledgerReasonOptions"
+                @change="applyFilters"
+              />
+            </div>
+            <div class="ml-auto flex items-center gap-3">
+              <button @click="applyFilters" :disabled="ledgerLoading" class="btn btn-secondary">
+                {{ t('common.refresh') }}
+              </button>
+              <button @click="resetFilters" class="btn btn-secondary">
+                {{ t('common.reset') }}
+              </button>
+            </div>
+          </div>
         </div>
         </div>
       </template>
 
       <template #table>
         <DataTable
+          v-if="activeTab === 'requests'"
           :columns="columns"
           :data="usageLogs"
           :loading="loading"
@@ -342,16 +405,70 @@
             <EmptyState :message="t('usage.noRecords')" />
           </template>
         </DataTable>
+        <DataTable
+          v-else
+          :columns="ledgerColumns"
+          :data="balanceLedgerRows"
+          :loading="ledgerLoading"
+          :server-side-sort="true"
+          default-sort-key="created_at"
+          default-sort-order="desc"
+          :estimate-row-height="76"
+          :overscan="8"
+          row-key="id"
+          @sort="handleLedgerSort"
+        >
+          <template #cell-reason="{ row }">
+            <div class="flex flex-col gap-1">
+              <span class="font-medium text-gray-900 dark:text-white">{{ row.reasonLabel }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ row.reason }}</span>
+            </div>
+          </template>
+
+          <template #cell-amount="{ row }">
+            <span class="font-semibold" :class="row.direction === 'credit' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'">
+              {{ row.amountLabel }}
+            </span>
+          </template>
+
+          <template #cell-balance_after="{ row }">
+            <span class="font-mono text-sm text-gray-700 dark:text-gray-300">{{ row.balanceAfterLabel }}</span>
+          </template>
+
+          <template #cell-remark="{ row }">
+            <span class="block max-w-[520px] whitespace-normal text-sm text-gray-600 dark:text-gray-300">
+              {{ row.remarkText }}
+            </span>
+          </template>
+
+          <template #cell-created_at="{ value }">
+            <span class="text-sm text-gray-600 dark:text-gray-400">{{
+              formatDateTime(value)
+            }}</span>
+          </template>
+
+          <template #empty>
+            <EmptyState :message="t('usage.balanceLedger.noRecords')" />
+          </template>
+        </DataTable>
       </template>
 
       <template #pagination>
         <Pagination
-          v-if="pagination.total > 0"
+          v-if="activeTab === 'requests' && pagination.total > 0"
           :page="pagination.page"
           :total="pagination.total"
           :page-size="pagination.page_size"
           @update:page="handlePageChange"
           @update:pageSize="handlePageSizeChange"
+        />
+        <Pagination
+          v-else-if="activeTab === 'balanceLedger' && ledgerPagination.total > 0"
+          :page="ledgerPagination.page"
+          :total="ledgerPagination.total"
+          :page-size="ledgerPagination.page_size"
+          @update:page="handleLedgerPageChange"
+          @update:pageSize="handleLedgerPageSizeChange"
         />
       </template>
     </TablePageLayout>
@@ -416,6 +533,10 @@
             <div v-if="tokenTooltipData && tokenTooltipData.cache_read_tokens > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.cacheReadTokens') }}</span>
               <span class="font-medium text-white">{{ tokenTooltipData.cache_read_tokens.toLocaleString() }}</span>
+            </div>
+            <div v-if="tokenTooltipData" class="flex items-center justify-between gap-4">
+              <span class="text-gray-400">{{ t('usage.cacheHitRate') }}</span>
+              <span class="font-medium text-cyan-300">{{ formatCacheHitRate(tokenTooltipData.input_tokens, tokenTooltipData.cache_read_tokens) }}</span>
             </div>
           </div>
           <!-- Total -->
@@ -514,7 +635,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { usageAPI, keysAPI } from '@/api'
@@ -526,11 +647,19 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import Select from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Icon from '@/components/icons/Icon.vue'
-import type { UsageLog, ApiKey, UsageQueryParams, UsageStatsResponse } from '@/types'
+import type {
+  ApiKey,
+  BalanceLedgerDirection,
+  UsageLog,
+  UsageQueryParams,
+  UsageStatsResponse,
+  UserBalanceLedgerEntry,
+  UserBalanceLedgerQueryParams
+} from '@/types'
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
-import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
+import { formatCacheHitRate, formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
 import { resolveUsageRequestType } from '@/utils/usageRequestType'
@@ -540,6 +669,18 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 let abortController: AbortController | null = null
+let ledgerAbortController: AbortController | null = null
+let ledgerPrefetchTimer: number | null = null
+
+type UsageTab = 'requests' | 'balanceLedger'
+type BalanceLedgerTableRow = UserBalanceLedgerEntry & {
+  reasonLabel: string
+  amountLabel: string
+  balanceAfterLabel: string
+  remarkText: string
+}
+
+const activeTab = ref<UsageTab>('requests')
 
 // Tooltip state
 const tooltipVisible = ref(false)
@@ -570,9 +711,20 @@ const columns = computed<Column[]>(() => [
   { key: 'user_agent', label: t('usage.userAgent'), sortable: false }
 ])
 
+const ledgerColumns = computed<Column[]>(() => [
+  { key: 'reason', label: t('usage.balanceLedger.reason'), sortable: false },
+  { key: 'amount', label: t('usage.balanceLedger.amount'), sortable: false },
+  { key: 'balance_after', label: t('usage.balanceLedger.balanceAfter'), sortable: false },
+  { key: 'remark', label: t('usage.balanceLedger.remark'), sortable: false },
+  { key: 'created_at', label: t('usage.time'), sortable: true }
+])
+
 const usageLogs = ref<UsageLog[]>([])
+const balanceLedger = ref<UserBalanceLedgerEntry[]>([])
 const apiKeys = ref<ApiKey[]>([])
 const loading = ref(false)
+const ledgerLoading = ref(false)
+const ledgerLoaded = ref(false)
 const exporting = ref(false)
 
 const apiKeyOptions = computed(() => {
@@ -584,6 +736,39 @@ const apiKeyOptions = computed(() => {
     }))
   ]
 })
+
+const ledgerDirectionOptions = computed(() => [
+  { value: '', label: t('usage.balanceLedger.allDirections') },
+  { value: 'debit', label: t('usage.balanceLedger.debit') },
+  { value: 'credit', label: t('usage.balanceLedger.credit') }
+])
+
+const ledgerReasonOptions = computed(() => [
+  { value: '', label: t('usage.balanceLedger.allReasons') },
+  { value: 'usage_charge', label: t('usage.balanceLedger.reasons.usage_charge') },
+  { value: 'private_group_commission', label: t('usage.balanceLedger.reasons.private_group_commission') },
+  { value: 'account_share_mode_seat_prepay', label: t('usage.balanceLedger.reasons.account_share_mode_seat_prepay') },
+  { value: 'account_share_mode_seat_refund', label: t('usage.balanceLedger.reasons.account_share_mode_seat_refund') },
+  { value: 'account_share_mode_seat_waiver_refund', label: t('usage.balanceLedger.reasons.account_share_mode_seat_waiver_refund') },
+  { value: 'account_share_mode_income', label: t('usage.balanceLedger.reasons.account_share_mode_income') },
+  { value: 'account_share_income', label: t('usage.balanceLedger.reasons.account_share_income') },
+  { value: 'invite_share_income', label: t('usage.balanceLedger.reasons.invite_share_income') },
+  { value: 'redeem_code', label: t('usage.balanceLedger.reasons.redeem_code') },
+  { value: 'admin_adjustment', label: t('usage.balanceLedger.reasons.admin_adjustment') }
+])
+
+const ledgerReasonLabelMap = computed<Record<string, string>>(() => ({
+  usage_charge: t('usage.balanceLedger.reasons.usage_charge'),
+  private_group_commission: t('usage.balanceLedger.reasons.private_group_commission'),
+  account_share_mode_seat_prepay: t('usage.balanceLedger.reasons.account_share_mode_seat_prepay'),
+  account_share_mode_seat_refund: t('usage.balanceLedger.reasons.account_share_mode_seat_refund'),
+  account_share_mode_seat_waiver_refund: t('usage.balanceLedger.reasons.account_share_mode_seat_waiver_refund'),
+  account_share_mode_income: t('usage.balanceLedger.reasons.account_share_mode_income'),
+  account_share_income: t('usage.balanceLedger.reasons.account_share_income'),
+  invite_share_income: t('usage.balanceLedger.reasons.invite_share_income'),
+  redeem_code: t('usage.balanceLedger.reasons.redeem_code'),
+  admin_adjustment: t('usage.balanceLedger.reasons.admin_adjustment')
+}))
 
 const epsilon = 1e-9
 
@@ -663,6 +848,14 @@ const filters = ref<UsageQueryParams>({
   end_date: undefined
 })
 
+const ledgerFilters = ref<{
+  direction: '' | BalanceLedgerDirection
+  reason: string
+}>({
+  direction: '',
+  reason: ''
+})
+
 // Initialize filters with date range
 filters.value.start_date = startDate.value
 filters.value.end_date = endDate.value
@@ -684,8 +877,17 @@ const pagination = reactive({
   total: 0,
   pages: 0
 })
+const ledgerPagination = reactive({
+  page: 1,
+  page_size: getPersistedPageSize(),
+  total: 0,
+  pages: 0
+})
 const sortState = reactive({
   sort_by: 'created_at',
+  sort_order: 'desc' as 'asc' | 'desc'
+})
+const ledgerSortState = reactive({
   sort_order: 'desc' as 'asc' | 'desc'
 })
 
@@ -752,6 +954,52 @@ const buildUsageQueryParams = (page: number, pageSize: number): UsageTableQueryP
   sort_order: sortState.sort_order
 })
 
+const buildBalanceLedgerQueryParams = (page: number, pageSize: number): UserBalanceLedgerQueryParams => ({
+  page,
+  page_size: pageSize,
+  direction: ledgerFilters.value.direction,
+  reason: ledgerFilters.value.reason || undefined,
+  start_date: filters.value.start_date || startDate.value,
+  end_date: filters.value.end_date || endDate.value,
+  sort_order: ledgerSortState.sort_order
+})
+
+const loadBalanceLedger = async () => {
+  if (ledgerAbortController) {
+    ledgerAbortController.abort()
+  }
+  const currentAbortController = new AbortController()
+  ledgerAbortController = currentAbortController
+  const { signal } = currentAbortController
+  ledgerLoading.value = true
+  try {
+    const response = await usageAPI.queryBalanceLedger(
+      buildBalanceLedgerQueryParams(ledgerPagination.page, ledgerPagination.page_size),
+      { signal }
+    )
+    if (signal.aborted) {
+      return
+    }
+    balanceLedger.value = response.items
+    ledgerPagination.total = response.total
+    ledgerPagination.pages = response.pages
+    ledgerLoaded.value = true
+  } catch (error) {
+    if (signal.aborted) {
+      return
+    }
+    const abortError = error as { name?: string; code?: string }
+    if (abortError?.name === 'AbortError' || abortError?.code === 'ERR_CANCELED') {
+      return
+    }
+    appStore.showError(t('usage.balanceLedger.failedToLoad'))
+  } finally {
+    if (ledgerAbortController === currentAbortController) {
+      ledgerLoading.value = false
+    }
+  }
+}
+
 const loadUsageLogs = async () => {
   if (abortController) {
     abortController.abort()
@@ -787,6 +1035,50 @@ const loadUsageLogs = async () => {
   }
 }
 
+const switchUsageTab = (tab: UsageTab) => {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  if (tab === 'balanceLedger') {
+    if (!ledgerLoaded.value && !ledgerLoading.value) {
+      ledgerPagination.page = 1
+      loadBalanceLedger()
+    }
+    return
+  }
+  pagination.page = 1
+  loadUsageLogs()
+  loadUsageStats()
+}
+
+const abortBalanceLedgerRequest = () => {
+  if (ledgerAbortController) {
+    ledgerAbortController.abort()
+  }
+}
+
+const clearBalanceLedgerPrefetch = () => {
+  if (typeof window === 'undefined' || ledgerPrefetchTimer === null) return
+  window.clearTimeout(ledgerPrefetchTimer)
+  ledgerPrefetchTimer = null
+}
+
+const invalidateBalanceLedgerCache = () => {
+  ledgerLoaded.value = false
+  clearBalanceLedgerPrefetch()
+  abortBalanceLedgerRequest()
+  ledgerLoading.value = false
+}
+
+const scheduleBalanceLedgerPrefetch = () => {
+  if (typeof window === 'undefined') return
+  if (ledgerLoaded.value || ledgerLoading.value || ledgerPrefetchTimer !== null) return
+  ledgerPrefetchTimer = window.setTimeout(() => {
+    ledgerPrefetchTimer = null
+    if (activeTab.value !== 'requests' || ledgerLoaded.value || ledgerLoading.value) return
+    loadBalanceLedger()
+  }, 400)
+}
+
 const loadApiKeys = async () => {
   try {
     const response = await keysAPI.list(1, 100)
@@ -811,6 +1103,12 @@ const loadUsageStats = async () => {
 }
 
 const applyFilters = () => {
+  if (activeTab.value === 'balanceLedger') {
+    ledgerPagination.page = 1
+    loadBalanceLedger()
+    return
+  }
+  invalidateBalanceLedgerCache()
   pagination.page = 1
   loadUsageLogs()
   loadUsageStats()
@@ -830,7 +1128,17 @@ const resetFilters = () => {
   endDate.value = formatLocalDate(now)
   filters.value.start_date = startDate.value
   filters.value.end_date = endDate.value
+  ledgerFilters.value = {
+    direction: '',
+    reason: ''
+  }
   pagination.page = 1
+  ledgerPagination.page = 1
+  invalidateBalanceLedgerCache()
+  if (activeTab.value === 'balanceLedger') {
+    loadBalanceLedger()
+    return
+  }
   loadUsageLogs()
   loadUsageStats()
 }
@@ -852,6 +1160,204 @@ const handleSort = (key: string, order: 'asc' | 'desc') => {
   pagination.page = 1
   loadUsageLogs()
 }
+
+const handleLedgerPageChange = (page: number) => {
+  ledgerPagination.page = page
+  loadBalanceLedger()
+}
+
+const handleLedgerPageSizeChange = (pageSize: number) => {
+  ledgerPagination.page_size = pageSize
+  ledgerPagination.page = 1
+  loadBalanceLedger()
+}
+
+const handleLedgerSort = (_key: string, order: 'asc' | 'desc') => {
+  ledgerSortState.sort_order = order
+  ledgerPagination.page = 1
+  loadBalanceLedger()
+}
+
+const getLedgerReasonLabel = (reason: string): string => {
+  return ledgerReasonLabelMap.value[reason] || reason || t('usage.unknown')
+}
+
+const normalizeLedgerDecimal = (value?: string | number | null, digits = 10): string => {
+  if (value === undefined || value === null || value === '') return '0'
+  const raw = String(value).trim()
+  const match = raw.match(/^(-?)(\d+)(?:\.(\d+))?$/)
+  if (!match) {
+    const amount = Number(value)
+    if (!Number.isFinite(amount)) return '0'
+    return amount.toFixed(digits).replace(/\.?0+$/, '') || '0'
+  }
+  const sign = match[1]
+  const integer = match[2].replace(/^0+(?=\d)/, '') || '0'
+  const fraction = (match[3] || '').slice(0, digits).replace(/0+$/, '')
+  const normalized = fraction ? `${integer}.${fraction}` : integer
+  if (normalized === '0') return '0'
+  return `${sign}${normalized}`
+}
+
+const absoluteLedgerDecimal = (value?: string | number | null): string => {
+  return normalizeLedgerDecimal(value).replace(/^-/, '')
+}
+
+const formatLedgerCurrency = (value?: string | number | null, digits = 10): string => {
+  const normalized = normalizeLedgerDecimal(value, digits)
+  return normalized.startsWith('-')
+    ? `-$${normalized.slice(1)}`
+    : `$${normalized}`
+}
+
+const formatOptionalLedgerCurrency = (value?: number | null, digits = 10): string => {
+  return value == null ? '' : formatLedgerCurrency(value, digits)
+}
+
+const formatLedgerAmount = (row: UserBalanceLedgerEntry): string => {
+  const sign = row.direction === 'credit' ? '+' : '-'
+  return `${sign}${formatLedgerCurrency(absoluteLedgerDecimal(row.amount))}`
+}
+
+const metadataValue = (row: UserBalanceLedgerEntry, key: string): unknown => {
+  return row.metadata ? row.metadata[key] : undefined
+}
+
+const metadataString = (row: UserBalanceLedgerEntry, key: string): string => {
+  const value = metadataValue(row, key)
+  if (value === undefined || value === null) return ''
+  return String(value)
+}
+
+const metadataNumber = (row: UserBalanceLedgerEntry, key: string): number | null => {
+  const value = Number(metadataValue(row, key))
+  return Number.isFinite(value) ? value : null
+}
+
+const formatMetadataDateTime = (row: UserBalanceLedgerEntry, key: string): string => {
+  const value = metadataString(row, key)
+  return value ? formatDateTime(value) : ''
+}
+
+const formatLedgerDuration = (milliseconds?: number | null): string => {
+  const ms = Number(milliseconds || 0)
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  const minutes = ms / 60000
+  if (minutes < 1) return `${Math.round(ms / 1000)}s`
+  if (minutes < 60) return `${Number(minutes.toFixed(1))}m`
+  const hours = minutes / 60
+  if (hours < 24) return `${Number(hours.toFixed(2))}h`
+  const days = hours / 24
+  return `${Number(days.toFixed(2))}d`
+}
+
+const ledgerPart = (labelKey: string, value: string | number | null | undefined): string => {
+  if (value === undefined || value === null || value === '') return ''
+  return `${t(labelKey)}: ${value}`
+}
+
+const compactLedgerParts = (parts: string[]): string => {
+  const clean = parts.filter(Boolean)
+  return clean.length > 0 ? clean.join(' · ') : t('usage.balanceLedger.noRemark')
+}
+
+const getLedgerStageLabel = (stage: string): string => {
+  if (stage === 'renew') return t('usage.balanceLedger.stages.renew')
+  if (stage === 'join') return t('usage.balanceLedger.stages.join')
+  return stage
+}
+
+const getLedgerRemark = (row: UserBalanceLedgerEntry): string => {
+  const duration = formatLedgerDuration(metadataNumber(row, 'duration_ms'))
+  const rate = metadataNumber(row, 'hourly_rate')
+  const periodStarted = metadataString(row, 'period_started')
+  const periodEnded = metadataString(row, 'period_ended')
+  const period = periodStarted && periodEnded
+    ? `${formatDateTime(periodStarted)} - ${formatDateTime(periodEnded)}`
+    : ''
+
+  switch (row.reason) {
+    case 'usage_charge':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.requestId', metadataString(row, 'request_id')),
+        ledgerPart('usage.balanceLedger.labels.apiKey', metadataString(row, 'api_key_id')),
+        ledgerPart('usage.balanceLedger.labels.account', metadataString(row, 'account_id'))
+      ])
+    case 'private_group_commission':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.group', metadataString(row, 'group_id')),
+        ledgerPart('usage.balanceLedger.labels.baseCost', formatOptionalLedgerCurrency(metadataNumber(row, 'base_cost'))),
+        ledgerPart('usage.balanceLedger.labels.requestId', metadataString(row, 'request_id'))
+      ])
+    case 'account_share_mode_seat_prepay':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.stage', getLedgerStageLabel(metadataString(row, 'prepay_stage'))),
+        ledgerPart('usage.balanceLedger.labels.hourlyRate', rate == null ? '' : formatLedgerCurrency(rate, 4)),
+        ledgerPart('usage.balanceLedger.labels.duration', duration),
+        ledgerPart('usage.balanceLedger.labels.paidUntil', formatMetadataDateTime(row, 'paid_until')),
+        ledgerPart('usage.balanceLedger.labels.account', metadataString(row, 'account_id')),
+        ledgerPart('usage.balanceLedger.labels.membership', metadataString(row, 'membership_id'))
+      ])
+    case 'account_share_mode_seat_refund':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.hourlyRate', rate == null ? '' : formatLedgerCurrency(rate, 4)),
+        ledgerPart('usage.balanceLedger.labels.duration', duration),
+        ledgerPart('usage.balanceLedger.labels.refundUntil', formatMetadataDateTime(row, 'refund_until')),
+        ledgerPart('usage.balanceLedger.labels.account', metadataString(row, 'account_id'))
+      ])
+    case 'account_share_mode_seat_waiver_refund':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.period', period),
+        ledgerPart('usage.balanceLedger.labels.duration', duration),
+        ledgerPart('usage.balanceLedger.labels.waiverRequired', formatOptionalLedgerCurrency(metadataNumber(row, 'waiver_required'))),
+        ledgerPart('usage.balanceLedger.labels.waiverUsage', formatOptionalLedgerCurrency(metadataNumber(row, 'waiver_usage'))),
+        ledgerPart('usage.balanceLedger.labels.account', metadataString(row, 'account_id'))
+      ])
+    case 'account_share_mode_income':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.consumer', metadataString(row, 'consumer_user_id')),
+        ledgerPart('usage.balanceLedger.labels.period', period),
+        ledgerPart('usage.balanceLedger.labels.settlement', metadataString(row, 'settlement_id')),
+        ledgerPart('usage.balanceLedger.labels.account', metadataString(row, 'account_id')),
+        ledgerPart('usage.balanceLedger.labels.requestId', metadataString(row, 'request_id'))
+      ])
+    case 'account_share_income':
+    case 'invite_share_income':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.consumer', metadataString(row, 'consumer_user_id')),
+        ledgerPart('usage.balanceLedger.labels.apiKey', metadataString(row, 'api_key_id')),
+        ledgerPart('usage.balanceLedger.labels.account', metadataString(row, 'account_id')),
+        ledgerPart('usage.balanceLedger.labels.requestId', metadataString(row, 'request_id'))
+      ])
+    case 'redeem_code':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.code', metadataString(row, 'code')),
+        ledgerPart('usage.balanceLedger.labels.reference', row.ref_id || '')
+      ])
+    case 'admin_adjustment':
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.notes', metadataString(row, 'notes')),
+        ledgerPart('usage.balanceLedger.labels.operation', metadataString(row, 'operation')),
+        ledgerPart('usage.balanceLedger.labels.code', metadataString(row, 'code')),
+        ledgerPart('usage.balanceLedger.labels.reference', row.ref_id || '')
+      ])
+    default:
+      return compactLedgerParts([
+        ledgerPart('usage.balanceLedger.labels.reference', row.ref_id || ''),
+        ledgerPart('usage.balanceLedger.labels.referenceType', row.ref_type)
+      ])
+  }
+}
+
+const balanceLedgerRows = computed<BalanceLedgerTableRow[]>(() =>
+  balanceLedger.value.map((row) => ({
+    ...row,
+    reasonLabel: getLedgerReasonLabel(row.reason),
+    amountLabel: formatLedgerAmount(row),
+    balanceAfterLabel: formatLedgerCurrency(row.balance_after),
+    remarkText: getLedgerRemark(row)
+  }))
+)
 
 /**
  * Escape CSV value to prevent injection and handle special characters
@@ -914,6 +1420,7 @@ const exportToCSV = async () => {
       'Output Tokens',
       'Cache Read Tokens',
       'Cache Creation Tokens',
+      'Cache Hit Rate',
       'Rate Multiplier',
       'Billed Cost',
       'Original Cost',
@@ -936,6 +1443,7 @@ const exportToCSV = async () => {
         log.output_tokens,
         log.cache_read_tokens,
         log.cache_creation_tokens,
+        formatCacheHitRate(log.input_tokens, log.cache_read_tokens),
         log.rate_multiplier,
         log.actual_cost.toFixed(8),
         log.total_cost.toFixed(8),
@@ -1003,5 +1511,14 @@ onMounted(() => {
   loadApiKeys()
   loadUsageLogs()
   loadUsageStats()
+  scheduleBalanceLedgerPrefetch()
+})
+
+onUnmounted(() => {
+  clearBalanceLedgerPrefetch()
+  if (abortController) {
+    abortController.abort()
+  }
+  abortBalanceLedgerRequest()
 })
 </script>

@@ -8,6 +8,21 @@ export function formatCacheTokens(tokens: number): string {
 }
 
 /**
+ * 格式化输入侧缓存命中率：缓存读取 Token /（实际输入 Token + 缓存读取 Token）
+ */
+export function formatCacheHitRate(inputTokens?: number | null, cacheReadTokens?: number | null): string {
+  const input = Math.max(0, Number(inputTokens) || 0)
+  const cacheRead = Math.max(0, Number(cacheReadTokens) || 0)
+  const totalInputSide = input + cacheRead
+  if (totalInputSide <= 0) return '0%'
+
+  const percentage = (cacheRead / totalInputSide) * 100
+  if (!Number.isFinite(percentage) || percentage <= 0) return '0%'
+  if (percentage < 0.1) return '<0.1%'
+  return `${percentage.toFixed(percentage >= 10 ? 1 : 2)}%`
+}
+
+/**
  * 自适应精度格式化倍率（确保小数值如 0.001 不被截断）
  */
 export function formatMultiplier(val: number): string {

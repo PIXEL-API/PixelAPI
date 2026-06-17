@@ -464,7 +464,14 @@ watch(validationToastMessage, (value, previousValue) => {
 function syncAffiliateReferralCode(): string {
   const code = resolveAffiliateReferralCode(route.query.aff, route.query.aff_code)
   if (code) {
+    const previousAffiliateCode = formData.aff_code.trim()
     formData.aff_code = code
+    if (!formData.invitation_code.trim() || formData.invitation_code.trim() === previousAffiliateCode) {
+      formData.invitation_code = code
+      if (invitationCodeEnabled.value) {
+        handleInvitationCodeInput()
+      }
+    }
   }
   return code
 }
@@ -751,6 +758,10 @@ function getInvitationErrorMessage(errorCode?: string): string {
       return t('auth.invitationCodeInvalid')
     case 'INVITATION_CODE_USED':
       return t('auth.invitationCodeInvalid')
+    case 'INVITATION_CODE_EXPIRED':
+      return t('auth.invitationCodeExpired')
+    case 'INVITATION_CODE_QUOTA_EXHAUSTED':
+      return t('auth.invitationCodeQuotaExhausted')
     case 'INVITATION_CODE_DISABLED':
       return t('auth.invitationCodeInvalid')
     default:
@@ -854,6 +865,17 @@ async function handleRegister(): Promise<void> {
   // Clear previous error
   errorMessage.value = ''
 
+  const affCode = syncAffiliateReferralCode() || formData.aff_code.trim() || loadAffiliateReferralCode()
+  if (affCode) {
+    formData.aff_code = affCode
+    if (!formData.invitation_code.trim()) {
+      formData.invitation_code = affCode
+      if (invitationCodeEnabled.value) {
+        handleInvitationCodeInput()
+      }
+    }
+  }
+
   // Validate form
   if (!validateForm()) {
     return
@@ -900,11 +922,6 @@ async function handleRegister(): Promise<void> {
   isLoading.value = true
 
   try {
-    const affCode = formData.aff_code.trim() || loadAffiliateReferralCode()
-    if (affCode) {
-      formData.aff_code = affCode
-    }
-
     // If email verification is enabled, redirect to verification page
     if (emailVerifyEnabled.value) {
       // Store registration data in sessionStorage

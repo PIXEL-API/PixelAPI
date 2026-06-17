@@ -1,10 +1,53 @@
 import { apiClient } from '../client'
 
 export type ModerationMode = 'off' | 'observe' | 'pre_block'
+export type ContentModerationProvider = 'openai' | 'zhipu'
+
+export interface ContentModerationAccountShareModeScope {
+  enabled: boolean
+  all: boolean
+  platforms: string[]
+  listing_ids: number[]
+}
+
+export interface ContentModerationCyberPreflightRules {
+  standalone_block_markers: string[]
+  hard_markers: string[]
+  offensive_intent_markers: string[]
+  credential_abuse_intent_markers: string[]
+  technique_markers: string[]
+  credential_markers: string[]
+  target_markers: string[]
+  defensive_markers: string[]
+}
+
+export interface RiskControlAccountShareListing {
+  id: number
+  account_id: number
+  owner_user_id: number
+  owner_username?: string
+  account_name?: string
+  status: string
+  seat_limit: number
+  active_seats: number
+  rate_multiplier: number
+  allowed_models: string[]
+  per_user_concurrency: number
+  account_concurrency: number
+  hourly_rate: number
+  min_balance_required: number
+  account_level?: string
+  account_status?: string
+  account_schedulable: boolean
+}
 
 export interface ContentModerationConfig {
   enabled: boolean
+  cyber_preflight_enabled: boolean
+  cyber_preflight_rules: ContentModerationCyberPreflightRules
+  cyber_preflight_default_rules: ContentModerationCyberPreflightRules
   mode: ModerationMode
+  provider: ContentModerationProvider
   base_url: string
   model: string
   api_key_configured: boolean
@@ -29,6 +72,7 @@ export interface ContentModerationConfig {
   hit_retention_days: number
   non_hit_retention_days: number
   pre_hash_check_enabled: boolean
+  account_share_mode_scope: ContentModerationAccountShareModeScope
 }
 
 export type ContentModerationAPIKeyStatusValue = 'unknown' | 'ok' | 'error' | 'frozen'
@@ -51,6 +95,7 @@ export interface ContentModerationAPIKeyStatus {
 
 export interface TestContentModerationAPIKeysPayload {
   api_keys?: string[]
+  provider?: ContentModerationProvider
   base_url?: string
   model?: string
   timeout_ms?: number
@@ -66,6 +111,7 @@ export interface TestContentModerationAPIKeysResponse {
 
 export interface ContentModerationTestAuditResult {
   flagged: boolean
+  risk_level: string
   highest_category: string
   highest_score: number
   composite_score: number
@@ -75,7 +121,10 @@ export interface ContentModerationTestAuditResult {
 
 export interface UpdateContentModerationConfig {
   enabled?: boolean
+  cyber_preflight_enabled?: boolean
+  cyber_preflight_rules?: ContentModerationCyberPreflightRules
   mode?: ModerationMode
+  provider?: ContentModerationProvider
   base_url?: string
   model?: string
   api_key?: string
@@ -100,10 +149,12 @@ export interface UpdateContentModerationConfig {
   hit_retention_days?: number
   non_hit_retention_days?: number
   pre_hash_check_enabled?: boolean
+  account_share_mode_scope?: ContentModerationAccountShareModeScope
 }
 
 export interface ContentModerationRuntimeStatus {
   enabled: boolean
+  cyber_preflight_enabled: boolean
   risk_control_enabled: boolean
   mode: ModerationMode
   worker_count: number
@@ -133,6 +184,12 @@ export interface ContentModerationLog {
   api_key_name: string
   group_id: number | null
   group_name: string
+  scope_type: 'group' | 'account_share_mode' | string
+  account_share_listing_id: number | null
+  account_id: number | null
+  owner_user_id: number | null
+  consumer_user_id: number | null
+  membership_id: number | null
   endpoint: string
   provider: string
   model: string
@@ -167,6 +224,14 @@ export interface ListContentModerationLogsParams {
 
 export interface ContentModerationLogsResponse {
   items: ContentModerationLog[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface RiskControlAccountShareListingsResponse {
+  items: RiskControlAccountShareListing[]
   total: number
   page: number
   page_size: number
@@ -220,6 +285,16 @@ export async function listLogs(
   return data
 }
 
+export async function listAccountShareListings(params: {
+  page?: number
+  page_size?: number
+} = {}): Promise<RiskControlAccountShareListingsResponse> {
+  const { data } = await apiClient.get<RiskControlAccountShareListingsResponse>('/admin/risk-control/account-share/listings', {
+    params,
+  })
+  return data
+}
+
 export async function unbanUser(userID: number): Promise<ContentModerationUnbanUserResponse> {
   const { data } = await apiClient.post<ContentModerationUnbanUserResponse>(
     `/admin/risk-control/users/${userID}/unban`
@@ -244,6 +319,7 @@ export const riskControlAPI = {
   updateConfig,
   getStatus,
   testAPIKeys,
+  listAccountShareListings,
   listLogs,
   unbanUser,
   deleteFlaggedHash,

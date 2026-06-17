@@ -555,7 +555,6 @@
               v-model="enableConcurrency"
               id="bulk-edit-concurrency-enabled"
               type="checkbox"
-              :disabled="isUserScope"
               aria-controls="bulk-edit-concurrency"
               class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
             />
@@ -564,12 +563,14 @@
             v-model.number="concurrency"
             id="bulk-edit-concurrency"
             type="number"
-            min="1"
-            :disabled="isUserScope || !enableConcurrency"
+            :min="isUserScope ? PERSONAL_ACCOUNT_MIN_CONCURRENCY : 1"
+            :max="isUserScope ? PERSONAL_ACCOUNT_MAX_CONCURRENCY : undefined"
+            step="1"
+            :disabled="!enableConcurrency"
             class="input"
-            :class="(isUserScope || !enableConcurrency) && 'cursor-not-allowed opacity-50'"
+            :class="!enableConcurrency && 'cursor-not-allowed opacity-50'"
             aria-labelledby="bulk-edit-concurrency-label"
-            @input="concurrency = Math.max(1, concurrency || 1)"
+            @input="normalizeConcurrencyInput"
           />
         </div>
         <div>
@@ -585,7 +586,6 @@
               v-model="enableLoadFactor"
               id="bulk-edit-load-factor-enabled"
               type="checkbox"
-              :disabled="isUserScope"
               aria-controls="bulk-edit-load-factor"
               class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
             />
@@ -594,14 +594,18 @@
             v-model.number="loadFactor"
             id="bulk-edit-load-factor"
             type="number"
-            min="1"
-            :disabled="isUserScope || !enableLoadFactor"
+            :min="isUserScope ? PERSONAL_ACCOUNT_MIN_LOAD_FACTOR : 1"
+            :max="isUserScope ? PERSONAL_ACCOUNT_MAX_LOAD_FACTOR : undefined"
+            step="1"
+            :disabled="!enableLoadFactor"
             class="input"
-            :class="(isUserScope || !enableLoadFactor) && 'cursor-not-allowed opacity-50'"
+            :class="!enableLoadFactor && 'cursor-not-allowed opacity-50'"
             aria-labelledby="bulk-edit-load-factor-label"
-            @input="loadFactor = (loadFactor &amp;&amp; loadFactor >= 1) ? loadFactor : null"
+            @input="normalizeLoadFactorInput"
           />
-          <p class="input-hint">{{ t('admin.accounts.loadFactorHint') }}</p>
+          <p class="input-hint">
+            {{ isUserScope ? t('userAccounts.bulkLoadFactorCreditsHint') : t('admin.accounts.loadFactorHint') }}
+          </p>
         </div>
         <div>
           <div class="mb-3 flex items-center justify-between">
@@ -677,17 +681,28 @@
             v-model="enableShareMode"
             id="bulk-edit-share-mode-enabled"
             type="checkbox"
+            :disabled="!canBulkEditShareMode"
             aria-controls="bulk-edit-share-mode"
-            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            :class="[
+              'rounded border-gray-300 text-primary-600 focus:ring-primary-500',
+              !canBulkEditShareMode && 'cursor-not-allowed opacity-50'
+            ]"
           />
         </div>
-        <div id="bulk-edit-share-mode" :class="!enableShareMode && 'pointer-events-none opacity-50'">
+        <div
+          id="bulk-edit-share-mode"
+          :class="(!enableShareMode || !canBulkEditShareMode) && 'pointer-events-none opacity-50'"
+        >
           <Select
             v-model="shareMode"
             :options="shareModeOptions"
+            :disabled="!enableShareMode || !canBulkEditShareMode"
             aria-labelledby="bulk-edit-share-mode-label"
           />
-          <p class="input-hint">{{ t('userAccounts.shareModeHint') }}</p>
+          <p v-if="hasAccountShareModeOnly" class="input-hint text-emerald-700 dark:text-emerald-300">
+            {{ t('userAccounts.accountShareModeOnlyBulkHint') }}
+          </p>
+          <p v-else class="input-hint">{{ t('userAccounts.shareModeHint') }}</p>
         </div>
       </div>
 
@@ -1096,6 +1111,7 @@
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { accountsAPI } from '@/api/accounts'
 import type { AccountBatchTask } from '@/api/accounts'
@@ -1110,7 +1126,14 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import Icon from '@/components/icons/Icon.vue'
 import {
   PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY,
-  PERSONAL_ACCOUNT_DEFAULT_PRIORITY
+  PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR,
+  PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
+  PERSONAL_ACCOUNT_MAX_LOAD_FACTOR,
+  PERSONAL_ACCOUNT_MAX_CONCURRENCY,
+  PERSONAL_ACCOUNT_MIN_LOAD_FACTOR,
+  PERSONAL_ACCOUNT_MIN_CONCURRENCY,
+  normalizePersonalAccountConcurrency,
+  normalizePersonalAccountLoadFactor
 } from '@/components/account/personalAccountTemplate'
 import {
   buildModelMappingObject as buildModelMappingPayload,
@@ -1142,13 +1165,15 @@ interface Props {
   allowProxy?: boolean
   allowBillingRate?: boolean
   allowBaseUrl?: boolean
+  hasAccountShareModeOnly?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   accountScope: 'admin',
   allowProxy: true,
   allowBillingRate: true,
-  allowBaseUrl: true
+  allowBaseUrl: true,
+  hasAccountShareModeOnly: false
 })
 const emit = defineEmits<{
   close: []
@@ -1157,8 +1182,11 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 const accountScope = computed(() => props.accountScope ?? 'admin')
 const isUserScope = computed(() => accountScope.value === 'user')
+const hasAccountShareModeOnly = computed(() => props.hasAccountShareModeOnly === true)
+const canBulkEditShareMode = computed(() => isUserScope.value && !hasAccountShareModeOnly.value)
 const canManageProxy = computed(() => !isUserScope.value && props.allowProxy !== false)
 const canManageBillingRate = computed(() => !isUserScope.value && props.allowBillingRate !== false)
 const canManageBaseUrl = computed(() => !isUserScope.value && props.allowBaseUrl !== false)
@@ -1330,6 +1358,22 @@ const umqModeOptions = computed(() => [
   { value: 'serialize', label: t('admin.accounts.quotaControl.rpmLimit.umqModeSerialize') },
 ])
 
+const normalizeConcurrencyInput = () => {
+  if (isUserScope.value) {
+    concurrency.value = normalizePersonalAccountConcurrency(concurrency.value)
+    return
+  }
+  concurrency.value = Math.max(1, concurrency.value || 1)
+}
+
+const normalizeLoadFactorInput = () => {
+  if (isUserScope.value) {
+    loadFactor.value = normalizePersonalAccountLoadFactor(loadFactor.value)
+    return
+  }
+  loadFactor.value = loadFactor.value && loadFactor.value >= 1 ? loadFactor.value : null
+}
+
 // Common HTTP error codes
 const commonErrorCodes = [
   { value: 401, label: 'Unauthorized' },
@@ -1478,9 +1522,13 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   }
 
   if (enableLoadFactor.value) {
-    // 空值/NaN/0 时发送 0（后端约定 <= 0 表示清除）
-    const lf = loadFactor.value
-    updates.load_factor = (lf != null && !Number.isNaN(lf) && lf > 0) ? lf : 0
+    if (isUserScope.value) {
+      updates.load_factor = normalizePersonalAccountLoadFactor(loadFactor.value)
+    } else {
+      // 空值/NaN/0 时发送 0（后端约定 <= 0 表示清除）
+      const lf = loadFactor.value
+      updates.load_factor = (lf != null && !Number.isNaN(lf) && lf > 0) ? lf : 0
+    }
   }
 
   if (enablePriority.value) {
@@ -1492,15 +1540,16 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   }
 
   if (isUserScope.value) {
-    delete updates.concurrency
-    delete updates.load_factor
+    if ('concurrency' in updates) {
+      updates.concurrency = normalizePersonalAccountConcurrency(updates.concurrency)
+    }
   }
 
   if (canManageBillingRate.value && enableRateMultiplier.value) {
     updates.rate_multiplier = rateMultiplier.value
   }
 
-  if (isUserScope.value && enableShareMode.value) {
+  if (canBulkEditShareMode.value && enableShareMode.value) {
     updates.share_mode = shareMode.value
   }
 
@@ -1659,9 +1708,13 @@ const sanitizeBulkUpdatePayload = (payload: Record<string, unknown>) => {
   }
   if (isUserScope.value) {
     delete next.status
-    delete next.concurrency
-    delete next.load_factor
     delete next.account_level
+    if ('concurrency' in next) {
+      next.concurrency = normalizePersonalAccountConcurrency(next.concurrency)
+    }
+    if ('load_factor' in next) {
+      next.load_factor = normalizePersonalAccountLoadFactor(next.load_factor)
+    }
     if ('priority' in next) {
       next.priority = typeof next.priority === 'number' && Number(next.priority) > 0
         ? next.priority
@@ -1719,6 +1772,11 @@ const handleSubmit = async () => {
     appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
     return
   }
+  if (isUserScope.value && enableShareMode.value && !canBulkEditShareMode.value) {
+    appStore.showError(t('userAccounts.accountShareModeOnlyBulkHint'))
+    enableShareMode.value = false
+    return
+  }
 
   const hasAnyFieldEnabled =
     (canManageBaseUrl.value && enableBaseUrl.value) ||
@@ -1732,7 +1790,7 @@ const handleSubmit = async () => {
     enablePriority.value ||
     (canManageAccountLevel.value && enableAccountLevel.value) ||
     (canManageBillingRate.value && enableRateMultiplier.value) ||
-    (isUserScope.value && enableShareMode.value) ||
+    (canBulkEditShareMode.value && enableShareMode.value) ||
     enableStatus.value ||
     (canManageGroups.value && enableGroups.value) ||
     enableOpenAIWSMode.value ||
@@ -1795,6 +1853,11 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
     }
 
     if (success > 0) {
+      if (isUserScope.value) {
+        await authStore.refreshUser().catch((error) => {
+          console.error('Failed to refresh user after bulk account update:', error)
+        })
+      }
       pendingUpdatesForConfirm.value = null
       emit('updated')
       handleClose()
@@ -1864,7 +1927,7 @@ watch(
       interceptWarmupRequests.value = false
       proxyId.value = null
       concurrency.value = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY : 1
-      loadFactor.value = null
+      loadFactor.value = isUserScope.value ? PERSONAL_ACCOUNT_DEFAULT_LOAD_FACTOR : null
       priority.value = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
       accountLevel.value = 'unknown'
       rateMultiplier.value = 1
@@ -1890,6 +1953,12 @@ watch(
     }
   }
 )
+
+watch(hasAccountShareModeOnly, (blocked) => {
+  if (blocked) {
+    enableShareMode.value = false
+  }
+})
 
 watch(
   [bulkEditableGroups, canManageGroups],
