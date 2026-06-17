@@ -24,7 +24,7 @@ func TestAccountShareModeRepositoryUpdateListingRequiresOwnerForUser(t *testing.
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency, a\\.concurrency").
 		WithArgs(int64(7), int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "edit_session_id", "editing_by_user_id", "editing_expires_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "proxy_id", "edit_session_id", "editing_by_user_id", "editing_expires_at"}))
 	mock.ExpectRollback()
 
 	status := service.AccountShareListingStatusPaused
@@ -49,8 +49,8 @@ func TestAccountShareModeRepositoryUpdateListingAllowsAdminWithoutOwnerFilter(t 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency, a\\.concurrency").
 		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
-			AddRow(int64(99), int64(50), 2, 5, 20, nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "proxy_id", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
+			AddRow(int64(99), int64(50), 2, 5, 20, nil, nil, nil, nil))
 	mock.ExpectExec("UPDATE account_share_listings").
 		WithArgs(service.AccountShareListingStatusPaused, int64(7)).
 		WillReturnError(updateErr)
@@ -79,8 +79,8 @@ func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAccount(t *t
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT l\\.account_id, l\\.owner_user_id, l\\.seat_limit, l\\.per_user_concurrency, a\\.concurrency").
 		WithArgs(int64(7), int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
-			AddRow(int64(99), int64(42), 2, 5, 20, nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "owner_user_id", "seat_limit", "per_user_concurrency", "concurrency", "proxy_id", "edit_session_id", "editing_by_user_id", "editing_expires_at"}).
+			AddRow(int64(99), int64(42), 2, 5, 20, nil, nil, nil, nil))
 	mock.ExpectExec("UPDATE account_share_listings").
 		WithArgs(`["gpt-5.5","gpt-5.4"]`, int64(7), int64(42)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
