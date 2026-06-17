@@ -33,6 +33,7 @@ type AdminService interface {
 	DeleteUser(ctx context.Context, id int64) error
 	UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error)
 	UpdateUserPoints(ctx context.Context, userID int64, points float64, operation string, notes string, operatorUserID int64) (*User, error)
+	UpdateUserLoadFactorCredits(ctx context.Context, userID int64, amount int, operation string, notes string, operatorUserID int64) (*User, error)
 	GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error)
 	GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error)
 	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
@@ -957,30 +958,88 @@ func (s *adminServiceImpl) deleteUserWithAPIKeys(ctx context.Context, userID int
 }
 
 func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error) {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	ledgerRepo, err := requireUserBalanceLedgerRepository(s.userRepo)
+	if err != nil {
+		return nil, err
+	}
+	if s.entClient == nil {
+		return nil, fmt.Errorf("ent client is not configured")
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin balance adjustment transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+
+	oldBalance, err := ledgerRepo.LockUserBalanceForUpdate(txCtx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	oldBalance := user.Balance
-
+	var newBalance float64
 	switch operation {
 	case "set":
-		user.Balance = balance
+		newBalance = balance
 	case "add":
-		user.Balance += balance
+		newBalance = oldBalance + balance
 	case "subtract":
-		user.Balance -= balance
+		newBalance = oldBalance - balance
+	default:
+		return nil, fmt.Errorf("invalid balance operation: %s", operation)
 	}
 
-	if user.Balance < 0 {
-		return nil, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", oldBalance, user.Balance)
+	if newBalance < 0 {
+		return nil, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", oldBalance, newBalance)
 	}
 
-	if err := s.userRepo.Update(ctx, user); err != nil {
+	balanceDiff := newBalance - oldBalance
+	if balanceDiff != 0 {
+		if s.redeemCodeRepo == nil {
+			return nil, fmt.Errorf("redeem code repository is not configured")
+		}
+		code, err := GenerateRedeemCode()
+		if err != nil {
+			return nil, fmt.Errorf("generate adjustment redeem code: %w", err)
+		}
+
+		adjustmentRecord := &RedeemCode{
+			Code:   code,
+			Type:   AdjustmentTypeAdminBalance,
+			Value:  balanceDiff,
+			Status: StatusUsed,
+			UsedBy: &userID,
+			Notes:  notes,
+		}
+		now := time.Now()
+		adjustmentRecord.UsedAt = &now
+
+		if err := s.redeemCodeRepo.Create(txCtx, adjustmentRecord); err != nil {
+			return nil, fmt.Errorf("create balance adjustment record: %w", err)
+		}
+
+		refID := adjustmentRecord.ID
+		if _, err := ledgerRepo.ApplyBalanceLedgerDelta(txCtx, UserBalanceLedgerDeltaInput{
+			UserID:   userID,
+			Delta:    balanceDiff,
+			Reason:   UserBalanceLedgerReasonAdminAdjustment,
+			RefType:  "redeem_code",
+			RefID:    &refID,
+			Metadata: map[string]any{"code": adjustmentRecord.Code, "notes": notes, "operation": operation},
+		}); err != nil {
+			return nil, fmt.Errorf("update user balance: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit balance adjustment transaction: %w", err)
+	}
+
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
 		return nil, err
 	}
-	balanceDiff := user.Balance - oldBalance
 	if s.authCacheInvalidator != nil && balanceDiff != 0 {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
@@ -993,29 +1052,6 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 				logger.LegacyPrintf("service.admin", "invalidate user balance cache failed: user_id=%d err=%v", userID, err)
 			}
 		}()
-	}
-
-	if balanceDiff != 0 {
-		code, err := GenerateRedeemCode()
-		if err != nil {
-			logger.LegacyPrintf("service.admin", "failed to generate adjustment redeem code: %v", err)
-			return user, nil
-		}
-
-		adjustmentRecord := &RedeemCode{
-			Code:   code,
-			Type:   AdjustmentTypeAdminBalance,
-			Value:  balanceDiff,
-			Status: StatusUsed,
-			UsedBy: &user.ID,
-			Notes:  notes,
-		}
-		now := time.Now()
-		adjustmentRecord.UsedAt = &now
-
-		if err := s.redeemCodeRepo.Create(ctx, adjustmentRecord); err != nil {
-			logger.LegacyPrintf("service.admin", "failed to create balance adjustment redeem code: %v", err)
-		}
 	}
 
 	return user, nil
@@ -1115,6 +1151,179 @@ func (s *adminServiceImpl) UpdateUserPoints(ctx context.Context, userID int64, p
 		return nil, err
 	}
 	return updated, nil
+}
+
+func (s *adminServiceImpl) UpdateUserLoadFactorCredits(ctx context.Context, userID int64, amount int, operation string, notes string, operatorUserID int64) (*User, error) {
+	if amount <= 0 {
+		return nil, infraerrors.BadRequest("LOAD_FACTOR_CREDITS_AMOUNT_INVALID", "load factor credits amount must be greater than 0")
+	}
+
+	var delta int
+	switch operation {
+	case "set":
+	case "add":
+		delta = amount
+	case "subtract":
+		delta = -amount
+	default:
+		return nil, infraerrors.BadRequest("LOAD_FACTOR_CREDITS_OPERATION_INVALID", "invalid load factor credits operation")
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin load factor credits adjustment transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+
+	balanceBefore, err := currentLoadFactorCreditsBalanceInTx(txCtx, tx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("lock user load factor credits: %w", err)
+	}
+	if operation == "set" {
+		delta = amount - balanceBefore
+	}
+	balanceAfter := balanceBefore + delta
+	if balanceAfter < 0 {
+		return nil, infraerrors.BadRequest("LOAD_FACTOR_CREDITS_BALANCE_NEGATIVE", "load factor credits balance cannot be negative")
+	}
+	if delta != 0 {
+		if err := applyLoadFactorCreditsAdjustmentInTx(txCtx, tx, loadFactorCreditsAdjustmentInput{
+			UserID:         userID,
+			Delta:          delta,
+			BalanceBefore:  balanceBefore,
+			BalanceAfter:   balanceAfter,
+			OperatorUserID: operatorUserID,
+			Metadata: map[string]any{
+				"operation": operation,
+				"notes":     notes,
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("update user load factor credits: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit load factor credits adjustment transaction: %w", err)
+	}
+
+	if s.authCacheInvalidator != nil && delta != 0 {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+
+	updated, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+type loadFactorCreditsAdjustmentInput struct {
+	UserID         int64
+	Delta          int
+	Reason         string
+	RefType        string
+	RefID          int64
+	BalanceBefore  int
+	BalanceAfter   int
+	OperatorUserID int64
+	Metadata       map[string]any
+}
+
+func currentLoadFactorCreditsBalanceInTx(ctx context.Context, tx *dbent.Tx, userID int64) (int, error) {
+	if tx == nil {
+		return 0, errors.New("load factor credits lookup requires transaction")
+	}
+	if userID <= 0 {
+		return 0, ErrUserNotFound
+	}
+	queryer, ok := tx.Driver().(serviceSQLQueryer)
+	if !ok {
+		return 0, errors.New("load factor credits lookup requires QueryContext support")
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		SELECT load_factor_credits_balance
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, userID)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return 0, ErrUserNotFound
+	}
+	var balance int
+	if err := rows.Scan(&balance); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return balance, nil
+}
+
+func applyLoadFactorCreditsAdjustmentInTx(ctx context.Context, tx *dbent.Tx, in loadFactorCreditsAdjustmentInput) error {
+	if tx == nil {
+		return errors.New("load factor credits adjustment requires transaction")
+	}
+	if in.UserID <= 0 {
+		return ErrUserNotFound
+	}
+	if in.Delta == 0 {
+		return nil
+	}
+	execer, ok := tx.Driver().(serviceSQLExecer)
+	if !ok {
+		return errors.New("load factor credits adjustment requires ExecContext support")
+	}
+
+	if _, err := execer.ExecContext(ctx, `
+		UPDATE users
+		SET load_factor_credits_balance = $1,
+			updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL
+	`, in.BalanceAfter, in.UserID); err != nil {
+		return err
+	}
+
+	direction := "credit"
+	amount := in.Delta
+	if amount < 0 {
+		direction = "debit"
+		amount = -amount
+	}
+	reason := strings.TrimSpace(in.Reason)
+	if reason == "" {
+		reason = "admin_adjustment"
+	}
+	refType := strings.TrimSpace(in.RefType)
+	var refID any
+	if in.RefID > 0 {
+		refID = in.RefID
+	}
+	metadata := in.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	rawMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	var operatorUserID any
+	if in.OperatorUserID > 0 {
+		operatorUserID = in.OperatorUserID
+	}
+	_, err = execer.ExecContext(ctx, `
+		INSERT INTO user_load_factor_ledger (
+			user_id, account_id, direction, amount, reason, ref_type, ref_id,
+			balance_before, balance_after, operator_user_id, metadata
+		) VALUES (
+			$1, NULL, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10::jsonb
+		)
+	`, in.UserID, direction, amount, reason, refType, refID, in.BalanceBefore, in.BalanceAfter, operatorUserID, string(rawMetadata))
+	return err
 }
 
 func (s *adminServiceImpl) GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error) {
@@ -3342,10 +3551,7 @@ func (s *adminServiceImpl) GetProxiesByIDs(ctx context.Context, ids []int64) ([]
 }
 
 func proxyAccountLimitExceededError(proxyID, current, limit, additional int64) error {
-	return infraerrors.Conflict(
-		"PROXY_ACCOUNT_LIMIT_EXCEEDED",
-		fmt.Sprintf("proxy %d account binding limit exceeded: %d/%d accounts would be bound; choose another proxy or raise the limit", proxyID, current+additional, limit),
-	)
+	return ProxyAccountLimitExceededError(proxyID, current, limit, additional)
 }
 
 func proxyAccountLimitBelowCurrentError(proxyID, current int64) error {

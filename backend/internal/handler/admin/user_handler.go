@@ -75,6 +75,12 @@ type UpdatePointsRequest struct {
 	Notes     string  `json:"notes"`
 }
 
+type UpdateLoadFactorCreditsRequest struct {
+	Amount    int    `json:"amount" binding:"required,gt=0"`
+	Operation string `json:"operation" binding:"required,oneof=set add subtract"`
+	Notes     string `json:"notes"`
+}
+
 type BindUserAuthIdentityRequest struct {
 	ProviderType    string                              `json:"provider_type"`
 	ProviderKey     string                              `json:"provider_key"`
@@ -375,6 +381,40 @@ func (h *UserHandler) UpdatePoints(c *gin.Context) {
 	}
 	executeAdminIdempotentJSON(c, "admin.users.points.update", idempotencyPayload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		user, execErr := h.adminService.UpdateUserPoints(ctx, userID, req.Points, req.Operation, req.Notes, operatorUserID)
+		if execErr != nil {
+			return nil, execErr
+		}
+		return dto.UserFromServiceAdmin(user), nil
+	})
+}
+
+// UpdateLoadFactorCredits handles updating user load factor credits.
+// POST /api/v1/admin/users/:id/load-factor-credits
+func (h *UserHandler) UpdateLoadFactorCredits(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+
+	var req UpdateLoadFactorCreditsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	operatorUserID, _ := currentAdminUserID(c)
+	idempotencyPayload := struct {
+		UserID         int64                          `json:"user_id"`
+		OperatorUserID int64                          `json:"operator_user_id"`
+		Body           UpdateLoadFactorCreditsRequest `json:"body"`
+	}{
+		UserID:         userID,
+		OperatorUserID: operatorUserID,
+		Body:           req,
+	}
+	executeAdminIdempotentJSON(c, "admin.users.load_factor_credits.update", idempotencyPayload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		user, execErr := h.adminService.UpdateUserLoadFactorCredits(ctx, userID, req.Amount, req.Operation, req.Notes, operatorUserID)
 		if execErr != nil {
 			return nil, execErr
 		}

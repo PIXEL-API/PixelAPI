@@ -43,6 +43,41 @@ func (h *AffiliateHandler) ListUsers(c *gin.Context) {
 	response.Paginated(c, entries, total, page, pageSize)
 }
 
+// GetUserSettings returns one user's affiliate invite-code policy.
+// GET /api/v1/admin/affiliates/users/:user_id
+func (h *AffiliateHandler) GetUserSettings(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil || userID <= 0 {
+		response.BadRequest(c, "Invalid user_id")
+		return
+	}
+
+	user, err := h.adminService.GetUser(c.Request.Context(), userID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	summary, err := h.affiliateService.EnsureUserAffiliate(c.Request.Context(), userID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, service.AffiliateAdminEntry{
+		UserID:               user.ID,
+		Email:                user.Email,
+		Username:             user.Username,
+		AffCode:              summary.AffCode,
+		AffCodeCustom:        summary.AffCodeCustom,
+		AffRebateRatePercent: summary.AffRebateRatePercent,
+		AffWeeklyLimit:       summary.AffWeeklyLimit,
+		AffWeeklyUsed:        summary.AffWeeklyUsed,
+		AffCodeAutoRotate:    summary.AffCodeAutoRotate,
+		AffCodeExpiresAt:     summary.AffCodeExpiresAt,
+		AffCount:             summary.AffCount,
+	})
+}
+
 // UpdateUserSettings updates a user's affiliate settings.
 // PUT /api/v1/admin/affiliates/users/:user_id
 //
@@ -50,6 +85,8 @@ func (h *AffiliateHandler) ListUsers(c *gin.Context) {
 type UpdateAffiliateUserRequest struct {
 	AffCode              *string  `json:"aff_code"`
 	AffRebateRatePercent *float64 `json:"aff_rebate_rate_percent"`
+	AffWeeklyLimit       *int     `json:"aff_weekly_limit"`
+	AffCodeAutoRotate    *bool    `json:"aff_code_auto_rotate"`
 	// ClearRebateRate explicitly clears the per-user rate (sets it to NULL).
 	// Used to disambiguate from "field not provided".
 	ClearRebateRate bool `json:"clear_rebate_rate"`
@@ -95,6 +132,26 @@ func (h *AffiliateHandler) UpdateUserSettings(c *gin.Context) {
 		}
 	} else if req.AffRebateRatePercent != nil {
 		if err := h.affiliateService.AdminSetUserRebateRate(c.Request.Context(), userID, req.AffRebateRatePercent); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+
+	if req.AffWeeklyLimit != nil || req.AffCodeAutoRotate != nil {
+		current, err := h.affiliateService.EnsureUserAffiliate(c.Request.Context(), userID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		weeklyLimit := current.AffWeeklyLimit
+		if req.AffWeeklyLimit != nil {
+			weeklyLimit = *req.AffWeeklyLimit
+		}
+		autoRotate := current.AffCodeAutoRotate
+		if req.AffCodeAutoRotate != nil {
+			autoRotate = *req.AffCodeAutoRotate
+		}
+		if err := h.affiliateService.AdminSetUserInviteCodePolicy(c.Request.Context(), userID, weeklyLimit, autoRotate); err != nil {
 			response.ErrorFrom(c, err)
 			return
 		}
@@ -167,6 +224,10 @@ func (h *AffiliateHandler) ClearUserSettings(c *gin.Context) {
 		return
 	}
 	if _, err := h.affiliateService.AdminResetUserAffCode(c.Request.Context(), userID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := h.affiliateService.AdminSetUserInviteCodePolicy(c.Request.Context(), userID, service.AffiliateCodeWeeklyLimitDefault, service.AffiliateCodeAutoRotateDefault); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}

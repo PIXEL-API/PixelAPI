@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -226,70 +227,10 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	if err := applyAccountShareSettlement(ctx, tx, cmd, usageLogID, result); err != nil {
 		return err
 	}
-
-	if strings.TrimSpace(cmd.LeaseID) != "" && (cmd.LeaseUsageRequests > 0 || cmd.LeaseUsageTokens > 0) {
-		if err := incrementUsageBillingAccountLeaseUsage(ctx, tx, cmd.LeaseID, cmd.LeaseUsageRequests, cmd.LeaseUsageTokens); err != nil {
-			return err
-		}
-	}
-
-	if strings.TrimSpace(cmd.QuotaReservationID) != "" {
-		actualCost := cmd.BalanceCost
-		if cmd.SubscriptionCost > actualCost {
-			actualCost = cmd.SubscriptionCost
-		}
-		if err := settleUsageBillingQuotaReservation(ctx, tx, cmd.QuotaReservationID, actualCost); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func incrementUsageBillingAccountLeaseUsage(ctx context.Context, tx *sql.Tx, leaseID string, requests int64, tokens int64) error {
-	res, err := tx.ExecContext(ctx, `
-		UPDATE account_leases
-		SET used_requests = used_requests + $2,
-			used_tokens = used_tokens + $3,
-			updated_at = NOW()
-		WHERE lease_id = $1
-		  AND deleted_at IS NULL
-		  AND (max_requests <= 0 OR used_requests + $2 <= max_requests)
-		  AND (max_tokens <= 0 OR used_tokens + $3 <= max_tokens)
-	`, strings.TrimSpace(leaseID), requests, tokens)
-	if err != nil {
+	if err := applyAccountShareModeSettlement(ctx, tx, cmd, usageLogID, result); err != nil {
 		return err
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return service.ErrSubsiteLeaseCapacityExceeded
-	}
-	return nil
-}
 
-func settleUsageBillingQuotaReservation(ctx context.Context, tx *sql.Tx, reservationID string, actualCost float64) error {
-	res, err := tx.ExecContext(ctx, `
-		UPDATE quota_reservations
-		SET actual_cost = $2,
-			status = 'settled',
-			settled_at = NOW(),
-			updated_at = NOW()
-		WHERE reservation_id = $1
-		  AND status = 'reserved'
-	`, strings.TrimSpace(reservationID), actualCost)
-	if err != nil {
-		return err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return service.ErrQuotaReservationNotFound
-	}
 	return nil
 }
 
@@ -697,6 +638,162 @@ func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.U
 		appendUsageBillingCreditUser(result, invite.InviterUserID)
 	}
 	return nil
+}
+
+func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, result *service.UsageBillingApplyResult) error {
+	if cmd == nil || cmd.AccountShareModeSettlement == nil {
+		return nil
+	}
+	snapshot := cmd.AccountShareModeSettlement
+	if snapshot.OwnerUserID <= 0 || snapshot.ConsumerUserID <= 0 || snapshot.OwnerUserID == snapshot.ConsumerUserID {
+		return nil
+	}
+	totalCharge := decimalFromFloat(snapshot.TotalCharge)
+	if totalCharge.IsZero() || totalCharge.IsNegative() {
+		return nil
+	}
+	ownerRatio, platformRatio := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
+	ownerCredit := totalCharge.Mul(ownerRatio).Round(10)
+	platformCredit := totalCharge.Mul(platformRatio).Round(10)
+	inserted, err := insertAccountShareModeSettlement(ctx, tx, snapshot, usageLogID, ownerCredit, platformCredit)
+	if err != nil || !inserted {
+		return err
+	}
+	if ownerCredit.IsZero() {
+		return nil
+	}
+	newBalance, err := creditUsageBillingBalance(ctx, tx, snapshot.OwnerUserID, ownerCredit)
+	if err != nil {
+		return err
+	}
+	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+		UserID:       snapshot.OwnerUserID,
+		Direction:    "credit",
+		Amount:       ownerCredit,
+		Reason:       "account_share_mode_income",
+		RefType:      "usage_log",
+		RefID:        nullablePositiveInt64(usageLogID),
+		BalanceAfter: decimalFromFloat(newBalance),
+		Metadata: map[string]any{
+			"request_id":       cmd.RequestID,
+			"api_key_id":       snapshot.APIKeyID,
+			"account_id":       snapshot.AccountID,
+			"listing_id":       snapshot.ListingID,
+			"membership_id":    snapshot.MembershipID,
+			"consumer_user_id": snapshot.ConsumerUserID,
+			"total_charge":     totalCharge.String(),
+			"owner_ratio":      ownerRatio.String(),
+			"platform_ratio":   platformRatio.String(),
+		},
+	}); err != nil {
+		return err
+	}
+	appendUsageBillingCreditUser(result, snapshot.OwnerUserID)
+	return nil
+}
+
+func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, snapshot *service.AccountShareModeBillingSnapshot, usageLogID int64, ownerCredit, platformCredit decimal.Decimal) (bool, error) {
+	if snapshot == nil {
+		return false, nil
+	}
+	var id int64
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO account_share_mode_settlement_entries (
+			usage_log_id,
+			membership_id,
+			listing_id,
+			account_id,
+			owner_user_id,
+			consumer_user_id,
+			api_key_id,
+			base_charge,
+			hourly_charge,
+			total_charge,
+			owner_credit,
+			platform_credit,
+			rate_multiplier_snapshot,
+			hourly_rate_snapshot,
+			owner_share_ratio_snapshot,
+			platform_share_ratio_snapshot,
+			duration_ms,
+			created_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12,
+			$13, $14, $15, $16, $17,
+			NOW()
+		)
+		ON CONFLICT (usage_log_id) DO NOTHING
+		RETURNING id
+	`,
+		nullablePositiveInt64(usageLogID),
+		snapshot.MembershipID,
+		snapshot.ListingID,
+		snapshot.AccountID,
+		snapshot.OwnerUserID,
+		snapshot.ConsumerUserID,
+		snapshot.APIKeyID,
+		decimalFromFloat(snapshot.BaseCharge).StringFixed(10),
+		decimalFromFloat(snapshot.HourlyCharge).StringFixed(10),
+		decimalFromFloat(snapshot.TotalCharge).StringFixed(10),
+		ownerCredit.StringFixed(10),
+		platformCredit.StringFixed(10),
+		decimalFromFloat(snapshot.RateMultiplier).StringFixed(4),
+		decimalFromFloat(snapshot.HourlyRate).StringFixed(8),
+		accountShareModeOwnerRatioString(snapshot),
+		accountShareModePlatformRatioString(snapshot),
+		snapshot.DurationMs,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return id > 0, nil
+}
+
+func normalizeAccountShareModeRatio(value float64, fallback float64) decimal.Decimal {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		value = fallback
+	}
+	ratio := decimalFromFloat(value)
+	if ratio.IsNegative() {
+		return decimal.Zero
+	}
+	if ratio.GreaterThan(decimal.NewFromInt(1)) {
+		return decimal.NewFromInt(1)
+	}
+	return ratio
+}
+
+func accountShareModeSettlementRatios(ownerRaw, platformRaw float64) (decimal.Decimal, decimal.Decimal) {
+	ownerRatio := normalizeAccountShareModeRatio(ownerRaw, service.AccountShareModeDefaultOwnerShareRatio)
+	platformRatio := normalizeAccountShareModeRatio(platformRaw, service.AccountShareModeDefaultPlatformShareRatio)
+	if ownerRatio.Add(platformRatio).GreaterThan(decimal.NewFromInt(1)) {
+		platformRatio = decimal.NewFromInt(1).Sub(ownerRatio)
+		if platformRatio.IsNegative() {
+			platformRatio = decimal.Zero
+		}
+	}
+	return ownerRatio, platformRatio
+}
+
+func accountShareModeOwnerRatioString(snapshot *service.AccountShareModeBillingSnapshot) string {
+	if snapshot == nil {
+		return decimal.Zero.StringFixed(8)
+	}
+	ownerRatio, _ := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
+	return ownerRatio.StringFixed(8)
+}
+
+func accountShareModePlatformRatioString(snapshot *service.AccountShareModeBillingSnapshot) string {
+	if snapshot == nil {
+		return decimal.Zero.StringFixed(8)
+	}
+	_, platformRatio := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
+	return platformRatio.StringFixed(8)
 }
 
 func loadAccountShareSnapshot(ctx context.Context, tx *sql.Tx, accountID int64) (accountShareSnapshot, error) {

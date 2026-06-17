@@ -182,6 +182,11 @@ func (s *stubAdminService) UpdateUserPoints(ctx context.Context, userID int64, p
 	return &user, nil
 }
 
+func (s *stubAdminService) UpdateUserLoadFactorCredits(ctx context.Context, userID int64, amount int, operation string, notes string, operatorUserID int64) (*service.User, error) {
+	user := service.User{ID: userID, LoadFactorCreditsBalance: amount, Status: service.StatusActive}
+	return &user, nil
+}
+
 func (s *stubAdminService) GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]service.APIKey, int64, error) {
 	return s.apiKeys, int64(len(s.apiKeys)), nil
 }

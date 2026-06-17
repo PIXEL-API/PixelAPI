@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -359,6 +362,219 @@ func (s *UsageService) ListWithFilters(ctx context.Context, params pagination.Pa
 		return nil, nil, fmt.Errorf("list usage logs with filters: %w", err)
 	}
 	return logs, result, nil
+}
+
+func (s *UsageService) ListBalanceLedger(ctx context.Context, params pagination.PaginationParams, filters UserBalanceLedgerFilters) ([]UserBalanceLedgerEntry, *pagination.PaginationResult, error) {
+	if s == nil || s.entClient == nil {
+		return nil, nil, infraerrors.InternalServer("USAGE_BALANCE_LEDGER_UNAVAILABLE", "usage balance ledger is unavailable")
+	}
+	if filters.RequireUserID && filters.UserID <= 0 {
+		return nil, nil, infraerrors.BadRequest("USER_ID_INVALID", "user_id must be positive")
+	}
+
+	direction := strings.ToLower(strings.TrimSpace(filters.Direction))
+	if direction != "" && direction != "debit" && direction != "credit" {
+		return nil, nil, infraerrors.BadRequest("BALANCE_LEDGER_DIRECTION_INVALID", "direction must be debit or credit")
+	}
+	reason := strings.TrimSpace(filters.Reason)
+	refType := strings.TrimSpace(filters.RefType)
+
+	whereParts := make([]string, 0, 7)
+	args := make([]any, 0, 7)
+	addArg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if filters.UserID > 0 {
+		whereParts = append(whereParts, "l.user_id = "+addArg(filters.UserID))
+	}
+	if direction != "" {
+		whereParts = append(whereParts, "l.direction = "+addArg(direction))
+	}
+	if reason != "" {
+		whereParts = append(whereParts, "l.reason = "+addArg(reason))
+	}
+	if refType != "" {
+		whereParts = append(whereParts, "l.ref_type = "+addArg(refType))
+	}
+	if filters.RefID != nil {
+		whereParts = append(whereParts, "l.ref_id = "+addArg(*filters.RefID))
+	}
+	if filters.StartTime != nil {
+		whereParts = append(whereParts, "l.created_at >= "+addArg(*filters.StartTime))
+	}
+	if filters.EndTime != nil {
+		whereParts = append(whereParts, "l.created_at < "+addArg(*filters.EndTime))
+	}
+	if len(whereParts) == 0 {
+		whereParts = append(whereParts, "TRUE")
+	}
+
+	whereSQL := strings.Join(whereParts, " AND ")
+	if filters.ExactTotal {
+		return s.listBalanceLedgerWithExactTotal(ctx, params, whereSQL, args)
+	}
+
+	return s.listBalanceLedgerWithFastPagination(ctx, params, whereSQL, args)
+}
+
+func (s *UsageService) listBalanceLedgerWithExactTotal(ctx context.Context, params pagination.PaginationParams, whereSQL string, args []any) ([]UserBalanceLedgerEntry, *pagination.PaginationResult, error) {
+	var total int64
+	countRows, err := s.entClient.QueryContext(ctx, "SELECT COUNT(*) FROM user_balance_ledger l WHERE "+whereSQL, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("count balance ledger: %w", err)
+	}
+	defer func() { _ = countRows.Close() }()
+	if !countRows.Next() {
+		return nil, nil, fmt.Errorf("count balance ledger: no rows")
+	}
+	if err := countRows.Scan(&total); err != nil {
+		return nil, nil, fmt.Errorf("count balance ledger: %w", err)
+	}
+	if err := countRows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("count balance ledger: %w", err)
+	}
+	entries, err := s.listBalanceLedgerByQuery(ctx, params, whereSQL, args, params.Limit(), params.Offset())
+	if err != nil {
+		return nil, nil, err
+	}
+	return entries, usagePaginationResultFromTotal(total, params), nil
+}
+
+func (s *UsageService) listBalanceLedgerWithFastPagination(ctx context.Context, params pagination.PaginationParams, whereSQL string, args []any) ([]UserBalanceLedgerEntry, *pagination.PaginationResult, error) {
+	limit := params.Limit()
+	offset := params.Offset()
+	limitWithProbe := limit + 1
+
+	entries, err := s.listBalanceLedgerByQuery(ctx, params, whereSQL, args, limitWithProbe, offset)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	hasMore := false
+	if len(entries) > limit {
+		hasMore = true
+		entries = entries[:limit]
+	}
+
+	total := int64(offset) + int64(len(entries))
+	if hasMore {
+		total = int64(offset) + int64(limit) + 1
+	}
+
+	return entries, usagePaginationResultFromTotal(total, params), nil
+}
+
+func (s *UsageService) listBalanceLedgerByQuery(
+	ctx context.Context,
+	params pagination.PaginationParams,
+	whereSQL string,
+	args []any,
+	limit int,
+	offset int,
+) ([]UserBalanceLedgerEntry, error) {
+	sortOrder := params.NormalizedSortOrder(pagination.SortOrderDesc)
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit, offset)
+	rows, err := s.entClient.QueryContext(ctx, fmt.Sprintf(`
+		SELECT
+			l.id,
+			l.user_id,
+			l.direction,
+			l.amount::text,
+			l.reason,
+			l.ref_type,
+			l.ref_id,
+			l.balance_after::text,
+			l.metadata,
+			l.created_at,
+			u.email,
+			u.username,
+			u.status
+		FROM user_balance_ledger l
+		LEFT JOIN users u ON u.id = l.user_id
+		WHERE %s
+		ORDER BY l.created_at %s, l.id %s
+		LIMIT $%d OFFSET $%d
+		`, whereSQL, strings.ToUpper(sortOrder), strings.ToUpper(sortOrder), len(queryArgs)-1, len(queryArgs)), queryArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("list balance ledger: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	entries := make([]UserBalanceLedgerEntry, 0, limit)
+	for rows.Next() {
+		var entry UserBalanceLedgerEntry
+		var refID sql.NullInt64
+		var rawMetadata []byte
+		var userEmail sql.NullString
+		var username sql.NullString
+		var userStatus sql.NullString
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.UserID,
+			&entry.Direction,
+			&entry.Amount,
+			&entry.Reason,
+			&entry.RefType,
+			&refID,
+			&entry.BalanceAfter,
+			&rawMetadata,
+			&entry.CreatedAt,
+			&userEmail,
+			&username,
+			&userStatus,
+		); err != nil {
+			return nil, fmt.Errorf("scan balance ledger: %w", err)
+		}
+		if refID.Valid {
+			value := refID.Int64
+			entry.RefID = &value
+		}
+		entry.Metadata = map[string]any{}
+		if len(rawMetadata) > 0 {
+			if err := json.Unmarshal(rawMetadata, &entry.Metadata); err != nil {
+				return nil, fmt.Errorf("decode balance ledger metadata: %w", err)
+			}
+		}
+		if userEmail.Valid || username.Valid || userStatus.Valid {
+			entry.User = &User{ID: entry.UserID}
+			if userEmail.Valid {
+				entry.User.Email = userEmail.String
+			}
+			if username.Valid {
+				entry.User.Username = username.String
+			}
+			if userStatus.Valid {
+				entry.User.Status = userStatus.String
+			}
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate balance ledger: %w", err)
+	}
+	return entries, nil
+}
+
+func usagePaginationResultFromTotal(total int64, params pagination.PaginationParams) *pagination.PaginationResult {
+	limit := params.Limit()
+	pages := int(total) / limit
+	if int(total)%limit > 0 {
+		pages++
+	}
+	if pages < 1 {
+		pages = 1
+	}
+	if params.Page < 1 {
+		params.Page = 1
+	}
+	return &pagination.PaginationResult{
+		Total:    total,
+		Page:     params.Page,
+		PageSize: limit,
+		Pages:    pages,
+	}
 }
 
 // GetGlobalStats returns global usage stats for a time range.

@@ -7,19 +7,21 @@ import (
 )
 
 type User struct {
-	ID                  int64      `json:"id"`
-	Email               string     `json:"email"`
-	Username            string     `json:"username"`
-	Role                string     `json:"role"`
-	Balance             float64    `json:"balance"`
-	PointsBalance       float64    `json:"points_balance"`
-	PreferPointsBilling bool       `json:"prefer_points_billing"`
-	Concurrency         int        `json:"concurrency"`
-	Status              string     `json:"status"`
-	AllowedGroups       []int64    `json:"allowed_groups"`
-	LastActiveAt        *time.Time `json:"last_active_at,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                         int64      `json:"id"`
+	Email                      string     `json:"email"`
+	Username                   string     `json:"username"`
+	Role                       string     `json:"role"`
+	Balance                    float64    `json:"balance"`
+	PointsBalance              float64    `json:"points_balance"`
+	LoadFactorCreditsBalance   int        `json:"load_factor_credits_balance"`
+	LoadFactorCreditsUsedTotal int        `json:"load_factor_credits_used_total"`
+	PreferPointsBilling        bool       `json:"prefer_points_billing"`
+	Concurrency                int        `json:"concurrency"`
+	Status                     string     `json:"status"`
+	AllowedGroups              []int64    `json:"allowed_groups"`
+	LastActiveAt               *time.Time `json:"last_active_at,omitempty"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
 
 	// 余额不足通知
 	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
@@ -33,6 +35,13 @@ type User struct {
 
 	APIKeys       []APIKey           `json:"api_keys,omitempty"`
 	Subscriptions []UserSubscription `json:"subscriptions,omitempty"`
+}
+
+type UserSummary struct {
+	ID       int64  `json:"id"`
+	Email    string `json:"email"`
+	Username string `json:"username,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
 // AdminUser 是管理员接口使用的 user DTO（包含敏感/内部字段）。
@@ -168,32 +177,34 @@ type AdminGroup struct {
 }
 
 type Account struct {
-	ID                 int64           `json:"id"`
-	Name               string          `json:"name"`
-	Notes              *string         `json:"notes"`
-	Platform           string          `json:"platform"`
-	AccountLevel       string          `json:"account_level"`
-	Type               string          `json:"type"`
-	Credentials        map[string]any  `json:"credentials"`
-	CredentialsStatus  map[string]bool `json:"credentials_status,omitempty"`
-	Extra              map[string]any  `json:"extra"`
-	OwnerUserID        *int64          `json:"owner_user_id,omitempty"`
-	ShareMode          string          `json:"share_mode"`
-	ShareStatus        string          `json:"share_status"`
-	SharePolicyID      *int64          `json:"share_policy_id,omitempty"`
-	ProxyID            *int64          `json:"proxy_id"`
-	Concurrency        int             `json:"concurrency"`
-	LoadFactor         *int            `json:"load_factor,omitempty"`
-	Priority           int             `json:"priority"`
-	RateMultiplier     float64         `json:"rate_multiplier"`
-	Status             string          `json:"status"`
-	ErrorMessage       string          `json:"error_message"`
-	ErrorSince         *time.Time      `json:"error_since"`
-	LastUsedAt         *time.Time      `json:"last_used_at"`
-	ExpiresAt          *int64          `json:"expires_at"`
-	AutoPauseOnExpired bool            `json:"auto_pause_on_expired"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	ID                        int64           `json:"id"`
+	Name                      string          `json:"name"`
+	Notes                     *string         `json:"notes"`
+	Platform                  string          `json:"platform"`
+	AccountLevel              string          `json:"account_level"`
+	Type                      string          `json:"type"`
+	Credentials               map[string]any  `json:"credentials"`
+	CredentialsStatus         map[string]bool `json:"credentials_status,omitempty"`
+	Extra                     map[string]any  `json:"extra"`
+	OwnerUserID               *int64          `json:"owner_user_id,omitempty"`
+	ShareMode                 string          `json:"share_mode"`
+	ShareStatus               string          `json:"share_status"`
+	SharePolicyID             *int64          `json:"share_policy_id,omitempty"`
+	AccountShareModeListingID *int64          `json:"account_share_mode_listing_id,omitempty"`
+	ProxyID                   *int64          `json:"proxy_id"`
+	Concurrency               int             `json:"concurrency"`
+	LoadFactor                *int            `json:"load_factor,omitempty"`
+	LoadFactorPaidCeiling     int             `json:"load_factor_paid_ceiling"`
+	Priority                  int             `json:"priority"`
+	RateMultiplier            float64         `json:"rate_multiplier"`
+	Status                    string          `json:"status"`
+	ErrorMessage              string          `json:"error_message"`
+	ErrorSince                *time.Time      `json:"error_since"`
+	LastUsedAt                *time.Time      `json:"last_used_at"`
+	ExpiresAt                 *int64          `json:"expires_at"`
+	AutoPauseOnExpired        bool            `json:"auto_pause_on_expired"`
+	CreatedAt                 time.Time       `json:"created_at"`
+	UpdatedAt                 time.Time       `json:"updated_at"`
 
 	Schedulable bool `json:"schedulable"`
 
@@ -300,6 +311,7 @@ type Proxy struct {
 	Port        int       `json:"port"`
 	Username    string    `json:"username"`
 	Password    string    `json:"-"`
+	OwnerUserID *int64    `json:"owner_user_id,omitempty"`
 	Status      string    `json:"status"`
 	MaxAccounts int       `json:"max_accounts"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -481,6 +493,20 @@ type AdminUsageLog struct {
 
 	// Account 最小账号信息（避免泄露敏感字段）
 	Account *AccountSummary `json:"account,omitempty"`
+}
+
+type UserBalanceLedgerEntry struct {
+	ID           int64          `json:"id"`
+	UserID       int64          `json:"user_id"`
+	User         *UserSummary   `json:"user,omitempty"`
+	Direction    string         `json:"direction"`
+	Amount       string         `json:"amount"`
+	Reason       string         `json:"reason"`
+	RefType      string         `json:"ref_type"`
+	RefID        *int64         `json:"ref_id"`
+	BalanceAfter string         `json:"balance_after"`
+	Metadata     map[string]any `json:"metadata"`
+	CreatedAt    time.Time      `json:"created_at"`
 }
 
 type UsageCleanupFilters struct {

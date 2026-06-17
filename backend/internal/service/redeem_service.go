@@ -337,12 +337,21 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	// 执行兑换逻辑（兑换码已被锁定，此时可安全操作）
 	switch redeemCode.Type {
 	case RedeemTypeBalance:
-		amount := redeemCode.Value
-		// 负数为退款扣减，余额最低为 0
-		if amount < 0 && user.Balance+amount < 0 {
-			amount = -user.Balance
+		ledgerRepo, err := requireUserBalanceLedgerRepository(s.userRepo)
+		if err != nil {
+			return nil, err
 		}
-		if err := s.userRepo.UpdateBalance(txCtx, userID, amount); err != nil {
+		refID := redeemCode.ID
+		if _, err := ledgerRepo.ApplyBalanceLedgerDelta(txCtx, UserBalanceLedgerDeltaInput{
+			UserID:              userID,
+			Delta:               redeemCode.Value,
+			Reason:              UserBalanceLedgerReasonRedeemCode,
+			RefType:             "redeem_code",
+			RefID:               &refID,
+			Metadata:            map[string]any{"code": redeemCode.Code},
+			ClampZero:           true,
+			TrackTotalRecharged: true,
+		}); err != nil {
 			return nil, fmt.Errorf("update user balance: %w", err)
 		}
 

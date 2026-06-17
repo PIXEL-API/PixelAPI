@@ -199,6 +199,88 @@ func (h *UsageHandler) List(c *gin.Context) {
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
 
+// ListBalanceLedger handles listing wallet balance ledger records for admins.
+// GET /api/v1/admin/usage/balance-ledger
+func (h *UsageHandler) ListBalanceLedger(c *gin.Context) {
+	page, pageSize := response.ParsePagination(c)
+	exactTotal := false
+	if exactTotalRaw := strings.TrimSpace(c.Query("exact_total")); exactTotalRaw != "" {
+		parsed, err := strconv.ParseBool(exactTotalRaw)
+		if err != nil {
+			response.BadRequest(c, "Invalid exact_total value, use true or false")
+			return
+		}
+		exactTotal = parsed
+	}
+
+	params := pagination.PaginationParams{
+		Page:      page,
+		PageSize:  pageSize,
+		SortOrder: c.DefaultQuery("sort_order", "desc"),
+	}
+
+	var userID int64
+	if userIDStr := strings.TrimSpace(c.Query("user_id")); userIDStr != "" {
+		id, err := strconv.ParseInt(userIDStr, 10, 64)
+		if err != nil || id <= 0 {
+			response.BadRequest(c, "Invalid user_id")
+			return
+		}
+		userID = id
+	}
+
+	var refID *int64
+	if refIDStr := strings.TrimSpace(c.Query("ref_id")); refIDStr != "" {
+		id, err := strconv.ParseInt(refIDStr, 10, 64)
+		if err != nil || id <= 0 {
+			response.BadRequest(c, "Invalid ref_id")
+			return
+		}
+		refID = &id
+	}
+
+	var startTime, endTime *time.Time
+	userTZ := c.Query("timezone")
+	if startDateStr := strings.TrimSpace(c.Query("start_date")); startDateStr != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", startDateStr, userTZ)
+		if err != nil {
+			response.BadRequest(c, "Invalid start_date format, use YYYY-MM-DD")
+			return
+		}
+		startTime = &t
+	}
+	if endDateStr := strings.TrimSpace(c.Query("end_date")); endDateStr != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", endDateStr, userTZ)
+		if err != nil {
+			response.BadRequest(c, "Invalid end_date format, use YYYY-MM-DD")
+			return
+		}
+		t = t.AddDate(0, 0, 1)
+		endTime = &t
+	}
+
+	records, result, err := h.usageService.ListBalanceLedger(c.Request.Context(), params, service.UserBalanceLedgerFilters{
+		UserID:     userID,
+		Direction:  c.Query("direction"),
+		Reason:     c.Query("reason"),
+		RefType:    c.Query("ref_type"),
+		RefID:      refID,
+		StartTime:  startTime,
+		EndTime:    endTime,
+		ExactTotal: exactTotal,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	out := make([]dto.UserBalanceLedgerEntry, 0, len(records))
+	for i := range records {
+		out = append(out, *dto.UserBalanceLedgerEntryFromService(&records[i]))
+	}
+	response.Paginated(c, out, result.Total, result.Page, result.PageSize)
+}
+
 // Stats handles getting usage statistics with filters
 // GET /api/v1/admin/usage/stats
 func (h *UsageHandler) Stats(c *gin.Context) {

@@ -175,6 +175,49 @@ func (h *UsageHandler) List(c *gin.Context) {
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
 
+// ListBalanceLedger handles listing current user's wallet balance ledger.
+// GET /api/v1/usage/balance-ledger
+func (h *UsageHandler) ListBalanceLedger(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	page, pageSize := response.ParsePagination(c)
+	params := pagination.PaginationParams{
+		Page:      page,
+		PageSize:  pageSize,
+		SortOrder: c.DefaultQuery("sort_order", "desc"),
+	}
+
+	startTime, endTime, err := parseOptionalUserDateRange(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	records, result, err := h.usageService.ListBalanceLedger(c.Request.Context(), params, service.UserBalanceLedgerFilters{
+		UserID:        subject.UserID,
+		RequireUserID: true,
+		Direction:     c.Query("direction"),
+		Reason:        c.Query("reason"),
+		StartTime:     startTime,
+		EndTime:       endTime,
+		ExactTotal:    true,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	out := make([]dto.UserBalanceLedgerEntry, 0, len(records))
+	for i := range records {
+		out = append(out, *dto.UserBalanceLedgerEntryFromService(&records[i]))
+	}
+	response.Paginated(c, out, result.Total, result.Page, result.PageSize)
+}
+
 // GetByID handles getting a single usage record
 // GET /api/v1/usage/:id
 func (h *UsageHandler) GetByID(c *gin.Context) {
@@ -203,6 +246,30 @@ func (h *UsageHandler) GetByID(c *gin.Context) {
 	}
 
 	response.Success(c, dto.UsageLogFromService(record))
+}
+
+func parseOptionalUserDateRange(c *gin.Context) (*time.Time, *time.Time, error) {
+	userTZ := c.Query("timezone")
+	var startTime, endTime *time.Time
+	if startDateStr := strings.TrimSpace(c.Query("start_date")); startDateStr != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", startDateStr, userTZ)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid start_date format, use YYYY-MM-DD")
+		}
+		startTime = &t
+	}
+	if endDateStr := strings.TrimSpace(c.Query("end_date")); endDateStr != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", endDateStr, userTZ)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid end_date format, use YYYY-MM-DD")
+		}
+		t = t.AddDate(0, 0, 1)
+		endTime = &t
+	}
+	if startTime != nil && endTime != nil && !endTime.After(*startTime) {
+		return nil, nil, fmt.Errorf("end_date must be greater than or equal to start_date")
+	}
+	return startTime, endTime, nil
 }
 
 // Stats handles getting usage statistics

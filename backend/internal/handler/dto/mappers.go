@@ -19,6 +19,8 @@ func UserFromServiceShallow(u *service.User) *User {
 		Role:                       u.Role,
 		Balance:                    u.Balance,
 		PointsBalance:              u.PointsBalance,
+		LoadFactorCreditsBalance:   u.LoadFactorCreditsBalance,
+		LoadFactorCreditsUsedTotal: u.LoadFactorCreditsUsedTotal,
 		PreferPointsBilling:        u.PreferPointsBilling,
 		Concurrency:                u.Concurrency,
 		Status:                     u.Status,
@@ -32,6 +34,18 @@ func UserFromServiceShallow(u *service.User) *User {
 		BalanceNotifyExtraEmails:   NotifyEmailEntriesFromService(u.BalanceNotifyExtraEmails),
 		TotalRecharged:             u.TotalRecharged,
 		RPMLimit:                   u.RPMLimit,
+	}
+}
+
+func UserSummaryFromService(u *service.User) *UserSummary {
+	if u == nil {
+		return nil
+	}
+	return &UserSummary{
+		ID:       u.ID,
+		Email:    u.Email,
+		Username: u.Username,
+		Status:   u.Status,
 	}
 }
 
@@ -234,42 +248,44 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	}
 	redactedCredentials, credentialsStatus := RedactCredentials(a.Credentials)
 	out := &Account{
-		ID:                      a.ID,
-		Name:                    a.Name,
-		Notes:                   a.Notes,
-		Platform:                a.Platform,
-		AccountLevel:            service.NormalizeAccountLevel(a.AccountLevel),
-		Type:                    a.Type,
-		Credentials:             redactedCredentials,
-		CredentialsStatus:       credentialsStatus,
-		Extra:                   a.Extra,
-		OwnerUserID:             a.OwnerUserID,
-		ShareMode:               service.NormalizeAccountShareMode(a.ShareMode),
-		ShareStatus:             service.NormalizeAccountShareStatus(a.ShareStatus),
-		SharePolicyID:           a.SharePolicyID,
-		ProxyID:                 a.ProxyID,
-		Concurrency:             a.Concurrency,
-		LoadFactor:              a.LoadFactor,
-		Priority:                a.Priority,
-		RateMultiplier:          a.BillingRateMultiplier(),
-		Status:                  a.Status,
-		ErrorMessage:            a.ErrorMessage,
-		ErrorSince:              a.ErrorSince,
-		LastUsedAt:              a.LastUsedAt,
-		ExpiresAt:               timeToUnixSeconds(a.ExpiresAt),
-		AutoPauseOnExpired:      a.AutoPauseOnExpired,
-		CreatedAt:               a.CreatedAt,
-		UpdatedAt:               a.UpdatedAt,
-		Schedulable:             a.Schedulable,
-		RateLimitedAt:           a.RateLimitedAt,
-		RateLimitResetAt:        a.RateLimitResetAt,
-		OverloadUntil:           a.OverloadUntil,
-		TempUnschedulableUntil:  a.TempUnschedulableUntil,
-		TempUnschedulableReason: a.TempUnschedulableReason,
-		SessionWindowStart:      a.SessionWindowStart,
-		SessionWindowEnd:        a.SessionWindowEnd,
-		SessionWindowStatus:     a.SessionWindowStatus,
-		GroupIDs:                a.GroupIDs,
+		ID:                        a.ID,
+		Name:                      a.Name,
+		Notes:                     a.Notes,
+		Platform:                  a.Platform,
+		AccountLevel:              service.NormalizeAccountLevel(a.AccountLevel),
+		Type:                      a.Type,
+		Credentials:               redactedCredentials,
+		CredentialsStatus:         credentialsStatus,
+		Extra:                     a.Extra,
+		OwnerUserID:               a.OwnerUserID,
+		ShareMode:                 service.NormalizeAccountShareMode(a.ShareMode),
+		ShareStatus:               service.NormalizeAccountShareStatus(a.ShareStatus),
+		SharePolicyID:             a.SharePolicyID,
+		AccountShareModeListingID: a.AccountShareModeListingID,
+		ProxyID:                   a.ProxyID,
+		Concurrency:               a.Concurrency,
+		LoadFactor:                a.LoadFactor,
+		LoadFactorPaidCeiling:     a.LoadFactorPaidCeiling,
+		Priority:                  a.Priority,
+		RateMultiplier:            a.BillingRateMultiplier(),
+		Status:                    a.Status,
+		ErrorMessage:              a.ErrorMessage,
+		ErrorSince:                a.ErrorSince,
+		LastUsedAt:                a.LastUsedAt,
+		ExpiresAt:                 timeToUnixSeconds(a.ExpiresAt),
+		AutoPauseOnExpired:        a.AutoPauseOnExpired,
+		CreatedAt:                 a.CreatedAt,
+		UpdatedAt:                 a.UpdatedAt,
+		Schedulable:               a.Schedulable,
+		RateLimitedAt:             a.RateLimitedAt,
+		RateLimitResetAt:          a.RateLimitResetAt,
+		OverloadUntil:             a.OverloadUntil,
+		TempUnschedulableUntil:    a.TempUnschedulableUntil,
+		TempUnschedulableReason:   a.TempUnschedulableReason,
+		SessionWindowStart:        a.SessionWindowStart,
+		SessionWindowEnd:          a.SessionWindowEnd,
+		SessionWindowStatus:       a.SessionWindowStatus,
+		GroupIDs:                  a.GroupIDs,
 	}
 
 	if a.IsOpenAIOAuth() {
@@ -468,6 +484,7 @@ func ProxyFromService(p *service.Proxy) *Proxy {
 		Host:        p.Host,
 		Port:        p.Port,
 		Username:    p.Username,
+		OwnerUserID: p.OwnerUserID,
 		Status:      p.Status,
 		MaxAccounts: p.MaxAccounts,
 		CreatedAt:   p.CreatedAt,
@@ -696,6 +713,25 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		AccountStatsCost:      l.AccountStatsCost,
 		IPAddress:             l.IPAddress,
 		Account:               AccountSummaryFromService(l.Account),
+	}
+}
+
+func UserBalanceLedgerEntryFromService(entry *service.UserBalanceLedgerEntry) *UserBalanceLedgerEntry {
+	if entry == nil {
+		return nil
+	}
+	return &UserBalanceLedgerEntry{
+		ID:           entry.ID,
+		UserID:       entry.UserID,
+		User:         UserSummaryFromService(entry.User),
+		Direction:    entry.Direction,
+		Amount:       entry.Amount,
+		Reason:       entry.Reason,
+		RefType:      entry.RefType,
+		RefID:        entry.RefID,
+		BalanceAfter: entry.BalanceAfter,
+		Metadata:     entry.Metadata,
+		CreatedAt:    entry.CreatedAt,
 	}
 }
 

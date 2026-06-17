@@ -14,13 +14,18 @@ import (
 var (
 	ErrAffiliateProfileNotFound = infraerrors.NotFound("AFFILIATE_PROFILE_NOT_FOUND", "affiliate profile not found")
 	ErrAffiliateCodeInvalid     = infraerrors.BadRequest("AFFILIATE_CODE_INVALID", "invalid affiliate code")
+	ErrAffiliateCodeExpired     = infraerrors.BadRequest("AFFILIATE_CODE_EXPIRED", "affiliate code expired")
+	ErrAffiliateCodeQuotaEmpty  = infraerrors.BadRequest("AFFILIATE_CODE_QUOTA_EMPTY", "affiliate code weekly quota exhausted")
 	ErrAffiliateCodeTaken       = infraerrors.Conflict("AFFILIATE_CODE_TAKEN", "affiliate code already in use")
 	ErrAffiliateAlreadyBound    = infraerrors.Conflict("AFFILIATE_ALREADY_BOUND", "affiliate inviter already bound")
 	ErrAffiliateQuotaEmpty      = infraerrors.BadRequest("AFFILIATE_QUOTA_EMPTY", "no affiliate quota available to transfer")
 )
 
 const (
-	affiliateInviteesLimit = 100
+	affiliateInviteesLimit          = 100
+	AffiliateCodeWeeklyLimitDefault = 2
+	AffiliateCodeWeeklyLimitMax     = 100000
+	AffiliateCodeAutoRotateDefault  = true
 	// AffiliateCodeMinLength / AffiliateCodeMaxLength bound both system-generated
 	// 12-char codes and admin-customized codes (e.g. "VIP2026").
 	AffiliateCodeMinLength = 4
@@ -62,6 +67,11 @@ type AffiliateSummary struct {
 	AffCode               string     `json:"aff_code"`
 	AffCodeCustom         bool       `json:"aff_code_custom"`
 	AffRebateRatePercent  *float64   `json:"aff_rebate_rate_percent,omitempty"`
+	AffWeeklyLimit        int        `json:"aff_weekly_limit"`
+	AffWeeklyUsed         int        `json:"aff_weekly_used"`
+	AffWeeklyWindowStart  *time.Time `json:"aff_weekly_window_start,omitempty"`
+	AffCodeExpiresAt      *time.Time `json:"aff_code_expires_at,omitempty"`
+	AffCodeAutoRotate     bool       `json:"aff_code_auto_rotate"`
 	InviterID             *int64     `json:"inviter_id,omitempty"`
 	InviterBoundAt        *time.Time `json:"inviter_bound_at,omitempty"`
 	InviteBindSource      string     `json:"invite_bind_source,omitempty"`
@@ -95,6 +105,12 @@ type AffiliateDetailQuery struct {
 type AffiliateDetail struct {
 	UserID                int64      `json:"user_id"`
 	AffCode               string     `json:"aff_code"`
+	AffWeeklyLimit        int        `json:"aff_weekly_limit"`
+	AffWeeklyUsed         int        `json:"aff_weekly_used"`
+	AffWeeklyRemaining    int        `json:"aff_weekly_remaining"`
+	AffWeeklyWindowStart  *time.Time `json:"aff_weekly_window_start,omitempty"`
+	AffCodeExpiresAt      *time.Time `json:"aff_code_expires_at,omitempty"`
+	AffCodeAutoRotate     bool       `json:"aff_code_auto_rotate"`
 	InviterID             *int64     `json:"inviter_id,omitempty"`
 	InviterBoundAt        *time.Time `json:"inviter_bound_at,omitempty"`
 	InviteBindSource      string     `json:"invite_bind_source,omitempty"`
@@ -116,6 +132,10 @@ type AffiliateDetail struct {
 type AffiliateRepository interface {
 	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
+	ValidateAffiliateCode(ctx context.Context, code string, cycle AffiliateCodeCycle) (*AffiliateSummary, error)
+	ConsumeAffiliateCode(ctx context.Context, userID int64, code string, cycle AffiliateCodeCycle) (*AffiliateSummary, error)
+	RefreshUserAffiliateCodeCycle(ctx context.Context, userID int64, cycle AffiliateCodeCycle) (*AffiliateSummary, error)
+	RefreshExpiredAffiliateCodeCycles(ctx context.Context, cycle AffiliateCodeCycle, limit int) (int, error)
 	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
 	AdminBindInviter(ctx context.Context, userID, inviterID int64, resetValidity bool) (*AffiliateSummary, error)
 	AdminExtendInviteRewards(ctx context.Context, req AffiliateInviteRewardExtensionRequest) (*AffiliateInviteRewardExtensionResult, error)
@@ -130,6 +150,7 @@ type AffiliateRepository interface {
 	UpdateUserAffCode(ctx context.Context, userID int64, newCode string) error
 	ResetUserAffCode(ctx context.Context, userID int64) (string, error)
 	SetUserRebateRate(ctx context.Context, userID int64, ratePercent *float64) error
+	SetUserInviteCodePolicy(ctx context.Context, userID int64, weeklyLimit int, autoRotate bool) error
 	BatchSetUserRebateRate(ctx context.Context, userIDs []int64, ratePercent *float64) error
 	ListUsersWithCustomSettings(ctx context.Context, filter AffiliateAdminFilter) ([]AffiliateAdminEntry, int64, error)
 }
@@ -143,13 +164,23 @@ type AffiliateAdminFilter struct {
 
 // AffiliateAdminEntry 专属用户列表条目
 type AffiliateAdminEntry struct {
-	UserID               int64    `json:"user_id"`
-	Email                string   `json:"email"`
-	Username             string   `json:"username"`
-	AffCode              string   `json:"aff_code"`
-	AffCodeCustom        bool     `json:"aff_code_custom"`
-	AffRebateRatePercent *float64 `json:"aff_rebate_rate_percent,omitempty"`
-	AffCount             int      `json:"aff_count"`
+	UserID               int64      `json:"user_id"`
+	Email                string     `json:"email"`
+	Username             string     `json:"username"`
+	AffCode              string     `json:"aff_code"`
+	AffCodeCustom        bool       `json:"aff_code_custom"`
+	AffRebateRatePercent *float64   `json:"aff_rebate_rate_percent,omitempty"`
+	AffWeeklyLimit       int        `json:"aff_weekly_limit"`
+	AffWeeklyUsed        int        `json:"aff_weekly_used"`
+	AffCodeAutoRotate    bool       `json:"aff_code_auto_rotate"`
+	AffCodeExpiresAt     *time.Time `json:"aff_code_expires_at,omitempty"`
+	AffCount             int        `json:"aff_count"`
+}
+
+type AffiliateCodeCycle struct {
+	Now         time.Time
+	WindowStart time.Time
+	WindowEnd   time.Time
 }
 
 const (
@@ -185,6 +216,43 @@ func NewAffiliateService(repo AffiliateRepository, settingService *SettingServic
 	}
 }
 
+func currentAffiliateCodeCycle(now time.Time) AffiliateCodeCycle {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("Asia/Shanghai", 8*60*60)
+	}
+	localNow := now.In(loc)
+	daysSinceMonday := (int(localNow.Weekday()) + 6) % 7
+	windowStartLocal := time.Date(
+		localNow.Year(),
+		localNow.Month(),
+		localNow.Day()-daysSinceMonday,
+		0, 0, 0, 0,
+		loc,
+	)
+	return AffiliateCodeCycle{
+		Now:         now.UTC(),
+		WindowStart: windowStartLocal.UTC(),
+		WindowEnd:   windowStartLocal.AddDate(0, 0, 7).UTC(),
+	}
+}
+
+func affiliateWeeklyRemaining(limit, used int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if used < 0 {
+		used = 0
+	}
+	if used >= limit {
+		return 0
+	}
+	return limit - used
+}
+
 // IsEnabled reports whether the affiliate (邀请返利) feature is turned on.
 func (s *AffiliateService) IsEnabled(ctx context.Context) bool {
 	if s == nil || s.settingService == nil {
@@ -200,7 +268,14 @@ func (s *AffiliateService) EnsureUserAffiliate(ctx context.Context, userID int64
 	if s == nil || s.repo == nil {
 		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
 	}
-	return s.repo.EnsureUserAffiliate(ctx, userID)
+	if _, err := s.repo.EnsureUserAffiliate(ctx, userID); err != nil {
+		return nil, err
+	}
+	refreshed, err := s.repo.RefreshUserAffiliateCodeCycle(ctx, userID, currentAffiliateCodeCycle(time.Now()))
+	if err != nil {
+		return nil, err
+	}
+	return refreshed, nil
 }
 
 func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64, query AffiliateDetailQuery) (*AffiliateDetail, error) {
@@ -221,6 +296,12 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64,
 	return &AffiliateDetail{
 		UserID:                     summary.UserID,
 		AffCode:                    summary.AffCode,
+		AffWeeklyLimit:             summary.AffWeeklyLimit,
+		AffWeeklyUsed:              summary.AffWeeklyUsed,
+		AffWeeklyRemaining:         affiliateWeeklyRemaining(summary.AffWeeklyLimit, summary.AffWeeklyUsed),
+		AffWeeklyWindowStart:       summary.AffWeeklyWindowStart,
+		AffCodeExpiresAt:           summary.AffCodeExpiresAt,
+		AffCodeAutoRotate:          summary.AffCodeAutoRotate,
 		InviterID:                  summary.InviterID,
 		InviterBoundAt:             summary.InviterBoundAt,
 		InviteBindSource:           summary.InviteBindSource,
@@ -235,6 +316,60 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64,
 		EffectiveRebateRatePercent: s.currentInviteSharePercent(ctx),
 		Invitees:                   invitees,
 	}, nil
+}
+
+func (s *AffiliateService) ValidateInvitationCode(ctx context.Context, rawCode string) error {
+	code := strings.ToUpper(strings.TrimSpace(rawCode))
+	if code == "" {
+		return ErrAffiliateCodeInvalid
+	}
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if !s.IsEnabled(ctx) {
+		return ErrAffiliateCodeInvalid
+	}
+	if !isValidAffiliateCodeFormat(code) {
+		return ErrAffiliateCodeInvalid
+	}
+	_, err := s.repo.ValidateAffiliateCode(ctx, code, currentAffiliateCodeCycle(time.Now()))
+	if errors.Is(err, ErrAffiliateProfileNotFound) {
+		return ErrAffiliateCodeInvalid
+	}
+	return err
+}
+
+func (s *AffiliateService) ConsumeInvitationCode(ctx context.Context, userID int64, rawCode string) error {
+	code := strings.ToUpper(strings.TrimSpace(rawCode))
+	if code == "" {
+		return ErrAffiliateCodeInvalid
+	}
+	if userID <= 0 {
+		return infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if !s.IsEnabled(ctx) {
+		return ErrAffiliateCodeInvalid
+	}
+	if !isValidAffiliateCodeFormat(code) {
+		return ErrAffiliateCodeInvalid
+	}
+	if _, err := s.repo.ConsumeAffiliateCode(ctx, userID, code, currentAffiliateCodeCycle(time.Now())); err != nil {
+		if errors.Is(err, ErrAffiliateProfileNotFound) {
+			return ErrAffiliateCodeInvalid
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *AffiliateService) RefreshExpiredAffiliateCodeCycles(ctx context.Context, limit int) (int, error) {
+	if s == nil || s.repo == nil {
+		return 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	return s.repo.RefreshExpiredAffiliateCodeCycles(ctx, currentAffiliateCodeCycle(time.Now()), limit)
 }
 
 func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, rawCode string) error {
@@ -516,6 +651,16 @@ func (s *AffiliateService) AdminSetUserRebateRate(ctx context.Context, userID in
 		return err
 	}
 	return s.repo.SetUserRebateRate(ctx, userID, ratePercent)
+}
+
+func (s *AffiliateService) AdminSetUserInviteCodePolicy(ctx context.Context, userID int64, weeklyLimit int, autoRotate bool) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if weeklyLimit < 0 || weeklyLimit > AffiliateCodeWeeklyLimitMax {
+		return infraerrors.BadRequest("INVALID_AFFILIATE_WEEKLY_LIMIT", "affiliate weekly limit out of range")
+	}
+	return s.repo.SetUserInviteCodePolicy(ctx, userID, weeklyLimit, autoRotate)
 }
 
 // AdminBatchSetUserRebateRate 批量设置/清除用户专属返利比例。

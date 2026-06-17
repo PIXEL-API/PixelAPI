@@ -58,6 +58,7 @@ type RevenueSummary struct {
 	Usage          RevenueUsageStats                `json:"usage"`
 	Adjustments    RevenueAdjustmentStats           `json:"adjustments"`
 	Profit         RevenueProfitStats               `json:"profit"`
+	PlatformLedger RevenuePlatformLedgerStats       `json:"platform_ledger"`
 	Trend          []RevenueTrendPoint              `json:"trend"`
 	TopUsers       []RevenueBreakdownItem           `json:"top_users"`
 	TopGroups      []RevenueBreakdownItem           `json:"top_groups"`
@@ -115,6 +116,19 @@ type RevenueProfitStats struct {
 	UsageGrossMargin   float64 `json:"usage_gross_margin"`
 	EstimatedNetProfit float64 `json:"estimated_net_profit"`
 	EstimatedNetMargin float64 `json:"estimated_net_margin"`
+}
+
+type RevenuePlatformLedgerStats struct {
+	UserCount                           int64   `json:"user_count"`
+	TotalUserBalance                    float64 `json:"total_user_balance"`
+	PositiveUserBalance                 float64 `json:"positive_user_balance"`
+	BalanceGreaterThanPointOne          float64 `json:"balance_gt_0_1"`
+	NegativeUserBalance                 float64 `json:"negative_user_balance"`
+	PositiveBalanceUserCount            int64   `json:"positive_balance_user_count"`
+	BalanceGreaterThanPointOneUserCount int64   `json:"balance_gt_0_1_user_count"`
+	PendingWithdrawalAmount             float64 `json:"pending_withdrawal_amount"`
+	PendingWithdrawalFee                float64 `json:"pending_withdrawal_fee"`
+	PendingWithdrawalNetAmount          float64 `json:"pending_withdrawal_net_amount"`
 }
 
 type RevenueTrendPoint struct {
@@ -251,6 +265,9 @@ func (s *RevenueService) GetSummary(ctx context.Context, params RevenueQueryPara
 		return nil, err
 	}
 	if err := s.fillRevenueShareStats(ctx, params, out, pointIndex); err != nil {
+		return nil, err
+	}
+	if err := s.fillRevenuePlatformLedgerStats(ctx, out); err != nil {
 		return nil, err
 	}
 
@@ -703,6 +720,59 @@ func (s *RevenueService) fillRevenueUsageStats(ctx context.Context, params Reven
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate revenue usage trend: %w", err)
+	}
+	return nil
+}
+
+func (s *RevenueService) fillRevenuePlatformLedgerStats(ctx context.Context, out *RevenueSummary) error {
+	query := `
+		WITH user_stats AS (
+			SELECT
+				COUNT(*)::bigint AS user_count,
+				COALESCE(SUM(balance), 0)::double precision AS total_user_balance,
+				COALESCE(SUM(balance) FILTER (WHERE balance > 0), 0)::double precision AS positive_user_balance,
+				COALESCE(SUM(balance) FILTER (WHERE balance > 0.1), 0)::double precision AS balance_gt_0_1,
+				COALESCE(SUM(balance) FILTER (WHERE balance < 0), 0)::double precision AS negative_user_balance,
+				COUNT(*) FILTER (WHERE balance > 0) AS positive_balance_user_count,
+				COUNT(*) FILTER (WHERE balance > 0.1) AS balance_gt_0_1_user_count
+			FROM users
+			WHERE deleted_at IS NULL
+		),
+		withdrawal_stats AS (
+			SELECT
+				COALESCE(SUM(total_deducted), 0)::double precision AS pending_withdrawal_amount,
+				COALESCE(SUM(fee_amount), 0)::double precision AS pending_withdrawal_fee,
+				COALESCE(SUM(total_deducted - fee_amount), 0)::double precision AS pending_withdrawal_net_amount
+			FROM user_withdrawal_requests
+			WHERE status = $1
+		)
+		SELECT
+			user_stats.user_count,
+			user_stats.total_user_balance,
+			user_stats.positive_user_balance,
+			user_stats.balance_gt_0_1,
+			user_stats.negative_user_balance,
+			user_stats.positive_balance_user_count,
+			user_stats.balance_gt_0_1_user_count,
+			withdrawal_stats.pending_withdrawal_amount,
+			withdrawal_stats.pending_withdrawal_fee,
+			withdrawal_stats.pending_withdrawal_net_amount
+		FROM user_stats
+		CROSS JOIN withdrawal_stats
+	`
+	if err := s.querySingle(ctx, query, []any{WithdrawalStatusPending},
+		&out.PlatformLedger.UserCount,
+		&out.PlatformLedger.TotalUserBalance,
+		&out.PlatformLedger.PositiveUserBalance,
+		&out.PlatformLedger.BalanceGreaterThanPointOne,
+		&out.PlatformLedger.NegativeUserBalance,
+		&out.PlatformLedger.PositiveBalanceUserCount,
+		&out.PlatformLedger.BalanceGreaterThanPointOneUserCount,
+		&out.PlatformLedger.PendingWithdrawalAmount,
+		&out.PlatformLedger.PendingWithdrawalFee,
+		&out.PlatformLedger.PendingWithdrawalNetAmount,
+	); err != nil {
+		return fmt.Errorf("query revenue platform ledger stats: %w", err)
 	}
 	return nil
 }
@@ -1296,6 +1366,14 @@ func finalizeRevenueSummary(out *RevenueSummary) {
 	out.Profit.UsageGrossMargin = marginRatio(out.Profit.UsageGrossProfit, out.Usage.ConsumedRevenue)
 	out.Profit.EstimatedNetProfit = roundRevenue(out.Usage.ConsumedRevenue - out.Usage.AccountCost - out.Adjustments.AffiliateRebate - out.Adjustments.ShareOwnerCredit + out.Adjustments.PrivateGroupCommission)
 	out.Profit.EstimatedNetMargin = marginRatio(out.Profit.EstimatedNetProfit, out.Usage.ConsumedRevenue)
+
+	out.PlatformLedger.TotalUserBalance = roundRevenue(out.PlatformLedger.TotalUserBalance)
+	out.PlatformLedger.PositiveUserBalance = roundRevenue(out.PlatformLedger.PositiveUserBalance)
+	out.PlatformLedger.BalanceGreaterThanPointOne = roundRevenue(out.PlatformLedger.BalanceGreaterThanPointOne)
+	out.PlatformLedger.NegativeUserBalance = roundRevenue(out.PlatformLedger.NegativeUserBalance)
+	out.PlatformLedger.PendingWithdrawalAmount = roundRevenue(out.PlatformLedger.PendingWithdrawalAmount)
+	out.PlatformLedger.PendingWithdrawalFee = roundRevenue(out.PlatformLedger.PendingWithdrawalFee)
+	out.PlatformLedger.PendingWithdrawalNetAmount = roundRevenue(out.PlatformLedger.PendingWithdrawalNetAmount)
 
 	for i := range out.Trend {
 		p := &out.Trend[i]

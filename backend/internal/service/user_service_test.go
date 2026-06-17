@@ -41,6 +41,7 @@ type mockUserRepo struct {
 	deleteAvatarIDs         []int64
 	getAvatarFn             func(ctx context.Context, userID int64) (*UserAvatar, error)
 	txCalls                 int
+	balanceLedgerDeltas     []UserBalanceLedgerDeltaInput
 }
 
 type mockUserRepoTxKey struct{}
@@ -187,6 +188,40 @@ func (m *mockUserRepo) UpdateBalance(ctx context.Context, id int64, amount float
 		return m.updateBalanceFn(ctx, id, amount)
 	}
 	return m.updateBalanceErr
+}
+func (m *mockUserRepo) LockUserBalanceForUpdate(ctx context.Context, userID int64) (float64, error) {
+	user, err := m.GetByID(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	return user.Balance, nil
+}
+func (m *mockUserRepo) ApplyBalanceLedgerDelta(ctx context.Context, input UserBalanceLedgerDeltaInput) (*UserBalanceLedgerAdjustmentResult, error) {
+	user, err := m.GetByID(ctx, input.UserID)
+	if err != nil {
+		return nil, err
+	}
+	before := user.Balance
+	delta := input.Delta
+	after := before + delta
+	if input.ClampZero && after < 0 {
+		delta = -before
+		after = 0
+	}
+	input.Delta = delta
+	m.balanceLedgerDeltas = append(m.balanceLedgerDeltas, input)
+	if m.updateBalanceFn != nil {
+		if err := m.updateBalanceFn(ctx, input.UserID, delta); err != nil {
+			return nil, err
+		}
+	} else if m.getByIDUser != nil {
+		m.getByIDUser.Balance = after
+	}
+	return &UserBalanceLedgerAdjustmentResult{
+		BalanceBefore: before,
+		BalanceAfter:  after,
+		Delta:         delta,
+	}, nil
 }
 func (m *mockUserRepo) UpdateUserLastActiveAt(_ context.Context, userID int64, activeAt time.Time) error {
 	m.updateLastActiveUserIDs = append(m.updateLastActiveUserIDs, userID)

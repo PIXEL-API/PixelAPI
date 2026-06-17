@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -3747,6 +3748,300 @@ type AccountUsageStatsResponse = usagestats.AccountUsageStatsResponse
 // EndpointStat represents endpoint usage statistics row.
 type EndpointStat = usagestats.EndpointStat
 
+// resolveAccountUsageStatsScopeIDs expands display-only account stats to prior
+// account rows that represent the same external account, including soft-deleted
+// rows. Runtime quota, scheduling, and billing paths must keep using account.ID.
+func (r *usageLogRepository) resolveAccountUsageStatsScopeIDs(ctx context.Context, accountID int64) ([]int64, error) {
+	if accountID <= 0 {
+		return []int64{}, nil
+	}
+
+	query := `
+		WITH current_account AS (
+			SELECT id, owner_user_id, platform, type, credentials, extra
+			FROM accounts
+			WHERE id = $1
+		),
+		account_scope AS (
+			SELECT DISTINCT a.id
+			FROM accounts a
+			JOIN current_account c
+			  ON a.platform = c.platform
+			 AND a.type = c.type
+			 AND a.owner_user_id IS NOT DISTINCT FROM c.owner_user_id
+			WHERE a.id = c.id
+			   OR (
+				c.platform = 'openai'
+				AND c.type = 'oauth'
+				AND (
+					(
+						NULLIF(BTRIM(c.credentials->>'organization_id'), '') IS NOT NULL
+						AND NULLIF(BTRIM(c.credentials->>'chatgpt_user_id'), '') IS NOT NULL
+						AND LOWER(NULLIF(BTRIM(a.credentials->>'organization_id'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'organization_id'), ''))
+						AND NULLIF(BTRIM(a.credentials->>'chatgpt_user_id'), '') = NULLIF(BTRIM(c.credentials->>'chatgpt_user_id'), '')
+					)
+					OR (
+						NULLIF(BTRIM(c.credentials->>'organization_id'), '') IS NOT NULL
+						AND NULLIF(BTRIM(c.credentials->>'chatgpt_user_id'), '') IS NULL
+						AND NULLIF(BTRIM(c.credentials->>'chatgpt_account_id'), '') IS NOT NULL
+						AND LOWER(NULLIF(BTRIM(a.credentials->>'organization_id'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'organization_id'), ''))
+						AND NULLIF(BTRIM(a.credentials->>'chatgpt_user_id'), '') IS NULL
+						AND NULLIF(BTRIM(a.credentials->>'chatgpt_account_id'), '') = NULLIF(BTRIM(c.credentials->>'chatgpt_account_id'), '')
+					)
+					OR (
+						NULLIF(BTRIM(c.credentials->>'organization_id'), '') IS NULL
+						AND NULLIF(BTRIM(c.credentials->>'chatgpt_user_id'), '') IS NOT NULL
+						AND NULLIF(BTRIM(a.credentials->>'organization_id'), '') IS NULL
+						AND NULLIF(BTRIM(a.credentials->>'chatgpt_user_id'), '') = NULLIF(BTRIM(c.credentials->>'chatgpt_user_id'), '')
+					)
+					OR (
+						NULLIF(BTRIM(c.credentials->>'organization_id'), '') IS NULL
+						AND NULLIF(BTRIM(c.credentials->>'chatgpt_user_id'), '') IS NULL
+						AND NULLIF(BTRIM(c.credentials->>'chatgpt_account_id'), '') IS NOT NULL
+						AND NULLIF(BTRIM(a.credentials->>'organization_id'), '') IS NULL
+						AND NULLIF(BTRIM(a.credentials->>'chatgpt_user_id'), '') IS NULL
+						AND NULLIF(BTRIM(a.credentials->>'chatgpt_account_id'), '') = NULLIF(BTRIM(c.credentials->>'chatgpt_account_id'), '')
+					)
+					OR (
+						NULLIF(BTRIM(c.credentials->>'email'), '') IS NOT NULL
+						AND LOWER(NULLIF(BTRIM(a.credentials->>'email'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'email'), ''))
+					)
+				)
+			   )
+			   OR (
+				c.platform = 'anthropic'
+				AND c.type = 'oauth'
+				AND (
+					(
+						COALESCE(NULLIF(BTRIM(c.extra->>'org_uuid'), ''), NULLIF(BTRIM(c.credentials->>'org_uuid'), '')) IS NOT NULL
+						AND COALESCE(NULLIF(BTRIM(c.extra->>'account_uuid'), ''), NULLIF(BTRIM(c.credentials->>'account_uuid'), '')) IS NOT NULL
+						AND LOWER(COALESCE(NULLIF(BTRIM(a.extra->>'org_uuid'), ''), NULLIF(BTRIM(a.credentials->>'org_uuid'), ''))) =
+							LOWER(COALESCE(NULLIF(BTRIM(c.extra->>'org_uuid'), ''), NULLIF(BTRIM(c.credentials->>'org_uuid'), '')))
+						AND LOWER(COALESCE(NULLIF(BTRIM(a.extra->>'account_uuid'), ''), NULLIF(BTRIM(a.credentials->>'account_uuid'), ''))) =
+							LOWER(COALESCE(NULLIF(BTRIM(c.extra->>'account_uuid'), ''), NULLIF(BTRIM(c.credentials->>'account_uuid'), '')))
+					)
+					OR (
+						COALESCE(NULLIF(BTRIM(c.extra->>'account_uuid'), ''), NULLIF(BTRIM(c.credentials->>'account_uuid'), '')) IS NOT NULL
+						AND COALESCE(NULLIF(BTRIM(c.extra->>'org_uuid'), ''), NULLIF(BTRIM(c.credentials->>'org_uuid'), '')) IS NULL
+						AND COALESCE(NULLIF(BTRIM(a.extra->>'org_uuid'), ''), NULLIF(BTRIM(a.credentials->>'org_uuid'), '')) IS NULL
+						AND LOWER(COALESCE(NULLIF(BTRIM(a.extra->>'account_uuid'), ''), NULLIF(BTRIM(a.credentials->>'account_uuid'), ''))) =
+							LOWER(COALESCE(NULLIF(BTRIM(c.extra->>'account_uuid'), ''), NULLIF(BTRIM(c.credentials->>'account_uuid'), '')))
+					)
+					OR (
+						COALESCE(NULLIF(BTRIM(c.extra->>'org_uuid'), ''), NULLIF(BTRIM(c.credentials->>'org_uuid'), '')) IS NOT NULL
+						AND COALESCE(NULLIF(BTRIM(c.extra->>'account_uuid'), ''), NULLIF(BTRIM(c.credentials->>'account_uuid'), '')) IS NULL
+						AND COALESCE(NULLIF(BTRIM(a.extra->>'account_uuid'), ''), NULLIF(BTRIM(a.credentials->>'account_uuid'), '')) IS NULL
+						AND LOWER(COALESCE(NULLIF(BTRIM(a.extra->>'org_uuid'), ''), NULLIF(BTRIM(a.credentials->>'org_uuid'), ''))) =
+							LOWER(COALESCE(NULLIF(BTRIM(c.extra->>'org_uuid'), ''), NULLIF(BTRIM(c.credentials->>'org_uuid'), '')))
+					)
+					OR (
+						NULLIF(BTRIM(c.credentials->>'email_address'), '') IS NOT NULL
+						AND LOWER(NULLIF(BTRIM(a.credentials->>'email_address'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'email_address'), ''))
+					)
+				)
+			   )
+			   OR (
+				c.platform = 'gemini'
+				AND c.type = 'oauth'
+				AND NULLIF(BTRIM(c.credentials->>'project_id'), '') IS NOT NULL
+				AND LOWER(COALESCE(NULLIF(BTRIM(a.credentials->>'oauth_type'), ''), 'code_assist')) =
+					LOWER(COALESCE(NULLIF(BTRIM(c.credentials->>'oauth_type'), ''), 'code_assist'))
+				AND LOWER(NULLIF(BTRIM(a.credentials->>'project_id'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'project_id'), ''))
+			   )
+			   OR (
+				c.platform = 'antigravity'
+				AND c.type = 'oauth'
+				AND (
+					(
+						NULLIF(BTRIM(c.credentials->>'project_id'), '') IS NOT NULL
+						AND LOWER(NULLIF(BTRIM(a.credentials->>'project_id'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'project_id'), ''))
+					)
+					OR (
+						NULLIF(BTRIM(c.credentials->>'email'), '') IS NOT NULL
+						AND LOWER(NULLIF(BTRIM(a.credentials->>'email'), '')) = LOWER(NULLIF(BTRIM(c.credentials->>'email'), ''))
+					)
+				)
+			   )
+		)
+		SELECT id FROM account_scope ORDER BY id
+	`
+
+	rows, err := r.sql.QueryContext(ctx, query, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	accountIDs := make([]int64, 0, 1)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		accountIDs = append(accountIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(accountIDs) == 0 {
+		return []int64{accountID}, nil
+	}
+	return accountIDs, nil
+}
+
+func (r *usageLogRepository) getModelStatsForAccountIDs(ctx context.Context, startTime, endTime time.Time, accountIDs []int64, source string) (results []ModelStat, err error) {
+	if len(accountIDs) == 0 {
+		return []ModelStat{}, nil
+	}
+
+	modelExpr := resolveModelDimensionExpression(source)
+	query := fmt.Sprintf(`
+		SELECT
+			%s as model,
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
+			COALESCE(SUM(total_cost), 0) as cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost
+		FROM usage_logs
+		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
+		GROUP BY %s
+		ORDER BY total_tokens DESC
+	`, modelExpr, modelExpr)
+
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	results, err = scanModelStatsRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (r *usageLogRepository) getEndpointStatsByColumnForAccountIDs(ctx context.Context, endpointColumn string, startTime, endTime time.Time, accountIDs []int64) (results []EndpointStat, err error) {
+	if len(accountIDs) == 0 {
+		return []EndpointStat{}, nil
+	}
+	switch endpointColumn {
+	case "inbound_endpoint", "upstream_endpoint":
+	default:
+		return nil, fmt.Errorf("unsupported account endpoint stats column: %s", endpointColumn)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(NULLIF(TRIM(%s), ''), 'unknown') AS endpoint,
+			COUNT(*) AS requests,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
+			COALESCE(SUM(total_cost), 0) as cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost
+		FROM usage_logs
+		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
+		GROUP BY endpoint
+		ORDER BY requests DESC
+	`, endpointColumn)
+
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	results = make([]EndpointStat, 0)
+	for rows.Next() {
+		var row EndpointStat
+		if err := rows.Scan(&row.Endpoint, &row.Requests, &row.TotalTokens, &row.Cost, &row.ActualCost); err != nil {
+			return nil, err
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func accountUsageStatsAccountIDStrings(accountIDs []int64) []string {
+	result := make([]string, 0, len(accountIDs))
+	for _, id := range accountIDs {
+		result = append(result, strconv.FormatInt(id, 10))
+	}
+	return result
+}
+
+func accountUsageStatsDateLabel(date string) string {
+	t, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return date
+	}
+	return t.Format("01/02")
+}
+
+func (r *usageLogRepository) getAccountHourlyCostsByDate(ctx context.Context, startTime, endTime time.Time, accountIDs []int64) (map[string]float64, error) {
+	result := make(map[string]float64)
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT
+			TO_CHAR(created_at, 'YYYY-MM-DD') AS date,
+			COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount ELSE -amount END), 0) AS hourly_cost
+		FROM user_balance_ledger
+		WHERE metadata->>'account_id' = ANY($1)
+			AND reason IN ($2, $3, $4)
+			AND created_at >= $5
+			AND created_at < $6
+		GROUP BY date
+		ORDER BY date ASC
+	`
+	rows, err := r.sql.QueryContext(
+		ctx,
+		query,
+		pq.Array(accountUsageStatsAccountIDStrings(accountIDs)),
+		accountShareSeatPrepayReason,
+		accountShareSeatRefundReason,
+		accountShareSeatWaiverRefundReason,
+		startTime,
+		endTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var date string
+		var hourlyCost float64
+		if err := rows.Scan(&date, &hourlyCost); err != nil {
+			return nil, err
+		}
+		result[date] = hourlyCost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Context, endpointColumn string, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []EndpointStat, err error) {
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
@@ -4193,9 +4488,14 @@ func (r *usageLogRepository) getModelStatsWithSnapshots(ctx context.Context, sta
 
 // GetAccountUsageStats returns comprehensive usage statistics for an account over a time range
 func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID int64, startTime, endTime time.Time) (resp *AccountUsageStatsResponse, err error) {
-	daysCount := int(endTime.Sub(startTime).Hours()/24) + 1
+	daysCount := int(endTime.Sub(startTime).Hours() / 24)
 	if daysCount <= 0 {
 		daysCount = 30
+	}
+
+	accountIDs, err := r.resolveAccountUsageStatsScopeIDs(ctx, accountID)
+	if err != nil {
+		return nil, err
 	}
 
 	query := `
@@ -4207,12 +4507,12 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost,
 			COALESCE(SUM(actual_cost), 0) as user_cost
 		FROM usage_logs
-		WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
 		GROUP BY date
 		ORDER BY date ASC
 	`
 
-	rows, err := r.sql.QueryContext(ctx, query, accountID, startTime, endTime)
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
@@ -4225,33 +4525,58 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		}
 	}()
 
-	history := make([]AccountUsageHistory, 0)
+	historyByDate := make(map[string]*AccountUsageHistory)
 	for rows.Next() {
 		var date string
 		var requests int64
 		var tokens int64
 		var cost float64
 		var actualCost float64
-		var userCost float64
-		if err = rows.Scan(&date, &requests, &tokens, &cost, &actualCost, &userCost); err != nil {
+		var requestUserCost float64
+		if err = rows.Scan(&date, &requests, &tokens, &cost, &actualCost, &requestUserCost); err != nil {
 			return nil, err
 		}
-		t, _ := time.Parse("2006-01-02", date)
-		history = append(history, AccountUsageHistory{
-			Date:       date,
-			Label:      t.Format("01/02"),
-			Requests:   requests,
-			Tokens:     tokens,
-			Cost:       cost,
-			ActualCost: actualCost,
-			UserCost:   userCost,
-		})
+		historyByDate[date] = &AccountUsageHistory{
+			Date:            date,
+			Label:           accountUsageStatsDateLabel(date),
+			Requests:        requests,
+			Tokens:          tokens,
+			Cost:            cost,
+			ActualCost:      actualCost,
+			RequestUserCost: requestUserCost,
+			UserCost:        requestUserCost,
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	var totalAccountCost, totalUserCost, totalStandardCost float64
+	hourlyCostsByDate, err := r.getAccountHourlyCostsByDate(ctx, startTime, endTime, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	for date, hourlyCost := range hourlyCostsByDate {
+		historyItem := historyByDate[date]
+		if historyItem == nil {
+			historyItem = &AccountUsageHistory{
+				Date:  date,
+				Label: accountUsageStatsDateLabel(date),
+			}
+			historyByDate[date] = historyItem
+		}
+		historyItem.HourlyCost = hourlyCost
+		historyItem.UserCost = historyItem.RequestUserCost + historyItem.HourlyCost
+	}
+
+	history := make([]AccountUsageHistory, 0, len(historyByDate))
+	for _, item := range historyByDate {
+		history = append(history, *item)
+	}
+	sort.Slice(history, func(i, j int) bool {
+		return history[i].Date < history[j].Date
+	})
+
+	var totalAccountCost, totalUserCost, totalRequestUserCost, totalHourlyCost, totalStandardCost float64
 	var totalRequests, totalTokens int64
 	var highestCostDay, highestRequestDay *AccountUsageHistory
 
@@ -4259,6 +4584,8 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		h := &history[i]
 		totalAccountCost += h.ActualCost
 		totalUserCost += h.UserCost
+		totalRequestUserCost += h.RequestUserCost
+		totalHourlyCost += h.HourlyCost
 		totalStandardCost += h.Cost
 		totalRequests += h.Requests
 		totalTokens += h.Tokens
@@ -4276,42 +4603,50 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		actualDaysUsed = 1
 	}
 
-	avgQuery := "SELECT COALESCE(AVG(duration_ms), 0) as avg_duration_ms FROM usage_logs WHERE account_id = $1 AND created_at >= $2 AND created_at < $3"
+	avgQuery := "SELECT COALESCE(AVG(duration_ms), 0) as avg_duration_ms FROM usage_logs WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3"
 	var avgDuration float64
-	if err := scanSingleRow(ctx, r.sql, avgQuery, []any{accountID, startTime, endTime}, &avgDuration); err != nil {
+	if err := scanSingleRow(ctx, r.sql, avgQuery, []any{pq.Array(accountIDs), startTime, endTime}, &avgDuration); err != nil {
 		return nil, err
 	}
 
 	summary := AccountUsageSummary{
-		Days:              daysCount,
-		ActualDaysUsed:    actualDaysUsed,
-		TotalCost:         totalAccountCost,
-		TotalUserCost:     totalUserCost,
-		TotalStandardCost: totalStandardCost,
-		TotalRequests:     totalRequests,
-		TotalTokens:       totalTokens,
-		AvgDailyCost:      totalAccountCost / float64(actualDaysUsed),
-		AvgDailyUserCost:  totalUserCost / float64(actualDaysUsed),
-		AvgDailyRequests:  float64(totalRequests) / float64(actualDaysUsed),
-		AvgDailyTokens:    float64(totalTokens) / float64(actualDaysUsed),
-		AvgDurationMs:     avgDuration,
+		Days:                    daysCount,
+		ActualDaysUsed:          actualDaysUsed,
+		TotalCost:               totalAccountCost,
+		TotalUserCost:           totalUserCost,
+		TotalRequestUserCost:    totalRequestUserCost,
+		TotalHourlyCost:         totalHourlyCost,
+		TotalStandardCost:       totalStandardCost,
+		TotalRequests:           totalRequests,
+		TotalTokens:             totalTokens,
+		AvgDailyCost:            totalAccountCost / float64(actualDaysUsed),
+		AvgDailyUserCost:        totalUserCost / float64(actualDaysUsed),
+		AvgDailyRequestUserCost: totalRequestUserCost / float64(actualDaysUsed),
+		AvgDailyHourlyCost:      totalHourlyCost / float64(actualDaysUsed),
+		AvgDailyRequests:        float64(totalRequests) / float64(actualDaysUsed),
+		AvgDailyTokens:          float64(totalTokens) / float64(actualDaysUsed),
+		AvgDurationMs:           avgDuration,
 	}
 
 	todayStr := timezone.Now().Format("2006-01-02")
 	for i := range history {
 		if history[i].Date == todayStr {
 			summary.Today = &struct {
-				Date     string  `json:"date"`
-				Cost     float64 `json:"cost"`
-				UserCost float64 `json:"user_cost"`
-				Requests int64   `json:"requests"`
-				Tokens   int64   `json:"tokens"`
+				Date            string  `json:"date"`
+				Cost            float64 `json:"cost"`
+				RequestUserCost float64 `json:"request_user_cost"`
+				HourlyCost      float64 `json:"hourly_cost"`
+				UserCost        float64 `json:"user_cost"`
+				Requests        int64   `json:"requests"`
+				Tokens          int64   `json:"tokens"`
 			}{
-				Date:     history[i].Date,
-				Cost:     history[i].ActualCost,
-				UserCost: history[i].UserCost,
-				Requests: history[i].Requests,
-				Tokens:   history[i].Tokens,
+				Date:            history[i].Date,
+				Cost:            history[i].ActualCost,
+				RequestUserCost: history[i].RequestUserCost,
+				HourlyCost:      history[i].HourlyCost,
+				UserCost:        history[i].UserCost,
+				Requests:        history[i].Requests,
+				Tokens:          history[i].Tokens,
 			}
 			break
 		}
@@ -4319,46 +4654,54 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 
 	if highestCostDay != nil {
 		summary.HighestCostDay = &struct {
-			Date     string  `json:"date"`
-			Label    string  `json:"label"`
-			Cost     float64 `json:"cost"`
-			UserCost float64 `json:"user_cost"`
-			Requests int64   `json:"requests"`
+			Date            string  `json:"date"`
+			Label           string  `json:"label"`
+			Cost            float64 `json:"cost"`
+			RequestUserCost float64 `json:"request_user_cost"`
+			HourlyCost      float64 `json:"hourly_cost"`
+			UserCost        float64 `json:"user_cost"`
+			Requests        int64   `json:"requests"`
 		}{
-			Date:     highestCostDay.Date,
-			Label:    highestCostDay.Label,
-			Cost:     highestCostDay.ActualCost,
-			UserCost: highestCostDay.UserCost,
-			Requests: highestCostDay.Requests,
+			Date:            highestCostDay.Date,
+			Label:           highestCostDay.Label,
+			Cost:            highestCostDay.ActualCost,
+			RequestUserCost: highestCostDay.RequestUserCost,
+			HourlyCost:      highestCostDay.HourlyCost,
+			UserCost:        highestCostDay.UserCost,
+			Requests:        highestCostDay.Requests,
 		}
 	}
 
 	if highestRequestDay != nil {
 		summary.HighestRequestDay = &struct {
-			Date     string  `json:"date"`
-			Label    string  `json:"label"`
-			Requests int64   `json:"requests"`
-			Cost     float64 `json:"cost"`
-			UserCost float64 `json:"user_cost"`
+			Date            string  `json:"date"`
+			Label           string  `json:"label"`
+			Requests        int64   `json:"requests"`
+			Cost            float64 `json:"cost"`
+			RequestUserCost float64 `json:"request_user_cost"`
+			HourlyCost      float64 `json:"hourly_cost"`
+			UserCost        float64 `json:"user_cost"`
 		}{
-			Date:     highestRequestDay.Date,
-			Label:    highestRequestDay.Label,
-			Requests: highestRequestDay.Requests,
-			Cost:     highestRequestDay.ActualCost,
-			UserCost: highestRequestDay.UserCost,
+			Date:            highestRequestDay.Date,
+			Label:           highestRequestDay.Label,
+			Requests:        highestRequestDay.Requests,
+			Cost:            highestRequestDay.ActualCost,
+			RequestUserCost: highestRequestDay.RequestUserCost,
+			HourlyCost:      highestRequestDay.HourlyCost,
+			UserCost:        highestRequestDay.UserCost,
 		}
 	}
 
-	models, err := r.GetModelStatsWithFilters(ctx, startTime, endTime, 0, 0, accountID, 0, nil, nil, nil)
+	models, err := r.getModelStatsForAccountIDs(ctx, startTime, endTime, accountIDs, usagestats.ModelSourceRequested)
 	if err != nil {
 		models = []ModelStat{}
 	}
-	endpoints, endpointErr := r.GetEndpointStatsWithFilters(ctx, startTime, endTime, 0, 0, accountID, 0, "", nil, nil, nil)
+	endpoints, endpointErr := r.getEndpointStatsByColumnForAccountIDs(ctx, "inbound_endpoint", startTime, endTime, accountIDs)
 	if endpointErr != nil {
 		logger.LegacyPrintf("repository.usage_log", "GetEndpointStatsWithFilters failed in GetAccountUsageStats: %v", endpointErr)
 		endpoints = []EndpointStat{}
 	}
-	upstreamEndpoints, upstreamEndpointErr := r.GetUpstreamEndpointStatsWithFilters(ctx, startTime, endTime, 0, 0, accountID, 0, "", nil, nil, nil)
+	upstreamEndpoints, upstreamEndpointErr := r.getEndpointStatsByColumnForAccountIDs(ctx, "upstream_endpoint", startTime, endTime, accountIDs)
 	if upstreamEndpointErr != nil {
 		logger.LegacyPrintf("repository.usage_log", "GetUpstreamEndpointStatsWithFilters failed in GetAccountUsageStats: %v", upstreamEndpointErr)
 		upstreamEndpoints = []EndpointStat{}

@@ -54,6 +54,22 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *testing.
 	require.True(t, called.Load())
 }
 
+func TestGatewayHandlerSubmitUsageRecordTask_DroppedPoolSyncFallback(t *testing.T) {
+	pool := newUsageRecordTestPool(t)
+	pool.Stop()
+	h := &GatewayHandler{usageRecordWorkerPool: pool}
+	var called atomic.Bool
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("expected deadline in dropped-task fallback context")
+		}
+		called.Store(true)
+	})
+
+	require.True(t, called.Load())
+}
+
 func TestGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
 	h := &GatewayHandler{}
 	require.NotPanics(t, func() {
@@ -100,6 +116,22 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *te
 	h.submitUsageRecordTask(func(ctx context.Context) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("expected deadline in fallback context")
+		}
+		called.Store(true)
+	})
+
+	require.True(t, called.Load())
+}
+
+func TestOpenAIGatewayHandlerSubmitUsageRecordTask_DroppedPoolSyncFallback(t *testing.T) {
+	pool := newUsageRecordTestPool(t)
+	pool.Stop()
+	h := &OpenAIGatewayHandler{usageRecordWorkerPool: pool}
+	var called atomic.Bool
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("expected deadline in dropped-task fallback context")
 		}
 		called.Store(true)
 	})

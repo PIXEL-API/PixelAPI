@@ -48,6 +48,181 @@ func (r *affiliateRepository) GetAffiliateByCode(ctx context.Context, code strin
 	return queryAffiliateByCode(ctx, client, code)
 }
 
+func (r *affiliateRepository) ValidateAffiliateCode(ctx context.Context, code string, cycle service.AffiliateCodeCycle) (*service.AffiliateSummary, error) {
+	client := clientFromContext(ctx, r.client)
+	summary, err := queryAffiliateByCode(ctx, client, code)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateAffiliateCodeCycle(summary, normalizeAffiliateCycle(cycle)); err != nil {
+		return nil, err
+	}
+	return summary, nil
+}
+
+func (r *affiliateRepository) ConsumeAffiliateCode(ctx context.Context, userID int64, code string, cycle service.AffiliateCodeCycle) (*service.AffiliateSummary, error) {
+	if userID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+	cycle = normalizeAffiliateCycle(cycle)
+	var inviter *service.AffiliateSummary
+	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		selfSummary, err := ensureUserAffiliateWithClient(txCtx, txClient, userID)
+		if err != nil {
+			return err
+		}
+		if selfSummary.InviterID != nil {
+			inviter = selfSummary
+			return nil
+		}
+
+		inviterSummary, err := queryAffiliateByCodeForUpdate(txCtx, txClient, code)
+		if err != nil {
+			return err
+		}
+		if inviterSummary.UserID <= 0 || inviterSummary.UserID == userID {
+			return service.ErrAffiliateCodeInvalid
+		}
+
+		if isAffiliateCodeCycleStale(inviterSummary, cycle) || isAffiliateCodeExpired(inviterSummary, cycle) {
+			if inviterSummary.AffCodeAutoRotate {
+				_, refreshErr := refreshAffiliateCodeCycleLocked(txCtx, txClient, inviterSummary, cycle)
+				if refreshErr != nil {
+					return refreshErr
+				}
+				return service.ErrAffiliateCodeExpired
+			}
+			refreshed, refreshErr := refreshAffiliateCodeCycleLocked(txCtx, txClient, inviterSummary, cycle)
+			if refreshErr != nil {
+				return refreshErr
+			}
+			inviterSummary = refreshed
+		}
+
+		if err := validateAffiliateCodeCycle(inviterSummary, cycle); err != nil {
+			return err
+		}
+
+		res, err := txClient.ExecContext(txCtx,
+			`UPDATE user_affiliates
+			SET inviter_id = $1,
+				inviter_bound_at = COALESCE(inviter_bound_at, NOW()),
+				invite_bind_source = COALESCE(invite_bind_source, 'registration'),
+				invite_reward_expires_at = CASE
+					WHEN invite_reward_expires_at IS NOT NULL THEN invite_reward_expires_at
+					WHEN duration.days > 0 THEN NOW() + make_interval(days => duration.days)
+					ELSE NULL
+				END,
+				updated_at = NOW()
+			FROM (
+				SELECT COALESCE((
+					SELECT CASE
+						WHEN value ~ '^[0-9]+$' THEN LEAST(value::integer, $3)
+						ELSE 0
+					END
+					FROM settings
+					WHERE key = $4
+					LIMIT 1
+				), 0) AS days
+			) duration
+			WHERE user_affiliates.user_id = $2
+				AND user_affiliates.inviter_id IS NULL`,
+			inviterSummary.UserID, userID, service.AffiliateRebateDurationDaysMax, service.SettingKeyAffiliateRebateDurationDays,
+		)
+		if err != nil {
+			return fmt.Errorf("bind inviter by consumed code: %w", err)
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			return service.ErrAffiliateAlreadyBound
+		}
+
+		if _, err = txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_count = aff_count + 1,
+    aff_weekly_used = aff_weekly_used + 1,
+    updated_at = NOW()
+WHERE user_id = $1`, inviterSummary.UserID); err != nil {
+			return fmt.Errorf("increment inviter code usage: %w", err)
+		}
+
+		inviter, err = queryAffiliateByUserID(txCtx, txClient, inviterSummary.UserID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return inviter, nil
+}
+
+func (r *affiliateRepository) RefreshUserAffiliateCodeCycle(ctx context.Context, userID int64, cycle service.AffiliateCodeCycle) (*service.AffiliateSummary, error) {
+	if userID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+	cycle = normalizeAffiliateCycle(cycle)
+	var out *service.AffiliateSummary
+	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		summary, err := ensureUserAffiliateWithClient(txCtx, txClient, userID)
+		if err != nil {
+			return err
+		}
+		locked, err := queryAffiliateByUserIDForUpdate(txCtx, txClient, summary.UserID)
+		if err != nil {
+			return err
+		}
+		out, err = refreshAffiliateCodeCycleLocked(txCtx, txClient, locked, cycle)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *affiliateRepository) RefreshExpiredAffiliateCodeCycles(ctx context.Context, cycle service.AffiliateCodeCycle, limit int) (int, error) {
+	cycle = normalizeAffiliateCycle(cycle)
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	client := clientFromContext(ctx, r.client)
+	rows, err := client.QueryContext(ctx, `
+SELECT user_id
+FROM user_affiliates
+WHERE aff_weekly_window_start < $1
+   OR (
+        aff_code_auto_rotate = true
+        AND aff_code_expires_at IS NOT NULL
+        AND aff_code_expires_at <= $2
+   )
+ORDER BY user_id
+LIMIT $3`, cycle.WindowStart, cycle.Now, limit)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	userIDs := make([]int64, 0, limit)
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return 0, err
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	refreshed := 0
+	for _, userID := range userIDs {
+		if _, err := r.RefreshUserAffiliateCodeCycle(ctx, userID, cycle); err != nil {
+			return refreshed, err
+		}
+		refreshed++
+	}
+	return refreshed, nil
+}
+
 func (r *affiliateRepository) GetCurrentInviteSharePercent(ctx context.Context) (float64, error) {
 	client := clientFromContext(ctx, r.client)
 	rows, err := client.QueryContext(ctx, `
@@ -636,6 +811,11 @@ SELECT user_id,
        aff_code,
        aff_code_custom,
        aff_rebate_rate_percent,
+       aff_weekly_limit,
+       aff_weekly_used,
+       aff_weekly_window_start,
+       aff_code_expires_at,
+       aff_code_auto_rotate,
        inviter_id,
        inviter_bound_at,
        invite_bind_source,
@@ -663,6 +843,8 @@ WHERE user_id = $1`, userID)
 	var inviterID sql.NullInt64
 	var inviterBoundAt sql.NullTime
 	var inviteRewardExpiresAt sql.NullTime
+	var affWeeklyWindowStart sql.NullTime
+	var affCodeExpiresAt sql.NullTime
 	var rebateRate sql.NullFloat64
 	var inviteBindSource sql.NullString
 	if err := rows.Scan(
@@ -670,6 +852,11 @@ WHERE user_id = $1`, userID)
 		&out.AffCode,
 		&out.AffCodeCustom,
 		&rebateRate,
+		&out.AffWeeklyLimit,
+		&out.AffWeeklyUsed,
+		&affWeeklyWindowStart,
+		&affCodeExpiresAt,
+		&out.AffCodeAutoRotate,
 		&inviterID,
 		&inviterBoundAt,
 		&inviteBindSource,
@@ -701,6 +888,14 @@ WHERE user_id = $1`, userID)
 		v := rebateRate.Float64
 		out.AffRebateRatePercent = &v
 	}
+	if affWeeklyWindowStart.Valid {
+		t := affWeeklyWindowStart.Time
+		out.AffWeeklyWindowStart = &t
+	}
+	if affCodeExpiresAt.Valid {
+		t := affCodeExpiresAt.Time
+		out.AffCodeExpiresAt = &t
+	}
 	return &out, nil
 }
 
@@ -710,6 +905,11 @@ SELECT user_id,
        aff_code,
        aff_code_custom,
        aff_rebate_rate_percent,
+       aff_weekly_limit,
+       aff_weekly_used,
+       aff_weekly_window_start,
+       aff_code_expires_at,
+       aff_code_auto_rotate,
        inviter_id,
        inviter_bound_at,
        invite_bind_source,
@@ -739,6 +939,8 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 	var inviterID sql.NullInt64
 	var inviterBoundAt sql.NullTime
 	var inviteRewardExpiresAt sql.NullTime
+	var affWeeklyWindowStart sql.NullTime
+	var affCodeExpiresAt sql.NullTime
 	var rebateRate sql.NullFloat64
 	var inviteBindSource sql.NullString
 	if err := rows.Scan(
@@ -746,6 +948,11 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 		&out.AffCode,
 		&out.AffCodeCustom,
 		&rebateRate,
+		&out.AffWeeklyLimit,
+		&out.AffWeeklyUsed,
+		&affWeeklyWindowStart,
+		&affCodeExpiresAt,
+		&out.AffCodeAutoRotate,
 		&inviterID,
 		&inviterBoundAt,
 		&inviteBindSource,
@@ -777,7 +984,236 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 		v := rebateRate.Float64
 		out.AffRebateRatePercent = &v
 	}
+	if affWeeklyWindowStart.Valid {
+		t := affWeeklyWindowStart.Time
+		out.AffWeeklyWindowStart = &t
+	}
+	if affCodeExpiresAt.Valid {
+		t := affCodeExpiresAt.Time
+		out.AffCodeExpiresAt = &t
+	}
 	return &out, nil
+}
+
+func queryAffiliateByUserIDForUpdate(ctx context.Context, client affiliateQueryExecer, userID int64) (*service.AffiliateSummary, error) {
+	rows, err := client.QueryContext(ctx, affiliateSummarySelectSQL(`
+WHERE user_id = $1
+FOR UPDATE`), userID)
+	if err != nil {
+		return nil, err
+	}
+	return scanAffiliateSummaryRows(rows)
+}
+
+func queryAffiliateByCodeForUpdate(ctx context.Context, client affiliateQueryExecer, code string) (*service.AffiliateSummary, error) {
+	rows, err := client.QueryContext(ctx, affiliateSummarySelectSQL(`
+WHERE aff_code = $1
+LIMIT 1
+FOR UPDATE`), strings.ToUpper(strings.TrimSpace(code)))
+	if err != nil {
+		return nil, err
+	}
+	return scanAffiliateSummaryRows(rows)
+}
+
+func affiliateSummarySelectSQL(whereClause string) string {
+	return `
+SELECT user_id,
+       aff_code,
+       aff_code_custom,
+       aff_rebate_rate_percent,
+       aff_weekly_limit,
+       aff_weekly_used,
+       aff_weekly_window_start,
+       aff_code_expires_at,
+       aff_code_auto_rotate,
+       inviter_id,
+       inviter_bound_at,
+       invite_bind_source,
+       invite_reward_expires_at,
+       aff_count,
+       aff_quota::double precision,
+       aff_frozen_quota::double precision,
+       aff_history_quota::double precision,
+       created_at,
+       updated_at
+FROM user_affiliates
+` + whereClause
+}
+
+func scanAffiliateSummaryRows(rows *sql.Rows) (*service.AffiliateSummary, error) {
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, service.ErrAffiliateProfileNotFound
+	}
+
+	var out service.AffiliateSummary
+	var inviterID sql.NullInt64
+	var inviterBoundAt sql.NullTime
+	var inviteRewardExpiresAt sql.NullTime
+	var affWeeklyWindowStart sql.NullTime
+	var affCodeExpiresAt sql.NullTime
+	var rebateRate sql.NullFloat64
+	var inviteBindSource sql.NullString
+	if err := rows.Scan(
+		&out.UserID,
+		&out.AffCode,
+		&out.AffCodeCustom,
+		&rebateRate,
+		&out.AffWeeklyLimit,
+		&out.AffWeeklyUsed,
+		&affWeeklyWindowStart,
+		&affCodeExpiresAt,
+		&out.AffCodeAutoRotate,
+		&inviterID,
+		&inviterBoundAt,
+		&inviteBindSource,
+		&inviteRewardExpiresAt,
+		&out.AffCount,
+		&out.AffQuota,
+		&out.AffFrozenQuota,
+		&out.AffHistoryQuota,
+		&out.CreatedAt,
+		&out.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if inviterID.Valid {
+		out.InviterID = &inviterID.Int64
+	}
+	if inviterBoundAt.Valid {
+		t := inviterBoundAt.Time
+		out.InviterBoundAt = &t
+	}
+	if inviteBindSource.Valid {
+		out.InviteBindSource = inviteBindSource.String
+	}
+	if inviteRewardExpiresAt.Valid {
+		t := inviteRewardExpiresAt.Time
+		out.InviteRewardExpiresAt = &t
+	}
+	if rebateRate.Valid {
+		v := rebateRate.Float64
+		out.AffRebateRatePercent = &v
+	}
+	if affWeeklyWindowStart.Valid {
+		t := affWeeklyWindowStart.Time
+		out.AffWeeklyWindowStart = &t
+	}
+	if affCodeExpiresAt.Valid {
+		t := affCodeExpiresAt.Time
+		out.AffCodeExpiresAt = &t
+	}
+	return &out, nil
+}
+
+func normalizeAffiliateCycle(cycle service.AffiliateCodeCycle) service.AffiliateCodeCycle {
+	if cycle.Now.IsZero() {
+		cycle.Now = time.Now().UTC()
+	}
+	if cycle.WindowStart.IsZero() {
+		cycle.WindowStart = cycle.Now
+	}
+	if cycle.WindowEnd.IsZero() || !cycle.WindowEnd.After(cycle.WindowStart) {
+		cycle.WindowEnd = cycle.WindowStart.AddDate(0, 0, 7)
+	}
+	return service.AffiliateCodeCycle{
+		Now:         cycle.Now.UTC(),
+		WindowStart: cycle.WindowStart.UTC(),
+		WindowEnd:   cycle.WindowEnd.UTC(),
+	}
+}
+
+func isAffiliateCodeCycleStale(summary *service.AffiliateSummary, cycle service.AffiliateCodeCycle) bool {
+	return summary == nil || summary.AffWeeklyWindowStart == nil || summary.AffWeeklyWindowStart.Before(cycle.WindowStart)
+}
+
+func isAffiliateCodeExpired(summary *service.AffiliateSummary, cycle service.AffiliateCodeCycle) bool {
+	if summary == nil {
+		return true
+	}
+	if summary.AffCodeExpiresAt == nil {
+		return false
+	}
+	return !cycle.Now.Before(summary.AffCodeExpiresAt.UTC())
+}
+
+func validateAffiliateCodeCycle(summary *service.AffiliateSummary, cycle service.AffiliateCodeCycle) error {
+	if summary == nil || summary.UserID <= 0 {
+		return service.ErrAffiliateCodeInvalid
+	}
+	if summary.AffCodeAutoRotate && isAffiliateCodeCycleStale(summary, cycle) {
+		return service.ErrAffiliateCodeExpired
+	}
+	if isAffiliateCodeExpired(summary, cycle) {
+		return service.ErrAffiliateCodeExpired
+	}
+
+	used := summary.AffWeeklyUsed
+	if isAffiliateCodeCycleStale(summary, cycle) {
+		used = 0
+	}
+	if summary.AffWeeklyLimit <= 0 || used >= summary.AffWeeklyLimit {
+		return service.ErrAffiliateCodeQuotaEmpty
+	}
+	return nil
+}
+
+func refreshAffiliateCodeCycleLocked(ctx context.Context, client affiliateQueryExecer, summary *service.AffiliateSummary, cycle service.AffiliateCodeCycle) (*service.AffiliateSummary, error) {
+	if summary == nil || summary.UserID <= 0 {
+		return nil, service.ErrAffiliateProfileNotFound
+	}
+	cycle = normalizeAffiliateCycle(cycle)
+	needsWindowReset := isAffiliateCodeCycleStale(summary, cycle)
+	needsRotate := summary.AffCodeAutoRotate && (needsWindowReset || isAffiliateCodeExpired(summary, cycle))
+	if !needsWindowReset && !needsRotate {
+		return summary, nil
+	}
+
+	if !summary.AffCodeAutoRotate {
+		_, err := client.ExecContext(ctx, `
+UPDATE user_affiliates
+SET aff_weekly_used = 0,
+    aff_weekly_window_start = $2,
+    aff_code_expires_at = NULL,
+    updated_at = NOW()
+WHERE user_id = $1`, summary.UserID, cycle.WindowStart)
+		if err != nil {
+			return nil, fmt.Errorf("refresh non-rotating affiliate code cycle: %w", err)
+		}
+		return queryAffiliateByUserID(ctx, client, summary.UserID)
+	}
+
+	for i := 0; i < affiliateCodeMaxAttempts; i++ {
+		candidate, err := generateAffiliateCode()
+		if err != nil {
+			return nil, err
+		}
+		_, err = client.ExecContext(ctx, `
+UPDATE user_affiliates
+SET aff_code = $2,
+    aff_code_custom = false,
+    aff_weekly_used = 0,
+    aff_weekly_window_start = $3,
+    aff_code_expires_at = $4,
+    aff_code_rotated_at = $5,
+    updated_at = NOW()
+WHERE user_id = $1`, summary.UserID, candidate, cycle.WindowStart, cycle.WindowEnd, cycle.Now)
+		if err != nil {
+			if isAffiliateUniqueViolation(err) {
+				continue
+			}
+			return nil, fmt.Errorf("rotate affiliate code cycle: %w", err)
+		}
+		return queryAffiliateByUserID(ctx, client, summary.UserID)
+	}
+	return nil, fmt.Errorf("rotate affiliate code cycle: exhausted attempts")
 }
 
 func queryUserBalance(ctx context.Context, client affiliateQueryExecer, userID int64) (float64, error) {
@@ -840,6 +1276,13 @@ func (r *affiliateRepository) UpdateUserAffCode(ctx context.Context, userID int6
 UPDATE user_affiliates
 SET aff_code = $1,
     aff_code_custom = true,
+    aff_weekly_used = 0,
+    aff_weekly_window_start = date_trunc('week', NOW() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai',
+    aff_code_expires_at = CASE
+        WHEN aff_code_auto_rotate = true THEN (date_trunc('week', NOW() AT TIME ZONE 'Asia/Shanghai') + INTERVAL '7 days') AT TIME ZONE 'Asia/Shanghai'
+        ELSE NULL
+    END,
+    aff_code_rotated_at = NOW(),
     updated_at = NOW()
 WHERE user_id = $2`, code, userID)
 		if err != nil {
@@ -875,6 +1318,13 @@ func (r *affiliateRepository) ResetUserAffCode(ctx context.Context, userID int64
 UPDATE user_affiliates
 SET aff_code = $1,
     aff_code_custom = false,
+    aff_weekly_used = 0,
+    aff_weekly_window_start = date_trunc('week', NOW() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai',
+    aff_code_expires_at = CASE
+        WHEN aff_code_auto_rotate = true THEN (date_trunc('week', NOW() AT TIME ZONE 'Asia/Shanghai') + INTERVAL '7 days') AT TIME ZONE 'Asia/Shanghai'
+        ELSE NULL
+    END,
+    aff_code_rotated_at = NOW(),
     updated_at = NOW()
 WHERE user_id = $2`, candidate, userID)
 			if err != nil {
@@ -916,6 +1366,35 @@ SET aff_rebate_rate_percent = $1,
 WHERE user_id = $2`, nullableArg(ratePercent), userID)
 		if err != nil {
 			return fmt.Errorf("set aff_rebate_rate_percent: %w", err)
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			return service.ErrUserNotFound
+		}
+		return nil
+	})
+}
+
+func (r *affiliateRepository) SetUserInviteCodePolicy(ctx context.Context, userID int64, weeklyLimit int, autoRotate bool) error {
+	if userID <= 0 {
+		return service.ErrUserNotFound
+	}
+	return r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, userID); err != nil {
+			return err
+		}
+		res, err := txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_weekly_limit = $1,
+    aff_code_auto_rotate = $2,
+    aff_code_expires_at = CASE
+        WHEN $2::boolean THEN (date_trunc('week', NOW() AT TIME ZONE 'Asia/Shanghai') + INTERVAL '7 days') AT TIME ZONE 'Asia/Shanghai'
+        ELSE NULL
+    END,
+    updated_at = NOW()
+WHERE user_id = $3`, weeklyLimit, autoRotate, userID)
+		if err != nil {
+			return fmt.Errorf("set affiliate invite code policy: %w", err)
 		}
 		affected, _ := res.RowsAffected()
 		if affected == 0 {
@@ -984,11 +1463,16 @@ func (r *affiliateRepository) ListUsersWithCustomSettings(ctx context.Context, f
 	offset := (page - 1) * pageSize
 	likePattern := "%" + strings.TrimSpace(filter.Search) + "%"
 
-	const baseFrom = `
+	baseFrom := fmt.Sprintf(`
 FROM user_affiliates ua
 JOIN users u ON u.id = ua.user_id
-WHERE (ua.aff_code_custom = true OR ua.aff_rebate_rate_percent IS NOT NULL)
-  AND (u.email ILIKE $1 OR u.username ILIKE $1)`
+WHERE (
+    ua.aff_code_custom = true
+    OR ua.aff_rebate_rate_percent IS NOT NULL
+    OR ua.aff_weekly_limit <> %d
+    OR ua.aff_code_auto_rotate <> TRUE
+)
+  AND (u.email ILIKE $1 OR u.username ILIKE $1)`, service.AffiliateCodeWeeklyLimitDefault)
 
 	client := clientFromContext(ctx, r.client)
 
@@ -1004,6 +1488,10 @@ SELECT ua.user_id,
        ua.aff_code,
        ua.aff_code_custom,
        ua.aff_rebate_rate_percent,
+       ua.aff_weekly_limit,
+       ua.aff_weekly_used,
+       ua.aff_code_auto_rotate,
+       ua.aff_code_expires_at,
        ua.aff_count` + baseFrom + `
 ORDER BY ua.updated_at DESC
 LIMIT $2 OFFSET $3`
@@ -1018,13 +1506,19 @@ LIMIT $2 OFFSET $3`
 	for rows.Next() {
 		var e service.AffiliateAdminEntry
 		var rebate sql.NullFloat64
+		var expiresAt sql.NullTime
 		if err := rows.Scan(&e.UserID, &e.Email, &e.Username, &e.AffCode,
-			&e.AffCodeCustom, &rebate, &e.AffCount); err != nil {
+			&e.AffCodeCustom, &rebate, &e.AffWeeklyLimit, &e.AffWeeklyUsed,
+			&e.AffCodeAutoRotate, &expiresAt, &e.AffCount); err != nil {
 			return nil, 0, err
 		}
 		if rebate.Valid {
 			v := rebate.Float64
 			e.AffRebateRatePercent = &v
+		}
+		if expiresAt.Valid {
+			t := expiresAt.Time
+			e.AffCodeExpiresAt = &t
 		}
 		entries = append(entries, e)
 	}

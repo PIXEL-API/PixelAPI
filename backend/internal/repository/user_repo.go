@@ -218,6 +218,8 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		SetRole(userIn.Role).
 		SetBalance(userIn.Balance).
 		SetPointsBalance(userIn.PointsBalance).
+		SetLoadFactorCreditsBalance(userIn.LoadFactorCreditsBalance).
+		SetLoadFactorCreditsUsedTotal(userIn.LoadFactorCreditsUsedTotal).
 		SetPreferPointsBilling(userIn.PreferPointsBilling).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
@@ -546,6 +548,9 @@ func userListOrder(params pagination.PaginationParams) []func(*entsql.Selector) 
 	case "points_balance":
 		field = dbuser.FieldPointsBalance
 		defaultField = false
+	case "load_factor_credits_balance":
+		field = dbuser.FieldLoadFactorCreditsBalance
+		defaultField = false
 	case "concurrency":
 		field = dbuser.FieldConcurrency
 		defaultField = false
@@ -718,6 +723,146 @@ func (r *userRepository) UpdateBalance(ctx context.Context, id int64, amount flo
 		return service.ErrUserNotFound
 	}
 	return nil
+}
+
+func (r *userRepository) LockUserBalanceForUpdate(ctx context.Context, userID int64) (float64, error) {
+	if userID <= 0 {
+		return 0, service.ErrUserNotFound
+	}
+	tx := dbent.TxFromContext(ctx)
+	if tx == nil {
+		return 0, fmt.Errorf("locking user balance requires an active transaction")
+	}
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return 0, fmt.Errorf("sql executor is not configured")
+	}
+	return lockUserBalanceForUpdate(ctx, exec, userID)
+}
+
+func (r *userRepository) ApplyBalanceLedgerDelta(ctx context.Context, input service.UserBalanceLedgerDeltaInput) (*service.UserBalanceLedgerAdjustmentResult, error) {
+	if input.UserID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		return nil, fmt.Errorf("balance ledger reason is required")
+	}
+	if strings.TrimSpace(input.RefType) == "" {
+		return nil, fmt.Errorf("balance ledger ref type is required")
+	}
+	metadataJSON, err := usageBillingWalletMetadataJSON(input.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx *dbent.Tx
+	ownedTx := false
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		tx = existingTx
+	} else {
+		createdTx, txErr := r.client.Tx(ctx)
+		if txErr != nil {
+			return nil, txErr
+		}
+		tx = createdTx
+		ownedTx = true
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+	}
+
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return nil, fmt.Errorf("sql executor is not configured")
+	}
+
+	currentBalance, err := lockUserBalanceForUpdate(ctx, exec, input.UserID)
+	if err != nil {
+		return nil, err
+	}
+	delta := input.Delta
+	newBalance := currentBalance + delta
+	if input.ClampZero && newBalance < 0 {
+		delta = -currentBalance
+		newBalance = 0
+	}
+	if !input.AllowNegativeBalance && newBalance < 0 {
+		return nil, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", currentBalance, newBalance)
+	}
+
+	result := &service.UserBalanceLedgerAdjustmentResult{
+		BalanceBefore: currentBalance,
+		BalanceAfter:  newBalance,
+		Delta:         delta,
+	}
+	if delta == 0 {
+		if ownedTx {
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+		}
+		return result, nil
+	}
+
+	updateResult, err := exec.ExecContext(ctx, `
+		UPDATE users
+		SET balance = $1::numeric,
+			total_recharged = CASE
+				WHEN $2::boolean AND $3::numeric > 0 THEN COALESCE(total_recharged, 0) + $3::numeric
+				ELSE total_recharged
+			END,
+			updated_at = NOW()
+		WHERE id = $4 AND deleted_at IS NULL
+	`, decimalFromSignedFloat(newBalance).StringFixed(10), input.TrackTotalRecharged, decimalFromSignedFloat(delta).StringFixed(10), input.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if rows, rowsErr := updateResult.RowsAffected(); rowsErr == nil && rows == 0 {
+		return nil, service.ErrUserNotFound
+	}
+
+	direction := "credit"
+	ledgerAmount := delta
+	if ledgerAmount < 0 {
+		direction = "debit"
+		ledgerAmount = -ledgerAmount
+	}
+	var refID any
+	if input.RefID != nil {
+		refID = *input.RefID
+	}
+	if _, err := exec.ExecContext(ctx, `
+		INSERT INTO user_balance_ledger (
+			user_id, direction, amount, reason, ref_type, ref_id, balance_after, metadata
+		) VALUES (
+			$1, $2, $3::numeric, $4, $5, $6, $7::numeric, $8::jsonb
+		)
+		ON CONFLICT DO NOTHING
+	`, input.UserID, direction, decimalFromFloat(ledgerAmount).StringFixed(10), input.Reason, input.RefType, refID, decimalFromSignedFloat(newBalance).StringFixed(10), metadataJSON); err != nil {
+		return nil, err
+	}
+
+	if ownedTx {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func lockUserBalanceForUpdate(ctx context.Context, exec sqlQueryer, userID int64) (float64, error) {
+	var currentBalance float64
+	if err := scanSingleRow(ctx, exec, `
+		SELECT balance
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, []any{userID}, &currentBalance); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, service.ErrUserNotFound
+		}
+		return 0, err
+	}
+	return currentBalance, nil
 }
 
 // DeductBalance 扣除用户余额

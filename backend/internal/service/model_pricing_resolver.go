@@ -166,6 +166,12 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 		resolved.BasePricing.CacheReadPricePerToken = *chPricing.CacheReadPrice
 		resolved.BasePricing.CacheReadPricePerTokenPriority = 0
 	}
+	if chPricing.ImageInputPrice != nil {
+		resolved.BasePricing.ImageInputPricePerToken = *chPricing.ImageInputPrice
+	}
+	if chPricing.ImageCacheReadPrice != nil {
+		resolved.BasePricing.ImageCacheReadPricePerToken = *chPricing.ImageCacheReadPrice
+	}
 	if chPricing.ImageOutputPrice != nil {
 		resolved.BasePricing.ImageOutputPricePerToken = *chPricing.ImageOutputPrice
 	}

@@ -60,6 +60,49 @@ func TestCalculateCostUnified_TokenMode(t *testing.T) {
 	require.Equal(t, string(BillingModeToken), cost.BillingMode)
 }
 
+func TestCalculateCostUnified_ImageTokenPrices(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx:   context.Background(),
+		Model: "gpt-image-2",
+		Tokens: UsageTokens{
+			TextInputTokens:      22,
+			ImageInputTokens:     10,
+			OutputTokens:         196,
+			CacheReadTokens:      4,
+			ImageCacheReadTokens: 3,
+			ImageOutputTokens:    196,
+		},
+		RateMultiplier: 8.0,
+		Resolver:       resolver,
+		Resolved: &ResolvedPricing{
+			Mode: BillingModeToken,
+			BasePricing: &ModelPricing{
+				InputPricePerToken:          5e-6,
+				ImageInputPricePerToken:     8e-6,
+				CacheReadPricePerToken:      1.25e-6,
+				ImageCacheReadPricePerToken: 2e-6,
+				ImageOutputPricePerToken:    30e-6,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	expectedInput := 22*5e-6 + 10*8e-6
+	expectedCacheRead := 1*1.25e-6 + 3*2e-6
+	expectedImageOutput := 196 * 30e-6
+	expectedTotal := expectedInput + expectedCacheRead + expectedImageOutput
+	require.InDelta(t, expectedInput, cost.InputCost, 1e-12)
+	require.InDelta(t, 0.0, cost.OutputCost, 1e-12)
+	require.InDelta(t, expectedImageOutput, cost.ImageOutputCost, 1e-12)
+	require.InDelta(t, expectedCacheRead, cost.CacheReadCost, 1e-12)
+	require.InDelta(t, expectedTotal, cost.TotalCost, 1e-12)
+	require.InDelta(t, expectedTotal*8, cost.ActualCost, 1e-12)
+	require.Equal(t, string(BillingModeToken), cost.BillingMode)
+}
+
 func TestCalculateCostUnified_PerRequestMode(t *testing.T) {
 	// Set up a ChannelService with a per-request pricing channel
 	cs := newTestChannelServiceWithCache(t, &channelCache{

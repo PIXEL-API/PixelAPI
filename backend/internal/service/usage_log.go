@@ -178,6 +178,32 @@ type UsageLog struct {
 	Subscription *UserSubscription
 }
 
+type UserBalanceLedgerFilters struct {
+	UserID        int64
+	RequireUserID bool
+	Direction     string
+	Reason        string
+	RefType       string
+	RefID         *int64
+	StartTime     *time.Time
+	EndTime       *time.Time
+	ExactTotal    bool
+}
+
+type UserBalanceLedgerEntry struct {
+	ID           int64
+	UserID       int64
+	Direction    string
+	Amount       string
+	Reason       string
+	RefType      string
+	RefID        *int64
+	BalanceAfter string
+	Metadata     map[string]any
+	CreatedAt    time.Time
+	User         *User
+}
+
 func (u *UsageLog) TotalTokens() int {
 	return u.InputTokens + u.OutputTokens + u.CacheCreationTokens + u.CacheReadTokens
 }

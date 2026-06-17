@@ -283,49 +283,61 @@ type BatchAPIKeyUsageStats struct {
 
 // AccountUsageHistory represents daily usage history for an account
 type AccountUsageHistory struct {
-	Date       string  `json:"date"`
-	Label      string  `json:"label"`
-	Requests   int64   `json:"requests"`
-	Tokens     int64   `json:"tokens"`
-	Cost       float64 `json:"cost"`        // 标准计费（total_cost）
-	ActualCost float64 `json:"actual_cost"` // 账号口径费用（total_cost * account_rate_multiplier）
-	UserCost   float64 `json:"user_cost"`   // 用户口径费用（actual_cost，受分组倍率影响）
+	Date            string  `json:"date"`
+	Label           string  `json:"label"`
+	Requests        int64   `json:"requests"`
+	Tokens          int64   `json:"tokens"`
+	Cost            float64 `json:"cost"`              // 标准计费（total_cost）
+	ActualCost      float64 `json:"actual_cost"`       // 账号口径费用（total_cost * account_rate_multiplier）
+	RequestUserCost float64 `json:"request_user_cost"` // 请求扣费（actual_cost，受分组倍率影响）
+	HourlyCost      float64 `json:"hourly_cost"`       // 账号模式小时费净额（预扣 - 退回）
+	UserCost        float64 `json:"user_cost"`         // 用户扣费合计（请求扣费 + 小时费净额）
 }
 
 // AccountUsageSummary represents summary statistics for an account
 type AccountUsageSummary struct {
-	Days              int     `json:"days"`
-	ActualDaysUsed    int     `json:"actual_days_used"`
-	TotalCost         float64 `json:"total_cost"`      // 账号口径费用
-	TotalUserCost     float64 `json:"total_user_cost"` // 用户口径费用
-	TotalStandardCost float64 `json:"total_standard_cost"`
-	TotalRequests     int64   `json:"total_requests"`
-	TotalTokens       int64   `json:"total_tokens"`
-	AvgDailyCost      float64 `json:"avg_daily_cost"` // 账号口径日均
-	AvgDailyUserCost  float64 `json:"avg_daily_user_cost"`
-	AvgDailyRequests  float64 `json:"avg_daily_requests"`
-	AvgDailyTokens    float64 `json:"avg_daily_tokens"`
-	AvgDurationMs     float64 `json:"avg_duration_ms"`
-	Today             *struct {
-		Date     string  `json:"date"`
-		Cost     float64 `json:"cost"`
-		UserCost float64 `json:"user_cost"`
-		Requests int64   `json:"requests"`
-		Tokens   int64   `json:"tokens"`
+	Days                    int     `json:"days"`
+	ActualDaysUsed          int     `json:"actual_days_used"`
+	TotalCost               float64 `json:"total_cost"`              // 账号口径费用
+	TotalUserCost           float64 `json:"total_user_cost"`         // 用户扣费合计
+	TotalRequestUserCost    float64 `json:"total_request_user_cost"` // 请求扣费合计
+	TotalHourlyCost         float64 `json:"total_hourly_cost"`       // 小时费净额合计
+	TotalStandardCost       float64 `json:"total_standard_cost"`
+	TotalRequests           int64   `json:"total_requests"`
+	TotalTokens             int64   `json:"total_tokens"`
+	AvgDailyCost            float64 `json:"avg_daily_cost"` // 账号口径日均
+	AvgDailyUserCost        float64 `json:"avg_daily_user_cost"`
+	AvgDailyRequestUserCost float64 `json:"avg_daily_request_user_cost"`
+	AvgDailyHourlyCost      float64 `json:"avg_daily_hourly_cost"`
+	AvgDailyRequests        float64 `json:"avg_daily_requests"`
+	AvgDailyTokens          float64 `json:"avg_daily_tokens"`
+	AvgDurationMs           float64 `json:"avg_duration_ms"`
+	Today                   *struct {
+		Date            string  `json:"date"`
+		Cost            float64 `json:"cost"`
+		RequestUserCost float64 `json:"request_user_cost"`
+		HourlyCost      float64 `json:"hourly_cost"`
+		UserCost        float64 `json:"user_cost"`
+		Requests        int64   `json:"requests"`
+		Tokens          int64   `json:"tokens"`
 	} `json:"today"`
 	HighestCostDay *struct {
-		Date     string  `json:"date"`
-		Label    string  `json:"label"`
-		Cost     float64 `json:"cost"`
-		UserCost float64 `json:"user_cost"`
-		Requests int64   `json:"requests"`
+		Date            string  `json:"date"`
+		Label           string  `json:"label"`
+		Cost            float64 `json:"cost"`
+		RequestUserCost float64 `json:"request_user_cost"`
+		HourlyCost      float64 `json:"hourly_cost"`
+		UserCost        float64 `json:"user_cost"`
+		Requests        int64   `json:"requests"`
 	} `json:"highest_cost_day"`
 	HighestRequestDay *struct {
-		Date     string  `json:"date"`
-		Label    string  `json:"label"`
-		Requests int64   `json:"requests"`
-		Cost     float64 `json:"cost"`
-		UserCost float64 `json:"user_cost"`
+		Date            string  `json:"date"`
+		Label           string  `json:"label"`
+		Requests        int64   `json:"requests"`
+		Cost            float64 `json:"cost"`
+		RequestUserCost float64 `json:"request_user_cost"`
+		HourlyCost      float64 `json:"hourly_cost"`
+		UserCost        float64 `json:"user_cost"`
 	} `json:"highest_request_day"`
 }
 

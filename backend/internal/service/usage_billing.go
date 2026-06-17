@@ -19,11 +19,9 @@ type UsageBillingCommand struct {
 	APIKeyID           int64
 	RequestFingerprint string
 	RequestPayloadHash string
-	QuotaReservationID string
 
 	UserID              int64
 	AccountID           int64
-	LeaseID             string
 	GroupID             *int64
 	SubscriptionID      *int64
 	AccountType         string
@@ -46,9 +44,6 @@ type UsageBillingCommand struct {
 	APIKeyRateLimitCost        float64
 	AccountQuotaCost           float64
 
-	LeaseUsageRequests int64
-	LeaseUsageTokens   int64
-
 	ShareSnapshotCaptured bool
 	ShareOwnerUserID      *int64
 	ShareModeSnapshot     string
@@ -60,6 +55,8 @@ type UsageBillingCommand struct {
 	InviteShareRatio      float64
 	UsageOccurredAt       time.Time
 
+	AccountShareModeSettlement *AccountShareModeBillingSnapshot
+
 	UsageLog *UsageLog
 }
 
@@ -68,14 +65,6 @@ func (c *UsageBillingCommand) Normalize() {
 		return
 	}
 	c.RequestID = strings.TrimSpace(c.RequestID)
-	c.QuotaReservationID = strings.TrimSpace(c.QuotaReservationID)
-	c.LeaseID = strings.TrimSpace(c.LeaseID)
-	if c.LeaseUsageRequests < 0 {
-		c.LeaseUsageRequests = 0
-	}
-	if c.LeaseUsageTokens < 0 {
-		c.LeaseUsageTokens = 0
-	}
 	if strings.TrimSpace(c.RequestFingerprint) == "" {
 		c.RequestFingerprint = buildUsageBillingFingerprint(c)
 	}
@@ -110,6 +99,23 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		c.APIKeyRateLimitCost,
 		c.AccountQuotaCost,
 	)
+	if snapshot := c.AccountShareModeSettlement; snapshot != nil {
+		raw += fmt.Sprintf(
+			"|account_share_mode|%d|%d|%d|%d|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f|%d",
+			snapshot.MembershipID,
+			snapshot.ListingID,
+			snapshot.AccountID,
+			snapshot.OwnerUserID,
+			snapshot.ConsumerUserID,
+			snapshot.BaseCharge,
+			snapshot.HourlyCharge,
+			snapshot.TotalCharge,
+			snapshot.RateMultiplier,
+			snapshot.OwnerShareRatio,
+			snapshot.PlatformShareRatio,
+			snapshot.DurationMs,
+		)
+	}
 	if payloadHash := strings.TrimSpace(c.RequestPayloadHash); payloadHash != "" {
 		raw += "|" + payloadHash
 	}

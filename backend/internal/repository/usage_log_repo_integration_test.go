@@ -1507,6 +1507,58 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats() {
 	s.Require().Len(resp.Models, 2)
 }
 
+func (s *UsageLogRepoSuite) TestGetAccountUsageStats_MergesOwnedOpenAIIdentityHistory() {
+	owner := mustCreateUser(s.T(), s.client, &service.User{Email: "accstats-owner@test.com"})
+	ownerID := owner.ID
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: owner.ID, Key: "sk-accstats-owner", Name: "k"})
+	oldAccount := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "acc-accstats-openai-old",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		OwnerUserID: &ownerID,
+		Credentials: map[string]any{"email": "same-openai-account@example.com"},
+	})
+	newAccount := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "acc-accstats-openai-new",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		OwnerUserID: &ownerID,
+		Credentials: map[string]any{
+			"organization_id": "org_same",
+			"chatgpt_user_id": "user_same",
+			"email":           "same-openai-account@example.com",
+		},
+	})
+
+	otherOwner := mustCreateUser(s.T(), s.client, &service.User{Email: "accstats-other@test.com"})
+	otherOwnerID := otherOwner.ID
+	otherAPIKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: otherOwner.ID, Key: "sk-accstats-other", Name: "k"})
+	otherAccount := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "acc-accstats-openai-other-owner",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		OwnerUserID: &otherOwnerID,
+		Credentials: map[string]any{"email": "same-openai-account@example.com"},
+	})
+
+	base := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+	s.createUsageLog(owner, apiKey, oldAccount, 100, 50, 1.25, base.Add(12*time.Hour))
+	s.createUsageLog(owner, apiKey, newAccount, 10, 5, 0.25, base.Add(36*time.Hour))
+	s.createUsageLog(otherOwner, otherAPIKey, otherAccount, 1000, 500, 99, base.Add(36*time.Hour))
+
+	s.Require().NoError(s.client.Account.DeleteOneID(oldAccount.ID).Exec(s.ctx))
+
+	resp, err := s.repo.GetAccountUsageStats(s.ctx, newAccount.ID, base, base.Add(72*time.Hour))
+	s.Require().NoError(err)
+	s.Require().Len(resp.History, 2)
+	s.Require().Equal(3, resp.Summary.Days)
+	s.Require().Equal(int64(2), resp.Summary.TotalRequests)
+	s.Require().Equal(int64(165), resp.Summary.TotalTokens)
+	s.Require().InDelta(1.50, resp.Summary.TotalCost, 0.000001)
+	s.Require().Len(resp.Models, 1)
+	s.Require().Equal(int64(2), resp.Models[0].Requests)
+}
+
 func (s *UsageLogRepoSuite) TestGetAccountUsageStats_EmptyRange() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-emptystats"})
 
