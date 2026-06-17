@@ -1,10 +1,13 @@
 package service
 
 import (
+	"fmt"
 	"net"
 	"net/url"
 	"strconv"
 	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 type Proxy struct {
@@ -15,7 +18,9 @@ type Proxy struct {
 	Port     int
 	Username string
 	Password string
-	Status   string
+	// OwnerUserID is nil for platform-managed proxies and set for user-owned proxies.
+	OwnerUserID *int64
+	Status      string
 	// MaxAccounts controls how many accounts may bind to this proxy. 0 means unlimited.
 	MaxAccounts int
 	CreatedAt   time.Time
@@ -53,6 +58,13 @@ type ProxyWithAccountCount struct {
 	QualityGrade   string
 	QualitySummary string
 	QualityChecked *int64
+}
+
+func ProxyAccountLimitExceededError(proxyID, current, limit, additional int64) error {
+	return infraerrors.Conflict(
+		"PROXY_ACCOUNT_LIMIT_EXCEEDED",
+		fmt.Sprintf("proxy %d account binding limit exceeded: %d/%d accounts would be bound; choose another proxy or raise the limit", proxyID, current+additional, limit),
+	)
 }
 
 type ProxyAccountSummary struct {

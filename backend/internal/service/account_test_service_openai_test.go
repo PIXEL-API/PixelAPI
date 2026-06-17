@@ -214,6 +214,37 @@ func TestCreateOpenAITestPayload_APIKeyKeepsMaxOutputTokens(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestAccountTestService_OpenAIAPIKeyRootBaseURLUsesV1ResponsesPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	account := &Account{
+		ID:          103,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://api.openai.com",
+		},
+	}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{
+		httpUpstream: upstream,
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4-mini", "", "")
+
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "https://api.openai.com/v1/responses", upstream.requests[0].URL.String())
+	require.Equal(t, "Bearer sk-test", upstream.requests[0].Header.Get("Authorization"))
+}
+
 func TestAccountTestService_OpenAIStreamEOFBeforeCompletedFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, recorder := newTestContext()

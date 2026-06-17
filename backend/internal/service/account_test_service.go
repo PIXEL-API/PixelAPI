@@ -561,7 +561,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
-		apiURL = strings.TrimSuffix(normalizedBaseURL, "/") + "/responses"
+		apiURL = buildOpenAIResponsesURL(normalizedBaseURL)
 	} else {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", account.Type))
 	}
@@ -631,7 +631,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// Process SSE stream
-	return s.processOpenAIStream(c, resp.Body)
+	return s.processOpenAIStream(c, resp.Body, !isOAuth)
 }
 
 // testOpenAICompactConnection probes /responses/compact and persists the
@@ -1162,7 +1162,22 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 	if isOAuth {
 		payload["store"] = false
 	} else {
-		payload["max_output_tokens"] = openAITestMaxOutputTokens
+		payload["max_output_tokens"] = 512
+		payload["tools"] = []map[string]any{
+			{
+				"type":        "function",
+				"name":        "probe_ping",
+				"description": "Capability probe. Call to acknowledge readiness.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"ok": map[string]any{"type": "boolean"},
+					},
+					"required": []string{"ok"},
+				},
+			},
+		}
+		payload["tool_choice"] = "required"
 	}
 
 	// All accounts require instructions for Responses API
@@ -1226,15 +1241,19 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 }
 
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
-func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
+func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader, requireFunctionCall bool) error {
 	reader := bufio.NewReader(body)
 	seenCompleted := false
+	seenFunctionCall := false
 
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
 				if seenCompleted {
+					if requireFunctionCall && !seenFunctionCall {
+						return s.sendErrorAndEnd(c, "OpenAI Responses tool probe failed: response completed without function_call")
+					}
 					s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 					return nil
 				}
@@ -1263,6 +1282,9 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 		}
 
 		eventType, _ := data["type"].(string)
+		if openAITestEventHasFunctionCall(eventType, data) {
+			seenFunctionCall = true
+		}
 
 		switch eventType {
 		case "response.output_text.delta":
@@ -1271,6 +1293,9 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
 		case "response.completed", "response.done":
+			if requireFunctionCall && !seenFunctionCall {
+				return s.sendErrorAndEnd(c, "OpenAI Responses tool probe failed: response completed without function_call")
+			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
 		case "response.failed":
@@ -1293,6 +1318,29 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 			return s.sendErrorAndEnd(c, errorMsg)
 		}
 	}
+}
+
+func openAITestEventHasFunctionCall(eventType string, data map[string]any) bool {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(eventType)), "function_call") {
+		return true
+	}
+	if item, ok := data["item"].(map[string]any); ok {
+		if itemType, _ := item["type"].(string); strings.TrimSpace(itemType) == "function_call" {
+			return true
+		}
+	}
+	responseData, _ := data["response"].(map[string]any)
+	output, _ := responseData["output"].([]any)
+	for _, item := range output {
+		outputItem, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if itemType, _ := outputItem["type"].(string); strings.TrimSpace(itemType) == "function_call" {
+			return true
+		}
+	}
+	return false
 }
 
 // testOpenAIImageAPIKey tests OpenAI image generation using an API Key account.

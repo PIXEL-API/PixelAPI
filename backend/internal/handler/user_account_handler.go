@@ -21,16 +21,22 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/errgroup"
 )
 
 type UserAccountHandler struct {
 	accountService          *service.AccountService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
+	rateLimitService        *service.RateLimitService
+	settingService          *service.SettingService
+	concurrencyService      *service.ConcurrencyService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
+	sessionLimitCache       service.SessionLimitCache
+	rpmCache                service.RPMCache
 	accountBatchTaskService *service.AccountBatchTaskService
 	levelVerifyMu           sync.Mutex
 	levelVerifyWindows      map[int64]levelVerifyWindow
@@ -40,6 +46,8 @@ func NewUserAccountHandler(
 	accountService *service.AccountService,
 	accountUsageService *service.AccountUsageService,
 	accountTestService *service.AccountTestService,
+	rateLimitService *service.RateLimitService,
+	settingService *service.SettingService,
 	oauthService *service.OAuthService,
 	openaiOAuthService *service.OpenAIOAuthService,
 	geminiOAuthService *service.GeminiOAuthService,
@@ -54,6 +62,8 @@ func NewUserAccountHandler(
 		accountService:          accountService,
 		accountUsageService:     accountUsageService,
 		accountTestService:      accountTestService,
+		rateLimitService:        rateLimitService,
+		settingService:          settingService,
 		oauthService:            oauthService,
 		openaiOAuthService:      openaiOAuthService,
 		geminiOAuthService:      geminiOAuthService,
@@ -63,6 +73,19 @@ func NewUserAccountHandler(
 	}
 	h.registerAccountBatchExecutors()
 	return h
+}
+
+func (h *UserAccountHandler) SetRuntimeCapacityProviders(
+	concurrencyService *service.ConcurrencyService,
+	sessionLimitCache service.SessionLimitCache,
+	rpmCache service.RPMCache,
+) {
+	if h == nil {
+		return
+	}
+	h.concurrencyService = concurrencyService
+	h.sessionLimitCache = sessionLimitCache
+	h.rpmCache = rpmCache
 }
 
 type createUserAccountRequest struct {
@@ -85,6 +108,8 @@ type createUserAccountRequest struct {
 
 type importUserAccountCredentialsRequest struct {
 	Contents           []string `json:"contents" binding:"required"`
+	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity"`
+	AccountLevel       string   `json:"account_level" binding:"omitempty,oneof=unknown free plus pro team"`
 	ShareMode          string   `json:"share_mode" binding:"omitempty,oneof=private public"`
 	Concurrency        int      `json:"concurrency"`
 	LoadFactor         *int     `json:"load_factor"`
@@ -142,12 +167,21 @@ type verifyUserAccountLevelRequest struct {
 }
 
 type verifyUserAccountLevelResponse struct {
-	Account      *dto.Account `json:"account"`
-	Verified     bool         `json:"verified"`
-	TargetLevel  string       `json:"target_level"`
-	AppliedLevel string       `json:"applied_level"`
-	Reason       string       `json:"reason,omitempty"`
-	ErrorMessage string       `json:"error_message,omitempty"`
+	Account      userAccountWithRuntime `json:"account"`
+	Verified     bool                   `json:"verified"`
+	TargetLevel  string                 `json:"target_level"`
+	AppliedLevel string                 `json:"applied_level"`
+	Reason       string                 `json:"reason,omitempty"`
+	ErrorMessage string                 `json:"error_message,omitempty"`
+}
+
+type userAccountWithRuntime struct {
+	*dto.Account
+	CurrentConcurrency int `json:"current_concurrency"`
+	// 以下字段仅对 Anthropic OAuth/SetupToken 账号有效，且仅在启用相应功能时返回。
+	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"`
+	ActiveSessions    *int     `json:"active_sessions,omitempty"`
+	CurrentRPM        *int     `json:"current_rpm,omitempty"`
 }
 
 type userAccountBatchTaskRequest struct {
@@ -257,6 +291,92 @@ func rejectUserManualCredentialAuth(c *gin.Context) {
 	response.BadRequest(c, "manual credential account creation is not allowed for user accounts; use official OAuth or import OAuth credentials")
 }
 
+func (h *UserAccountHandler) prepareUserOpenAIAccountRequest(c *gin.Context, ownerUserID int64, req *createUserAccountRequest) bool {
+	if req == nil {
+		response.BadRequest(c, "Invalid account request")
+		return false
+	}
+	if req.Platform != service.PlatformOpenAI {
+		req.AccountLevel = service.AccountLevelUnknown
+		return rejectUserProxyID(c, req.ProxyID)
+	}
+
+	targetLevel := service.NormalizeAccountLevel(req.AccountLevel)
+	if !service.IsUserSelectableOpenAIAccountLevel(targetLevel) {
+		response.BadRequest(c, "OpenAI account level must be selected before import")
+		return false
+	}
+	req.AccountLevel = targetLevel
+	if !service.RequiresUserOpenAIProxyLogin(targetLevel) {
+		return rejectUserProxyID(c, req.ProxyID)
+	}
+	if h.openaiOAuthService == nil {
+		response.ErrorFrom(c, service.ErrServiceUnavailable)
+		return false
+	}
+	if err := h.openaiOAuthService.EnsureProxyVisibleToUser(c.Request.Context(), ownerUserID, req.ProxyID); err != nil {
+		response.ErrorFrom(c, err)
+		return false
+	}
+	return true
+}
+
+func normalizeUserCredentialImportTargetLevel(req *importUserAccountCredentialsRequest) {
+	if req == nil {
+		return
+	}
+	targetLevel := service.NormalizeAccountLevel(req.AccountLevel)
+	if service.IsUserSelectableOpenAIAccountLevel(targetLevel) {
+		req.AccountLevel = targetLevel
+		return
+	}
+	req.AccountLevel = service.AccountLevelUnknown
+}
+
+func credentialImportSourceIsOpenAI(source service.AccountCredentialImportSource) bool {
+	return source.Platform == service.PlatformOpenAI || source.Kind == service.AccountCredentialImportKindOpenAIRefreshToken
+}
+
+func credentialImportSourcePlatform(source service.AccountCredentialImportSource) string {
+	switch source.Kind {
+	case service.AccountCredentialImportKindOpenAIRefreshToken:
+		return service.PlatformOpenAI
+	case service.AccountCredentialImportKindClaudeSessionKey:
+		return service.PlatformAnthropic
+	default:
+		return strings.TrimSpace(source.Platform)
+	}
+}
+
+func validateCredentialImportTargetPlatform(defaults importUserAccountCredentialsRequest, source service.AccountCredentialImportSource) error {
+	targetPlatform := strings.TrimSpace(defaults.Platform)
+	sourcePlatform := credentialImportSourcePlatform(source)
+	if targetPlatform == "" {
+		return infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_PLATFORM_REQUIRED", "导入账号前请先选择平台")
+	}
+	if sourcePlatform == "" {
+		return infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_PLATFORM_UNKNOWN", "无法确认导入内容的平台，请检查凭证格式")
+	}
+	if sourcePlatform != targetPlatform {
+		return infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_PLATFORM_MISMATCH", "导入内容平台与所选平台不一致，请选择正确平台后重试").WithMetadata(map[string]string{
+			"target_platform": targetPlatform,
+			"source_platform": sourcePlatform,
+		})
+	}
+	return nil
+}
+
+func validateOpenAIImportTargetLevel(defaults importUserAccountCredentialsRequest) (string, error) {
+	targetLevel := service.NormalizeAccountLevel(defaults.AccountLevel)
+	if !service.IsUserSelectableOpenAIAccountLevel(targetLevel) {
+		return "", service.ErrOwnedOpenAIAccountLevelRequired
+	}
+	if service.RequiresUserOpenAIProxyLogin(targetLevel) {
+		return "", service.ErrOwnedOpenAIAccountProxyRequired
+	}
+	return targetLevel, nil
+}
+
 func userUnixSecondsToTime(value *int64) *time.Time {
 	if value == nil || *value <= 0 {
 		return nil
@@ -333,6 +453,17 @@ func publicShareValidationErrorMessage(err error) string {
 		return strings.TrimSpace(appErr.Message)
 	}
 	return strings.TrimSpace(err.Error())
+}
+
+func credentialImportFailureMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	var appErr *infraerrors.ApplicationError
+	if errors.As(err, &appErr) && strings.TrimSpace(appErr.Message) != "" {
+		return strings.TrimSpace(appErr.Message)
+	}
+	return "账号导入失败，请检查凭证格式或稍后重试"
 }
 
 func accountLevelVerificationMessage(err error, result *service.ScheduledTestResult) string {
@@ -547,6 +678,149 @@ func (h *UserAccountHandler) executeUserSetPublicShareTaskItem(ctx context.Conte
 	}, nil
 }
 
+func (h *UserAccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) userAccountWithRuntime {
+	item := userAccountWithRuntime{
+		Account: dto.AccountFromService(account),
+	}
+	if account == nil {
+		return item
+	}
+
+	if h.concurrencyService != nil {
+		if counts, err := h.concurrencyService.GetAccountConcurrencyBatch(ctx, []int64{account.ID}); err == nil && counts != nil {
+			item.CurrentConcurrency = counts[account.ID]
+		}
+	}
+
+	if account.IsAnthropicOAuthOrSetupToken() {
+		if h.accountUsageService != nil && account.GetWindowCostLimit() > 0 {
+			startTime := account.GetCurrentWindowStartTime()
+			if stats, err := h.accountUsageService.GetAccountWindowStats(ctx, account.ID, startTime); err == nil && stats != nil {
+				cost := stats.StandardCost
+				item.CurrentWindowCost = &cost
+			}
+		}
+
+		if h.sessionLimitCache != nil && account.GetMaxSessions() > 0 {
+			idleTimeouts := map[int64]time.Duration{
+				account.ID: time.Duration(account.GetSessionIdleTimeoutMinutes()) * time.Minute,
+			}
+			if sessions, err := h.sessionLimitCache.GetActiveSessionCountBatch(ctx, []int64{account.ID}, idleTimeouts); err == nil && sessions != nil {
+				if count, ok := sessions[account.ID]; ok {
+					item.ActiveSessions = &count
+				}
+			}
+		}
+
+		if h.rpmCache != nil && account.GetBaseRPM() > 0 {
+			if rpm, err := h.rpmCache.GetRPM(ctx, account.ID); err == nil {
+				item.CurrentRPM = &rpm
+			}
+		}
+	}
+
+	return item
+}
+
+func (h *UserAccountHandler) buildAccountListResponseWithRuntime(ctx context.Context, accounts []service.Account) []userAccountWithRuntime {
+	out := make([]userAccountWithRuntime, len(accounts))
+	if len(accounts) == 0 {
+		return out
+	}
+
+	accountIDs := make([]int64, 0, len(accounts))
+	for i := range accounts {
+		accountIDs = append(accountIDs, accounts[i].ID)
+	}
+
+	concurrencyCounts := make(map[int64]int)
+	if h.concurrencyService != nil {
+		if counts, err := h.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs); err == nil && counts != nil {
+			concurrencyCounts = counts
+		}
+	}
+
+	windowCostAccountIDs := make([]int64, 0)
+	sessionLimitAccountIDs := make([]int64, 0)
+	rpmAccountIDs := make([]int64, 0)
+	sessionIdleTimeouts := make(map[int64]time.Duration)
+	for i := range accounts {
+		acc := &accounts[i]
+		if !acc.IsAnthropicOAuthOrSetupToken() {
+			continue
+		}
+		if acc.GetWindowCostLimit() > 0 {
+			windowCostAccountIDs = append(windowCostAccountIDs, acc.ID)
+		}
+		if acc.GetMaxSessions() > 0 {
+			sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
+			sessionIdleTimeouts[acc.ID] = time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
+		}
+		if acc.GetBaseRPM() > 0 {
+			rpmAccountIDs = append(rpmAccountIDs, acc.ID)
+		}
+	}
+
+	rpmCounts := make(map[int64]int)
+	if len(rpmAccountIDs) > 0 && h.rpmCache != nil {
+		if counts, err := h.rpmCache.GetRPMBatch(ctx, rpmAccountIDs); err == nil && counts != nil {
+			rpmCounts = counts
+		}
+	}
+
+	activeSessions := make(map[int64]int)
+	if len(sessionLimitAccountIDs) > 0 && h.sessionLimitCache != nil {
+		if sessions, err := h.sessionLimitCache.GetActiveSessionCountBatch(ctx, sessionLimitAccountIDs, sessionIdleTimeouts); err == nil && sessions != nil {
+			activeSessions = sessions
+		}
+	}
+
+	windowCosts := make(map[int64]float64)
+	if len(windowCostAccountIDs) > 0 && h.accountUsageService != nil {
+		var mu sync.Mutex
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(10)
+		for i := range accounts {
+			acc := &accounts[i]
+			if !acc.IsAnthropicOAuthOrSetupToken() || acc.GetWindowCostLimit() <= 0 {
+				continue
+			}
+			accCopy := acc
+			g.Go(func() error {
+				startTime := accCopy.GetCurrentWindowStartTime()
+				stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
+				if err == nil && stats != nil {
+					mu.Lock()
+					windowCosts[accCopy.ID] = stats.StandardCost
+					mu.Unlock()
+				}
+				return nil
+			})
+		}
+		_ = g.Wait()
+	}
+
+	for i := range accounts {
+		acc := &accounts[i]
+		item := userAccountWithRuntime{
+			Account:            dto.AccountFromService(acc),
+			CurrentConcurrency: concurrencyCounts[acc.ID],
+		}
+		if cost, ok := windowCosts[acc.ID]; ok {
+			item.CurrentWindowCost = &cost
+		}
+		if count, ok := activeSessions[acc.ID]; ok {
+			item.ActiveSessions = &count
+		}
+		if rpm, ok := rpmCounts[acc.ID]; ok {
+			item.CurrentRPM = &rpm
+		}
+		out[i] = item
+	}
+
+	return out
+}
+
 func (h *UserAccountHandler) List(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -582,10 +856,7 @@ func (h *UserAccountHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	out := make([]dto.Account, 0, len(accounts))
-	for i := range accounts {
-		out = append(out, *dto.AccountFromService(&accounts[i]))
-	}
+	out := h.buildAccountListResponseWithRuntime(c.Request.Context(), accounts)
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
 
@@ -620,7 +891,7 @@ func (h *UserAccountHandler) GetByID(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, dto.AccountFromService(account))
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
 func (h *UserAccountHandler) GetUsage(c *gin.Context) {
@@ -759,7 +1030,7 @@ func (h *UserAccountHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.prepareUserOpenAIAccountRequest(c, subject.UserID, &req) {
 		return
 	}
 	if req.Concurrency <= 0 {
@@ -779,7 +1050,7 @@ func (h *UserAccountHandler) Create(c *gin.Context) {
 			Credentials:        req.Credentials,
 			Extra:              req.Extra,
 			ShareMode:          req.ShareMode,
-			ProxyID:            nil,
+			ProxyID:            req.ProxyID,
 			Concurrency:        req.Concurrency,
 			LoadFactor:         req.LoadFactor,
 			Priority:           req.Priority,
@@ -794,7 +1065,7 @@ func (h *UserAccountHandler) Create(c *gin.Context) {
 		if err != nil {
 			return nil, err
 		}
-		return dto.AccountFromService(account), nil
+		return h.buildAccountResponseWithRuntime(ctx, account), nil
 	})
 }
 
@@ -809,7 +1080,7 @@ func (h *UserAccountHandler) Import(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
+	if !h.prepareUserOpenAIAccountRequest(c, subject.UserID, &req) {
 		return
 	}
 	if req.Concurrency <= 0 {
@@ -829,7 +1100,7 @@ func (h *UserAccountHandler) Import(c *gin.Context) {
 			Credentials:        req.Credentials,
 			Extra:              req.Extra,
 			ShareMode:          req.ShareMode,
-			ProxyID:            nil,
+			ProxyID:            req.ProxyID,
 			Concurrency:        req.Concurrency,
 			LoadFactor:         req.LoadFactor,
 			Priority:           req.Priority,
@@ -844,7 +1115,7 @@ func (h *UserAccountHandler) Import(c *gin.Context) {
 		if err != nil {
 			return nil, err
 		}
-		return dto.AccountFromService(account), nil
+		return h.buildAccountResponseWithRuntime(ctx, account), nil
 	})
 }
 
@@ -872,8 +1143,14 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		response.BadRequest(c, "No importable account credentials found")
 		return
 	}
-	if len(sources) > service.MaxAccountCredentialImportItems {
-		response.BadRequest(c, fmt.Sprintf("Too many import items; maximum is %d", service.MaxAccountCredentialImportItems))
+	normalizeUserCredentialImportTargetLevel(&req)
+	importLimit, err := h.userAccountImportLimit(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if len(sources) > importLimit {
+		response.BadRequest(c, fmt.Sprintf("Too many import items; maximum is %d", importLimit))
 		return
 	}
 
@@ -891,7 +1168,7 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 				Index:   len(parseErrors) + idx + 1,
 				Kind:    string(source.Kind),
 				Name:    source.Name,
-				Message: err.Error(),
+				Message: credentialImportFailureMessage(err),
 			})
 			continue
 		}
@@ -903,6 +1180,13 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *UserAccountHandler) userAccountImportLimit(ctx context.Context) (int, error) {
+	if h.settingService == nil {
+		return 0, fmt.Errorf("setting service is required for user account import limit")
+	}
+	return h.settingService.GetUserAccountImportLimit(ctx)
+}
+
 func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	ctx context.Context,
 	ownerUserID int64,
@@ -910,10 +1194,24 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	defaults importUserAccountCredentialsRequest,
 	sequence int,
 ) (*service.Account, error) {
+	if err := validateCredentialImportTargetPlatform(defaults, source); err != nil {
+		return nil, err
+	}
+
+	openAIAccountLevel := service.AccountLevelUnknown
+	if credentialImportSourceIsOpenAI(source) {
+		targetLevel, err := validateOpenAIImportTargetLevel(defaults)
+		if err != nil {
+			return nil, err
+		}
+		openAIAccountLevel = targetLevel
+	}
+
 	req := service.CreateAccountRequest{
 		Name:               strings.TrimSpace(source.Name),
 		Notes:              source.Notes,
 		Platform:           source.Platform,
+		AccountLevel:       service.AccountLevelUnknown,
 		Type:               service.AccountTypeOAuth,
 		Credentials:        source.Credentials,
 		Extra:              source.Extra,
@@ -938,7 +1236,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 	case service.AccountCredentialImportKindOpenAIRefreshToken:
 		tokenInfo, err := h.openaiOAuthService.RefreshTokenWithClientID(ctx, source.Token, "", source.ClientID)
 		if err != nil {
-			return nil, fmt.Errorf("validate OpenAI refresh token: %w", err)
+			return nil, infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_OPENAI_REFRESH_FAILED", "OpenAI Refresh Token 校验失败，请检查账号凭证后重试")
 		}
 		req.Platform = service.PlatformOpenAI
 		req.Credentials = h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
@@ -959,7 +1257,7 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 			Scope:      "full",
 		})
 		if err != nil {
-			return nil, fmt.Errorf("exchange Claude session key: %w", err)
+			return nil, infraerrors.BadRequest("OWNED_ACCOUNT_IMPORT_CLAUDE_SESSION_FAILED", "Claude Session Key 兑换失败，请检查账号凭证后重试")
 		}
 		req.Platform = service.PlatformAnthropic
 		req.Credentials = service.BuildClaudeAccountCredentials(tokenInfo)
@@ -977,6 +1275,9 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		return nil, fmt.Errorf("unsupported credential import kind")
 	}
 
+	if req.Platform == service.PlatformOpenAI {
+		req.AccountLevel = openAIAccountLevel
+	}
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, fmt.Errorf("account name is required")
 	}
@@ -1036,7 +1337,7 @@ func (h *UserAccountHandler) Update(c *gin.Context) {
 			return
 		}
 	}
-	response.Success(c, dto.AccountFromService(account))
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
 func (h *UserAccountHandler) RevalidatePublicShare(c *gin.Context) {
@@ -1064,7 +1365,7 @@ func (h *UserAccountHandler) RevalidatePublicShare(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, dto.AccountFromService(account))
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
 func (h *UserAccountHandler) CreateBatchRefreshTask(c *gin.Context) {
@@ -1157,6 +1458,11 @@ func (h *UserAccountHandler) CreateBatchRevalidatePublicShareTask(c *gin.Context
 func (h *UserAccountHandler) createSetPublicShareTask(ctx context.Context, ownerUserID int64, accountIDs []int64) (*service.AccountBatchTask, error) {
 	if h.accountBatchTaskService == nil {
 		return nil, infraerrors.ServiceUnavailable("ACCOUNT_BATCH_TASK_UNAVAILABLE", "Account batch task service is unavailable")
+	}
+	for _, accountID := range accountIDs {
+		if err := h.accountService.EnsureOwnedAccountCanEnterPublicShare(ctx, ownerUserID, accountID); err != nil {
+			return nil, err
+		}
 	}
 	ownerID := ownerUserID
 	return h.accountBatchTaskService.CreateTask(ctx, service.CreateAccountBatchTaskInput{
@@ -1375,6 +1681,45 @@ func (h *UserAccountHandler) Test(c *gin.Context) {
 	if err := h.accountTestService.TestAccountConnection(c, accountID, req.ModelID, req.Prompt, req.Mode); err != nil {
 		return
 	}
+
+	if h.rateLimitService != nil {
+		if _, err := h.rateLimitService.RecoverAccountAfterSuccessfulTest(c.Request.Context(), accountID); err != nil {
+			_ = c.Error(err)
+		}
+	}
+}
+
+func (h *UserAccountHandler) RecoverState(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if h.rateLimitService == nil {
+		response.Error(c, 503, "Rate limit service unavailable")
+		return
+	}
+	if _, err := h.rateLimitService.RecoverAccountState(c.Request.Context(), accountID, service.AccountRecoveryOptions{
+		InvalidateToken: true,
+	}); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
 func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
@@ -1415,7 +1760,7 @@ func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
 		switch currentLevel {
 		case service.AccountLevelPlus, service.AccountLevelPro, service.AccountLevelTeam:
 			response.Success(c, verifyUserAccountLevelResponse{
-				Account:      dto.AccountFromService(account),
+				Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), account),
 				Verified:     true,
 				TargetLevel:  targetLevel,
 				AppliedLevel: currentLevel,
@@ -1432,7 +1777,7 @@ func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
 			return
 		}
 		response.Success(c, verifyUserAccountLevelResponse{
-			Account:      dto.AccountFromService(updated),
+			Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), updated),
 			Verified:     true,
 			TargetLevel:  targetLevel,
 			AppliedLevel: updated.AccountLevel,
@@ -1458,7 +1803,7 @@ func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
 			return
 		}
 		response.Success(c, verifyUserAccountLevelResponse{
-			Account:      dto.AccountFromService(updated),
+			Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), updated),
 			Verified:     true,
 			TargetLevel:  targetLevel,
 			AppliedLevel: updated.AccountLevel,
@@ -1477,7 +1822,7 @@ func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
 			return
 		}
 		response.Success(c, verifyUserAccountLevelResponse{
-			Account:      dto.AccountFromService(updated),
+			Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), updated),
 			Verified:     false,
 			TargetLevel:  targetLevel,
 			AppliedLevel: updated.AccountLevel,
@@ -1493,7 +1838,7 @@ func (h *UserAccountHandler) VerifyLevel(c *gin.Context) {
 		return
 	}
 	response.Success(c, verifyUserAccountLevelResponse{
-		Account:      dto.AccountFromService(current),
+		Account:      h.buildAccountResponseWithRuntime(c.Request.Context(), current),
 		Verified:     false,
 		TargetLevel:  targetLevel,
 		AppliedLevel: current.AccountLevel,
@@ -1616,13 +1961,13 @@ func (h *UserAccountHandler) Refresh(c *gin.Context) {
 	}
 	if warning == "missing_project_id_temporary" {
 		response.Success(c, gin.H{
-			"account": dto.AccountFromService(updatedAccount),
+			"account": h.buildAccountResponseWithRuntime(c.Request.Context(), updatedAccount),
 			"message": "Token refreshed successfully, but project_id could not be retrieved (will retry automatically)",
 			"warning": "missing_project_id_temporary",
 		})
 		return
 	}
-	response.Success(c, dto.AccountFromService(updatedAccount))
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), updatedAccount))
 }
 
 func (h *UserAccountHandler) setOwnedAccountPrivacy(ctx context.Context, ownerUserID int64, account *service.Account) (string, error) {
@@ -1631,9 +1976,6 @@ func (h *UserAccountHandler) setOwnedAccountPrivacy(ctx context.Context, ownerUs
 	}
 	if account.Type != service.AccountTypeOAuth {
 		return "", infraerrors.BadRequest("PRIVACY_UNSUPPORTED", "Only OAuth accounts support privacy setting")
-	}
-	if account.ProxyID != nil {
-		return "", infraerrors.BadRequest("PROXY_NOT_ALLOWED", "proxy is not allowed for user accounts")
 	}
 
 	mode := ""
@@ -1646,7 +1988,11 @@ func (h *UserAccountHandler) setOwnedAccountPrivacy(ctx context.Context, ownerUs
 		if token == "" {
 			return "", infraerrors.BadRequest("PRIVACY_TOKEN_MISSING", "Cannot set privacy: missing access_token")
 		}
-		mode = service.DisableOpenAITraining(ctx, h.openaiOAuthService.PrivacyClientFactory(), token, "")
+		proxyURL, err := h.openaiOAuthService.VisibleProxyURLForUser(ctx, ownerUserID, account.ProxyID)
+		if err != nil {
+			return "", err
+		}
+		mode = service.DisableOpenAITraining(ctx, h.openaiOAuthService.PrivacyClientFactory(), token, proxyURL)
 	case service.PlatformAntigravity:
 		token, _ := account.Credentials["access_token"].(string)
 		if token == "" {
@@ -1701,10 +2047,10 @@ func (h *UserAccountHandler) SetPrivacy(c *gin.Context) {
 			account.Extra = make(map[string]any)
 		}
 		account.Extra["privacy_mode"] = mode
-		response.Success(c, dto.AccountFromService(account))
+		response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 		return
 	}
-	response.Success(c, dto.AccountFromService(updated))
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), updated))
 }
 
 func (h *UserAccountHandler) GenerateAnthropicOAuthURL(c *gin.Context) {
@@ -1774,12 +2120,24 @@ func (h *UserAccountHandler) GenerateOpenAIOAuthURL(c *gin.Context) {
 	if !bindOptionalJSON(c, &req) {
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
-		return
+	if req.ProxyID != nil {
+		subject, ok := middleware2.GetAuthSubjectFromContext(c)
+		if !ok {
+			response.Unauthorized(c, "User not authenticated")
+			return
+		}
+		if h.openaiOAuthService == nil {
+			response.ErrorFrom(c, service.ErrServiceUnavailable)
+			return
+		}
+		if err := h.openaiOAuthService.EnsureProxyVisibleToUser(c.Request.Context(), subject.UserID, req.ProxyID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 	result, err := h.openaiOAuthService.GenerateAuthURL(
 		c.Request.Context(),
-		nil,
+		req.ProxyID,
 		req.RedirectURI,
 		service.PlatformOpenAI,
 	)
@@ -1799,15 +2157,27 @@ func (h *UserAccountHandler) ExchangeOpenAIOAuthCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if !rejectUserProxyID(c, req.ProxyID) {
-		return
+	if req.ProxyID != nil {
+		subject, ok := middleware2.GetAuthSubjectFromContext(c)
+		if !ok {
+			response.Unauthorized(c, "User not authenticated")
+			return
+		}
+		if h.openaiOAuthService == nil {
+			response.ErrorFrom(c, service.ErrServiceUnavailable)
+			return
+		}
+		if err := h.openaiOAuthService.EnsureProxyVisibleToUser(c.Request.Context(), subject.UserID, req.ProxyID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
 		SessionID:   req.SessionID,
 		Code:        req.Code,
 		State:       req.State,
 		RedirectURI: req.RedirectURI,
-		ProxyID:     nil,
+		ProxyID:     req.ProxyID,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

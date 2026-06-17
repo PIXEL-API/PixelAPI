@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	openAIAccountScheduleLayerAccountShareMode = "account_share_mode"
 	openAIAccountScheduleLayerPreviousResponse = "previous_response_id"
 	openAIAccountScheduleLayerCleanRelay       = "clean_relay"
 	openAIAccountScheduleLayerSessionSticky    = "session_hash"
@@ -1308,6 +1309,110 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	return selection, decision, err
 }
 
+func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
+	ctx context.Context,
+	groupID *int64,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	requiredTransport OpenAIUpstreamTransport,
+	requiredImageCapability OpenAIImagesCapability,
+	requireCompact bool,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, bool, error) {
+	decision := OpenAIAccountScheduleDecision{Layer: openAIAccountScheduleLayerAccountShareMode}
+	if s == nil || s.accountShareModeService == nil || groupID == nil || *groupID <= 0 {
+		return nil, decision, false, nil
+	}
+	if !s.accountShareModeService.IsModeGroup(ctx, *groupID) {
+		return nil, decision, false, nil
+	}
+	reqCtx, ok := AccountShareModeRequestFromContext(ctx)
+	if !ok {
+		return nil, decision, true, ErrAccountShareModeGroupUnbound
+	}
+	membership, listing, err := s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
+	if err != nil {
+		return nil, decision, true, err
+	}
+	if membership == nil || listing == nil {
+		return nil, decision, true, ErrAccountShareModeGroupUnbound
+	}
+	accountID := membership.AccountID
+	if accountID <= 0 {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+	decision.CandidateCount = 1
+	decision.SelectedAccountID = accountID
+
+	if excludedIDs != nil {
+		if _, excluded := excludedIDs[accountID]; excluded {
+			return nil, decision, true, ErrNoAvailableAccounts
+		}
+	}
+	if s.userRepo != nil {
+		user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
+		if err != nil {
+			return nil, decision, true, err
+		}
+		if user.Balance < listing.MinBalanceRequired {
+			return nil, decision, true, ErrAccountShareBalanceBelowMinimum
+		}
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, decision, true, err
+	}
+	if account == nil {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+	decision.SelectedAccountType = account.Type
+	if account.ID != accountID || !account.IsOpenAI() || !account.IsSchedulable() {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+	if !isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+	if !account.SupportsOpenAIImageCapability(requiredImageCapability) {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+	if !s.isOpenAIAccountTransportCompatible(account, requiredTransport) {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+	if s.needsUpstreamChannelRestrictionCheck(ctx, groupID) && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+
+	membershipSlot, err := s.accountShareModeService.AcquireMembershipSlot(ctx, membership.ID, listing.PerUserConcurrency)
+	if err != nil {
+		return nil, decision, true, err
+	}
+	if membershipSlot == nil || !membershipSlot.Acquired {
+		return nil, decision, true, ErrAccountSharePerUserConcurrencyExceeded
+	}
+	accountSlot, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+	if err != nil {
+		if membershipSlot.ReleaseFunc != nil {
+			membershipSlot.ReleaseFunc()
+		}
+		return nil, decision, true, err
+	}
+	if accountSlot == nil || !accountSlot.Acquired {
+		if membershipSlot.ReleaseFunc != nil {
+			membershipSlot.ReleaseFunc()
+		}
+		return nil, decision, true, ErrNoAvailableAccounts
+	}
+
+	release := func() {
+		if accountSlot.ReleaseFunc != nil {
+			accountSlot.ReleaseFunc()
+		}
+		if membershipSlot.ReleaseFunc != nil {
+			membershipSlot.ReleaseFunc()
+		}
+	}
+	return newAccountShareModeSelectionResult(account, true, release, nil), decision, true, nil
+}
+
 func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	ctx context.Context,
 	groupID *int64,
@@ -1320,6 +1425,9 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	requireCompact bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	decision := OpenAIAccountScheduleDecision{}
+	if selection, accountModeDecision, handled, err := s.selectAccountShareModeBoundAccount(ctx, groupID, requestedModel, excludedIDs, requiredTransport, requiredImageCapability, requireCompact); handled {
+		return selection, accountModeDecision, err
+	}
 	scheduler := s.getOpenAIAccountScheduler(ctx)
 	if scheduler == nil {
 		decision.Layer = openAIAccountScheduleLayerLoadBalance

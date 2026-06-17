@@ -30,21 +30,25 @@ type Account struct {
 	ShareMode     string
 	ShareStatus   string
 	SharePolicyID *int64
-	ProxyID       *int64
-	Concurrency   int
-	Priority      int
+	// AccountShareModeListingID is a runtime marker for accounts that back an
+	// account-share-mode listing. It is not stored on accounts.
+	AccountShareModeListingID *int64
+	ProxyID                   *int64
+	Concurrency               int
+	Priority                  int
 	// RateMultiplier 账号计费倍率（>=0，允许 0 表示该账号计费为 0）。
 	// 使用指针用于兼容旧版本调度缓存（Redis）中缺字段的情况：nil 表示按 1.0 处理。
-	RateMultiplier     *float64
-	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
-	Status             string
-	ErrorMessage       string
-	ErrorSince         *time.Time
-	LastUsedAt         *time.Time
-	ExpiresAt          *time.Time
-	AutoPauseOnExpired bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	RateMultiplier        *float64
+	LoadFactor            *int // 调度负载因子；nil 表示使用 Concurrency
+	LoadFactorPaidCeiling int
+	Status                string
+	ErrorMessage          string
+	ErrorSince            *time.Time
+	LastUsedAt            *time.Time
+	ExpiresAt             *time.Time
+	AutoPauseOnExpired    bool
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 
 	Schedulable bool
 
@@ -85,6 +89,7 @@ const (
 const (
 	OAuthAccountDefaultConcurrency = 3
 	OpenAIPlusDefaultConcurrency   = 3
+	OwnedPersonalDefaultLoadFactor = 10
 	AccountMaxLoadFactor           = 10000
 	CodexQuotaDefaultLimitPercent  = 100.0
 	CodexQuotaMinLimitPercent      = 1.0
@@ -94,6 +99,13 @@ const (
 const (
 	CodexQuotaWindow5h = "5h"
 	CodexQuotaWindow7d = "7d"
+)
+
+const (
+	AccountListStatusRateLimited         = "rate_limited"
+	AccountListStatusTempUnschedulable   = "temp_unschedulable"
+	AccountListStatusUnschedulable       = "unschedulable"
+	AccountListStatusCodexQuotaProtected = "codex_quota_protected"
 )
 
 func NormalizeAccountLevel(level string) string {
@@ -114,6 +126,24 @@ func NormalizeAccountLevel(level string) string {
 func IsConcreteAccountLevel(level string) bool {
 	switch NormalizeAccountLevel(level) {
 	case AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsUserSelectableOpenAIAccountLevel(level string) bool {
+	switch NormalizeAccountLevel(level) {
+	case AccountLevelFree, AccountLevelPlus, AccountLevelPro, AccountLevelTeam:
+		return true
+	default:
+		return false
+	}
+}
+
+func RequiresUserOpenAIProxyLogin(level string) bool {
+	switch NormalizeAccountLevel(level) {
+	case AccountLevelPro:
 		return true
 	default:
 		return false
@@ -153,6 +183,21 @@ func InferOpenAIAccountLevel(credentials, extra map[string]any) string {
 	return AccountLevelUnknown
 }
 
+func OpenAIAccountPlanType(credentials, extra map[string]any) string {
+	for _, values := range []map[string]any{credentials, extra} {
+		for _, key := range []string{"plan_type", "chatgpt_plan_type", "subscription_plan"} {
+			raw, ok := values[key].(string)
+			if !ok {
+				continue
+			}
+			if trimmed := strings.TrimSpace(raw); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
 func NormalizeOpenAIPlanAccountLevel(planType string) string {
 	if level := NormalizeAccountLevel(planType); IsConcreteAccountLevel(level) {
 		return level
@@ -164,7 +209,7 @@ func NormalizeOpenAIPlanAccountLevel(planType string) string {
 		return AccountLevelFree
 	case normalized == "chatgptplus" || strings.HasPrefix(normalized, "plus"):
 		return AccountLevelPlus
-	case normalized == "chatgptpro":
+	case normalized == "chatgptpro" || strings.HasPrefix(normalized, "chatgptpro") || normalized == "pro" || strings.HasPrefix(normalized, "pro"):
 		return AccountLevelPro
 	case normalized == "chatgptteam":
 		return AccountLevelTeam
@@ -1288,6 +1333,24 @@ func (a *Account) CodexQuotaProtectionReasonAt(now time.Time) string {
 func (a *Account) CodexQuotaProtectionResetAt(now time.Time) *time.Time {
 	_, resetAt := a.codexQuotaProtectionWindowAt(now)
 	return resetAt
+}
+
+func (a *Account) CodexUsageProgress(window string, now time.Time) *UsageProgress {
+	if a == nil || !a.IsOpenAIOAuth() {
+		return nil
+	}
+	return buildCodexUsageProgressFromExtra(a.Extra, window, now)
+}
+
+func (a *Account) CodexUsageUpdatedAt() *time.Time {
+	if a == nil {
+		return nil
+	}
+	updatedAt := a.getExtraTime("codex_usage_updated_at")
+	if updatedAt.IsZero() {
+		return nil
+	}
+	return &updatedAt
 }
 
 func (a *Account) codexQuotaProtectionWindowAt(now time.Time) (string, *time.Time) {

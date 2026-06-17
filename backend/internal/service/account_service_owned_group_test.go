@@ -127,16 +127,20 @@ func (s *ownedPrivateGroupProvisionerStub) GetActiveUserPrivateGroup(context.Con
 }
 
 type ownedAccountDuplicateRepoStub struct {
-	createdAccounts     []*Account
-	updatedAccounts     []*Account
-	bulkUpdateCalls     int
-	bulkUpdateIDs       []int64
-	bulkUpdatePayload   AccountBulkUpdate
-	boundAccountIDs     []int64
-	boundGroupIDs       map[int64][]int64
-	getByIDAccounts     map[int64]*Account
-	getByIDsAccounts    map[int64]*Account
-	listOwnedByPlatform map[string][]Account
+	createdAccounts            []*Account
+	updatedAccounts            []*Account
+	bulkUpdateCalls            int
+	bulkUpdateIDs              []int64
+	bulkUpdatePayload          AccountBulkUpdate
+	boundAccountIDs            []int64
+	boundGroupIDs              map[int64][]int64
+	getByIDAccounts            map[int64]*Account
+	getByIDsAccounts           map[int64]*Account
+	accountShareModeListingIDs map[int64]int64
+	listOwnedByPlatform        map[string][]Account
+	loadFactorCreditsBalance   int
+	loadFactorCreditsUsedTotal int
+	loadFactorCreditCharges    []int
 }
 
 func (s *ownedAccountDuplicateRepoStub) Create(_ context.Context, account *Account) error {
@@ -157,6 +161,42 @@ func (s *ownedAccountDuplicateRepoStub) Update(_ context.Context, account *Accou
 		s.getByIDsAccounts[account.ID] = &stored
 	}
 	return nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) UpdateOwnedAccountWithLoadFactorCredits(ctx context.Context, ownerUserID int64, account *Account) (*Account, error) {
+	if account == nil {
+		return nil, ErrAccountNilInput
+	}
+	if account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID {
+		return nil, ErrAccountNotFound
+	}
+	if account.LoadFactor == nil || *account.LoadFactor <= 0 {
+		return nil, ErrOwnedAccountLoadFactorOutOfRange
+	}
+	cp := *account
+	paidCeiling := cp.LoadFactorPaidCeiling
+	if paidCeiling < OwnedPersonalDefaultLoadFactor {
+		paidCeiling = OwnedPersonalDefaultLoadFactor
+	}
+	charge := *cp.LoadFactor - paidCeiling
+	if charge < 0 {
+		charge = 0
+	}
+	if charge > s.loadFactorCreditsBalance {
+		return nil, ErrOwnedAccountLoadFactorCreditsInsufficient
+	}
+	s.loadFactorCreditsBalance -= charge
+	s.loadFactorCreditsUsedTotal += charge
+	s.loadFactorCreditCharges = append(s.loadFactorCreditCharges, charge)
+	if *cp.LoadFactor > paidCeiling {
+		cp.LoadFactorPaidCeiling = *cp.LoadFactor
+	} else {
+		cp.LoadFactorPaidCeiling = paidCeiling
+	}
+	if err := s.Update(ctx, &cp); err != nil {
+		return nil, err
+	}
+	return &cp, nil
 }
 
 func (s *ownedAccountDuplicateRepoStub) BulkUpdate(_ context.Context, ids []int64, updates AccountBulkUpdate) (int64, error) {
@@ -195,6 +235,11 @@ func (s *ownedAccountDuplicateRepoStub) GetByIDs(_ context.Context, ids []int64)
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (s *ownedAccountDuplicateRepoStub) IsAccountShareModeListingAccount(_ context.Context, accountID int64) (bool, error) {
+	listingID := s.accountShareModeListingIDs[accountID]
+	return listingID > 0, nil
 }
 
 func (s *ownedAccountDuplicateRepoStub) ListOwnedWithFilters(_ context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
@@ -734,12 +779,13 @@ func TestAccountServiceCreateOwnedRejectsDuplicateOpenAIIdentity(t *testing.T) {
 	}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
-		Name:        "duplicate",
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeOAuth,
-		Credentials: map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1"},
-		Concurrency: 1,
-		Priority:    1,
+		Name:         "duplicate",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelFree,
+		Credentials:  map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1", "plan_type": "free"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
 	})
 
 	require.Nil(t, account)
@@ -747,24 +793,124 @@ func TestAccountServiceCreateOwnedRejectsDuplicateOpenAIIdentity(t *testing.T) {
 	require.Empty(t, repo.createdAccounts)
 }
 
-func TestAccountServiceCreateOwnedRejectsManualAccountLevel(t *testing.T) {
+func TestAccountServiceCreateOwnedRejectsOpenAIWithoutAccountLevel(t *testing.T) {
 	ownerID := int64(101)
 	repo := &ownedAccountDuplicateRepoStub{}
 	svc := &AccountService{accountRepo: repo}
 
 	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
-		Name:         "manual-level",
+		Name:        "missing-level",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token", "plan_type": "free"},
+		Concurrency: ownedPersonalDefaultConcurrency,
+		Priority:    1,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedOpenAIAccountLevelRequired)
+	require.Empty(t, repo.createdAccounts)
+}
+
+func TestAccountServiceCreateOwnedRejectsOpenAIProWithoutProxy(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{accountRepo: repo}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "pro-without-proxy",
 		Platform:     PlatformOpenAI,
 		Type:         AccountTypeOAuth,
 		AccountLevel: AccountLevelPro,
-		Credentials:  map[string]any{"access_token": "token"},
-		Concurrency:  1,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
 		Priority:     1,
 	})
 
 	require.Nil(t, account)
-	require.ErrorIs(t, err, ErrOwnedAccountLevelNotAllowed)
+	require.ErrorIs(t, err, ErrOwnedOpenAIAccountProxyRequired)
 	require.Empty(t, repo.createdAccounts)
+}
+
+func TestAccountServiceCreateOwnedRejectsOpenAILevelMismatch(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "mismatch",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPlus,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "free"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
+	})
+
+	require.Nil(t, account)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "OWNED_OPENAI_ACCOUNT_LEVEL_MISMATCH")
+	require.Empty(t, repo.createdAccounts)
+}
+
+func TestAccountServiceCreateOwnedAllowsOpenAITeamWithoutProxy(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "team-json",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelTeam,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "team"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, AccountLevelTeam, account.AccountLevel)
+	require.Nil(t, account.ProxyID)
+	require.Len(t, repo.createdAccounts, 1)
+	require.Equal(t, AccountLevelTeam, repo.createdAccounts[0].AccountLevel)
+	require.Nil(t, repo.createdAccounts[0].ProxyID)
+}
+
+func TestAccountServiceCreateOwnedKeepsAllowedPersonalConcurrency(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformAnthropic, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:        "personal",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token"},
+		Concurrency: ownedPersonalMaxConcurrency,
+		Priority:    ownedPersonalDefaultPriority,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, ownedPersonalMaxConcurrency, account.Concurrency)
+	require.Len(t, repo.createdAccounts, 1)
+	require.Equal(t, ownedPersonalMaxConcurrency, repo.createdAccounts[0].Concurrency)
 }
 
 func TestValidateOwnedAccountSourceAllowsOAuthMetadataURLs(t *testing.T) {
@@ -882,6 +1028,198 @@ func TestAccountServiceUpdateOwnedRejectsManualAccountLevel(t *testing.T) {
 
 	require.Nil(t, account)
 	require.ErrorIs(t, err, ErrOwnedAccountLevelNotAllowed)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceUpdateOwnedPreservesPersonalAccountHiddenConfig(t *testing.T) {
+	ownerID := int64(101)
+	loadFactor := 8
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			2: {
+				ID:          2,
+				Name:        "before",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{
+					"access_token": "token",
+					"model_mapping": map[string]any{
+						"custom-model": "custom-target",
+					},
+					"compact_model_mapping": map[string]any{
+						"compact-model": "compact-target",
+					},
+				},
+				Extra: map[string]any{
+					"openai_compact_mode":        OpenAICompactModeForceOff,
+					"openai_passthrough":         true,
+					"codex_5h_limit_percent":     50.0,
+					"codex_7d_limit_percent":     70.0,
+					"session_id_masking_enabled": true,
+				},
+				Status:             StatusActive,
+				Schedulable:        true,
+				Concurrency:        9,
+				LoadFactor:         &loadFactor,
+				Priority:           7,
+				AutoPauseOnExpired: false,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+	nextName := "after"
+	nextConcurrency := 12
+	autoPause := true
+	priority := 7
+	credentials := map[string]any{
+		"model_mapping": map[string]any{
+			"default-model": "default-model",
+		},
+	}
+	extra := map[string]any{
+		"openai_compact_mode":        ownedPersonalDefaultOpenAICompactMode,
+		"openai_passthrough":         false,
+		"codex_5h_limit_percent":     60.0,
+		"codex_7d_limit_percent":     70.0,
+		"session_id_masking_enabled": true,
+	}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{
+		Name:               &nextName,
+		Credentials:        &credentials,
+		Extra:              &extra,
+		Concurrency:        &nextConcurrency,
+		Priority:           &priority,
+		AutoPauseOnExpired: &autoPause,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "after", account.Name)
+	require.Equal(t, 12, account.Concurrency)
+	require.NotNil(t, account.LoadFactor)
+	require.Equal(t, 8, *account.LoadFactor)
+	require.False(t, account.AutoPauseOnExpired)
+	require.Equal(t, 7, account.Priority)
+	require.Equal(t, map[string]any{"custom-model": "custom-target"}, account.Credentials["model_mapping"])
+	require.Equal(t, map[string]any{"compact-model": "compact-target"}, account.Credentials["compact_model_mapping"])
+	require.Equal(t, OpenAICompactModeForceOff, account.Extra["openai_compact_mode"])
+	require.Equal(t, true, account.Extra["openai_passthrough"])
+	require.Equal(t, 60.0, account.Extra["codex_5h_limit_percent"])
+	require.Equal(t, 70.0, account.Extra["codex_7d_limit_percent"])
+	require.Equal(t, true, account.Extra["session_id_masking_enabled"])
+}
+
+func TestAccountServiceUpdateOwnedLoadFactorDebitsOnlyNewPaidCeiling(t *testing.T) {
+	ownerID := int64(101)
+	initialLoadFactor := 10
+	repo := &ownedAccountDuplicateRepoStub{
+		loadFactorCreditsBalance: 15,
+		getByIDAccounts: map[int64]*Account{
+			2: {
+				ID:                    2,
+				Name:                  "personal",
+				Platform:              PlatformOpenAI,
+				Type:                  AccountTypeOAuth,
+				OwnerUserID:           &ownerID,
+				Credentials:           map[string]any{"access_token": "token"},
+				Status:                StatusActive,
+				Concurrency:           ownedPersonalDefaultConcurrency,
+				LoadFactor:            &initialLoadFactor,
+				LoadFactorPaidCeiling: OwnedPersonalDefaultLoadFactor,
+				Priority:              ownedPersonalDefaultPriority,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	target := 20
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{LoadFactor: &target})
+
+	require.NoError(t, err)
+	require.Equal(t, 20, *account.LoadFactor)
+	require.Equal(t, 20, account.LoadFactorPaidCeiling)
+	require.Equal(t, 5, repo.loadFactorCreditsBalance)
+	require.Equal(t, 10, repo.loadFactorCreditsUsedTotal)
+
+	target = 12
+	account, err = svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{LoadFactor: &target})
+
+	require.NoError(t, err)
+	require.Equal(t, 12, *account.LoadFactor)
+	require.Equal(t, 20, account.LoadFactorPaidCeiling)
+	require.Equal(t, 5, repo.loadFactorCreditsBalance)
+	require.Equal(t, 10, repo.loadFactorCreditsUsedTotal)
+
+	target = 20
+	account, err = svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{LoadFactor: &target})
+
+	require.NoError(t, err)
+	require.Equal(t, 20, *account.LoadFactor)
+	require.Equal(t, 20, account.LoadFactorPaidCeiling)
+	require.Equal(t, 5, repo.loadFactorCreditsBalance)
+	require.Equal(t, 10, repo.loadFactorCreditsUsedTotal)
+	require.Equal(t, []int{10, 0, 0}, repo.loadFactorCreditCharges)
+}
+
+func TestAccountServiceUpdateOwnedLoadFactorRejectsInsufficientCredits(t *testing.T) {
+	ownerID := int64(101)
+	initialLoadFactor := 10
+	repo := &ownedAccountDuplicateRepoStub{
+		loadFactorCreditsBalance: 2,
+		getByIDAccounts: map[int64]*Account{
+			2: {
+				ID:                    2,
+				Name:                  "personal",
+				Platform:              PlatformOpenAI,
+				Type:                  AccountTypeOAuth,
+				OwnerUserID:           &ownerID,
+				Credentials:           map[string]any{"access_token": "token"},
+				Status:                StatusActive,
+				Concurrency:           ownedPersonalDefaultConcurrency,
+				LoadFactor:            &initialLoadFactor,
+				LoadFactorPaidCeiling: OwnedPersonalDefaultLoadFactor,
+				Priority:              ownedPersonalDefaultPriority,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+	target := 20
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{LoadFactor: &target})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountLoadFactorCreditsInsufficient)
+	require.Equal(t, 2, repo.loadFactorCreditsBalance)
+	require.Equal(t, 0, repo.loadFactorCreditsUsedTotal)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceUpdateOwnedRejectsPersonalConcurrencyOutOfRange(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			2: {
+				ID:          2,
+				Name:        "personal",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token"},
+				Status:      StatusActive,
+				Concurrency: ownedPersonalDefaultConcurrency,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+	tooHigh := ownedPersonalMaxConcurrency + 1
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{
+		Concurrency: &tooHigh,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountConcurrencyOutOfRange)
 	require.Empty(t, repo.updatedAccounts)
 }
 
@@ -1032,6 +1370,63 @@ func TestAccountServiceBulkUpdateOwnedSchedulableUsesRepositoryBulkUpdate(t *tes
 	require.Empty(t, repo.updatedAccounts)
 }
 
+func TestAccountServiceBulkUpdateOwnedConcurrencyUsesRepositoryBulkUpdate(t *testing.T) {
+	ownerID := int64(101)
+	nextConcurrency := 20
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDsAccounts: map[int64]*Account{
+			1: {
+				ID:          1,
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token-1"},
+				Concurrency: ownedPersonalDefaultConcurrency,
+				Priority:    7,
+			},
+			2: {
+				ID:          2,
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{"access_token": "token-2"},
+				Concurrency: ownedPersonalDefaultConcurrency,
+				Priority:    9,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs:  []int64{1, 2},
+		Concurrency: &nextConcurrency,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.Equal(t, 1, repo.bulkUpdateCalls)
+	require.NotNil(t, repo.bulkUpdatePayload.Concurrency)
+	require.Equal(t, nextConcurrency, *repo.bulkUpdatePayload.Concurrency)
+	require.Empty(t, repo.updatedAccounts)
+}
+
+func TestAccountServiceBulkUpdateOwnedRejectsPersonalConcurrencyOutOfRange(t *testing.T) {
+	ownerID := int64(101)
+	tooLow := ownedPersonalMinConcurrency - 1
+	repo := &ownedAccountDuplicateRepoStub{}
+	svc := &AccountService{accountRepo: repo}
+
+	result, err := svc.BulkUpdateOwned(context.Background(), ownerID, &BulkUpdateOwnedAccountsInput{
+		AccountIDs:  []int64{1},
+		Concurrency: &tooLow,
+	})
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrOwnedAccountConcurrencyOutOfRange)
+	require.Equal(t, 0, repo.bulkUpdateCalls)
+}
+
 func TestAccountServiceBulkUpdateOwnedShareModeUsesPerAccountUpdateOnly(t *testing.T) {
 	ownerID := int64(101)
 	repo := &ownedAccountDuplicateRepoStub{
@@ -1096,9 +1491,85 @@ func TestAccountServiceBulkUpdateOwnedShareModeUsesPerAccountUpdateOnly(t *testi
 	require.Equal(t, AccountShareModePrivate, repo.updatedAccounts[0].ShareMode)
 }
 
+func TestAccountServiceUpdateOwnedRejectsAccountShareModeListingPublicShare(t *testing.T) {
+	ownerID := int64(101)
+	listingID := int64(301)
+	publicMode := AccountShareModePublic
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			1: {
+				ID:                        1,
+				Platform:                  PlatformOpenAI,
+				AccountLevel:              AccountLevelPlus,
+				Type:                      AccountTypeOAuth,
+				OwnerUserID:               &ownerID,
+				Credentials:               map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1"},
+				ShareMode:                 AccountShareModePrivate,
+				ShareStatus:               AccountShareStatusApproved,
+				AccountShareModeListingID: &listingID,
+				Status:                    StatusActive,
+				Schedulable:               true,
+				Concurrency:               OpenAIPlusDefaultConcurrency,
+				Priority:                  1,
+			},
+		},
+		accountShareModeListingIDs: map[int64]int64{1: listingID},
+	}
+	svc := &AccountService{accountRepo: repo}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 1, UpdateAccountRequest{
+		ShareMode: &publicMode,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrOwnedAccountShareModeOnly)
+	require.Empty(t, repo.updatedAccounts)
+	require.Empty(t, repo.boundAccountIDs)
+}
+
+func TestAccountServiceUpdateOwnedAllowsPrivateAccountPublicSharePending(t *testing.T) {
+	ownerID := int64(101)
+	publicMode := AccountShareModePublic
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			1: {
+				ID:           1,
+				Platform:     PlatformOpenAI,
+				AccountLevel: AccountLevelPlus,
+				Type:         AccountTypeOAuth,
+				OwnerUserID:  &ownerID,
+				Credentials:  map[string]any{"access_token": "token", "chatgpt_account_id": "acct-1"},
+				ShareMode:    AccountShareModePrivate,
+				ShareStatus:  AccountShareStatusApproved,
+				Status:       StatusActive,
+				Schedulable:  true,
+				Concurrency:  OpenAIPlusDefaultConcurrency,
+				Priority:     1,
+			},
+		},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 1, UpdateAccountRequest{
+		ShareMode: &publicMode,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, AccountShareModePublic, account.ShareMode)
+	require.Equal(t, AccountShareStatusPending, account.ShareStatus)
+	require.Equal(t, []int64{99}, repo.boundGroupIDs[1])
+}
+
 func TestAccountServiceManagedGroupIDsKeepsApprovedPublicAccountInPublicPool(t *testing.T) {
 	ownerID := int64(101)
 	svc := &AccountService{
+		accountRepo: &ownedAccountDuplicateRepoStub{},
 		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
 			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
 		},

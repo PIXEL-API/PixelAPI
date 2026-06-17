@@ -19,25 +19,35 @@ import (
 )
 
 var (
-	ErrAccountNotFound                        = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
-	ErrAccountNilInput                        = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
-	ErrCodexQuotaLimitPercentInvalid          = infraerrors.BadRequest("CODEX_QUOTA_LIMIT_PERCENT_INVALID", "Codex quota limit percent must be between 1 and 100")
-	ErrOwnedAccountAlreadyExists              = infraerrors.Conflict("OWNED_ACCOUNT_ALREADY_EXISTS", "account already exists")
-	ErrOwnedAccountTypeNotAllowed             = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
-	ErrOwnedAccountCredentialsInvalid         = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
-	ErrOwnedAccountCredentialsNotAllowed      = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
-	ErrOwnedAccountLevelNotAllowed            = infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_NOT_ALLOWED", "user accounts cannot manually change account level")
-	ErrOwnedAccountGroupPlatformMismatch      = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
-	ErrOwnedAccountGroupValidationUnavailable = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
-	ErrOwnedAccountPublicPoolUnavailable      = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "public shared account pool group is not configured for this account platform")
-	ErrOwnedAccountPublicPolicyUnavailable    = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE", "account share policy is not configured for this public account pool")
-	ErrOwnedAccountPublicValidationFailed     = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
+	ErrAccountNotFound                           = infraerrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
+	ErrAccountNilInput                           = infraerrors.BadRequest("ACCOUNT_NIL_INPUT", "account input cannot be nil")
+	ErrCodexQuotaLimitPercentInvalid             = infraerrors.BadRequest("CODEX_QUOTA_LIMIT_PERCENT_INVALID", "Codex quota limit percent must be between 1 and 100")
+	ErrOwnedAccountAlreadyExists                 = infraerrors.Conflict("OWNED_ACCOUNT_ALREADY_EXISTS", "account already exists")
+	ErrOwnedAccountTypeNotAllowed                = infraerrors.BadRequest("OWNED_ACCOUNT_TYPE_NOT_ALLOWED", "user accounts only support official OAuth accounts")
+	ErrOwnedAccountCredentialsInvalid            = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_INVALID", "OAuth account credentials must include an access token")
+	ErrOwnedAccountCredentialsNotAllowed         = infraerrors.BadRequest("OWNED_ACCOUNT_CREDENTIALS_NOT_ALLOWED", "user accounts cannot include API keys, custom URLs, upstream endpoints, cookies or manual session credentials")
+	ErrOwnedAccountConcurrencyOutOfRange         = infraerrors.BadRequest("OWNED_ACCOUNT_CONCURRENCY_OUT_OF_RANGE", "personal account concurrency must be between 3 and 50")
+	ErrOwnedAccountLoadFactorOutOfRange          = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_OUT_OF_RANGE", fmt.Sprintf("personal account load factor must be between 1 and %d", AccountMaxLoadFactor))
+	ErrOwnedAccountLoadFactorCreditsUnavailable  = infraerrors.InternalServer("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_UNAVAILABLE", "load factor credit accounting is unavailable")
+	ErrOwnedAccountLoadFactorCreditsInsufficient = infraerrors.BadRequest("OWNED_ACCOUNT_LOAD_FACTOR_CREDITS_INSUFFICIENT", "load factor credits are insufficient")
+	ErrOwnedAccountLevelNotAllowed               = infraerrors.BadRequest("OWNED_ACCOUNT_LEVEL_NOT_ALLOWED", "user accounts cannot manually change account level")
+	ErrOwnedOpenAIAccountLevelRequired           = infraerrors.BadRequest("OWNED_OPENAI_ACCOUNT_LEVEL_REQUIRED", "OpenAI user accounts must select an account level before import")
+	ErrOwnedOpenAIAccountProxyRequired           = infraerrors.BadRequest("OWNED_OPENAI_ACCOUNT_PROXY_REQUIRED", "Pro OpenAI user accounts must use account login with a selected proxy IP")
+	ErrOwnedAccountGroupPlatformMismatch         = infraerrors.BadRequest("OWNED_ACCOUNT_GROUP_PLATFORM_MISMATCH", "account group platform does not match account platform")
+	ErrOwnedAccountGroupValidationUnavailable    = infraerrors.InternalServer("OWNED_ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "owned account group validation is unavailable")
+	ErrOwnedAccountPublicPoolUnavailable         = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POOL_UNAVAILABLE", "public shared account pool group is not configured for this account platform")
+	ErrOwnedAccountPublicPolicyUnavailable       = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_POLICY_UNAVAILABLE", "account share policy is not configured for this public account pool")
+	ErrOwnedAccountPublicValidationFailed        = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
+	ErrOwnedAccountShareModeOnly                 = infraerrors.BadRequest("OWNED_ACCOUNT_SHARE_MODE_ONLY", "account share mode accounts cannot be moved to the public shared account pool")
+	ErrOwnedAccountShareModeBoundaryUnavailable  = infraerrors.InternalServer("OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE", "account share mode boundary check is unavailable")
 )
 
 const AccountListGroupUngrouped int64 = -1
 const AccountListProxyUnassigned int64 = -1
 const AccountPrivacyModeUnsetFilter = "__unset__"
-const ownedPersonalDefaultConcurrency = 3
+const ownedPersonalMinConcurrency = 3
+const ownedPersonalMaxConcurrency = 50
+const ownedPersonalDefaultConcurrency = ownedPersonalMinConcurrency
 const ownedPersonalDefaultPriority = 1
 const ownedPersonalDefaultOpenAICompactMode = "force_on"
 const ownedPersonalDefaultOpenAIWSMode = OpenAIWSIngressModeOff
@@ -204,8 +214,16 @@ type ownedAccountFilterRepository interface {
 	ListOwnedWithFilters(ctx context.Context, ownerUserID int64, params pagination.PaginationParams, platform, accountType, status, search string, groupID, proxyID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error)
 }
 
+type ownedLoadFactorCreditAccountRepository interface {
+	UpdateOwnedAccountWithLoadFactorCredits(ctx context.Context, ownerUserID int64, account *Account) (*Account, error)
+}
+
 type accountQuotaPoolRepository interface {
 	ListQuotaPoolAccounts(ctx context.Context, ownerUserID int64) ([]Account, error)
+}
+
+type accountShareModeListingAccountRepository interface {
+	IsAccountShareModeListingAccount(ctx context.Context, accountID int64) (bool, error)
 }
 
 type ownedAccountDuplicateKey struct {
@@ -395,6 +413,14 @@ func (s *AccountService) GetOwnedByID(ctx context.Context, ownerUserID, accountI
 	return account, nil
 }
 
+func (s *AccountService) EnsureOwnedAccountCanEnterPublicShare(ctx context.Context, ownerUserID, accountID int64) error {
+	account, err := s.GetOwnedByID(ctx, ownerUserID, accountID)
+	if err != nil {
+		return err
+	}
+	return s.ensureAccountCanEnterPublicShare(ctx, account)
+}
+
 func (s *AccountService) CreateOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
 	return s.createOwned(ctx, ownerUserID, req)
 }
@@ -407,10 +433,26 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
-	if IsConcreteAccountLevel(req.AccountLevel) {
-		return nil, ErrOwnedAccountLevelNotAllowed
+	targetLevel := NormalizeAccountLevel(req.AccountLevel)
+	preserveProxy := req.Platform == PlatformOpenAI && RequiresUserOpenAIProxyLogin(targetLevel)
+	proxyID := req.ProxyID
+	if err := applyOwnedPersonalAccountTemplateToCreate(&req); err != nil {
+		return nil, err
 	}
-	applyOwnedPersonalAccountTemplateToCreate(&req)
+	if req.Platform == PlatformOpenAI {
+		if !IsUserSelectableOpenAIAccountLevel(targetLevel) {
+			return nil, ErrOwnedOpenAIAccountLevelRequired
+		}
+		if preserveProxy {
+			if proxyID == nil || *proxyID <= 0 {
+				return nil, ErrOwnedOpenAIAccountProxyRequired
+			}
+			req.ProxyID = proxyID
+		}
+		req.AccountLevel = targetLevel
+	} else {
+		req.AccountLevel = AccountLevelUnknown
+	}
 	if err := validateOwnedAccountSource(req.Type, req.Credentials, req.Extra); err != nil {
 		return nil, err
 	}
@@ -430,25 +472,31 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 		shareStatus = AccountShareStatusPending
 	}
 
+	accountLevel, err := resolveOwnedOpenAIAccountLevel(req.Platform, targetLevel, req.Credentials, req.Extra)
+	if err != nil {
+		return nil, err
+	}
+
 	account := &Account{
-		Name:               req.Name,
-		Notes:              normalizeAccountNotes(req.Notes),
-		Platform:           req.Platform,
-		AccountLevel:       NormalizeOpenAIAccountLevel(req.Platform, req.AccountLevel, req.Credentials, req.Extra),
-		Type:               req.Type,
-		Credentials:        req.Credentials,
-		Extra:              req.Extra,
-		OwnerUserID:        &ownerUserID,
-		ShareMode:          shareMode,
-		ShareStatus:        shareStatus,
-		ProxyID:            req.ProxyID,
-		Concurrency:        req.Concurrency,
-		LoadFactor:         normalizeLoadFactor(req.LoadFactor),
-		Priority:           req.Priority,
-		Status:             StatusActive,
-		ExpiresAt:          req.ExpiresAt,
-		AutoPauseOnExpired: true,
-		Schedulable:        true,
+		Name:                  req.Name,
+		Notes:                 normalizeAccountNotes(req.Notes),
+		Platform:              req.Platform,
+		AccountLevel:          accountLevel,
+		Type:                  req.Type,
+		Credentials:           req.Credentials,
+		Extra:                 req.Extra,
+		OwnerUserID:           &ownerUserID,
+		ShareMode:             shareMode,
+		ShareStatus:           shareStatus,
+		ProxyID:               req.ProxyID,
+		Concurrency:           req.Concurrency,
+		LoadFactor:            normalizeLoadFactor(req.LoadFactor),
+		LoadFactorPaidCeiling: OwnedPersonalDefaultLoadFactor,
+		Priority:              req.Priority,
+		Status:                StatusActive,
+		ExpiresAt:             req.ExpiresAt,
+		AutoPauseOnExpired:    true,
+		Schedulable:           true,
 	}
 	if req.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
@@ -503,6 +551,44 @@ func validateOwnedAccountSource(accountType string, credentials, extra map[strin
 		})
 	}
 	return nil
+}
+
+func resolveOwnedOpenAIAccountLevel(platform, targetLevel string, credentials, extra map[string]any) (string, error) {
+	if platform != PlatformOpenAI {
+		return AccountLevelUnknown, nil
+	}
+
+	target := NormalizeAccountLevel(targetLevel)
+	if !IsUserSelectableOpenAIAccountLevel(target) {
+		return "", ErrOwnedOpenAIAccountLevelRequired
+	}
+
+	actual := InferOpenAIAccountLevel(credentials, extra)
+	if !IsConcreteAccountLevel(actual) {
+		actual = AccountLevelFree
+		if target == AccountLevelFree {
+			return actual, nil
+		}
+		return "", infraerrors.BadRequest(
+			"OWNED_OPENAI_ACCOUNT_LEVEL_UNCONFIRMED",
+			"无法确认账号等级，已自动分配到FREE分组或请通过账号登录",
+		).WithMetadata(map[string]string{
+			"target_level": target,
+			"actual_level": actual,
+		})
+	}
+
+	actual = NormalizeAccountLevel(actual)
+	if actual != target {
+		return "", infraerrors.BadRequest(
+			"OWNED_OPENAI_ACCOUNT_LEVEL_MISMATCH",
+			fmt.Sprintf("账号等级不匹配：选择的是 %s，实际识别为 %s", target, actual),
+		).WithMetadata(map[string]string{
+			"target_level": target,
+			"actual_level": actual,
+		})
+	}
+	return actual, nil
 }
 
 func hasNonEmptyStringField(values map[string]any, key string) bool {
@@ -589,12 +675,37 @@ func applyOwnedPersonalAccountTemplateToMaps(platform string, credentials, extra
 	return nextCredentials, nextExtra
 }
 
-func applyOwnedPersonalAccountTemplateToCreate(req *CreateAccountRequest) {
-	if req == nil {
-		return
+func normalizeOwnedPersonalAccountConcurrency(concurrency int) int {
+	if concurrency <= 0 {
+		return ownedPersonalDefaultConcurrency
 	}
-	req.Concurrency = ownedPersonalDefaultConcurrency
-	req.LoadFactor = nil
+	return concurrency
+}
+
+func validateOwnedPersonalAccountConcurrency(concurrency int) error {
+	if concurrency < ownedPersonalMinConcurrency || concurrency > ownedPersonalMaxConcurrency {
+		return ErrOwnedAccountConcurrencyOutOfRange
+	}
+	return nil
+}
+
+func validateOwnedPersonalAccountLoadFactor(loadFactor int) error {
+	if loadFactor <= 0 || loadFactor > AccountMaxLoadFactor {
+		return ErrOwnedAccountLoadFactorOutOfRange
+	}
+	return nil
+}
+
+func applyOwnedPersonalAccountTemplateToCreate(req *CreateAccountRequest) error {
+	if req == nil {
+		return nil
+	}
+	req.Concurrency = normalizeOwnedPersonalAccountConcurrency(req.Concurrency)
+	if err := validateOwnedPersonalAccountConcurrency(req.Concurrency); err != nil {
+		return err
+	}
+	loadFactor := OwnedPersonalDefaultLoadFactor
+	req.LoadFactor = &loadFactor
 	if req.Priority <= 0 {
 		req.Priority = ownedPersonalDefaultPriority
 	}
@@ -603,35 +714,91 @@ func applyOwnedPersonalAccountTemplateToCreate(req *CreateAccountRequest) {
 	req.GroupIDs = nil
 	req.ProxyID = nil
 	req.Credentials, req.Extra = applyOwnedPersonalAccountTemplateToMaps(req.Platform, req.Credentials, req.Extra)
+	return nil
 }
 
-func applyOwnedPersonalAccountTemplateToUpdate(account *Account, req *UpdateAccountRequest) {
+func sanitizeOwnedPersonalAccountUpdate(account *Account, req *UpdateAccountRequest) error {
 	if account == nil || req == nil {
-		return
+		return nil
 	}
-	concurrency := ownedPersonalDefaultConcurrency
-	req.Concurrency = &concurrency
-	req.LoadFactor = nil
-	autoPause := true
-	req.AutoPauseOnExpired = &autoPause
 	req.GroupIDs = nil
 	req.ProxyID = nil
-	priority := ownedPersonalDefaultPriority
-	if req.Priority != nil && *req.Priority > 0 {
-		priority = *req.Priority
+	if req.Concurrency != nil {
+		if err := validateOwnedPersonalAccountConcurrency(*req.Concurrency); err != nil {
+			return err
+		}
 	}
-	req.Priority = &priority
-	credentials := account.Credentials
+	if req.LoadFactor != nil {
+		if err := validateOwnedPersonalAccountLoadFactor(*req.LoadFactor); err != nil {
+			return err
+		}
+	}
+	req.AutoPauseOnExpired = nil
+	if req.Priority != nil && *req.Priority <= 0 {
+		priority := ownedPersonalDefaultPriority
+		req.Priority = &priority
+	}
 	if req.Credentials != nil {
-		credentials = *req.Credentials
+		nextCredentials := mergeAccountMap(nil, *req.Credentials)
+		if nextCredentials == nil {
+			nextCredentials = map[string]any{}
+		}
+		preserveOwnedPersonalCredentialPolicy(account, nextCredentials)
+		req.Credentials = &nextCredentials
 	}
-	extra := account.Extra
 	if req.Extra != nil {
-		extra = *req.Extra
+		nextExtra := mergeAccountMap(nil, *req.Extra)
+		if nextExtra == nil {
+			nextExtra = map[string]any{}
+		}
+		preserveOwnedPersonalExtraPolicy(account, nextExtra)
+		req.Extra = &nextExtra
 	}
-	nextCredentials, nextExtra := applyOwnedPersonalAccountTemplateToMaps(account.Platform, credentials, extra)
-	req.Credentials = &nextCredentials
-	req.Extra = &nextExtra
+	return nil
+}
+
+var ownedPersonalLockedCredentialKeys = []string{
+	"model_mapping",
+	"compact_model_mapping",
+}
+
+var ownedPersonalLockedOpenAIExtraKeys = []string{
+	"openai_oauth_responses_websockets_v2_mode",
+	"openai_oauth_responses_websockets_v2_enabled",
+	"openai_apikey_responses_websockets_v2_mode",
+	"openai_apikey_responses_websockets_v2_enabled",
+	"responses_websockets_v2_enabled",
+	"openai_ws_enabled",
+	"openai_passthrough",
+	"openai_oauth_passthrough",
+	"openai_compact_mode",
+	"codex_cli_only",
+}
+
+func preserveOwnedPersonalCredentialPolicy(account *Account, nextCredentials map[string]any) {
+	if account == nil || nextCredentials == nil {
+		return
+	}
+	for _, key := range ownedPersonalLockedCredentialKeys {
+		preserveMapKey(account.Credentials, nextCredentials, key)
+	}
+}
+
+func preserveOwnedPersonalExtraPolicy(account *Account, nextExtra map[string]any) {
+	if account == nil || nextExtra == nil || account.Platform != PlatformOpenAI {
+		return
+	}
+	for _, key := range ownedPersonalLockedOpenAIExtraKeys {
+		preserveMapKey(account.Extra, nextExtra, key)
+	}
+}
+
+func preserveMapKey(current map[string]any, next map[string]any, key string) {
+	if value, exists := current[key]; exists {
+		next[key] = value
+		return
+	}
+	delete(next, key)
 }
 
 func NormalizeCodexQuotaLimitExtra(platform, accountType string, extra map[string]any) (map[string]any, error) {
@@ -847,7 +1014,9 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		return nil, err
 	}
 	before := cloneAccountForNotice(account)
-	applyOwnedPersonalAccountTemplateToUpdate(account, &req)
+	if err := sanitizeOwnedPersonalAccountUpdate(account, &req); err != nil {
+		return nil, err
+	}
 
 	if req.Name != nil {
 		account.Name = *req.Name
@@ -947,7 +1116,16 @@ func (s *AccountService) UpdateOwned(ctx context.Context, ownerUserID, accountID
 		}
 		shouldBindGroups = true
 	}
-	if err := s.accountRepo.Update(ctx, account); err != nil {
+	if req.LoadFactor != nil {
+		repo, ok := s.accountRepo.(ownedLoadFactorCreditAccountRepository)
+		if !ok {
+			return nil, ErrOwnedAccountLoadFactorCreditsUnavailable
+		}
+		account, err = repo.UpdateOwnedAccountWithLoadFactorCredits(ctx, ownerUserID, account)
+		if err != nil {
+			return nil, fmt.Errorf("update account: %w", err)
+		}
+	} else if err := s.accountRepo.Update(ctx, account); err != nil {
 		return nil, fmt.Errorf("update account: %w", err)
 	}
 	if shouldBindGroups {
@@ -1301,14 +1479,18 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		return result, nil
 	}
 
-	if input.Concurrency != nil && *input.Concurrency <= 0 {
-		return nil, fmt.Errorf("concurrency must be > 0")
+	if input.Concurrency != nil {
+		if err := validateOwnedPersonalAccountConcurrency(*input.Concurrency); err != nil {
+			return nil, err
+		}
 	}
 	if input.Priority != nil && *input.Priority <= 0 {
 		return nil, fmt.Errorf("priority must be > 0")
 	}
-	if err := ValidateAccountLoadFactor(input.LoadFactor); err != nil {
-		return nil, err
+	if input.LoadFactor != nil {
+		if err := validateOwnedPersonalAccountLoadFactor(*input.LoadFactor); err != nil {
+			return nil, err
+		}
 	}
 	if input.GroupIDs != nil {
 		return nil, ErrGroupNotAllowed
@@ -1336,12 +1518,6 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		}
 	}
 
-	if input.Concurrency != nil {
-		input.Concurrency = nil
-	}
-	if input.LoadFactor != nil {
-		input.LoadFactor = nil
-	}
 	if input.Credentials == nil {
 		input.Credentials = map[string]any{}
 	}
@@ -1368,8 +1544,14 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		if err := validateOwnedAccountSource(account.Type, nextCredentials, nextExtra); err != nil {
 			return nil, err
 		}
-		nextConcurrency := ownedPersonalDefaultConcurrency
-		nextLoadFactor := (*int)(nil)
+		nextConcurrency := normalizeOwnedPersonalAccountConcurrency(account.Concurrency)
+		if input.Concurrency != nil {
+			nextConcurrency = *input.Concurrency
+		}
+		nextLoadFactor := account.LoadFactor
+		if input.LoadFactor != nil {
+			nextLoadFactor = normalizeLoadFactor(input.LoadFactor)
+		}
 		nextAccountLevel := NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, nextCredentials, nextExtra)
 		if input.AccountLevel != nil {
 			nextAccountLevel = NormalizeAccountLevel(*input.AccountLevel)
@@ -1391,14 +1573,14 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 		return nil, err
 	}
 
-	requiresPerAccountUpdate := shareMode != "" || len(input.Credentials) > 0 || len(input.Extra) > 0
+	requiresPerAccountUpdate := input.LoadFactor != nil || shareMode != "" || len(input.Credentials) > 0 || len(input.Extra) > 0
 	if requiresPerAccountUpdate {
 		for _, accountID := range accountIDs {
 			account := accountsByID[accountID]
 			entry := BulkUpdateAccountResult{AccountID: accountID}
 			updateReq := UpdateAccountRequest{
-				Concurrency:  nil,
-				LoadFactor:   nil,
+				Concurrency:  input.Concurrency,
+				LoadFactor:   input.LoadFactor,
 				Priority:     input.Priority,
 				Schedulable:  input.Schedulable,
 				AccountLevel: input.AccountLevel,
@@ -1443,7 +1625,7 @@ func (s *AccountService) BulkUpdateOwned(ctx context.Context, ownerUserID int64,
 	}
 
 	repoUpdates := AccountBulkUpdate{
-		Concurrency: nil,
+		Concurrency: input.Concurrency,
 		Priority:    input.Priority,
 		LoadFactor:  nil,
 		Schedulable: input.Schedulable,
@@ -1564,6 +1746,11 @@ func (s *AccountService) managedOwnedAccountGroupIDsForShareMode(ctx context.Con
 	if account == nil {
 		return nil, ErrAccountNotFound
 	}
+	if NormalizeAccountShareMode(nextMode) == AccountShareModePublic {
+		if err := s.ensureAccountCanEnterPublicShare(ctx, account); err != nil {
+			return nil, err
+		}
+	}
 	if NormalizeAccountShareMode(nextMode) == AccountShareModePublic && account.IsPublicShareApproved() {
 		publicGroup, err := s.resolveOwnedPublicShareGroup(ctx, account)
 		if err != nil {
@@ -1572,6 +1759,27 @@ func (s *AccountService) managedOwnedAccountGroupIDsForShareMode(ctx context.Con
 		return s.publicOwnedAccountGroupIDs(ctx, ownerUserID, account, publicGroup)
 	}
 	return s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, nextMode, nil)
+}
+
+func (s *AccountService) ensureAccountCanEnterPublicShare(ctx context.Context, account *Account) error {
+	if account == nil {
+		return ErrAccountNotFound
+	}
+	if account.AccountShareModeListingID != nil && *account.AccountShareModeListingID > 0 {
+		return ErrOwnedAccountShareModeOnly
+	}
+	repo, ok := s.accountRepo.(accountShareModeListingAccountRepository)
+	if !ok {
+		return ErrOwnedAccountShareModeBoundaryUnavailable
+	}
+	isModeListingAccount, err := repo.IsAccountShareModeListingAccount(ctx, account.ID)
+	if err != nil {
+		return fmt.Errorf("check account share mode boundary: %w", err)
+	}
+	if isModeListingAccount {
+		return ErrOwnedAccountShareModeOnly
+	}
+	return nil
 }
 
 func (s *AccountService) ApproveOwnedPublicShare(ctx context.Context, ownerUserID, accountID int64) (*Account, error) {
@@ -1585,6 +1793,9 @@ func (s *AccountService) ApproveOwnedPublicShareWithOptions(ctx context.Context,
 	}
 	before := cloneAccountForNotice(account)
 	if err := validateOwnedAccountSource(account.Type, account.Credentials, account.Extra); err != nil {
+		return nil, err
+	}
+	if err := s.ensureAccountCanEnterPublicShare(ctx, account); err != nil {
 		return nil, err
 	}
 	if !isOwnedAccountPublicShareApprovable(account, opts.AllowRateLimited) {
@@ -1641,6 +1852,9 @@ func (s *AccountService) MarkOwnedPublicSharePending(ctx context.Context, ownerU
 		return nil, err
 	}
 	before := cloneAccountForNotice(account)
+	if err := s.ensureAccountCanEnterPublicShare(ctx, account); err != nil {
+		return nil, err
+	}
 	groupIDs, err := s.initialOwnedAccountGroupIDs(ctx, ownerUserID, account.Platform, account.Type, AccountShareModePublic, nil)
 	if err != nil {
 		return nil, err

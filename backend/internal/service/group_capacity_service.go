@@ -110,17 +110,24 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	if err != nil {
 		return GroupCapacitySummary{}, err
 	}
-	if len(accounts) == 0 {
+	now := time.Now()
+	schedulableAccounts := accounts[:0]
+	for i := range accounts {
+		if accounts[i].IsSchedulableAt(now) {
+			schedulableAccounts = append(schedulableAccounts, accounts[i])
+		}
+	}
+	if len(schedulableAccounts) == 0 {
 		return GroupCapacitySummary{}, nil
 	}
 
 	// Collect account IDs and config values
-	accountIDs := make([]int64, 0, len(accounts))
+	accountIDs := make([]int64, 0, len(schedulableAccounts))
 	sessionTimeouts := make(map[int64]time.Duration)
 	var concurrencyMax, sessionsMax, rpmMax int
 
-	for i := range accounts {
-		acc := &accounts[i]
+	for i := range schedulableAccounts {
+		acc := &schedulableAccounts[i]
 		accountIDs = append(accountIDs, acc.ID)
 		concurrencyMax += acc.Concurrency
 

@@ -8,9 +8,27 @@ import (
 	"strings"
 )
 
-const MaxAccountCredentialImportItems = 200
+const (
+	MaxAccountCredentialImportItems         = 1000
+	DefaultUserAccountCredentialImportLimit = 100
+	MinUserAccountCredentialImportLimit     = 1
+	MaxUserAccountCredentialImportLimit     = MaxAccountCredentialImportItems
+)
 
 const codexManagerOpenAIIssuer = "https://auth.openai.com"
+
+func NormalizeUserAccountCredentialImportLimit(limit int) int {
+	if limit <= 0 {
+		return DefaultUserAccountCredentialImportLimit
+	}
+	if limit < MinUserAccountCredentialImportLimit {
+		return MinUserAccountCredentialImportLimit
+	}
+	if limit > MaxUserAccountCredentialImportLimit {
+		return MaxUserAccountCredentialImportLimit
+	}
+	return limit
+}
 
 type AccountCredentialImportKind string
 

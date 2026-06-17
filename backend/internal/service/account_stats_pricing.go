@@ -65,15 +65,41 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 	if err != nil || pricing == nil {
 		return nil
 	}
-	cost := float64(tokens.InputTokens)*pricing.InputPricePerToken +
-		float64(tokens.OutputTokens)*pricing.OutputPricePerToken +
+	imageInputPrice := pricing.ImageInputPricePerToken
+	if imageInputPrice == 0 {
+		imageInputPrice = pricing.InputPricePerToken
+	}
+	imageCacheReadPrice := pricing.ImageCacheReadPricePerToken
+	if imageCacheReadPrice == 0 {
+		imageCacheReadPrice = pricing.CacheReadPricePerToken
+	}
+	imageCacheReadTokens := clampImageCacheReadTokens(tokens)
+	textOutputTokens := tokens.OutputTokens - tokens.ImageOutputTokens
+	if textOutputTokens < 0 {
+		textOutputTokens = 0
+	}
+	cost := float64(tokens.InputTokens+tokens.TextInputTokens)*pricing.InputPricePerToken +
+		float64(tokens.ImageInputTokens)*imageInputPrice +
+		float64(textOutputTokens)*pricing.OutputPricePerToken +
 		float64(tokens.CacheCreationTokens)*pricing.CacheCreationPricePerToken +
-		float64(tokens.CacheReadTokens)*pricing.CacheReadPricePerToken +
+		float64(tokens.CacheReadTokens-imageCacheReadTokens)*pricing.CacheReadPricePerToken +
+		float64(imageCacheReadTokens)*imageCacheReadPrice +
 		float64(tokens.ImageOutputTokens)*pricing.ImageOutputPricePerToken
 	if cost <= 0 {
 		return nil
 	}
 	return &cost
+}
+
+func clampImageCacheReadTokens(tokens UsageTokens) int {
+	imageCacheReadTokens := tokens.ImageCacheReadTokens
+	if imageCacheReadTokens < 0 {
+		return 0
+	}
+	if imageCacheReadTokens > tokens.CacheReadTokens {
+		return tokens.CacheReadTokens
+	}
+	return imageCacheReadTokens
 }
 
 // tryCustomRules 遍历自定义规则，按数组顺序先命中为准。
@@ -203,10 +229,27 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 		}
 		return *ptr
 	}
-	cost := float64(tokens.InputTokens)*deref(p.InputPrice) +
-		float64(tokens.OutputTokens)*deref(p.OutputPrice) +
+	inputPrice := deref(p.InputPrice)
+	cacheReadPrice := deref(p.CacheReadPrice)
+	imageInputPrice := deref(p.ImageInputPrice)
+	if imageInputPrice == 0 {
+		imageInputPrice = inputPrice
+	}
+	imageCacheReadPrice := deref(p.ImageCacheReadPrice)
+	if imageCacheReadPrice == 0 {
+		imageCacheReadPrice = cacheReadPrice
+	}
+	imageCacheReadTokens := clampImageCacheReadTokens(tokens)
+	textOutputTokens := tokens.OutputTokens - tokens.ImageOutputTokens
+	if textOutputTokens < 0 {
+		textOutputTokens = 0
+	}
+	cost := float64(tokens.InputTokens+tokens.TextInputTokens)*inputPrice +
+		float64(tokens.ImageInputTokens)*imageInputPrice +
+		float64(textOutputTokens)*deref(p.OutputPrice) +
 		float64(tokens.CacheCreationTokens)*deref(p.CacheWritePrice) +
-		float64(tokens.CacheReadTokens)*deref(p.CacheReadPrice) +
+		float64(tokens.CacheReadTokens-imageCacheReadTokens)*cacheReadPrice +
+		float64(imageCacheReadTokens)*imageCacheReadPrice +
 		float64(tokens.ImageOutputTokens)*deref(p.ImageOutputPrice)
 	if cost <= 0 {
 		return nil

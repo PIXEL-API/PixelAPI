@@ -17,9 +17,10 @@ import (
 )
 
 type userAccountBatchRepoStub struct {
-	accounts         map[int64]*service.Account
-	createdTask      service.CreateAccountBatchTaskInput
-	createTaskCalled int
+	accounts                   map[int64]*service.Account
+	accountShareModeListingIDs map[int64]int64
+	createdTask                service.CreateAccountBatchTaskInput
+	createTaskCalled           int
 }
 
 func (s *userAccountBatchRepoStub) Create(_ context.Context, account *service.Account) error {
@@ -45,6 +46,11 @@ func (s *userAccountBatchRepoStub) GetByIDs(_ context.Context, ids []int64) ([]*
 		}
 	}
 	return out, nil
+}
+
+func (s *userAccountBatchRepoStub) IsAccountShareModeListingAccount(_ context.Context, accountID int64) (bool, error) {
+	listingID := s.accountShareModeListingIDs[accountID]
+	return listingID > 0, nil
 }
 
 func (s *userAccountBatchRepoStub) CreateTask(_ context.Context, input service.CreateAccountBatchTaskInput) (*service.AccountBatchTask, error) {
@@ -220,7 +226,7 @@ func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
 	}
 	accountSvc := service.NewAccountService(repo, nil, nil, nil)
 	batchSvc := service.NewAccountBatchTaskService(repo, nil)
-	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, batchSvc)
+	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil, nil, batchSvc)
 	router := gin.New()
 	router.POST("/accounts/bulk-update", func(c *gin.Context) {
 		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerID})
@@ -256,6 +262,56 @@ func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
 	require.Equal(t, 2, envelope.Data.Task.Total)
 }
 
+func TestUserAccountHandlerBulkPublicShareRejectsAccountShareModeAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerID := int64(101)
+	listingID := int64(9001)
+	repo := &userAccountBatchRepoStub{
+		accounts: map[int64]*service.Account{
+			1: {
+				ID:                        1,
+				OwnerUserID:               &ownerID,
+				Platform:                  service.PlatformOpenAI,
+				Type:                      service.AccountTypeOAuth,
+				Credentials:               map[string]any{"access_token": "token-1"},
+				AccountShareModeListingID: &listingID,
+			},
+			2: {
+				ID:          2,
+				OwnerUserID: &ownerID,
+				Platform:    service.PlatformOpenAI,
+				Type:        service.AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "token-2"},
+			},
+		},
+		accountShareModeListingIDs: map[int64]int64{1: listingID},
+	}
+	accountSvc := service.NewAccountService(repo, nil, nil, nil)
+	batchSvc := service.NewAccountBatchTaskService(repo, nil)
+	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil, nil, batchSvc)
+	router := gin.New()
+	router.POST("/accounts/bulk-update", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerID})
+		handler.BulkUpdate(c)
+	})
+
+	body := []byte(`{"account_ids":[1,2],"share_mode":"public"}`)
+	req := httptest.NewRequest(http.MethodPost, "/accounts/bulk-update", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, 0, repo.createTaskCalled)
+	var envelope struct {
+		Code   int    `json:"code"`
+		Reason string `json:"reason"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	require.Equal(t, http.StatusBadRequest, envelope.Code)
+	require.Equal(t, "OWNED_ACCOUNT_SHARE_MODE_ONLY", envelope.Reason)
+}
+
 func TestUserAccountHandlerVerifyPlusAlreadyPlusDoesNotRequireTestService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ownerID := int64(101)
@@ -272,7 +328,7 @@ func TestUserAccountHandlerVerifyPlusAlreadyPlusDoesNotRequireTestService(t *tes
 		},
 	}
 	accountSvc := service.NewAccountService(repo, nil, nil, nil)
-	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.POST("/accounts/:id/verify-level", func(c *gin.Context) {
 		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerID})

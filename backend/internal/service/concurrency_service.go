@@ -88,6 +88,12 @@ type ConcurrencyService struct {
 	cache ConcurrencyCache
 }
 
+type accountShareMembershipConcurrencyCache interface {
+	AcquireAccountShareMembershipSlot(ctx context.Context, membershipID int64, maxConcurrency int, requestID string) (bool, error)
+	ReleaseAccountShareMembershipSlot(ctx context.Context, membershipID int64, requestID string) error
+	GetAccountShareMembershipConcurrency(ctx context.Context, membershipID int64) (int, error)
+}
+
 // NewConcurrencyService creates a new ConcurrencyService
 func NewConcurrencyService(cache ConcurrencyCache) *ConcurrencyService {
 	return &ConcurrencyService{cache: cache}
@@ -199,6 +205,62 @@ func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, 
 		Acquired:    false,
 		ReleaseFunc: nil,
 	}, nil
+}
+
+// AcquireAccountShareMembershipSlot attempts to acquire a per-consumer slot for an account-share membership.
+func (s *ConcurrencyService) AcquireAccountShareMembershipSlot(ctx context.Context, membershipID int64, maxConcurrency int) (*AcquireResult, error) {
+	if maxConcurrency <= 0 {
+		return &AcquireResult{
+			Acquired:    true,
+			ReleaseFunc: func() {},
+		}, nil
+	}
+	if s == nil || s.cache == nil {
+		return &AcquireResult{
+			Acquired:    true,
+			ReleaseFunc: func() {},
+		}, nil
+	}
+	membershipCache, ok := s.cache.(accountShareMembershipConcurrencyCache)
+	if !ok {
+		return &AcquireResult{
+			Acquired:    true,
+			ReleaseFunc: func() {},
+		}, nil
+	}
+
+	requestID := generateRequestID()
+	acquired, err := membershipCache.AcquireAccountShareMembershipSlot(ctx, membershipID, maxConcurrency, requestID)
+	if err != nil {
+		return nil, err
+	}
+	if acquired {
+		return &AcquireResult{
+			Acquired: true,
+			ReleaseFunc: func() {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := membershipCache.ReleaseAccountShareMembershipSlot(bgCtx, membershipID, requestID); err != nil {
+					logger.LegacyPrintf("service.concurrency", "Warning: failed to release account share membership slot for %d (req=%s): %v", membershipID, requestID, err)
+				}
+			},
+		}, nil
+	}
+	return &AcquireResult{
+		Acquired:    false,
+		ReleaseFunc: nil,
+	}, nil
+}
+
+func (s *ConcurrencyService) GetAccountShareMembershipConcurrency(ctx context.Context, membershipID int64) (int, error) {
+	if s == nil || s.cache == nil || membershipID <= 0 {
+		return 0, nil
+	}
+	membershipCache, ok := s.cache.(accountShareMembershipConcurrencyCache)
+	if !ok {
+		return 0, nil
+	}
+	return membershipCache.GetAccountShareMembershipConcurrency(ctx, membershipID)
 }
 
 // ============================================
