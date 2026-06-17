@@ -160,6 +160,7 @@ var (
 		{Name: "share_policy_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "concurrency", Type: field.TypeInt, Default: 3},
 		{Name: "load_factor", Type: field.TypeInt, Nullable: true},
+		{Name: "load_factor_paid_ceiling", Type: field.TypeInt, Default: 10},
 		{Name: "priority", Type: field.TypeInt, Default: 50},
 		{Name: "rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
@@ -187,13 +188,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "accounts_proxies_proxy",
-				Columns:    []*schema.Column{AccountsColumns[32]},
+				Columns:    []*schema.Column{AccountsColumns[33]},
 				RefColumns: []*schema.Column{ProxiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "accounts_users_owned_accounts",
-				Columns:    []*schema.Column{AccountsColumns[33]},
+				Columns:    []*schema.Column{AccountsColumns[34]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -212,57 +213,57 @@ var (
 			{
 				Name:    "account_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[18]},
+				Columns: []*schema.Column{AccountsColumns[19]},
 			},
 			{
 				Name:    "account_proxy_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[32]},
+				Columns: []*schema.Column{AccountsColumns[33]},
 			},
 			{
 				Name:    "account_priority",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[16]},
+				Columns: []*schema.Column{AccountsColumns[17]},
 			},
 			{
 				Name:    "account_last_used_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[20]},
+				Columns: []*schema.Column{AccountsColumns[21]},
 			},
 			{
 				Name:    "account_schedulable",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[23]},
+				Columns: []*schema.Column{AccountsColumns[24]},
 			},
 			{
 				Name:    "account_rate_limited_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[24]},
+				Columns: []*schema.Column{AccountsColumns[25]},
 			},
 			{
 				Name:    "account_rate_limit_reset_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[25]},
+				Columns: []*schema.Column{AccountsColumns[26]},
 			},
 			{
 				Name:    "account_overload_until",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[26]},
+				Columns: []*schema.Column{AccountsColumns[27]},
 			},
 			{
 				Name:    "account_platform_priority",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[7], AccountsColumns[16]},
+				Columns: []*schema.Column{AccountsColumns[7], AccountsColumns[17]},
 			},
 			{
 				Name:    "account_priority_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[16], AccountsColumns[18]},
+				Columns: []*schema.Column{AccountsColumns[17], AccountsColumns[19]},
 			},
 			{
 				Name:    "account_owner_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[33]},
+				Columns: []*schema.Column{AccountsColumns[34]},
 			},
 			{
 				Name:    "account_share_mode_share_status",
@@ -505,6 +506,7 @@ var (
 		{Name: "group_name", Type: field.TypeString, Nullable: true, Size: 100, Default: ""},
 		{Name: "enabled", Type: field.TypeBool, Default: true},
 		{Name: "interval_seconds", Type: field.TypeInt},
+		{Name: "jitter_seconds", Type: field.TypeInt, Default: 0},
 		{Name: "last_checked_at", Type: field.TypeTime, Nullable: true},
 		{Name: "created_by", Type: field.TypeInt64},
 		{Name: "extra_headers", Type: field.TypeJSON},
@@ -520,7 +522,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "channel_monitors_channel_monitor_request_templates_request_template",
-				Columns:    []*schema.Column{ChannelMonitorsColumns[17]},
+				Columns:    []*schema.Column{ChannelMonitorsColumns[18]},
 				RefColumns: []*schema.Column{ChannelMonitorRequestTemplatesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -529,7 +531,7 @@ var (
 			{
 				Name:    "channelmonitor_enabled_last_checked_at",
 				Unique:  false,
-				Columns: []*schema.Column{ChannelMonitorsColumns[10], ChannelMonitorsColumns[12]},
+				Columns: []*schema.Column{ChannelMonitorsColumns[10], ChannelMonitorsColumns[13]},
 			},
 			{
 				Name:    "channelmonitor_provider",
@@ -544,7 +546,7 @@ var (
 			{
 				Name:    "channelmonitor_template_id",
 				Unique:  false,
-				Columns: []*schema.Column{ChannelMonitorsColumns[17]},
+				Columns: []*schema.Column{ChannelMonitorsColumns[18]},
 			},
 		},
 	}
@@ -1189,17 +1191,31 @@ var (
 		{Name: "password", Type: field.TypeString, Nullable: true, Size: 100},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "max_accounts", Type: field.TypeInt, Default: 0},
+		{Name: "owner_user_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// ProxiesTable holds the schema information for the "proxies" table.
 	ProxiesTable = &schema.Table{
 		Name:       "proxies",
 		Columns:    ProxiesColumns,
 		PrimaryKey: []*schema.Column{ProxiesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "proxies_users_owned_proxies",
+				Columns:    []*schema.Column{ProxiesColumns[12]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
 		Indexes: []*schema.Index{
 			{
 				Name:    "proxy_status",
 				Unique:  false,
 				Columns: []*schema.Column{ProxiesColumns[10]},
+			},
+			{
+				Name:    "proxy_owner_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{ProxiesColumns[12]},
 			},
 			{
 				Name:    "proxy_deleted_at",
@@ -1493,6 +1509,7 @@ var (
 		{Name: "payment_order_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "status", Type: field.TypeString, Size: 30, Default: "pending"},
 		{Name: "delivered_cards", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "load_factor_credits_awarded", Type: field.TypeInt, Default: 0},
 		{Name: "paid_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "completed_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "cancelled_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
@@ -1511,19 +1528,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "shop_orders_shop_draw_cycles_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[22]},
+				Columns:    []*schema.Column{ShopOrdersColumns[23]},
 				RefColumns: []*schema.Column{ShopDrawCyclesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "shop_orders_shop_products_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[23]},
+				Columns:    []*schema.Column{ShopOrdersColumns[24]},
 				RefColumns: []*schema.Column{ShopProductsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "shop_orders_users_shop_orders",
-				Columns:    []*schema.Column{ShopOrdersColumns[24]},
+				Columns:    []*schema.Column{ShopOrdersColumns[25]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -1532,12 +1549,12 @@ var (
 			{
 				Name:    "shoporder_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[24]},
+				Columns: []*schema.Column{ShopOrdersColumns[25]},
 			},
 			{
 				Name:    "shoporder_product_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[23]},
+				Columns: []*schema.Column{ShopOrdersColumns[24]},
 			},
 			{
 				Name:    "shoporder_payment_order_id",
@@ -1547,7 +1564,7 @@ var (
 			{
 				Name:    "shoporder_draw_cycle_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopOrdersColumns[22]},
+				Columns: []*schema.Column{ShopOrdersColumns[23]},
 			},
 			{
 				Name:    "shoporder_status",
@@ -1582,6 +1599,7 @@ var (
 		{Name: "allow_points_payment", Type: field.TypeBool, Default: false},
 		{Name: "allow_platform_payment", Type: field.TypeBool, Default: true},
 		{Name: "draw_enabled", Type: field.TypeBool, Default: false},
+		{Name: "load_factor_credits_per_unit", Type: field.TypeInt, Default: 0},
 		{Name: "draw_min_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "draw_max_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "draw_guarantee_count", Type: field.TypeInt, Default: 0},
@@ -1596,7 +1614,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "shop_products_shop_categories_products",
-				Columns:    []*schema.Column{ShopProductsColumns[23]},
+				Columns:    []*schema.Column{ShopProductsColumns[24]},
 				RefColumns: []*schema.Column{ShopCategoriesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -1605,7 +1623,7 @@ var (
 			{
 				Name:    "shopproduct_category_id",
 				Unique:  false,
-				Columns: []*schema.Column{ShopProductsColumns[23]},
+				Columns: []*schema.Column{ShopProductsColumns[24]},
 			},
 			{
 				Name:    "shopproduct_enabled",
@@ -1988,6 +2006,8 @@ var (
 		{Name: "role", Type: field.TypeString, Size: 20, Default: "user"},
 		{Name: "balance", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "points_balance", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "load_factor_credits_balance", Type: field.TypeInt, Default: 0},
+		{Name: "load_factor_credits_used_total", Type: field.TypeInt, Default: 0},
 		{Name: "prefer_points_billing", Type: field.TypeBool, Default: false},
 		{Name: "concurrency", Type: field.TypeInt, Default: 5},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
@@ -2015,7 +2035,7 @@ var (
 			{
 				Name:    "user_status",
 				Unique:  false,
-				Columns: []*schema.Column{UsersColumns[11]},
+				Columns: []*schema.Column{UsersColumns[13]},
 			},
 			{
 				Name:    "user_deleted_at",
@@ -2368,6 +2388,7 @@ func init() {
 	PromoCodeUsagesTable.Annotation = &entsql.Annotation{
 		Table: "promo_code_usages",
 	}
+	ProxiesTable.ForeignKeys[0].RefTable = UsersTable
 	ProxiesTable.Annotation = &entsql.Annotation{
 		Table: "proxies",
 	}

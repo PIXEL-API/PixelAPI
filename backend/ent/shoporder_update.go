@@ -307,6 +307,27 @@ func (_u *ShopOrderUpdate) ClearDeliveredCards() *ShopOrderUpdate {
 	return _u
 }
 
+// SetLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field.
+func (_u *ShopOrderUpdate) SetLoadFactorCreditsAwarded(v int) *ShopOrderUpdate {
+	_u.mutation.ResetLoadFactorCreditsAwarded()
+	_u.mutation.SetLoadFactorCreditsAwarded(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field if the given value is not nil.
+func (_u *ShopOrderUpdate) SetNillableLoadFactorCreditsAwarded(v *int) *ShopOrderUpdate {
+	if v != nil {
+		_u.SetLoadFactorCreditsAwarded(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsAwarded adds value to the "load_factor_credits_awarded" field.
+func (_u *ShopOrderUpdate) AddLoadFactorCreditsAwarded(v int) *ShopOrderUpdate {
+	_u.mutation.AddLoadFactorCreditsAwarded(v)
+	return _u
+}
+
 // SetPaidAt sets the "paid_at" field.
 func (_u *ShopOrderUpdate) SetPaidAt(v time.Time) *ShopOrderUpdate {
 	_u.mutation.SetPaidAt(v)
@@ -728,6 +749,12 @@ func (_u *ShopOrderUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.DeliveredCardsCleared() {
 		_spec.ClearField(shoporder.FieldDeliveredCards, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsAwarded(); ok {
+		_spec.SetField(shoporder.FieldLoadFactorCreditsAwarded, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsAwarded(); ok {
+		_spec.AddField(shoporder.FieldLoadFactorCreditsAwarded, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.PaidAt(); ok {
 		_spec.SetField(shoporder.FieldPaidAt, field.TypeTime, value)
@@ -1241,6 +1268,27 @@ func (_u *ShopOrderUpdateOne) ClearDeliveredCards() *ShopOrderUpdateOne {
 	return _u
 }
 
+// SetLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field.
+func (_u *ShopOrderUpdateOne) SetLoadFactorCreditsAwarded(v int) *ShopOrderUpdateOne {
+	_u.mutation.ResetLoadFactorCreditsAwarded()
+	_u.mutation.SetLoadFactorCreditsAwarded(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field if the given value is not nil.
+func (_u *ShopOrderUpdateOne) SetNillableLoadFactorCreditsAwarded(v *int) *ShopOrderUpdateOne {
+	if v != nil {
+		_u.SetLoadFactorCreditsAwarded(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsAwarded adds value to the "load_factor_credits_awarded" field.
+func (_u *ShopOrderUpdateOne) AddLoadFactorCreditsAwarded(v int) *ShopOrderUpdateOne {
+	_u.mutation.AddLoadFactorCreditsAwarded(v)
+	return _u
+}
+
 // SetPaidAt sets the "paid_at" field.
 func (_u *ShopOrderUpdateOne) SetPaidAt(v time.Time) *ShopOrderUpdateOne {
 	_u.mutation.SetPaidAt(v)
@@ -1692,6 +1740,12 @@ func (_u *ShopOrderUpdateOne) sqlSave(ctx context.Context) (_node *ShopOrder, er
 	}
 	if _u.mutation.DeliveredCardsCleared() {
 		_spec.ClearField(shoporder.FieldDeliveredCards, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsAwarded(); ok {
+		_spec.SetField(shoporder.FieldLoadFactorCreditsAwarded, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsAwarded(); ok {
+		_spec.AddField(shoporder.FieldLoadFactorCreditsAwarded, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.PaidAt(); ok {
 		_spec.SetField(shoporder.FieldPaidAt, field.TypeTime, value)

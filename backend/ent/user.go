@@ -33,6 +33,10 @@ type User struct {
 	Balance float64 `json:"balance,omitempty"`
 	// PointsBalance holds the value of the "points_balance" field.
 	PointsBalance float64 `json:"points_balance,omitempty"`
+	// LoadFactorCreditsBalance holds the value of the "load_factor_credits_balance" field.
+	LoadFactorCreditsBalance int `json:"load_factor_credits_balance,omitempty"`
+	// LoadFactorCreditsUsedTotal holds the value of the "load_factor_credits_used_total" field.
+	LoadFactorCreditsUsedTotal int `json:"load_factor_credits_used_total,omitempty"`
 	// PreferPointsBilling holds the value of the "prefer_points_billing" field.
 	PreferPointsBilling bool `json:"prefer_points_billing,omitempty"`
 	// Concurrency holds the value of the "concurrency" field.
@@ -109,6 +113,8 @@ type UserEdges struct {
 	ShopBalanceLedger []*ShopBalanceLedger `json:"shop_balance_ledger,omitempty"`
 	// OwnedAccounts holds the value of the owned_accounts edge.
 	OwnedAccounts []*Account `json:"owned_accounts,omitempty"`
+	// OwnedProxies holds the value of the owned_proxies edge.
+	OwnedProxies []*Proxy `json:"owned_proxies,omitempty"`
 	// AuthIdentities holds the value of the auth_identities edge.
 	AuthIdentities []*AuthIdentity `json:"auth_identities,omitempty"`
 	// PendingAuthSessions holds the value of the pending_auth_sessions edge.
@@ -117,7 +123,7 @@ type UserEdges struct {
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [20]bool
+	loadedTypes [21]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -273,10 +279,19 @@ func (e UserEdges) OwnedAccountsOrErr() ([]*Account, error) {
 	return nil, &NotLoadedError{edge: "owned_accounts"}
 }
 
+// OwnedProxiesOrErr returns the OwnedProxies value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) OwnedProxiesOrErr() ([]*Proxy, error) {
+	if e.loadedTypes[17] {
+		return e.OwnedProxies, nil
+	}
+	return nil, &NotLoadedError{edge: "owned_proxies"}
+}
+
 // AuthIdentitiesOrErr returns the AuthIdentities value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuthIdentitiesOrErr() ([]*AuthIdentity, error) {
-	if e.loadedTypes[17] {
+	if e.loadedTypes[18] {
 		return e.AuthIdentities, nil
 	}
 	return nil, &NotLoadedError{edge: "auth_identities"}
@@ -285,7 +300,7 @@ func (e UserEdges) AuthIdentitiesOrErr() ([]*AuthIdentity, error) {
 // PendingAuthSessionsOrErr returns the PendingAuthSessions value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) PendingAuthSessionsOrErr() ([]*PendingAuthSession, error) {
-	if e.loadedTypes[18] {
+	if e.loadedTypes[19] {
 		return e.PendingAuthSessions, nil
 	}
 	return nil, &NotLoadedError{edge: "pending_auth_sessions"}
@@ -294,7 +309,7 @@ func (e UserEdges) PendingAuthSessionsOrErr() ([]*PendingAuthSession, error) {
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[19] {
+	if e.loadedTypes[20] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -309,7 +324,7 @@ func (*User) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case user.FieldBalance, user.FieldPointsBalance, user.FieldBalanceNotifyThreshold, user.FieldTotalRecharged:
 			values[i] = new(sql.NullFloat64)
-		case user.FieldID, user.FieldConcurrency, user.FieldRpmLimit:
+		case user.FieldID, user.FieldLoadFactorCreditsBalance, user.FieldLoadFactorCreditsUsedTotal, user.FieldConcurrency, user.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
 		case user.FieldEmail, user.FieldPasswordHash, user.FieldRole, user.FieldStatus, user.FieldUsername, user.FieldNotes, user.FieldTotpSecretEncrypted, user.FieldSignupSource, user.FieldBalanceNotifyThresholdType, user.FieldBalanceNotifyExtraEmails:
 			values[i] = new(sql.NullString)
@@ -384,6 +399,18 @@ func (_m *User) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field points_balance", values[i])
 			} else if value.Valid {
 				_m.PointsBalance = value.Float64
+			}
+		case user.FieldLoadFactorCreditsBalance:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field load_factor_credits_balance", values[i])
+			} else if value.Valid {
+				_m.LoadFactorCreditsBalance = int(value.Int64)
+			}
+		case user.FieldLoadFactorCreditsUsedTotal:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field load_factor_credits_used_total", values[i])
+			} else if value.Valid {
+				_m.LoadFactorCreditsUsedTotal = int(value.Int64)
 			}
 		case user.FieldPreferPointsBilling:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -590,6 +617,11 @@ func (_m *User) QueryOwnedAccounts() *AccountQuery {
 	return NewUserClient(_m.config).QueryOwnedAccounts(_m)
 }
 
+// QueryOwnedProxies queries the "owned_proxies" edge of the User entity.
+func (_m *User) QueryOwnedProxies() *ProxyQuery {
+	return NewUserClient(_m.config).QueryOwnedProxies(_m)
+}
+
 // QueryAuthIdentities queries the "auth_identities" edge of the User entity.
 func (_m *User) QueryAuthIdentities() *AuthIdentityQuery {
 	return NewUserClient(_m.config).QueryAuthIdentities(_m)
@@ -653,6 +685,12 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("points_balance=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PointsBalance))
+	builder.WriteString(", ")
+	builder.WriteString("load_factor_credits_balance=")
+	builder.WriteString(fmt.Sprintf("%v", _m.LoadFactorCreditsBalance))
+	builder.WriteString(", ")
+	builder.WriteString("load_factor_credits_used_total=")
+	builder.WriteString(fmt.Sprintf("%v", _m.LoadFactorCreditsUsedTotal))
 	builder.WriteString(", ")
 	builder.WriteString("prefer_points_billing=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PreferPointsBilling))

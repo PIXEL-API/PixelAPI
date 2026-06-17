@@ -49,6 +49,9 @@ func (Proxy) Fields() []ent.Field {
 			MaxLen(100).
 			Optional().
 			Nillable(),
+		field.Int64("owner_user_id").
+			Optional().
+			Nillable(),
 		field.String("status").
 			MaxLen(20).
 			Default("active"),
@@ -63,12 +66,17 @@ func (Proxy) Edges() []ent.Edge {
 		// accounts: 使用此代理的账户（反向边）
 		edge.From("accounts", Account.Type).
 			Ref("proxy"),
+		edge.From("owner", User.Type).
+			Ref("owned_proxies").
+			Field("owner_user_id").
+			Unique(),
 	}
 }
 
 func (Proxy) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("status"),
+		index.Fields("owner_user_id"),
 		index.Fields("deleted_at"),
 	}
 }

@@ -193,6 +193,20 @@ func (_c *ShopOrderCreate) SetDeliveredCards(v []string) *ShopOrderCreate {
 	return _c
 }
 
+// SetLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field.
+func (_c *ShopOrderCreate) SetLoadFactorCreditsAwarded(v int) *ShopOrderCreate {
+	_c.mutation.SetLoadFactorCreditsAwarded(v)
+	return _c
+}
+
+// SetNillableLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field if the given value is not nil.
+func (_c *ShopOrderCreate) SetNillableLoadFactorCreditsAwarded(v *int) *ShopOrderCreate {
+	if v != nil {
+		_c.SetLoadFactorCreditsAwarded(*v)
+	}
+	return _c
+}
+
 // SetPaidAt sets the "paid_at" field.
 func (_c *ShopOrderCreate) SetPaidAt(v time.Time) *ShopOrderCreate {
 	_c.mutation.SetPaidAt(v)
@@ -391,6 +405,10 @@ func (_c *ShopOrderCreate) defaults() {
 		v := shoporder.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.LoadFactorCreditsAwarded(); !ok {
+		v := shoporder.DefaultLoadFactorCreditsAwarded
+		_c.mutation.SetLoadFactorCreditsAwarded(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -458,6 +476,9 @@ func (_c *ShopOrderCreate) check() error {
 		if err := shoporder.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "ShopOrder.status": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.LoadFactorCreditsAwarded(); !ok {
+		return &ValidationError{Name: "load_factor_credits_awarded", err: errors.New(`ent: missing required field "ShopOrder.load_factor_credits_awarded"`)}
 	}
 	if len(_c.mutation.UserIDs()) == 0 {
 		return &ValidationError{Name: "user", err: errors.New(`ent: missing required edge "ShopOrder.user"`)}
@@ -551,6 +572,10 @@ func (_c *ShopOrderCreate) createSpec() (*ShopOrder, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DeliveredCards(); ok {
 		_spec.SetField(shoporder.FieldDeliveredCards, field.TypeJSON, value)
 		_node.DeliveredCards = value
+	}
+	if value, ok := _c.mutation.LoadFactorCreditsAwarded(); ok {
+		_spec.SetField(shoporder.FieldLoadFactorCreditsAwarded, field.TypeInt, value)
+		_node.LoadFactorCreditsAwarded = value
 	}
 	if value, ok := _c.mutation.PaidAt(); ok {
 		_spec.SetField(shoporder.FieldPaidAt, field.TypeTime, value)
@@ -954,6 +979,24 @@ func (u *ShopOrderUpsert) UpdateDeliveredCards() *ShopOrderUpsert {
 // ClearDeliveredCards clears the value of the "delivered_cards" field.
 func (u *ShopOrderUpsert) ClearDeliveredCards() *ShopOrderUpsert {
 	u.SetNull(shoporder.FieldDeliveredCards)
+	return u
+}
+
+// SetLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field.
+func (u *ShopOrderUpsert) SetLoadFactorCreditsAwarded(v int) *ShopOrderUpsert {
+	u.Set(shoporder.FieldLoadFactorCreditsAwarded, v)
+	return u
+}
+
+// UpdateLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field to the value that was provided on create.
+func (u *ShopOrderUpsert) UpdateLoadFactorCreditsAwarded() *ShopOrderUpsert {
+	u.SetExcluded(shoporder.FieldLoadFactorCreditsAwarded)
+	return u
+}
+
+// AddLoadFactorCreditsAwarded adds v to the "load_factor_credits_awarded" field.
+func (u *ShopOrderUpsert) AddLoadFactorCreditsAwarded(v int) *ShopOrderUpsert {
+	u.Add(shoporder.FieldLoadFactorCreditsAwarded, v)
 	return u
 }
 
@@ -1424,6 +1467,27 @@ func (u *ShopOrderUpsertOne) UpdateDeliveredCards() *ShopOrderUpsertOne {
 func (u *ShopOrderUpsertOne) ClearDeliveredCards() *ShopOrderUpsertOne {
 	return u.Update(func(s *ShopOrderUpsert) {
 		s.ClearDeliveredCards()
+	})
+}
+
+// SetLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field.
+func (u *ShopOrderUpsertOne) SetLoadFactorCreditsAwarded(v int) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetLoadFactorCreditsAwarded(v)
+	})
+}
+
+// AddLoadFactorCreditsAwarded adds v to the "load_factor_credits_awarded" field.
+func (u *ShopOrderUpsertOne) AddLoadFactorCreditsAwarded(v int) *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddLoadFactorCreditsAwarded(v)
+	})
+}
+
+// UpdateLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field to the value that was provided on create.
+func (u *ShopOrderUpsertOne) UpdateLoadFactorCreditsAwarded() *ShopOrderUpsertOne {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateLoadFactorCreditsAwarded()
 	})
 }
 
@@ -2083,6 +2147,27 @@ func (u *ShopOrderUpsertBulk) UpdateDeliveredCards() *ShopOrderUpsertBulk {
 func (u *ShopOrderUpsertBulk) ClearDeliveredCards() *ShopOrderUpsertBulk {
 	return u.Update(func(s *ShopOrderUpsert) {
 		s.ClearDeliveredCards()
+	})
+}
+
+// SetLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field.
+func (u *ShopOrderUpsertBulk) SetLoadFactorCreditsAwarded(v int) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.SetLoadFactorCreditsAwarded(v)
+	})
+}
+
+// AddLoadFactorCreditsAwarded adds v to the "load_factor_credits_awarded" field.
+func (u *ShopOrderUpsertBulk) AddLoadFactorCreditsAwarded(v int) *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.AddLoadFactorCreditsAwarded(v)
+	})
+}
+
+// UpdateLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field to the value that was provided on create.
+func (u *ShopOrderUpsertBulk) UpdateLoadFactorCreditsAwarded() *ShopOrderUpsertBulk {
+	return u.Update(func(s *ShopOrderUpsert) {
+		s.UpdateLoadFactorCreditsAwarded()
 	})
 }
 

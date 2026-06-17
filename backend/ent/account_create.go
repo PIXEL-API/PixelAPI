@@ -224,6 +224,20 @@ func (_c *AccountCreate) SetNillableLoadFactor(v *int) *AccountCreate {
 	return _c
 }
 
+// SetLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field.
+func (_c *AccountCreate) SetLoadFactorPaidCeiling(v int) *AccountCreate {
+	_c.mutation.SetLoadFactorPaidCeiling(v)
+	return _c
+}
+
+// SetNillableLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableLoadFactorPaidCeiling(v *int) *AccountCreate {
+	if v != nil {
+		_c.SetLoadFactorPaidCeiling(*v)
+	}
+	return _c
+}
+
 // SetPriority sets the "priority" field.
 func (_c *AccountCreate) SetPriority(v int) *AccountCreate {
 	_c.mutation.SetPriority(v)
@@ -583,6 +597,10 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultConcurrency
 		_c.mutation.SetConcurrency(v)
 	}
+	if _, ok := _c.mutation.LoadFactorPaidCeiling(); !ok {
+		v := account.DefaultLoadFactorPaidCeiling
+		_c.mutation.SetLoadFactorPaidCeiling(v)
+	}
 	if _, ok := _c.mutation.Priority(); !ok {
 		v := account.DefaultPriority
 		_c.mutation.SetPriority(v)
@@ -670,6 +688,9 @@ func (_c *AccountCreate) check() error {
 	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		return &ValidationError{Name: "concurrency", err: errors.New(`ent: missing required field "Account.concurrency"`)}
+	}
+	if _, ok := _c.mutation.LoadFactorPaidCeiling(); !ok {
+		return &ValidationError{Name: "load_factor_paid_ceiling", err: errors.New(`ent: missing required field "Account.load_factor_paid_ceiling"`)}
 	}
 	if _, ok := _c.mutation.Priority(); !ok {
 		return &ValidationError{Name: "priority", err: errors.New(`ent: missing required field "Account.priority"`)}
@@ -782,6 +803,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.LoadFactor(); ok {
 		_spec.SetField(account.FieldLoadFactor, field.TypeInt, value)
 		_node.LoadFactor = &value
+	}
+	if value, ok := _c.mutation.LoadFactorPaidCeiling(); ok {
+		_spec.SetField(account.FieldLoadFactorPaidCeiling, field.TypeInt, value)
+		_node.LoadFactorPaidCeiling = value
 	}
 	if value, ok := _c.mutation.Priority(); ok {
 		_spec.SetField(account.FieldPriority, field.TypeInt, value)
@@ -1212,6 +1237,24 @@ func (u *AccountUpsert) AddLoadFactor(v int) *AccountUpsert {
 // ClearLoadFactor clears the value of the "load_factor" field.
 func (u *AccountUpsert) ClearLoadFactor() *AccountUpsert {
 	u.SetNull(account.FieldLoadFactor)
+	return u
+}
+
+// SetLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field.
+func (u *AccountUpsert) SetLoadFactorPaidCeiling(v int) *AccountUpsert {
+	u.Set(account.FieldLoadFactorPaidCeiling, v)
+	return u
+}
+
+// UpdateLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateLoadFactorPaidCeiling() *AccountUpsert {
+	u.SetExcluded(account.FieldLoadFactorPaidCeiling)
+	return u
+}
+
+// AddLoadFactorPaidCeiling adds v to the "load_factor_paid_ceiling" field.
+func (u *AccountUpsert) AddLoadFactorPaidCeiling(v int) *AccountUpsert {
+	u.Add(account.FieldLoadFactorPaidCeiling, v)
 	return u
 }
 
@@ -1814,6 +1857,27 @@ func (u *AccountUpsertOne) UpdateLoadFactor() *AccountUpsertOne {
 func (u *AccountUpsertOne) ClearLoadFactor() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearLoadFactor()
+	})
+}
+
+// SetLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field.
+func (u *AccountUpsertOne) SetLoadFactorPaidCeiling(v int) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetLoadFactorPaidCeiling(v)
+	})
+}
+
+// AddLoadFactorPaidCeiling adds v to the "load_factor_paid_ceiling" field.
+func (u *AccountUpsertOne) AddLoadFactorPaidCeiling(v int) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddLoadFactorPaidCeiling(v)
+	})
+}
+
+// UpdateLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateLoadFactorPaidCeiling() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateLoadFactorPaidCeiling()
 	})
 }
 
@@ -2627,6 +2691,27 @@ func (u *AccountUpsertBulk) UpdateLoadFactor() *AccountUpsertBulk {
 func (u *AccountUpsertBulk) ClearLoadFactor() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearLoadFactor()
+	})
+}
+
+// SetLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field.
+func (u *AccountUpsertBulk) SetLoadFactorPaidCeiling(v int) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetLoadFactorPaidCeiling(v)
+	})
+}
+
+// AddLoadFactorPaidCeiling adds v to the "load_factor_paid_ceiling" field.
+func (u *AccountUpsertBulk) AddLoadFactorPaidCeiling(v int) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddLoadFactorPaidCeiling(v)
+	})
+}
+
+// UpdateLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateLoadFactorPaidCeiling() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateLoadFactorPaidCeiling()
 	})
 }
 

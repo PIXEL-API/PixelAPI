@@ -284,6 +284,20 @@ func (_c *ShopProductCreate) SetNillableDrawEnabled(v *bool) *ShopProductCreate 
 	return _c
 }
 
+// SetLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field.
+func (_c *ShopProductCreate) SetLoadFactorCreditsPerUnit(v int) *ShopProductCreate {
+	_c.mutation.SetLoadFactorCreditsPerUnit(v)
+	return _c
+}
+
+// SetNillableLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field if the given value is not nil.
+func (_c *ShopProductCreate) SetNillableLoadFactorCreditsPerUnit(v *int) *ShopProductCreate {
+	if v != nil {
+		_c.SetLoadFactorCreditsPerUnit(*v)
+	}
+	return _c
+}
+
 // SetDrawMinAmount sets the "draw_min_amount" field.
 func (_c *ShopProductCreate) SetDrawMinAmount(v float64) *ShopProductCreate {
 	_c.mutation.SetDrawMinAmount(v)
@@ -481,6 +495,10 @@ func (_c *ShopProductCreate) defaults() {
 		v := shopproduct.DefaultDrawEnabled
 		_c.mutation.SetDrawEnabled(v)
 	}
+	if _, ok := _c.mutation.LoadFactorCreditsPerUnit(); !ok {
+		v := shopproduct.DefaultLoadFactorCreditsPerUnit
+		_c.mutation.SetLoadFactorCreditsPerUnit(v)
+	}
 	if _, ok := _c.mutation.DrawMinAmount(); !ok {
 		v := shopproduct.DefaultDrawMinAmount
 		_c.mutation.SetDrawMinAmount(v)
@@ -555,6 +573,9 @@ func (_c *ShopProductCreate) check() error {
 	}
 	if _, ok := _c.mutation.DrawEnabled(); !ok {
 		return &ValidationError{Name: "draw_enabled", err: errors.New(`ent: missing required field "ShopProduct.draw_enabled"`)}
+	}
+	if _, ok := _c.mutation.LoadFactorCreditsPerUnit(); !ok {
+		return &ValidationError{Name: "load_factor_credits_per_unit", err: errors.New(`ent: missing required field "ShopProduct.load_factor_credits_per_unit"`)}
 	}
 	if _, ok := _c.mutation.DrawMinAmount(); !ok {
 		return &ValidationError{Name: "draw_min_amount", err: errors.New(`ent: missing required field "ShopProduct.draw_min_amount"`)}
@@ -666,6 +687,10 @@ func (_c *ShopProductCreate) createSpec() (*ShopProduct, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DrawEnabled(); ok {
 		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
 		_node.DrawEnabled = value
+	}
+	if value, ok := _c.mutation.LoadFactorCreditsPerUnit(); ok {
+		_spec.SetField(shopproduct.FieldLoadFactorCreditsPerUnit, field.TypeInt, value)
+		_node.LoadFactorCreditsPerUnit = value
 	}
 	if value, ok := _c.mutation.DrawMinAmount(); ok {
 		_spec.SetField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)
@@ -1067,6 +1092,24 @@ func (u *ShopProductUpsert) SetDrawEnabled(v bool) *ShopProductUpsert {
 // UpdateDrawEnabled sets the "draw_enabled" field to the value that was provided on create.
 func (u *ShopProductUpsert) UpdateDrawEnabled() *ShopProductUpsert {
 	u.SetExcluded(shopproduct.FieldDrawEnabled)
+	return u
+}
+
+// SetLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field.
+func (u *ShopProductUpsert) SetLoadFactorCreditsPerUnit(v int) *ShopProductUpsert {
+	u.Set(shopproduct.FieldLoadFactorCreditsPerUnit, v)
+	return u
+}
+
+// UpdateLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field to the value that was provided on create.
+func (u *ShopProductUpsert) UpdateLoadFactorCreditsPerUnit() *ShopProductUpsert {
+	u.SetExcluded(shopproduct.FieldLoadFactorCreditsPerUnit)
+	return u
+}
+
+// AddLoadFactorCreditsPerUnit adds v to the "load_factor_credits_per_unit" field.
+func (u *ShopProductUpsert) AddLoadFactorCreditsPerUnit(v int) *ShopProductUpsert {
+	u.Add(shopproduct.FieldLoadFactorCreditsPerUnit, v)
 	return u
 }
 
@@ -1499,6 +1542,27 @@ func (u *ShopProductUpsertOne) SetDrawEnabled(v bool) *ShopProductUpsertOne {
 func (u *ShopProductUpsertOne) UpdateDrawEnabled() *ShopProductUpsertOne {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateDrawEnabled()
+	})
+}
+
+// SetLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field.
+func (u *ShopProductUpsertOne) SetLoadFactorCreditsPerUnit(v int) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetLoadFactorCreditsPerUnit(v)
+	})
+}
+
+// AddLoadFactorCreditsPerUnit adds v to the "load_factor_credits_per_unit" field.
+func (u *ShopProductUpsertOne) AddLoadFactorCreditsPerUnit(v int) *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddLoadFactorCreditsPerUnit(v)
+	})
+}
+
+// UpdateLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field to the value that was provided on create.
+func (u *ShopProductUpsertOne) UpdateLoadFactorCreditsPerUnit() *ShopProductUpsertOne {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateLoadFactorCreditsPerUnit()
 	})
 }
 
@@ -2109,6 +2173,27 @@ func (u *ShopProductUpsertBulk) SetDrawEnabled(v bool) *ShopProductUpsertBulk {
 func (u *ShopProductUpsertBulk) UpdateDrawEnabled() *ShopProductUpsertBulk {
 	return u.Update(func(s *ShopProductUpsert) {
 		s.UpdateDrawEnabled()
+	})
+}
+
+// SetLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field.
+func (u *ShopProductUpsertBulk) SetLoadFactorCreditsPerUnit(v int) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.SetLoadFactorCreditsPerUnit(v)
+	})
+}
+
+// AddLoadFactorCreditsPerUnit adds v to the "load_factor_credits_per_unit" field.
+func (u *ShopProductUpsertBulk) AddLoadFactorCreditsPerUnit(v int) *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.AddLoadFactorCreditsPerUnit(v)
+	})
+}
+
+// UpdateLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field to the value that was provided on create.
+func (u *ShopProductUpsertBulk) UpdateLoadFactorCreditsPerUnit() *ShopProductUpsertBulk {
+	return u.Update(func(s *ShopProductUpsert) {
+		s.UpdateLoadFactorCreditsPerUnit()
 	})
 }
 

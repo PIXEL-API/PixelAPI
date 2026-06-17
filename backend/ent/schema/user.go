@@ -52,6 +52,10 @@ func (User) Fields() []ent.Field {
 		field.Float("points_balance").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).
 			Default(0),
+		field.Int("load_factor_credits_balance").
+			Default(0),
+		field.Int("load_factor_credits_used_total").
+			Default(0),
 		field.Bool("prefer_points_billing").
 			Default(false),
 		field.Int("concurrency").
@@ -140,6 +144,7 @@ func (User) Edges() []ent.Edge {
 		edge.To("shop_draw_cycles", ShopDrawCycle.Type),
 		edge.To("shop_balance_ledger", ShopBalanceLedger.Type),
 		edge.To("owned_accounts", Account.Type),
+		edge.To("owned_proxies", Proxy.Type),
 		edge.To("auth_identities", AuthIdentity.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("pending_auth_sessions", PendingAuthSession.Type),

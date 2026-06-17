@@ -116,6 +116,8 @@ func (Account) Fields() []ent.Field {
 			Default(3),
 
 		field.Int("load_factor").Optional().Nillable(),
+		field.Int("load_factor_paid_ceiling").
+			Default(10),
 
 		// priority: 账户优先级，数值越小优先级越高
 		// 调度器会优先使用高优先级的账户

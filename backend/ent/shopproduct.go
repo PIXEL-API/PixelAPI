@@ -56,6 +56,8 @@ type ShopProduct struct {
 	AllowPlatformPayment bool `json:"allow_platform_payment,omitempty"`
 	// DrawEnabled holds the value of the "draw_enabled" field.
 	DrawEnabled bool `json:"draw_enabled,omitempty"`
+	// LoadFactorCreditsPerUnit holds the value of the "load_factor_credits_per_unit" field.
+	LoadFactorCreditsPerUnit int `json:"load_factor_credits_per_unit,omitempty"`
 	// DrawMinAmount holds the value of the "draw_min_amount" field.
 	DrawMinAmount float64 `json:"draw_min_amount,omitempty"`
 	// DrawMaxAmount holds the value of the "draw_max_amount" field.
@@ -132,7 +134,7 @@ func (*ShopProduct) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case shopproduct.FieldPrice, shopproduct.FieldOriginalPrice, shopproduct.FieldDrawMinAmount, shopproduct.FieldDrawMaxAmount, shopproduct.FieldDrawReturnRate:
 			values[i] = new(sql.NullFloat64)
-		case shopproduct.FieldID, shopproduct.FieldCategoryID, shopproduct.FieldSortOrder, shopproduct.FieldMinPurchase, shopproduct.FieldMaxPurchase, shopproduct.FieldDrawGuaranteeCount:
+		case shopproduct.FieldID, shopproduct.FieldCategoryID, shopproduct.FieldSortOrder, shopproduct.FieldMinPurchase, shopproduct.FieldMaxPurchase, shopproduct.FieldLoadFactorCreditsPerUnit, shopproduct.FieldDrawGuaranteeCount:
 			values[i] = new(sql.NullInt64)
 		case shopproduct.FieldName, shopproduct.FieldCoverURL, shopproduct.FieldDescription, shopproduct.FieldProductType:
 			values[i] = new(sql.NullString)
@@ -276,6 +278,12 @@ func (_m *ShopProduct) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field draw_enabled", values[i])
 			} else if value.Valid {
 				_m.DrawEnabled = value.Bool
+			}
+		case shopproduct.FieldLoadFactorCreditsPerUnit:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field load_factor_credits_per_unit", values[i])
+			} else if value.Valid {
+				_m.LoadFactorCreditsPerUnit = int(value.Int64)
 			}
 		case shopproduct.FieldDrawMinAmount:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
@@ -421,6 +429,9 @@ func (_m *ShopProduct) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("draw_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DrawEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("load_factor_credits_per_unit=")
+	builder.WriteString(fmt.Sprintf("%v", _m.LoadFactorCreditsPerUnit))
 	builder.WriteString(", ")
 	builder.WriteString("draw_min_amount=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DrawMinAmount))

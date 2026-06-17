@@ -75,6 +75,8 @@ func (ShopProduct) Fields() []ent.Field {
 			Default(true),
 		field.Bool("draw_enabled").
 			Default(false),
+		field.Int("load_factor_credits_per_unit").
+			Default(0),
 		field.Float("draw_min_amount").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
 			Default(0),

@@ -58,6 +58,9 @@ func (ChannelMonitor) Fields() []ent.Field {
 			Default(true),
 		field.Int("interval_seconds").
 			Range(15, 3600),
+		field.Int("jitter_seconds").
+			Default(0).
+			NonNegative(),
 		field.Time("last_checked_at").
 			Optional().
 			Nillable(),

@@ -335,6 +335,27 @@ func (_u *ShopProductUpdate) SetNillableDrawEnabled(v *bool) *ShopProductUpdate 
 	return _u
 }
 
+// SetLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field.
+func (_u *ShopProductUpdate) SetLoadFactorCreditsPerUnit(v int) *ShopProductUpdate {
+	_u.mutation.ResetLoadFactorCreditsPerUnit()
+	_u.mutation.SetLoadFactorCreditsPerUnit(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field if the given value is not nil.
+func (_u *ShopProductUpdate) SetNillableLoadFactorCreditsPerUnit(v *int) *ShopProductUpdate {
+	if v != nil {
+		_u.SetLoadFactorCreditsPerUnit(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsPerUnit adds value to the "load_factor_credits_per_unit" field.
+func (_u *ShopProductUpdate) AddLoadFactorCreditsPerUnit(v int) *ShopProductUpdate {
+	_u.mutation.AddLoadFactorCreditsPerUnit(v)
+	return _u
+}
+
 // SetDrawMinAmount sets the "draw_min_amount" field.
 func (_u *ShopProductUpdate) SetDrawMinAmount(v float64) *ShopProductUpdate {
 	_u.mutation.ResetDrawMinAmount()
@@ -680,6 +701,12 @@ func (_u *ShopProductUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.DrawEnabled(); ok {
 		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsPerUnit(); ok {
+		_spec.SetField(shopproduct.FieldLoadFactorCreditsPerUnit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsPerUnit(); ok {
+		_spec.AddField(shopproduct.FieldLoadFactorCreditsPerUnit, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.DrawMinAmount(); ok {
 		_spec.SetField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)
@@ -1192,6 +1219,27 @@ func (_u *ShopProductUpdateOne) SetNillableDrawEnabled(v *bool) *ShopProductUpda
 	return _u
 }
 
+// SetLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field.
+func (_u *ShopProductUpdateOne) SetLoadFactorCreditsPerUnit(v int) *ShopProductUpdateOne {
+	_u.mutation.ResetLoadFactorCreditsPerUnit()
+	_u.mutation.SetLoadFactorCreditsPerUnit(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field if the given value is not nil.
+func (_u *ShopProductUpdateOne) SetNillableLoadFactorCreditsPerUnit(v *int) *ShopProductUpdateOne {
+	if v != nil {
+		_u.SetLoadFactorCreditsPerUnit(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsPerUnit adds value to the "load_factor_credits_per_unit" field.
+func (_u *ShopProductUpdateOne) AddLoadFactorCreditsPerUnit(v int) *ShopProductUpdateOne {
+	_u.mutation.AddLoadFactorCreditsPerUnit(v)
+	return _u
+}
+
 // SetDrawMinAmount sets the "draw_min_amount" field.
 func (_u *ShopProductUpdateOne) SetDrawMinAmount(v float64) *ShopProductUpdateOne {
 	_u.mutation.ResetDrawMinAmount()
@@ -1567,6 +1615,12 @@ func (_u *ShopProductUpdateOne) sqlSave(ctx context.Context) (_node *ShopProduct
 	}
 	if value, ok := _u.mutation.DrawEnabled(); ok {
 		_spec.SetField(shopproduct.FieldDrawEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsPerUnit(); ok {
+		_spec.SetField(shopproduct.FieldLoadFactorCreditsPerUnit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsPerUnit(); ok {
+		_spec.AddField(shopproduct.FieldLoadFactorCreditsPerUnit, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.DrawMinAmount(); ok {
 		_spec.SetField(shopproduct.FieldDrawMinAmount, field.TypeFloat64, value)

@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 )
 
 // ProxyCreate is the builder for creating a Proxy entity.
@@ -117,6 +118,20 @@ func (_c *ProxyCreate) SetNillablePassword(v *string) *ProxyCreate {
 	return _c
 }
 
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_c *ProxyCreate) SetOwnerUserID(v int64) *ProxyCreate {
+	_c.mutation.SetOwnerUserID(v)
+	return _c
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillableOwnerUserID(v *int64) *ProxyCreate {
+	if v != nil {
+		_c.SetOwnerUserID(*v)
+	}
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *ProxyCreate) SetStatus(v string) *ProxyCreate {
 	_c.mutation.SetStatus(v)
@@ -158,6 +173,25 @@ func (_c *ProxyCreate) AddAccounts(v ...*Account) *ProxyCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddAccountIDs(ids...)
+}
+
+// SetOwnerID sets the "owner" edge to the User entity by ID.
+func (_c *ProxyCreate) SetOwnerID(id int64) *ProxyCreate {
+	_c.mutation.SetOwnerID(id)
+	return _c
+}
+
+// SetNillableOwnerID sets the "owner" edge to the User entity by ID if the given value is not nil.
+func (_c *ProxyCreate) SetNillableOwnerID(id *int64) *ProxyCreate {
+	if id != nil {
+		_c = _c.SetOwnerID(*id)
+	}
+	return _c
+}
+
+// SetOwner sets the "owner" edge to the User entity.
+func (_c *ProxyCreate) SetOwner(v *User) *ProxyCreate {
+	return _c.SetOwnerID(v.ID)
 }
 
 // Mutation returns the ProxyMutation object of the builder.
@@ -365,6 +399,23 @@ func (_c *ProxyCreate) createSpec() (*Proxy, *sqlgraph.CreateSpec) {
 		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
+	if nodes := _c.mutation.OwnerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   proxy.OwnerTable,
+			Columns: []string{proxy.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.OwnerUserID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
 	return _node, _spec
 }
 
@@ -534,6 +585,24 @@ func (u *ProxyUpsert) UpdatePassword() *ProxyUpsert {
 // ClearPassword clears the value of the "password" field.
 func (u *ProxyUpsert) ClearPassword() *ProxyUpsert {
 	u.SetNull(proxy.FieldPassword)
+	return u
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *ProxyUpsert) SetOwnerUserID(v int64) *ProxyUpsert {
+	u.Set(proxy.FieldOwnerUserID, v)
+	return u
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdateOwnerUserID() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldOwnerUserID)
+	return u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *ProxyUpsert) ClearOwnerUserID() *ProxyUpsert {
+	u.SetNull(proxy.FieldOwnerUserID)
 	return u
 }
 
@@ -749,6 +818,27 @@ func (u *ProxyUpsertOne) UpdatePassword() *ProxyUpsertOne {
 func (u *ProxyUpsertOne) ClearPassword() *ProxyUpsertOne {
 	return u.Update(func(s *ProxyUpsert) {
 		s.ClearPassword()
+	})
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *ProxyUpsertOne) SetOwnerUserID(v int64) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetOwnerUserID(v)
+	})
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdateOwnerUserID() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateOwnerUserID()
+	})
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *ProxyUpsertOne) ClearOwnerUserID() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearOwnerUserID()
 	})
 }
 
@@ -1135,6 +1225,27 @@ func (u *ProxyUpsertBulk) UpdatePassword() *ProxyUpsertBulk {
 func (u *ProxyUpsertBulk) ClearPassword() *ProxyUpsertBulk {
 	return u.Update(func(s *ProxyUpsert) {
 		s.ClearPassword()
+	})
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *ProxyUpsertBulk) SetOwnerUserID(v int64) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetOwnerUserID(v)
+	})
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdateOwnerUserID() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateOwnerUserID()
+	})
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *ProxyUpsertBulk) ClearOwnerUserID() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearOwnerUserID()
 	})
 }
 

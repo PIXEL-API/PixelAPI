@@ -55,6 +55,8 @@ type ShopOrder struct {
 	Status string `json:"status,omitempty"`
 	// DeliveredCards holds the value of the "delivered_cards" field.
 	DeliveredCards []string `json:"delivered_cards,omitempty"`
+	// LoadFactorCreditsAwarded holds the value of the "load_factor_credits_awarded" field.
+	LoadFactorCreditsAwarded int `json:"load_factor_credits_awarded,omitempty"`
 	// PaidAt holds the value of the "paid_at" field.
 	PaidAt *time.Time `json:"paid_at,omitempty"`
 	// CompletedAt holds the value of the "completed_at" field.
@@ -152,7 +154,7 @@ func (*ShopOrder) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case shoporder.FieldUnitPrice, shoporder.FieldTotalAmount, shoporder.FieldPointsAmount, shoporder.FieldDrawRewardAmount:
 			values[i] = new(sql.NullFloat64)
-		case shoporder.FieldID, shoporder.FieldUserID, shoporder.FieldProductID, shoporder.FieldQuantity, shoporder.FieldPaymentOrderID, shoporder.FieldDrawCycleID, shoporder.FieldDrawCycleIndex:
+		case shoporder.FieldID, shoporder.FieldUserID, shoporder.FieldProductID, shoporder.FieldQuantity, shoporder.FieldPaymentOrderID, shoporder.FieldLoadFactorCreditsAwarded, shoporder.FieldDrawCycleID, shoporder.FieldDrawCycleIndex:
 			values[i] = new(sql.NullInt64)
 		case shoporder.FieldOrderNo, shoporder.FieldProductName, shoporder.FieldProductCoverURL, shoporder.FieldProductDescription, shoporder.FieldProductType, shoporder.FieldPaymentMethod, shoporder.FieldStatus, shoporder.FieldFailedReason:
 			values[i] = new(sql.NullString)
@@ -285,6 +287,12 @@ func (_m *ShopOrder) assignValues(columns []string, values []any) error {
 				if err := json.Unmarshal(*value, &_m.DeliveredCards); err != nil {
 					return fmt.Errorf("unmarshal field delivered_cards: %w", err)
 				}
+			}
+		case shoporder.FieldLoadFactorCreditsAwarded:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field load_factor_credits_awarded", values[i])
+			} else if value.Valid {
+				_m.LoadFactorCreditsAwarded = int(value.Int64)
 			}
 		case shoporder.FieldPaidAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -452,6 +460,9 @@ func (_m *ShopOrder) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("delivered_cards=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DeliveredCards))
+	builder.WriteString(", ")
+	builder.WriteString("load_factor_credits_awarded=")
+	builder.WriteString(fmt.Sprintf("%v", _m.LoadFactorCreditsAwarded))
 	builder.WriteString(", ")
 	if v := _m.PaidAt; v != nil {
 		builder.WriteString("paid_at=")

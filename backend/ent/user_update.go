@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
+	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
@@ -152,6 +153,48 @@ func (_u *UserUpdate) SetNillablePointsBalance(v *float64) *UserUpdate {
 // AddPointsBalance adds value to the "points_balance" field.
 func (_u *UserUpdate) AddPointsBalance(v float64) *UserUpdate {
 	_u.mutation.AddPointsBalance(v)
+	return _u
+}
+
+// SetLoadFactorCreditsBalance sets the "load_factor_credits_balance" field.
+func (_u *UserUpdate) SetLoadFactorCreditsBalance(v int) *UserUpdate {
+	_u.mutation.ResetLoadFactorCreditsBalance()
+	_u.mutation.SetLoadFactorCreditsBalance(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsBalance sets the "load_factor_credits_balance" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableLoadFactorCreditsBalance(v *int) *UserUpdate {
+	if v != nil {
+		_u.SetLoadFactorCreditsBalance(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsBalance adds value to the "load_factor_credits_balance" field.
+func (_u *UserUpdate) AddLoadFactorCreditsBalance(v int) *UserUpdate {
+	_u.mutation.AddLoadFactorCreditsBalance(v)
+	return _u
+}
+
+// SetLoadFactorCreditsUsedTotal sets the "load_factor_credits_used_total" field.
+func (_u *UserUpdate) SetLoadFactorCreditsUsedTotal(v int) *UserUpdate {
+	_u.mutation.ResetLoadFactorCreditsUsedTotal()
+	_u.mutation.SetLoadFactorCreditsUsedTotal(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsUsedTotal sets the "load_factor_credits_used_total" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableLoadFactorCreditsUsedTotal(v *int) *UserUpdate {
+	if v != nil {
+		_u.SetLoadFactorCreditsUsedTotal(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsUsedTotal adds value to the "load_factor_credits_used_total" field.
+func (_u *UserUpdate) AddLoadFactorCreditsUsedTotal(v int) *UserUpdate {
+	_u.mutation.AddLoadFactorCreditsUsedTotal(v)
 	return _u
 }
 
@@ -706,6 +749,21 @@ func (_u *UserUpdate) AddOwnedAccounts(v ...*Account) *UserUpdate {
 	return _u.AddOwnedAccountIDs(ids...)
 }
 
+// AddOwnedProxyIDs adds the "owned_proxies" edge to the Proxy entity by IDs.
+func (_u *UserUpdate) AddOwnedProxyIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddOwnedProxyIDs(ids...)
+	return _u
+}
+
+// AddOwnedProxies adds the "owned_proxies" edges to the Proxy entity.
+func (_u *UserUpdate) AddOwnedProxies(v ...*Proxy) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddOwnedProxyIDs(ids...)
+}
+
 // AddAuthIdentityIDs adds the "auth_identities" edge to the AuthIdentity entity by IDs.
 func (_u *UserUpdate) AddAuthIdentityIDs(ids ...int64) *UserUpdate {
 	_u.mutation.AddAuthIdentityIDs(ids...)
@@ -1098,6 +1156,27 @@ func (_u *UserUpdate) RemoveOwnedAccounts(v ...*Account) *UserUpdate {
 	return _u.RemoveOwnedAccountIDs(ids...)
 }
 
+// ClearOwnedProxies clears all "owned_proxies" edges to the Proxy entity.
+func (_u *UserUpdate) ClearOwnedProxies() *UserUpdate {
+	_u.mutation.ClearOwnedProxies()
+	return _u
+}
+
+// RemoveOwnedProxyIDs removes the "owned_proxies" edge to Proxy entities by IDs.
+func (_u *UserUpdate) RemoveOwnedProxyIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveOwnedProxyIDs(ids...)
+	return _u
+}
+
+// RemoveOwnedProxies removes "owned_proxies" edges to Proxy entities.
+func (_u *UserUpdate) RemoveOwnedProxies(v ...*Proxy) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveOwnedProxyIDs(ids...)
+}
+
 // ClearAuthIdentities clears all "auth_identities" edges to the AuthIdentity entity.
 func (_u *UserUpdate) ClearAuthIdentities() *UserUpdate {
 	_u.mutation.ClearAuthIdentities()
@@ -1258,6 +1337,18 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedPointsBalance(); ok {
 		_spec.AddField(user.FieldPointsBalance, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsBalance(); ok {
+		_spec.SetField(user.FieldLoadFactorCreditsBalance, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsBalance(); ok {
+		_spec.AddField(user.FieldLoadFactorCreditsBalance, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsUsedTotal(); ok {
+		_spec.SetField(user.FieldLoadFactorCreditsUsedTotal, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsUsedTotal(); ok {
+		_spec.AddField(user.FieldLoadFactorCreditsUsedTotal, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.PreferPointsBilling(); ok {
 		_spec.SetField(user.FieldPreferPointsBilling, field.TypeBool, value)
@@ -2114,6 +2205,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.OwnedProxiesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedProxiesTable,
+			Columns: []string{user.OwnedProxiesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedOwnedProxiesIDs(); len(nodes) > 0 && !_u.mutation.OwnedProxiesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedProxiesTable,
+			Columns: []string{user.OwnedProxiesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnedProxiesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedProxiesTable,
+			Columns: []string{user.OwnedProxiesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _u.mutation.AuthIdentitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
@@ -2331,6 +2467,48 @@ func (_u *UserUpdateOne) SetNillablePointsBalance(v *float64) *UserUpdateOne {
 // AddPointsBalance adds value to the "points_balance" field.
 func (_u *UserUpdateOne) AddPointsBalance(v float64) *UserUpdateOne {
 	_u.mutation.AddPointsBalance(v)
+	return _u
+}
+
+// SetLoadFactorCreditsBalance sets the "load_factor_credits_balance" field.
+func (_u *UserUpdateOne) SetLoadFactorCreditsBalance(v int) *UserUpdateOne {
+	_u.mutation.ResetLoadFactorCreditsBalance()
+	_u.mutation.SetLoadFactorCreditsBalance(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsBalance sets the "load_factor_credits_balance" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableLoadFactorCreditsBalance(v *int) *UserUpdateOne {
+	if v != nil {
+		_u.SetLoadFactorCreditsBalance(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsBalance adds value to the "load_factor_credits_balance" field.
+func (_u *UserUpdateOne) AddLoadFactorCreditsBalance(v int) *UserUpdateOne {
+	_u.mutation.AddLoadFactorCreditsBalance(v)
+	return _u
+}
+
+// SetLoadFactorCreditsUsedTotal sets the "load_factor_credits_used_total" field.
+func (_u *UserUpdateOne) SetLoadFactorCreditsUsedTotal(v int) *UserUpdateOne {
+	_u.mutation.ResetLoadFactorCreditsUsedTotal()
+	_u.mutation.SetLoadFactorCreditsUsedTotal(v)
+	return _u
+}
+
+// SetNillableLoadFactorCreditsUsedTotal sets the "load_factor_credits_used_total" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableLoadFactorCreditsUsedTotal(v *int) *UserUpdateOne {
+	if v != nil {
+		_u.SetLoadFactorCreditsUsedTotal(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorCreditsUsedTotal adds value to the "load_factor_credits_used_total" field.
+func (_u *UserUpdateOne) AddLoadFactorCreditsUsedTotal(v int) *UserUpdateOne {
+	_u.mutation.AddLoadFactorCreditsUsedTotal(v)
 	return _u
 }
 
@@ -2885,6 +3063,21 @@ func (_u *UserUpdateOne) AddOwnedAccounts(v ...*Account) *UserUpdateOne {
 	return _u.AddOwnedAccountIDs(ids...)
 }
 
+// AddOwnedProxyIDs adds the "owned_proxies" edge to the Proxy entity by IDs.
+func (_u *UserUpdateOne) AddOwnedProxyIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddOwnedProxyIDs(ids...)
+	return _u
+}
+
+// AddOwnedProxies adds the "owned_proxies" edges to the Proxy entity.
+func (_u *UserUpdateOne) AddOwnedProxies(v ...*Proxy) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddOwnedProxyIDs(ids...)
+}
+
 // AddAuthIdentityIDs adds the "auth_identities" edge to the AuthIdentity entity by IDs.
 func (_u *UserUpdateOne) AddAuthIdentityIDs(ids ...int64) *UserUpdateOne {
 	_u.mutation.AddAuthIdentityIDs(ids...)
@@ -3277,6 +3470,27 @@ func (_u *UserUpdateOne) RemoveOwnedAccounts(v ...*Account) *UserUpdateOne {
 	return _u.RemoveOwnedAccountIDs(ids...)
 }
 
+// ClearOwnedProxies clears all "owned_proxies" edges to the Proxy entity.
+func (_u *UserUpdateOne) ClearOwnedProxies() *UserUpdateOne {
+	_u.mutation.ClearOwnedProxies()
+	return _u
+}
+
+// RemoveOwnedProxyIDs removes the "owned_proxies" edge to Proxy entities by IDs.
+func (_u *UserUpdateOne) RemoveOwnedProxyIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveOwnedProxyIDs(ids...)
+	return _u
+}
+
+// RemoveOwnedProxies removes "owned_proxies" edges to Proxy entities.
+func (_u *UserUpdateOne) RemoveOwnedProxies(v ...*Proxy) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveOwnedProxyIDs(ids...)
+}
+
 // ClearAuthIdentities clears all "auth_identities" edges to the AuthIdentity entity.
 func (_u *UserUpdateOne) ClearAuthIdentities() *UserUpdateOne {
 	_u.mutation.ClearAuthIdentities()
@@ -3467,6 +3681,18 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.AddedPointsBalance(); ok {
 		_spec.AddField(user.FieldPointsBalance, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsBalance(); ok {
+		_spec.SetField(user.FieldLoadFactorCreditsBalance, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsBalance(); ok {
+		_spec.AddField(user.FieldLoadFactorCreditsBalance, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.LoadFactorCreditsUsedTotal(); ok {
+		_spec.SetField(user.FieldLoadFactorCreditsUsedTotal, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorCreditsUsedTotal(); ok {
+		_spec.AddField(user.FieldLoadFactorCreditsUsedTotal, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.PreferPointsBilling(); ok {
 		_spec.SetField(user.FieldPreferPointsBilling, field.TypeBool, value)
@@ -4316,6 +4542,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.OwnedProxiesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedProxiesTable,
+			Columns: []string{user.OwnedProxiesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedOwnedProxiesIDs(); len(nodes) > 0 && !_u.mutation.OwnedProxiesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedProxiesTable,
+			Columns: []string{user.OwnedProxiesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnedProxiesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.OwnedProxiesTable,
+			Columns: []string{user.OwnedProxiesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

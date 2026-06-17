@@ -150,6 +150,11 @@ func DrawEnabled(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldDrawEnabled, v))
 }
 
+// LoadFactorCreditsPerUnit applies equality check predicate on the "load_factor_credits_per_unit" field. It's identical to LoadFactorCreditsPerUnitEQ.
+func LoadFactorCreditsPerUnit(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldLoadFactorCreditsPerUnit, v))
+}
+
 // DrawMinAmount applies equality check predicate on the "draw_min_amount" field. It's identical to DrawMinAmountEQ.
 func DrawMinAmount(v float64) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldEQ(FieldDrawMinAmount, v))
@@ -838,6 +843,46 @@ func DrawEnabledEQ(v bool) predicate.ShopProduct {
 // DrawEnabledNEQ applies the NEQ predicate on the "draw_enabled" field.
 func DrawEnabledNEQ(v bool) predicate.ShopProduct {
 	return predicate.ShopProduct(sql.FieldNEQ(FieldDrawEnabled, v))
+}
+
+// LoadFactorCreditsPerUnitEQ applies the EQ predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitEQ(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldEQ(FieldLoadFactorCreditsPerUnit, v))
+}
+
+// LoadFactorCreditsPerUnitNEQ applies the NEQ predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitNEQ(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNEQ(FieldLoadFactorCreditsPerUnit, v))
+}
+
+// LoadFactorCreditsPerUnitIn applies the In predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitIn(vs ...int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldIn(FieldLoadFactorCreditsPerUnit, vs...))
+}
+
+// LoadFactorCreditsPerUnitNotIn applies the NotIn predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitNotIn(vs ...int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldNotIn(FieldLoadFactorCreditsPerUnit, vs...))
+}
+
+// LoadFactorCreditsPerUnitGT applies the GT predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitGT(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGT(FieldLoadFactorCreditsPerUnit, v))
+}
+
+// LoadFactorCreditsPerUnitGTE applies the GTE predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitGTE(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldGTE(FieldLoadFactorCreditsPerUnit, v))
+}
+
+// LoadFactorCreditsPerUnitLT applies the LT predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitLT(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLT(FieldLoadFactorCreditsPerUnit, v))
+}
+
+// LoadFactorCreditsPerUnitLTE applies the LTE predicate on the "load_factor_credits_per_unit" field.
+func LoadFactorCreditsPerUnitLTE(v int) predicate.ShopProduct {
+	return predicate.ShopProduct(sql.FieldLTE(FieldLoadFactorCreditsPerUnit, v))
 }
 
 // DrawMinAmountEQ applies the EQ predicate on the "draw_min_amount" field.

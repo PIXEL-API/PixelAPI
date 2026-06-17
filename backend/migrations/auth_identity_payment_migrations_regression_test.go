@@ -143,3 +143,16 @@ func TestMigration124BackfillsLegacyOIDCSecurityFlagsSafely(t *testing.T) {
 	require.Contains(t, sql, "oidc_connect_enabled")
 	require.Contains(t, sql, "'false'")
 }
+
+func TestMigration186AllowsAllAccountShareMembershipEndReasons(t *testing.T) {
+	content, err := FS.ReadFile("186_account_share_membership_end_reasons.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "DROP CONSTRAINT account_share_memberships_ended_reason_chk")
+	require.Contains(t, sql, "ADD CONSTRAINT account_share_memberships_ended_reason_chk")
+	require.Contains(t, sql, "'manual'")
+	require.Contains(t, sql, "'idle_timeout'")
+	require.Contains(t, sql, "'prepay_insufficient'")
+	require.Contains(t, sql, "'account_unavailable'")
+}

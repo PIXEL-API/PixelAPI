@@ -22,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
+	"github.com/Wei-Shaw/sub2api/ent/proxy"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/shopbalanceledger"
 	"github.com/Wei-Shaw/sub2api/ent/shopdrawcycle"
@@ -59,6 +60,7 @@ type UserQuery struct {
 	withShopDrawCycles         *ShopDrawCycleQuery
 	withShopBalanceLedger      *ShopBalanceLedgerQuery
 	withOwnedAccounts          *AccountQuery
+	withOwnedProxies           *ProxyQuery
 	withAuthIdentities         *AuthIdentityQuery
 	withPendingAuthSessions    *PendingAuthSessionQuery
 	withUserAllowedGroups      *UserAllowedGroupQuery
@@ -473,6 +475,28 @@ func (_q *UserQuery) QueryOwnedAccounts() *AccountQuery {
 	return query
 }
 
+// QueryOwnedProxies chains the current query on the "owned_proxies" edge.
+func (_q *UserQuery) QueryOwnedProxies() *ProxyQuery {
+	query := (&ProxyClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(proxy.Table, proxy.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.OwnedProxiesTable, user.OwnedProxiesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
 // QueryAuthIdentities chains the current query on the "auth_identities" edge.
 func (_q *UserQuery) QueryAuthIdentities() *AuthIdentityQuery {
 	query := (&AuthIdentityClient{config: _q.config}).Query()
@@ -748,6 +772,7 @@ func (_q *UserQuery) Clone() *UserQuery {
 		withShopDrawCycles:         _q.withShopDrawCycles.Clone(),
 		withShopBalanceLedger:      _q.withShopBalanceLedger.Clone(),
 		withOwnedAccounts:          _q.withOwnedAccounts.Clone(),
+		withOwnedProxies:           _q.withOwnedProxies.Clone(),
 		withAuthIdentities:         _q.withAuthIdentities.Clone(),
 		withPendingAuthSessions:    _q.withPendingAuthSessions.Clone(),
 		withUserAllowedGroups:      _q.withUserAllowedGroups.Clone(),
@@ -944,6 +969,17 @@ func (_q *UserQuery) WithOwnedAccounts(opts ...func(*AccountQuery)) *UserQuery {
 	return _q
 }
 
+// WithOwnedProxies tells the query-builder to eager-load the nodes that are connected to
+// the "owned_proxies" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithOwnedProxies(opts ...func(*ProxyQuery)) *UserQuery {
+	query := (&ProxyClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withOwnedProxies = query
+	return _q
+}
+
 // WithAuthIdentities tells the query-builder to eager-load the nodes that are connected to
 // the "auth_identities" edge. The optional arguments are used to configure the query builder of the edge.
 func (_q *UserQuery) WithAuthIdentities(opts ...func(*AuthIdentityQuery)) *UserQuery {
@@ -1055,7 +1091,7 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = _q.querySpec()
-		loadedTypes = [20]bool{
+		loadedTypes = [21]bool{
 			_q.withAPIKeys != nil,
 			_q.withRedeemCodes != nil,
 			_q.withSubscriptions != nil,
@@ -1073,6 +1109,7 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 			_q.withShopDrawCycles != nil,
 			_q.withShopBalanceLedger != nil,
 			_q.withOwnedAccounts != nil,
+			_q.withOwnedProxies != nil,
 			_q.withAuthIdentities != nil,
 			_q.withPendingAuthSessions != nil,
 			_q.withUserAllowedGroups != nil,
@@ -1219,6 +1256,13 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := _q.loadOwnedAccounts(ctx, query, nodes,
 			func(n *User) { n.Edges.OwnedAccounts = []*Account{} },
 			func(n *User, e *Account) { n.Edges.OwnedAccounts = append(n.Edges.OwnedAccounts, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withOwnedProxies; query != nil {
+		if err := _q.loadOwnedProxies(ctx, query, nodes,
+			func(n *User) { n.Edges.OwnedProxies = []*Proxy{} },
+			func(n *User, e *Proxy) { n.Edges.OwnedProxies = append(n.Edges.OwnedProxies, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -1786,6 +1830,39 @@ func (_q *UserQuery) loadOwnedAccounts(ctx context.Context, query *AccountQuery,
 	}
 	query.Where(predicate.Account(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(user.OwnedAccountsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.OwnerUserID
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "owner_user_id" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "owner_user_id" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadOwnedProxies(ctx context.Context, query *ProxyQuery, nodes []*User, init func(*User), assign func(*User, *Proxy)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(proxy.FieldOwnerUserID)
+	}
+	query.Where(predicate.Proxy(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.OwnedProxiesColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

@@ -52,6 +52,8 @@ const (
 	FieldAllowPlatformPayment = "allow_platform_payment"
 	// FieldDrawEnabled holds the string denoting the draw_enabled field in the database.
 	FieldDrawEnabled = "draw_enabled"
+	// FieldLoadFactorCreditsPerUnit holds the string denoting the load_factor_credits_per_unit field in the database.
+	FieldLoadFactorCreditsPerUnit = "load_factor_credits_per_unit"
 	// FieldDrawMinAmount holds the string denoting the draw_min_amount field in the database.
 	FieldDrawMinAmount = "draw_min_amount"
 	// FieldDrawMaxAmount holds the string denoting the draw_max_amount field in the database.
@@ -122,6 +124,7 @@ var Columns = []string{
 	FieldAllowPointsPayment,
 	FieldAllowPlatformPayment,
 	FieldDrawEnabled,
+	FieldLoadFactorCreditsPerUnit,
 	FieldDrawMinAmount,
 	FieldDrawMaxAmount,
 	FieldDrawGuaranteeCount,
@@ -173,6 +176,8 @@ var (
 	DefaultAllowPlatformPayment bool
 	// DefaultDrawEnabled holds the default value on creation for the "draw_enabled" field.
 	DefaultDrawEnabled bool
+	// DefaultLoadFactorCreditsPerUnit holds the default value on creation for the "load_factor_credits_per_unit" field.
+	DefaultLoadFactorCreditsPerUnit int
 	// DefaultDrawMinAmount holds the default value on creation for the "draw_min_amount" field.
 	DefaultDrawMinAmount float64
 	// DefaultDrawMaxAmount holds the default value on creation for the "draw_max_amount" field.
@@ -284,6 +289,11 @@ func ByAllowPlatformPayment(opts ...sql.OrderTermOption) OrderOption {
 // ByDrawEnabled orders the results by the draw_enabled field.
 func ByDrawEnabled(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDrawEnabled, opts...).ToFunc()
+}
+
+// ByLoadFactorCreditsPerUnit orders the results by the load_factor_credits_per_unit field.
+func ByLoadFactorCreditsPerUnit(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLoadFactorCreditsPerUnit, opts...).ToFunc()
 }
 
 // ByDrawMinAmount orders the results by the draw_min_amount field.

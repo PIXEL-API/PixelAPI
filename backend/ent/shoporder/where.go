@@ -135,6 +135,11 @@ func Status(v string) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldStatus, v))
 }
 
+// LoadFactorCreditsAwarded applies equality check predicate on the "load_factor_credits_awarded" field. It's identical to LoadFactorCreditsAwardedEQ.
+func LoadFactorCreditsAwarded(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldLoadFactorCreditsAwarded, v))
+}
+
 // PaidAt applies equality check predicate on the "paid_at" field. It's identical to PaidAtEQ.
 func PaidAt(v time.Time) predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldEQ(FieldPaidAt, v))
@@ -983,6 +988,46 @@ func DeliveredCardsIsNil() predicate.ShopOrder {
 // DeliveredCardsNotNil applies the NotNil predicate on the "delivered_cards" field.
 func DeliveredCardsNotNil() predicate.ShopOrder {
 	return predicate.ShopOrder(sql.FieldNotNull(FieldDeliveredCards))
+}
+
+// LoadFactorCreditsAwardedEQ applies the EQ predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedEQ(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldEQ(FieldLoadFactorCreditsAwarded, v))
+}
+
+// LoadFactorCreditsAwardedNEQ applies the NEQ predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedNEQ(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNEQ(FieldLoadFactorCreditsAwarded, v))
+}
+
+// LoadFactorCreditsAwardedIn applies the In predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedIn(vs ...int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldIn(FieldLoadFactorCreditsAwarded, vs...))
+}
+
+// LoadFactorCreditsAwardedNotIn applies the NotIn predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedNotIn(vs ...int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldNotIn(FieldLoadFactorCreditsAwarded, vs...))
+}
+
+// LoadFactorCreditsAwardedGT applies the GT predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedGT(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGT(FieldLoadFactorCreditsAwarded, v))
+}
+
+// LoadFactorCreditsAwardedGTE applies the GTE predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedGTE(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldGTE(FieldLoadFactorCreditsAwarded, v))
+}
+
+// LoadFactorCreditsAwardedLT applies the LT predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedLT(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLT(FieldLoadFactorCreditsAwarded, v))
+}
+
+// LoadFactorCreditsAwardedLTE applies the LTE predicate on the "load_factor_credits_awarded" field.
+func LoadFactorCreditsAwardedLTE(v int) predicate.ShopOrder {
+	return predicate.ShopOrder(sql.FieldLTE(FieldLoadFactorCreditsAwarded, v))
 }
 
 // PaidAtEQ applies the EQ predicate on the "paid_at" field.

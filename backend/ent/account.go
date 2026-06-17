@@ -54,6 +54,8 @@ type Account struct {
 	Concurrency int `json:"concurrency,omitempty"`
 	// LoadFactor holds the value of the "load_factor" field.
 	LoadFactor *int `json:"load_factor,omitempty"`
+	// LoadFactorPaidCeiling holds the value of the "load_factor_paid_ceiling" field.
+	LoadFactorPaidCeiling int `json:"load_factor_paid_ceiling,omitempty"`
 	// Priority holds the value of the "priority" field.
 	Priority int `json:"priority,omitempty"`
 	// RateMultiplier holds the value of the "rate_multiplier" field.
@@ -169,7 +171,7 @@ func (*Account) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case account.FieldRateMultiplier:
 			values[i] = new(sql.NullFloat64)
-		case account.FieldID, account.FieldOwnerUserID, account.FieldSharePolicyID, account.FieldProxyID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority:
+		case account.FieldID, account.FieldOwnerUserID, account.FieldSharePolicyID, account.FieldProxyID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldLoadFactorPaidCeiling, account.FieldPriority:
 			values[i] = new(sql.NullInt64)
 		case account.FieldName, account.FieldAccountLevel, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldShareMode, account.FieldShareStatus, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus:
 			values[i] = new(sql.NullString)
@@ -307,6 +309,12 @@ func (_m *Account) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.LoadFactor = new(int)
 				*_m.LoadFactor = int(value.Int64)
+			}
+		case account.FieldLoadFactorPaidCeiling:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field load_factor_paid_ceiling", values[i])
+			} else if value.Valid {
+				_m.LoadFactorPaidCeiling = int(value.Int64)
 			}
 		case account.FieldPriority:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -538,6 +546,9 @@ func (_m *Account) String() string {
 		builder.WriteString("load_factor=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("load_factor_paid_ceiling=")
+	builder.WriteString(fmt.Sprintf("%v", _m.LoadFactorPaidCeiling))
 	builder.WriteString(", ")
 	builder.WriteString("priority=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Priority))

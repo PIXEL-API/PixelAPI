@@ -49,6 +49,8 @@ const (
 	FieldConcurrency = "concurrency"
 	// FieldLoadFactor holds the string denoting the load_factor field in the database.
 	FieldLoadFactor = "load_factor"
+	// FieldLoadFactorPaidCeiling holds the string denoting the load_factor_paid_ceiling field in the database.
+	FieldLoadFactorPaidCeiling = "load_factor_paid_ceiling"
 	// FieldPriority holds the string denoting the priority field in the database.
 	FieldPriority = "priority"
 	// FieldRateMultiplier holds the string denoting the rate_multiplier field in the database.
@@ -148,6 +150,7 @@ var Columns = []string{
 	FieldProxyID,
 	FieldConcurrency,
 	FieldLoadFactor,
+	FieldLoadFactorPaidCeiling,
 	FieldPriority,
 	FieldRateMultiplier,
 	FieldStatus,
@@ -220,6 +223,8 @@ var (
 	ShareStatusValidator func(string) error
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
 	DefaultConcurrency int
+	// DefaultLoadFactorPaidCeiling holds the default value on creation for the "load_factor_paid_ceiling" field.
+	DefaultLoadFactorPaidCeiling int
 	// DefaultPriority holds the default value on creation for the "priority" field.
 	DefaultPriority int
 	// DefaultRateMultiplier holds the default value on creation for the "rate_multiplier" field.
@@ -317,6 +322,11 @@ func ByConcurrency(opts ...sql.OrderTermOption) OrderOption {
 // ByLoadFactor orders the results by the load_factor field.
 func ByLoadFactor(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLoadFactor, opts...).ToFunc()
+}
+
+// ByLoadFactorPaidCeiling orders the results by the load_factor_paid_ceiling field.
+func ByLoadFactorPaidCeiling(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLoadFactorPaidCeiling, opts...).ToFunc()
 }
 
 // ByPriority orders the results by the priority field.

@@ -31,6 +31,10 @@ const (
 	FieldBalance = "balance"
 	// FieldPointsBalance holds the string denoting the points_balance field in the database.
 	FieldPointsBalance = "points_balance"
+	// FieldLoadFactorCreditsBalance holds the string denoting the load_factor_credits_balance field in the database.
+	FieldLoadFactorCreditsBalance = "load_factor_credits_balance"
+	// FieldLoadFactorCreditsUsedTotal holds the string denoting the load_factor_credits_used_total field in the database.
+	FieldLoadFactorCreditsUsedTotal = "load_factor_credits_used_total"
 	// FieldPreferPointsBilling holds the string denoting the prefer_points_billing field in the database.
 	FieldPreferPointsBilling = "prefer_points_billing"
 	// FieldConcurrency holds the string denoting the concurrency field in the database.
@@ -99,6 +103,8 @@ const (
 	EdgeShopBalanceLedger = "shop_balance_ledger"
 	// EdgeOwnedAccounts holds the string denoting the owned_accounts edge name in mutations.
 	EdgeOwnedAccounts = "owned_accounts"
+	// EdgeOwnedProxies holds the string denoting the owned_proxies edge name in mutations.
+	EdgeOwnedProxies = "owned_proxies"
 	// EdgeAuthIdentities holds the string denoting the auth_identities edge name in mutations.
 	EdgeAuthIdentities = "auth_identities"
 	// EdgePendingAuthSessions holds the string denoting the pending_auth_sessions edge name in mutations.
@@ -224,6 +230,13 @@ const (
 	OwnedAccountsInverseTable = "accounts"
 	// OwnedAccountsColumn is the table column denoting the owned_accounts relation/edge.
 	OwnedAccountsColumn = "owner_user_id"
+	// OwnedProxiesTable is the table that holds the owned_proxies relation/edge.
+	OwnedProxiesTable = "proxies"
+	// OwnedProxiesInverseTable is the table name for the Proxy entity.
+	// It exists in this package in order to avoid circular dependency with the "proxy" package.
+	OwnedProxiesInverseTable = "proxies"
+	// OwnedProxiesColumn is the table column denoting the owned_proxies relation/edge.
+	OwnedProxiesColumn = "owner_user_id"
 	// AuthIdentitiesTable is the table that holds the auth_identities relation/edge.
 	AuthIdentitiesTable = "auth_identities"
 	// AuthIdentitiesInverseTable is the table name for the AuthIdentity entity.
@@ -258,6 +271,8 @@ var Columns = []string{
 	FieldRole,
 	FieldBalance,
 	FieldPointsBalance,
+	FieldLoadFactorCreditsBalance,
+	FieldLoadFactorCreditsUsedTotal,
 	FieldPreferPointsBilling,
 	FieldConcurrency,
 	FieldStatus,
@@ -319,6 +334,10 @@ var (
 	DefaultBalance float64
 	// DefaultPointsBalance holds the default value on creation for the "points_balance" field.
 	DefaultPointsBalance float64
+	// DefaultLoadFactorCreditsBalance holds the default value on creation for the "load_factor_credits_balance" field.
+	DefaultLoadFactorCreditsBalance int
+	// DefaultLoadFactorCreditsUsedTotal holds the default value on creation for the "load_factor_credits_used_total" field.
+	DefaultLoadFactorCreditsUsedTotal int
 	// DefaultPreferPointsBilling holds the default value on creation for the "prefer_points_billing" field.
 	DefaultPreferPointsBilling bool
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
@@ -397,6 +416,16 @@ func ByBalance(opts ...sql.OrderTermOption) OrderOption {
 // ByPointsBalance orders the results by the points_balance field.
 func ByPointsBalance(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPointsBalance, opts...).ToFunc()
+}
+
+// ByLoadFactorCreditsBalance orders the results by the load_factor_credits_balance field.
+func ByLoadFactorCreditsBalance(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLoadFactorCreditsBalance, opts...).ToFunc()
+}
+
+// ByLoadFactorCreditsUsedTotal orders the results by the load_factor_credits_used_total field.
+func ByLoadFactorCreditsUsedTotal(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLoadFactorCreditsUsedTotal, opts...).ToFunc()
 }
 
 // ByPreferPointsBilling orders the results by the prefer_points_billing field.
@@ -722,6 +751,20 @@ func ByOwnedAccounts(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByOwnedProxiesCount orders the results by owned_proxies count.
+func ByOwnedProxiesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newOwnedProxiesStep(), opts...)
+	}
+}
+
+// ByOwnedProxies orders the results by owned_proxies terms.
+func ByOwnedProxies(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newOwnedProxiesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByAuthIdentitiesCount orders the results by auth_identities count.
 func ByAuthIdentitiesCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -880,6 +923,13 @@ func newOwnedAccountsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(OwnedAccountsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, OwnedAccountsTable, OwnedAccountsColumn),
+	)
+}
+func newOwnedProxiesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(OwnedProxiesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, OwnedProxiesTable, OwnedProxiesColumn),
 	)
 }
 func newAuthIdentitiesStep() *sqlgraph.Step {

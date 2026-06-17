@@ -70,6 +70,8 @@ func (ShopOrder) Fields() []ent.Field {
 		field.JSON("delivered_cards", []string{}).
 			Optional().
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
+		field.Int("load_factor_credits_awarded").
+			Default(0),
 		field.Time("paid_at").
 			Optional().
 			Nillable().

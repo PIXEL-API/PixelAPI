@@ -3279,59 +3279,61 @@ func (m *APIKeyGroupRouteMutation) ResetEdge(name string) error {
 // AccountMutation represents an operation that mutates the Account nodes in the graph.
 type AccountMutation struct {
 	config
-	op                        Op
-	typ                       string
-	id                        *int64
-	created_at                *time.Time
-	updated_at                *time.Time
-	deleted_at                *time.Time
-	name                      *string
-	account_level             *string
-	notes                     *string
-	platform                  *string
-	_type                     *string
-	credentials               *map[string]interface{}
-	extra                     *map[string]interface{}
-	share_mode                *string
-	share_status              *string
-	share_policy_id           *int64
-	addshare_policy_id        *int64
-	concurrency               *int
-	addconcurrency            *int
-	load_factor               *int
-	addload_factor            *int
-	priority                  *int
-	addpriority               *int
-	rate_multiplier           *float64
-	addrate_multiplier        *float64
-	status                    *string
-	error_message             *string
-	last_used_at              *time.Time
-	expires_at                *time.Time
-	auto_pause_on_expired     *bool
-	schedulable               *bool
-	rate_limited_at           *time.Time
-	rate_limit_reset_at       *time.Time
-	overload_until            *time.Time
-	temp_unschedulable_until  *time.Time
-	temp_unschedulable_reason *string
-	session_window_start      *time.Time
-	session_window_end        *time.Time
-	session_window_status     *string
-	clearedFields             map[string]struct{}
-	groups                    map[int64]struct{}
-	removedgroups             map[int64]struct{}
-	clearedgroups             bool
-	proxy                     *int64
-	clearedproxy              bool
-	owner                     *int64
-	clearedowner              bool
-	usage_logs                map[int64]struct{}
-	removedusage_logs         map[int64]struct{}
-	clearedusage_logs         bool
-	done                      bool
-	oldValue                  func(context.Context) (*Account, error)
-	predicates                []predicate.Account
+	op                          Op
+	typ                         string
+	id                          *int64
+	created_at                  *time.Time
+	updated_at                  *time.Time
+	deleted_at                  *time.Time
+	name                        *string
+	account_level               *string
+	notes                       *string
+	platform                    *string
+	_type                       *string
+	credentials                 *map[string]interface{}
+	extra                       *map[string]interface{}
+	share_mode                  *string
+	share_status                *string
+	share_policy_id             *int64
+	addshare_policy_id          *int64
+	concurrency                 *int
+	addconcurrency              *int
+	load_factor                 *int
+	addload_factor              *int
+	load_factor_paid_ceiling    *int
+	addload_factor_paid_ceiling *int
+	priority                    *int
+	addpriority                 *int
+	rate_multiplier             *float64
+	addrate_multiplier          *float64
+	status                      *string
+	error_message               *string
+	last_used_at                *time.Time
+	expires_at                  *time.Time
+	auto_pause_on_expired       *bool
+	schedulable                 *bool
+	rate_limited_at             *time.Time
+	rate_limit_reset_at         *time.Time
+	overload_until              *time.Time
+	temp_unschedulable_until    *time.Time
+	temp_unschedulable_reason   *string
+	session_window_start        *time.Time
+	session_window_end          *time.Time
+	session_window_status       *string
+	clearedFields               map[string]struct{}
+	groups                      map[int64]struct{}
+	removedgroups               map[int64]struct{}
+	clearedgroups               bool
+	proxy                       *int64
+	clearedproxy                bool
+	owner                       *int64
+	clearedowner                bool
+	usage_logs                  map[int64]struct{}
+	removedusage_logs           map[int64]struct{}
+	clearedusage_logs           bool
+	done                        bool
+	oldValue                    func(context.Context) (*Account, error)
+	predicates                  []predicate.Account
 }
 
 var _ ent.Mutation = (*AccountMutation)(nil)
@@ -4182,6 +4184,62 @@ func (m *AccountMutation) ResetLoadFactor() {
 	m.load_factor = nil
 	m.addload_factor = nil
 	delete(m.clearedFields, account.FieldLoadFactor)
+}
+
+// SetLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field.
+func (m *AccountMutation) SetLoadFactorPaidCeiling(i int) {
+	m.load_factor_paid_ceiling = &i
+	m.addload_factor_paid_ceiling = nil
+}
+
+// LoadFactorPaidCeiling returns the value of the "load_factor_paid_ceiling" field in the mutation.
+func (m *AccountMutation) LoadFactorPaidCeiling() (r int, exists bool) {
+	v := m.load_factor_paid_ceiling
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLoadFactorPaidCeiling returns the old "load_factor_paid_ceiling" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldLoadFactorPaidCeiling(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLoadFactorPaidCeiling is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLoadFactorPaidCeiling requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLoadFactorPaidCeiling: %w", err)
+	}
+	return oldValue.LoadFactorPaidCeiling, nil
+}
+
+// AddLoadFactorPaidCeiling adds i to the "load_factor_paid_ceiling" field.
+func (m *AccountMutation) AddLoadFactorPaidCeiling(i int) {
+	if m.addload_factor_paid_ceiling != nil {
+		*m.addload_factor_paid_ceiling += i
+	} else {
+		m.addload_factor_paid_ceiling = &i
+	}
+}
+
+// AddedLoadFactorPaidCeiling returns the value that was added to the "load_factor_paid_ceiling" field in this mutation.
+func (m *AccountMutation) AddedLoadFactorPaidCeiling() (r int, exists bool) {
+	v := m.addload_factor_paid_ceiling
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetLoadFactorPaidCeiling resets all changes to the "load_factor_paid_ceiling" field.
+func (m *AccountMutation) ResetLoadFactorPaidCeiling() {
+	m.load_factor_paid_ceiling = nil
+	m.addload_factor_paid_ceiling = nil
 }
 
 // SetPriority sets the "priority" field.
@@ -5152,7 +5210,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 33)
+	fields := make([]string, 0, 34)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -5203,6 +5261,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.load_factor != nil {
 		fields = append(fields, account.FieldLoadFactor)
+	}
+	if m.load_factor_paid_ceiling != nil {
+		fields = append(fields, account.FieldLoadFactorPaidCeiling)
 	}
 	if m.priority != nil {
 		fields = append(fields, account.FieldPriority)
@@ -5294,6 +5355,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.Concurrency()
 	case account.FieldLoadFactor:
 		return m.LoadFactor()
+	case account.FieldLoadFactorPaidCeiling:
+		return m.LoadFactorPaidCeiling()
 	case account.FieldPriority:
 		return m.Priority()
 	case account.FieldRateMultiplier:
@@ -5369,6 +5432,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldConcurrency(ctx)
 	case account.FieldLoadFactor:
 		return m.OldLoadFactor(ctx)
+	case account.FieldLoadFactorPaidCeiling:
+		return m.OldLoadFactorPaidCeiling(ctx)
 	case account.FieldPriority:
 		return m.OldPriority(ctx)
 	case account.FieldRateMultiplier:
@@ -5529,6 +5594,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLoadFactor(v)
 		return nil
+	case account.FieldLoadFactorPaidCeiling:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLoadFactorPaidCeiling(v)
+		return nil
 	case account.FieldPriority:
 		v, ok := value.(int)
 		if !ok {
@@ -5658,6 +5730,9 @@ func (m *AccountMutation) AddedFields() []string {
 	if m.addload_factor != nil {
 		fields = append(fields, account.FieldLoadFactor)
 	}
+	if m.addload_factor_paid_ceiling != nil {
+		fields = append(fields, account.FieldLoadFactorPaidCeiling)
+	}
 	if m.addpriority != nil {
 		fields = append(fields, account.FieldPriority)
 	}
@@ -5678,6 +5753,8 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedConcurrency()
 	case account.FieldLoadFactor:
 		return m.AddedLoadFactor()
+	case account.FieldLoadFactorPaidCeiling:
+		return m.AddedLoadFactorPaidCeiling()
 	case account.FieldPriority:
 		return m.AddedPriority()
 	case account.FieldRateMultiplier:
@@ -5711,6 +5788,13 @@ func (m *AccountMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddLoadFactor(v)
+		return nil
+	case account.FieldLoadFactorPaidCeiling:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLoadFactorPaidCeiling(v)
 		return nil
 	case account.FieldPriority:
 		v, ok := value.(int)
@@ -5908,6 +5992,9 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldLoadFactor:
 		m.ResetLoadFactor()
+		return nil
+	case account.FieldLoadFactorPaidCeiling:
+		m.ResetLoadFactorPaidCeiling()
 		return nil
 	case account.FieldPriority:
 		m.ResetPriority()
@@ -10169,6 +10256,8 @@ type ChannelMonitorMutation struct {
 	enabled                 *bool
 	interval_seconds        *int
 	addinterval_seconds     *int
+	jitter_seconds          *int
+	addjitter_seconds       *int
 	last_checked_at         *time.Time
 	created_by              *int64
 	addcreated_by           *int64
@@ -10731,6 +10820,62 @@ func (m *ChannelMonitorMutation) ResetIntervalSeconds() {
 	m.addinterval_seconds = nil
 }
 
+// SetJitterSeconds sets the "jitter_seconds" field.
+func (m *ChannelMonitorMutation) SetJitterSeconds(i int) {
+	m.jitter_seconds = &i
+	m.addjitter_seconds = nil
+}
+
+// JitterSeconds returns the value of the "jitter_seconds" field in the mutation.
+func (m *ChannelMonitorMutation) JitterSeconds() (r int, exists bool) {
+	v := m.jitter_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldJitterSeconds returns the old "jitter_seconds" field's value of the ChannelMonitor entity.
+// If the ChannelMonitor object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ChannelMonitorMutation) OldJitterSeconds(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldJitterSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldJitterSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldJitterSeconds: %w", err)
+	}
+	return oldValue.JitterSeconds, nil
+}
+
+// AddJitterSeconds adds i to the "jitter_seconds" field.
+func (m *ChannelMonitorMutation) AddJitterSeconds(i int) {
+	if m.addjitter_seconds != nil {
+		*m.addjitter_seconds += i
+	} else {
+		m.addjitter_seconds = &i
+	}
+}
+
+// AddedJitterSeconds returns the value that was added to the "jitter_seconds" field in this mutation.
+func (m *ChannelMonitorMutation) AddedJitterSeconds() (r int, exists bool) {
+	v := m.addjitter_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetJitterSeconds resets all changes to the "jitter_seconds" field.
+func (m *ChannelMonitorMutation) ResetJitterSeconds() {
+	m.jitter_seconds = nil
+	m.addjitter_seconds = nil
+}
+
 // SetLastCheckedAt sets the "last_checked_at" field.
 func (m *ChannelMonitorMutation) SetLastCheckedAt(t time.Time) {
 	m.last_checked_at = &t
@@ -11188,7 +11333,7 @@ func (m *ChannelMonitorMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ChannelMonitorMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 18)
 	if m.created_at != nil {
 		fields = append(fields, channelmonitor.FieldCreatedAt)
 	}
@@ -11221,6 +11366,9 @@ func (m *ChannelMonitorMutation) Fields() []string {
 	}
 	if m.interval_seconds != nil {
 		fields = append(fields, channelmonitor.FieldIntervalSeconds)
+	}
+	if m.jitter_seconds != nil {
+		fields = append(fields, channelmonitor.FieldJitterSeconds)
 	}
 	if m.last_checked_at != nil {
 		fields = append(fields, channelmonitor.FieldLastCheckedAt)
@@ -11270,6 +11418,8 @@ func (m *ChannelMonitorMutation) Field(name string) (ent.Value, bool) {
 		return m.Enabled()
 	case channelmonitor.FieldIntervalSeconds:
 		return m.IntervalSeconds()
+	case channelmonitor.FieldJitterSeconds:
+		return m.JitterSeconds()
 	case channelmonitor.FieldLastCheckedAt:
 		return m.LastCheckedAt()
 	case channelmonitor.FieldCreatedBy:
@@ -11313,6 +11463,8 @@ func (m *ChannelMonitorMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldEnabled(ctx)
 	case channelmonitor.FieldIntervalSeconds:
 		return m.OldIntervalSeconds(ctx)
+	case channelmonitor.FieldJitterSeconds:
+		return m.OldJitterSeconds(ctx)
 	case channelmonitor.FieldLastCheckedAt:
 		return m.OldLastCheckedAt(ctx)
 	case channelmonitor.FieldCreatedBy:
@@ -11411,6 +11563,13 @@ func (m *ChannelMonitorMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetIntervalSeconds(v)
 		return nil
+	case channelmonitor.FieldJitterSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetJitterSeconds(v)
+		return nil
 	case channelmonitor.FieldLastCheckedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -11464,6 +11623,9 @@ func (m *ChannelMonitorMutation) AddedFields() []string {
 	if m.addinterval_seconds != nil {
 		fields = append(fields, channelmonitor.FieldIntervalSeconds)
 	}
+	if m.addjitter_seconds != nil {
+		fields = append(fields, channelmonitor.FieldJitterSeconds)
+	}
 	if m.addcreated_by != nil {
 		fields = append(fields, channelmonitor.FieldCreatedBy)
 	}
@@ -11477,6 +11639,8 @@ func (m *ChannelMonitorMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case channelmonitor.FieldIntervalSeconds:
 		return m.AddedIntervalSeconds()
+	case channelmonitor.FieldJitterSeconds:
+		return m.AddedJitterSeconds()
 	case channelmonitor.FieldCreatedBy:
 		return m.AddedCreatedBy()
 	}
@@ -11494,6 +11658,13 @@ func (m *ChannelMonitorMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddIntervalSeconds(v)
+		return nil
+	case channelmonitor.FieldJitterSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddJitterSeconds(v)
 		return nil
 	case channelmonitor.FieldCreatedBy:
 		v, ok := value.(int64)
@@ -11588,6 +11759,9 @@ func (m *ChannelMonitorMutation) ResetField(name string) error {
 		return nil
 	case channelmonitor.FieldIntervalSeconds:
 		m.ResetIntervalSeconds()
+		return nil
+	case channelmonitor.FieldJitterSeconds:
+		m.ResetJitterSeconds()
 		return nil
 	case channelmonitor.FieldLastCheckedAt:
 		m.ResetLastCheckedAt()
@@ -29423,6 +29597,8 @@ type ProxyMutation struct {
 	accounts        map[int64]struct{}
 	removedaccounts map[int64]struct{}
 	clearedaccounts bool
+	owner           *int64
+	clearedowner    bool
 	done            bool
 	oldValue        func(context.Context) (*Proxy, error)
 	predicates      []predicate.Proxy
@@ -29909,6 +30085,55 @@ func (m *ProxyMutation) ResetPassword() {
 	delete(m.clearedFields, proxy.FieldPassword)
 }
 
+// SetOwnerUserID sets the "owner_user_id" field.
+func (m *ProxyMutation) SetOwnerUserID(i int64) {
+	m.owner = &i
+}
+
+// OwnerUserID returns the value of the "owner_user_id" field in the mutation.
+func (m *ProxyMutation) OwnerUserID() (r int64, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOwnerUserID returns the old "owner_user_id" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldOwnerUserID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOwnerUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOwnerUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOwnerUserID: %w", err)
+	}
+	return oldValue.OwnerUserID, nil
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (m *ProxyMutation) ClearOwnerUserID() {
+	m.owner = nil
+	m.clearedFields[proxy.FieldOwnerUserID] = struct{}{}
+}
+
+// OwnerUserIDCleared returns if the "owner_user_id" field was cleared in this mutation.
+func (m *ProxyMutation) OwnerUserIDCleared() bool {
+	_, ok := m.clearedFields[proxy.FieldOwnerUserID]
+	return ok
+}
+
+// ResetOwnerUserID resets all changes to the "owner_user_id" field.
+func (m *ProxyMutation) ResetOwnerUserID() {
+	m.owner = nil
+	delete(m.clearedFields, proxy.FieldOwnerUserID)
+}
+
 // SetStatus sets the "status" field.
 func (m *ProxyMutation) SetStatus(s string) {
 	m.status = &s
@@ -30055,6 +30280,46 @@ func (m *ProxyMutation) ResetAccounts() {
 	m.removedaccounts = nil
 }
 
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *ProxyMutation) SetOwnerID(id int64) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *ProxyMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[proxy.FieldOwnerUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *ProxyMutation) OwnerCleared() bool {
+	return m.OwnerUserIDCleared() || m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *ProxyMutation) OwnerID() (id int64, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *ProxyMutation) OwnerIDs() (ids []int64) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *ProxyMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
 // Where appends a list predicates to the ProxyMutation builder.
 func (m *ProxyMutation) Where(ps ...predicate.Proxy) {
 	m.predicates = append(m.predicates, ps...)
@@ -30089,7 +30354,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 12)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -30116,6 +30381,9 @@ func (m *ProxyMutation) Fields() []string {
 	}
 	if m.password != nil {
 		fields = append(fields, proxy.FieldPassword)
+	}
+	if m.owner != nil {
+		fields = append(fields, proxy.FieldOwnerUserID)
 	}
 	if m.status != nil {
 		fields = append(fields, proxy.FieldStatus)
@@ -30149,6 +30417,8 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.Username()
 	case proxy.FieldPassword:
 		return m.Password()
+	case proxy.FieldOwnerUserID:
+		return m.OwnerUserID()
 	case proxy.FieldStatus:
 		return m.Status()
 	case proxy.FieldMaxAccounts:
@@ -30180,6 +30450,8 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldUsername(ctx)
 	case proxy.FieldPassword:
 		return m.OldPassword(ctx)
+	case proxy.FieldOwnerUserID:
+		return m.OldOwnerUserID(ctx)
 	case proxy.FieldStatus:
 		return m.OldStatus(ctx)
 	case proxy.FieldMaxAccounts:
@@ -30255,6 +30527,13 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPassword(v)
+		return nil
+	case proxy.FieldOwnerUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOwnerUserID(v)
 		return nil
 	case proxy.FieldStatus:
 		v, ok := value.(string)
@@ -30336,6 +30615,9 @@ func (m *ProxyMutation) ClearedFields() []string {
 	if m.FieldCleared(proxy.FieldPassword) {
 		fields = append(fields, proxy.FieldPassword)
 	}
+	if m.FieldCleared(proxy.FieldOwnerUserID) {
+		fields = append(fields, proxy.FieldOwnerUserID)
+	}
 	return fields
 }
 
@@ -30358,6 +30640,9 @@ func (m *ProxyMutation) ClearField(name string) error {
 		return nil
 	case proxy.FieldPassword:
 		m.ClearPassword()
+		return nil
+	case proxy.FieldOwnerUserID:
+		m.ClearOwnerUserID()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy nullable field %s", name)
@@ -30394,6 +30679,9 @@ func (m *ProxyMutation) ResetField(name string) error {
 	case proxy.FieldPassword:
 		m.ResetPassword()
 		return nil
+	case proxy.FieldOwnerUserID:
+		m.ResetOwnerUserID()
+		return nil
 	case proxy.FieldStatus:
 		m.ResetStatus()
 		return nil
@@ -30406,9 +30694,12 @@ func (m *ProxyMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ProxyMutation) AddedEdges() []string {
-	edges := make([]string, 0, 1)
+	edges := make([]string, 0, 2)
 	if m.accounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
+	}
+	if m.owner != nil {
+		edges = append(edges, proxy.EdgeOwner)
 	}
 	return edges
 }
@@ -30423,13 +30714,17 @@ func (m *ProxyMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case proxy.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ProxyMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 1)
+	edges := make([]string, 0, 2)
 	if m.removedaccounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
@@ -30452,9 +30747,12 @@ func (m *ProxyMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ProxyMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 1)
+	edges := make([]string, 0, 2)
 	if m.clearedaccounts {
 		edges = append(edges, proxy.EdgeAccounts)
+	}
+	if m.clearedowner {
+		edges = append(edges, proxy.EdgeOwner)
 	}
 	return edges
 }
@@ -30465,6 +30763,8 @@ func (m *ProxyMutation) EdgeCleared(name string) bool {
 	switch name {
 	case proxy.EdgeAccounts:
 		return m.clearedaccounts
+	case proxy.EdgeOwner:
+		return m.clearedowner
 	}
 	return false
 }
@@ -30473,6 +30773,9 @@ func (m *ProxyMutation) EdgeCleared(name string) bool {
 // if that edge is not defined in the schema.
 func (m *ProxyMutation) ClearEdge(name string) error {
 	switch name {
+	case proxy.EdgeOwner:
+		m.ClearOwner()
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy unique edge %s", name)
 }
@@ -30483,6 +30786,9 @@ func (m *ProxyMutation) ResetEdge(name string) error {
 	switch name {
 	case proxy.EdgeAccounts:
 		m.ResetAccounts()
+		return nil
+	case proxy.EdgeOwner:
+		m.ResetOwner()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy edge %s", name)
@@ -36809,54 +37115,56 @@ func (m *ShopDrawCycleMutation) ResetEdge(name string) error {
 // ShopOrderMutation represents an operation that mutates the ShopOrder nodes in the graph.
 type ShopOrderMutation struct {
 	config
-	op                    Op
-	typ                   string
-	id                    *int64
-	created_at            *time.Time
-	updated_at            *time.Time
-	order_no              *string
-	product_name          *string
-	product_cover_url     *string
-	product_description   *string
-	product_type          *string
-	unit_price            *float64
-	addunit_price         *float64
-	quantity              *int
-	addquantity           *int
-	total_amount          *float64
-	addtotal_amount       *float64
-	points_amount         *float64
-	addpoints_amount      *float64
-	payment_method        *string
-	payment_order_id      *int64
-	addpayment_order_id   *int64
-	status                *string
-	delivered_cards       *[]string
-	appenddelivered_cards []string
-	paid_at               *time.Time
-	completed_at          *time.Time
-	cancelled_at          *time.Time
-	failed_reason         *string
-	draw_reward_amount    *float64
-	adddraw_reward_amount *float64
-	draw_cycle_index      *int
-	adddraw_cycle_index   *int
-	clearedFields         map[string]struct{}
-	user                  *int64
-	cleareduser           bool
-	product               *int64
-	clearedproduct        bool
-	draw_cycle            *int64
-	cleareddraw_cycle     bool
-	balance_ledger        map[int64]struct{}
-	removedbalance_ledger map[int64]struct{}
-	clearedbalance_ledger bool
-	card_keys             map[int64]struct{}
-	removedcard_keys      map[int64]struct{}
-	clearedcard_keys      bool
-	done                  bool
-	oldValue              func(context.Context) (*ShopOrder, error)
-	predicates            []predicate.ShopOrder
+	op                             Op
+	typ                            string
+	id                             *int64
+	created_at                     *time.Time
+	updated_at                     *time.Time
+	order_no                       *string
+	product_name                   *string
+	product_cover_url              *string
+	product_description            *string
+	product_type                   *string
+	unit_price                     *float64
+	addunit_price                  *float64
+	quantity                       *int
+	addquantity                    *int
+	total_amount                   *float64
+	addtotal_amount                *float64
+	points_amount                  *float64
+	addpoints_amount               *float64
+	payment_method                 *string
+	payment_order_id               *int64
+	addpayment_order_id            *int64
+	status                         *string
+	delivered_cards                *[]string
+	appenddelivered_cards          []string
+	load_factor_credits_awarded    *int
+	addload_factor_credits_awarded *int
+	paid_at                        *time.Time
+	completed_at                   *time.Time
+	cancelled_at                   *time.Time
+	failed_reason                  *string
+	draw_reward_amount             *float64
+	adddraw_reward_amount          *float64
+	draw_cycle_index               *int
+	adddraw_cycle_index            *int
+	clearedFields                  map[string]struct{}
+	user                           *int64
+	cleareduser                    bool
+	product                        *int64
+	clearedproduct                 bool
+	draw_cycle                     *int64
+	cleareddraw_cycle              bool
+	balance_ledger                 map[int64]struct{}
+	removedbalance_ledger          map[int64]struct{}
+	clearedbalance_ledger          bool
+	card_keys                      map[int64]struct{}
+	removedcard_keys               map[int64]struct{}
+	clearedcard_keys               bool
+	done                           bool
+	oldValue                       func(context.Context) (*ShopOrder, error)
+	predicates                     []predicate.ShopOrder
 }
 
 var _ ent.Mutation = (*ShopOrderMutation)(nil)
@@ -37738,6 +38046,62 @@ func (m *ShopOrderMutation) ResetDeliveredCards() {
 	delete(m.clearedFields, shoporder.FieldDeliveredCards)
 }
 
+// SetLoadFactorCreditsAwarded sets the "load_factor_credits_awarded" field.
+func (m *ShopOrderMutation) SetLoadFactorCreditsAwarded(i int) {
+	m.load_factor_credits_awarded = &i
+	m.addload_factor_credits_awarded = nil
+}
+
+// LoadFactorCreditsAwarded returns the value of the "load_factor_credits_awarded" field in the mutation.
+func (m *ShopOrderMutation) LoadFactorCreditsAwarded() (r int, exists bool) {
+	v := m.load_factor_credits_awarded
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLoadFactorCreditsAwarded returns the old "load_factor_credits_awarded" field's value of the ShopOrder entity.
+// If the ShopOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopOrderMutation) OldLoadFactorCreditsAwarded(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLoadFactorCreditsAwarded is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLoadFactorCreditsAwarded requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLoadFactorCreditsAwarded: %w", err)
+	}
+	return oldValue.LoadFactorCreditsAwarded, nil
+}
+
+// AddLoadFactorCreditsAwarded adds i to the "load_factor_credits_awarded" field.
+func (m *ShopOrderMutation) AddLoadFactorCreditsAwarded(i int) {
+	if m.addload_factor_credits_awarded != nil {
+		*m.addload_factor_credits_awarded += i
+	} else {
+		m.addload_factor_credits_awarded = &i
+	}
+}
+
+// AddedLoadFactorCreditsAwarded returns the value that was added to the "load_factor_credits_awarded" field in this mutation.
+func (m *ShopOrderMutation) AddedLoadFactorCreditsAwarded() (r int, exists bool) {
+	v := m.addload_factor_credits_awarded
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetLoadFactorCreditsAwarded resets all changes to the "load_factor_credits_awarded" field.
+func (m *ShopOrderMutation) ResetLoadFactorCreditsAwarded() {
+	m.load_factor_credits_awarded = nil
+	m.addload_factor_credits_awarded = nil
+}
+
 // SetPaidAt sets the "paid_at" field.
 func (m *ShopOrderMutation) SetPaidAt(t time.Time) {
 	m.paid_at = &t
@@ -38346,7 +38710,7 @@ func (m *ShopOrderMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopOrderMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 25)
 	if m.created_at != nil {
 		fields = append(fields, shoporder.FieldCreatedAt)
 	}
@@ -38397,6 +38761,9 @@ func (m *ShopOrderMutation) Fields() []string {
 	}
 	if m.delivered_cards != nil {
 		fields = append(fields, shoporder.FieldDeliveredCards)
+	}
+	if m.load_factor_credits_awarded != nil {
+		fields = append(fields, shoporder.FieldLoadFactorCreditsAwarded)
 	}
 	if m.paid_at != nil {
 		fields = append(fields, shoporder.FieldPaidAt)
@@ -38461,6 +38828,8 @@ func (m *ShopOrderMutation) Field(name string) (ent.Value, bool) {
 		return m.Status()
 	case shoporder.FieldDeliveredCards:
 		return m.DeliveredCards()
+	case shoporder.FieldLoadFactorCreditsAwarded:
+		return m.LoadFactorCreditsAwarded()
 	case shoporder.FieldPaidAt:
 		return m.PaidAt()
 	case shoporder.FieldCompletedAt:
@@ -38518,6 +38887,8 @@ func (m *ShopOrderMutation) OldField(ctx context.Context, name string) (ent.Valu
 		return m.OldStatus(ctx)
 	case shoporder.FieldDeliveredCards:
 		return m.OldDeliveredCards(ctx)
+	case shoporder.FieldLoadFactorCreditsAwarded:
+		return m.OldLoadFactorCreditsAwarded(ctx)
 	case shoporder.FieldPaidAt:
 		return m.OldPaidAt(ctx)
 	case shoporder.FieldCompletedAt:
@@ -38660,6 +39031,13 @@ func (m *ShopOrderMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetDeliveredCards(v)
 		return nil
+	case shoporder.FieldLoadFactorCreditsAwarded:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLoadFactorCreditsAwarded(v)
+		return nil
 	case shoporder.FieldPaidAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -38732,6 +39110,9 @@ func (m *ShopOrderMutation) AddedFields() []string {
 	if m.addpayment_order_id != nil {
 		fields = append(fields, shoporder.FieldPaymentOrderID)
 	}
+	if m.addload_factor_credits_awarded != nil {
+		fields = append(fields, shoporder.FieldLoadFactorCreditsAwarded)
+	}
 	if m.adddraw_reward_amount != nil {
 		fields = append(fields, shoporder.FieldDrawRewardAmount)
 	}
@@ -38756,6 +39137,8 @@ func (m *ShopOrderMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedPointsAmount()
 	case shoporder.FieldPaymentOrderID:
 		return m.AddedPaymentOrderID()
+	case shoporder.FieldLoadFactorCreditsAwarded:
+		return m.AddedLoadFactorCreditsAwarded()
 	case shoporder.FieldDrawRewardAmount:
 		return m.AddedDrawRewardAmount()
 	case shoporder.FieldDrawCycleIndex:
@@ -38803,6 +39186,13 @@ func (m *ShopOrderMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPaymentOrderID(v)
+		return nil
+	case shoporder.FieldLoadFactorCreditsAwarded:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLoadFactorCreditsAwarded(v)
 		return nil
 	case shoporder.FieldDrawRewardAmount:
 		v, ok := value.(float64)
@@ -38964,6 +39354,9 @@ func (m *ShopOrderMutation) ResetField(name string) error {
 		return nil
 	case shoporder.FieldDeliveredCards:
 		m.ResetDeliveredCards()
+		return nil
+	case shoporder.FieldLoadFactorCreditsAwarded:
+		m.ResetLoadFactorCreditsAwarded()
 		return nil
 	case shoporder.FieldPaidAt:
 		m.ResetPaidAt()
@@ -39157,55 +39550,57 @@ func (m *ShopOrderMutation) ResetEdge(name string) error {
 // ShopProductMutation represents an operation that mutates the ShopProduct nodes in the graph.
 type ShopProductMutation struct {
 	config
-	op                      Op
-	typ                     string
-	id                      *int64
-	created_at              *time.Time
-	updated_at              *time.Time
-	name                    *string
-	cover_url               *string
-	description             *string
-	price                   *float64
-	addprice                *float64
-	original_price          *float64
-	addoriginal_price       *float64
-	enabled                 *bool
-	sort_order              *int
-	addsort_order           *int
-	min_purchase            *int
-	addmin_purchase         *int
-	max_purchase            *int
-	addmax_purchase         *int
-	auto_delivery           *bool
-	product_type            *string
-	balance_only            *bool
-	allow_balance_payment   *bool
-	allow_points_payment    *bool
-	allow_platform_payment  *bool
-	draw_enabled            *bool
-	draw_min_amount         *float64
-	adddraw_min_amount      *float64
-	draw_max_amount         *float64
-	adddraw_max_amount      *float64
-	draw_guarantee_count    *int
-	adddraw_guarantee_count *int
-	draw_return_rate        *float64
-	adddraw_return_rate     *float64
-	clearedFields           map[string]struct{}
-	category                *int64
-	clearedcategory         bool
-	card_keys               map[int64]struct{}
-	removedcard_keys        map[int64]struct{}
-	clearedcard_keys        bool
-	orders                  map[int64]struct{}
-	removedorders           map[int64]struct{}
-	clearedorders           bool
-	draw_cycles             map[int64]struct{}
-	removeddraw_cycles      map[int64]struct{}
-	cleareddraw_cycles      bool
-	done                    bool
-	oldValue                func(context.Context) (*ShopProduct, error)
-	predicates              []predicate.ShopProduct
+	op                              Op
+	typ                             string
+	id                              *int64
+	created_at                      *time.Time
+	updated_at                      *time.Time
+	name                            *string
+	cover_url                       *string
+	description                     *string
+	price                           *float64
+	addprice                        *float64
+	original_price                  *float64
+	addoriginal_price               *float64
+	enabled                         *bool
+	sort_order                      *int
+	addsort_order                   *int
+	min_purchase                    *int
+	addmin_purchase                 *int
+	max_purchase                    *int
+	addmax_purchase                 *int
+	auto_delivery                   *bool
+	product_type                    *string
+	balance_only                    *bool
+	allow_balance_payment           *bool
+	allow_points_payment            *bool
+	allow_platform_payment          *bool
+	draw_enabled                    *bool
+	load_factor_credits_per_unit    *int
+	addload_factor_credits_per_unit *int
+	draw_min_amount                 *float64
+	adddraw_min_amount              *float64
+	draw_max_amount                 *float64
+	adddraw_max_amount              *float64
+	draw_guarantee_count            *int
+	adddraw_guarantee_count         *int
+	draw_return_rate                *float64
+	adddraw_return_rate             *float64
+	clearedFields                   map[string]struct{}
+	category                        *int64
+	clearedcategory                 bool
+	card_keys                       map[int64]struct{}
+	removedcard_keys                map[int64]struct{}
+	clearedcard_keys                bool
+	orders                          map[int64]struct{}
+	removedorders                   map[int64]struct{}
+	clearedorders                   bool
+	draw_cycles                     map[int64]struct{}
+	removeddraw_cycles              map[int64]struct{}
+	cleareddraw_cycles              bool
+	done                            bool
+	oldValue                        func(context.Context) (*ShopProduct, error)
+	predicates                      []predicate.ShopProduct
 }
 
 var _ ent.Mutation = (*ShopProductMutation)(nil)
@@ -40143,6 +40538,62 @@ func (m *ShopProductMutation) ResetDrawEnabled() {
 	m.draw_enabled = nil
 }
 
+// SetLoadFactorCreditsPerUnit sets the "load_factor_credits_per_unit" field.
+func (m *ShopProductMutation) SetLoadFactorCreditsPerUnit(i int) {
+	m.load_factor_credits_per_unit = &i
+	m.addload_factor_credits_per_unit = nil
+}
+
+// LoadFactorCreditsPerUnit returns the value of the "load_factor_credits_per_unit" field in the mutation.
+func (m *ShopProductMutation) LoadFactorCreditsPerUnit() (r int, exists bool) {
+	v := m.load_factor_credits_per_unit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLoadFactorCreditsPerUnit returns the old "load_factor_credits_per_unit" field's value of the ShopProduct entity.
+// If the ShopProduct object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShopProductMutation) OldLoadFactorCreditsPerUnit(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLoadFactorCreditsPerUnit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLoadFactorCreditsPerUnit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLoadFactorCreditsPerUnit: %w", err)
+	}
+	return oldValue.LoadFactorCreditsPerUnit, nil
+}
+
+// AddLoadFactorCreditsPerUnit adds i to the "load_factor_credits_per_unit" field.
+func (m *ShopProductMutation) AddLoadFactorCreditsPerUnit(i int) {
+	if m.addload_factor_credits_per_unit != nil {
+		*m.addload_factor_credits_per_unit += i
+	} else {
+		m.addload_factor_credits_per_unit = &i
+	}
+}
+
+// AddedLoadFactorCreditsPerUnit returns the value that was added to the "load_factor_credits_per_unit" field in this mutation.
+func (m *ShopProductMutation) AddedLoadFactorCreditsPerUnit() (r int, exists bool) {
+	v := m.addload_factor_credits_per_unit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetLoadFactorCreditsPerUnit resets all changes to the "load_factor_credits_per_unit" field.
+func (m *ShopProductMutation) ResetLoadFactorCreditsPerUnit() {
+	m.load_factor_credits_per_unit = nil
+	m.addload_factor_credits_per_unit = nil
+}
+
 // SetDrawMinAmount sets the "draw_min_amount" field.
 func (m *ShopProductMutation) SetDrawMinAmount(f float64) {
 	m.draw_min_amount = &f
@@ -40590,7 +41041,7 @@ func (m *ShopProductMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ShopProductMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 24)
 	if m.created_at != nil {
 		fields = append(fields, shopproduct.FieldCreatedAt)
 	}
@@ -40647,6 +41098,9 @@ func (m *ShopProductMutation) Fields() []string {
 	}
 	if m.draw_enabled != nil {
 		fields = append(fields, shopproduct.FieldDrawEnabled)
+	}
+	if m.load_factor_credits_per_unit != nil {
+		fields = append(fields, shopproduct.FieldLoadFactorCreditsPerUnit)
 	}
 	if m.draw_min_amount != nil {
 		fields = append(fields, shopproduct.FieldDrawMinAmount)
@@ -40706,6 +41160,8 @@ func (m *ShopProductMutation) Field(name string) (ent.Value, bool) {
 		return m.AllowPlatformPayment()
 	case shopproduct.FieldDrawEnabled:
 		return m.DrawEnabled()
+	case shopproduct.FieldLoadFactorCreditsPerUnit:
+		return m.LoadFactorCreditsPerUnit()
 	case shopproduct.FieldDrawMinAmount:
 		return m.DrawMinAmount()
 	case shopproduct.FieldDrawMaxAmount:
@@ -40761,6 +41217,8 @@ func (m *ShopProductMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldAllowPlatformPayment(ctx)
 	case shopproduct.FieldDrawEnabled:
 		return m.OldDrawEnabled(ctx)
+	case shopproduct.FieldLoadFactorCreditsPerUnit:
+		return m.OldLoadFactorCreditsPerUnit(ctx)
 	case shopproduct.FieldDrawMinAmount:
 		return m.OldDrawMinAmount(ctx)
 	case shopproduct.FieldDrawMaxAmount:
@@ -40911,6 +41369,13 @@ func (m *ShopProductMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetDrawEnabled(v)
 		return nil
+	case shopproduct.FieldLoadFactorCreditsPerUnit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLoadFactorCreditsPerUnit(v)
+		return nil
 	case shopproduct.FieldDrawMinAmount:
 		v, ok := value.(float64)
 		if !ok {
@@ -40962,6 +41427,9 @@ func (m *ShopProductMutation) AddedFields() []string {
 	if m.addmax_purchase != nil {
 		fields = append(fields, shopproduct.FieldMaxPurchase)
 	}
+	if m.addload_factor_credits_per_unit != nil {
+		fields = append(fields, shopproduct.FieldLoadFactorCreditsPerUnit)
+	}
 	if m.adddraw_min_amount != nil {
 		fields = append(fields, shopproduct.FieldDrawMinAmount)
 	}
@@ -40992,6 +41460,8 @@ func (m *ShopProductMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedMinPurchase()
 	case shopproduct.FieldMaxPurchase:
 		return m.AddedMaxPurchase()
+	case shopproduct.FieldLoadFactorCreditsPerUnit:
+		return m.AddedLoadFactorCreditsPerUnit()
 	case shopproduct.FieldDrawMinAmount:
 		return m.AddedDrawMinAmount()
 	case shopproduct.FieldDrawMaxAmount:
@@ -41043,6 +41513,13 @@ func (m *ShopProductMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddMaxPurchase(v)
+		return nil
+	case shopproduct.FieldLoadFactorCreditsPerUnit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLoadFactorCreditsPerUnit(v)
 		return nil
 	case shopproduct.FieldDrawMinAmount:
 		v, ok := value.(float64)
@@ -41182,6 +41659,9 @@ func (m *ShopProductMutation) ResetField(name string) error {
 		return nil
 	case shopproduct.FieldDrawEnabled:
 		m.ResetDrawEnabled()
+		return nil
+	case shopproduct.FieldLoadFactorCreditsPerUnit:
+		m.ResetLoadFactorCreditsPerUnit()
 		return nil
 	case shopproduct.FieldDrawMinAmount:
 		m.ResetDrawMinAmount()
@@ -51016,101 +51496,108 @@ func (m *UsageLogMutation) ResetEdge(name string) error {
 // UserMutation represents an operation that mutates the User nodes in the graph.
 type UserMutation struct {
 	config
-	op                              Op
-	typ                             string
-	id                              *int64
-	created_at                      *time.Time
-	updated_at                      *time.Time
-	deleted_at                      *time.Time
-	email                           *string
-	password_hash                   *string
-	role                            *string
-	balance                         *float64
-	addbalance                      *float64
-	points_balance                  *float64
-	addpoints_balance               *float64
-	prefer_points_billing           *bool
-	concurrency                     *int
-	addconcurrency                  *int
-	status                          *string
-	username                        *string
-	notes                           *string
-	totp_secret_encrypted           *string
-	totp_enabled                    *bool
-	totp_enabled_at                 *time.Time
-	signup_source                   *string
-	last_login_at                   *time.Time
-	last_active_at                  *time.Time
-	balance_notify_enabled          *bool
-	balance_notify_threshold_type   *string
-	balance_notify_threshold        *float64
-	addbalance_notify_threshold     *float64
-	balance_notify_extra_emails     *string
-	total_recharged                 *float64
-	addtotal_recharged              *float64
-	rpm_limit                       *int
-	addrpm_limit                    *int
-	clearedFields                   map[string]struct{}
-	api_keys                        map[int64]struct{}
-	removedapi_keys                 map[int64]struct{}
-	clearedapi_keys                 bool
-	redeem_codes                    map[int64]struct{}
-	removedredeem_codes             map[int64]struct{}
-	clearedredeem_codes             bool
-	subscriptions                   map[int64]struct{}
-	removedsubscriptions            map[int64]struct{}
-	clearedsubscriptions            bool
-	assigned_subscriptions          map[int64]struct{}
-	removedassigned_subscriptions   map[int64]struct{}
-	clearedassigned_subscriptions   bool
-	announcement_reads              map[int64]struct{}
-	removedannouncement_reads       map[int64]struct{}
-	clearedannouncement_reads       bool
-	support_threads                 map[int64]struct{}
-	removedsupport_threads          map[int64]struct{}
-	clearedsupport_threads          bool
-	assigned_support_threads        map[int64]struct{}
-	removedassigned_support_threads map[int64]struct{}
-	clearedassigned_support_threads bool
-	sent_support_messages           map[int64]struct{}
-	removedsent_support_messages    map[int64]struct{}
-	clearedsent_support_messages    bool
-	allowed_groups                  map[int64]struct{}
-	removedallowed_groups           map[int64]struct{}
-	clearedallowed_groups           bool
-	usage_logs                      map[int64]struct{}
-	removedusage_logs               map[int64]struct{}
-	clearedusage_logs               bool
-	attribute_values                map[int64]struct{}
-	removedattribute_values         map[int64]struct{}
-	clearedattribute_values         bool
-	promo_code_usages               map[int64]struct{}
-	removedpromo_code_usages        map[int64]struct{}
-	clearedpromo_code_usages        bool
-	payment_orders                  map[int64]struct{}
-	removedpayment_orders           map[int64]struct{}
-	clearedpayment_orders           bool
-	shop_orders                     map[int64]struct{}
-	removedshop_orders              map[int64]struct{}
-	clearedshop_orders              bool
-	shop_draw_cycles                map[int64]struct{}
-	removedshop_draw_cycles         map[int64]struct{}
-	clearedshop_draw_cycles         bool
-	shop_balance_ledger             map[int64]struct{}
-	removedshop_balance_ledger      map[int64]struct{}
-	clearedshop_balance_ledger      bool
-	owned_accounts                  map[int64]struct{}
-	removedowned_accounts           map[int64]struct{}
-	clearedowned_accounts           bool
-	auth_identities                 map[int64]struct{}
-	removedauth_identities          map[int64]struct{}
-	clearedauth_identities          bool
-	pending_auth_sessions           map[int64]struct{}
-	removedpending_auth_sessions    map[int64]struct{}
-	clearedpending_auth_sessions    bool
-	done                            bool
-	oldValue                        func(context.Context) (*User, error)
-	predicates                      []predicate.User
+	op                                Op
+	typ                               string
+	id                                *int64
+	created_at                        *time.Time
+	updated_at                        *time.Time
+	deleted_at                        *time.Time
+	email                             *string
+	password_hash                     *string
+	role                              *string
+	balance                           *float64
+	addbalance                        *float64
+	points_balance                    *float64
+	addpoints_balance                 *float64
+	load_factor_credits_balance       *int
+	addload_factor_credits_balance    *int
+	load_factor_credits_used_total    *int
+	addload_factor_credits_used_total *int
+	prefer_points_billing             *bool
+	concurrency                       *int
+	addconcurrency                    *int
+	status                            *string
+	username                          *string
+	notes                             *string
+	totp_secret_encrypted             *string
+	totp_enabled                      *bool
+	totp_enabled_at                   *time.Time
+	signup_source                     *string
+	last_login_at                     *time.Time
+	last_active_at                    *time.Time
+	balance_notify_enabled            *bool
+	balance_notify_threshold_type     *string
+	balance_notify_threshold          *float64
+	addbalance_notify_threshold       *float64
+	balance_notify_extra_emails       *string
+	total_recharged                   *float64
+	addtotal_recharged                *float64
+	rpm_limit                         *int
+	addrpm_limit                      *int
+	clearedFields                     map[string]struct{}
+	api_keys                          map[int64]struct{}
+	removedapi_keys                   map[int64]struct{}
+	clearedapi_keys                   bool
+	redeem_codes                      map[int64]struct{}
+	removedredeem_codes               map[int64]struct{}
+	clearedredeem_codes               bool
+	subscriptions                     map[int64]struct{}
+	removedsubscriptions              map[int64]struct{}
+	clearedsubscriptions              bool
+	assigned_subscriptions            map[int64]struct{}
+	removedassigned_subscriptions     map[int64]struct{}
+	clearedassigned_subscriptions     bool
+	announcement_reads                map[int64]struct{}
+	removedannouncement_reads         map[int64]struct{}
+	clearedannouncement_reads         bool
+	support_threads                   map[int64]struct{}
+	removedsupport_threads            map[int64]struct{}
+	clearedsupport_threads            bool
+	assigned_support_threads          map[int64]struct{}
+	removedassigned_support_threads   map[int64]struct{}
+	clearedassigned_support_threads   bool
+	sent_support_messages             map[int64]struct{}
+	removedsent_support_messages      map[int64]struct{}
+	clearedsent_support_messages      bool
+	allowed_groups                    map[int64]struct{}
+	removedallowed_groups             map[int64]struct{}
+	clearedallowed_groups             bool
+	usage_logs                        map[int64]struct{}
+	removedusage_logs                 map[int64]struct{}
+	clearedusage_logs                 bool
+	attribute_values                  map[int64]struct{}
+	removedattribute_values           map[int64]struct{}
+	clearedattribute_values           bool
+	promo_code_usages                 map[int64]struct{}
+	removedpromo_code_usages          map[int64]struct{}
+	clearedpromo_code_usages          bool
+	payment_orders                    map[int64]struct{}
+	removedpayment_orders             map[int64]struct{}
+	clearedpayment_orders             bool
+	shop_orders                       map[int64]struct{}
+	removedshop_orders                map[int64]struct{}
+	clearedshop_orders                bool
+	shop_draw_cycles                  map[int64]struct{}
+	removedshop_draw_cycles           map[int64]struct{}
+	clearedshop_draw_cycles           bool
+	shop_balance_ledger               map[int64]struct{}
+	removedshop_balance_ledger        map[int64]struct{}
+	clearedshop_balance_ledger        bool
+	owned_accounts                    map[int64]struct{}
+	removedowned_accounts             map[int64]struct{}
+	clearedowned_accounts             bool
+	owned_proxies                     map[int64]struct{}
+	removedowned_proxies              map[int64]struct{}
+	clearedowned_proxies              bool
+	auth_identities                   map[int64]struct{}
+	removedauth_identities            map[int64]struct{}
+	clearedauth_identities            bool
+	pending_auth_sessions             map[int64]struct{}
+	removedpending_auth_sessions      map[int64]struct{}
+	clearedpending_auth_sessions      bool
+	done                              bool
+	oldValue                          func(context.Context) (*User, error)
+	predicates                        []predicate.User
 }
 
 var _ ent.Mutation = (*UserMutation)(nil)
@@ -51550,6 +52037,118 @@ func (m *UserMutation) AddedPointsBalance() (r float64, exists bool) {
 func (m *UserMutation) ResetPointsBalance() {
 	m.points_balance = nil
 	m.addpoints_balance = nil
+}
+
+// SetLoadFactorCreditsBalance sets the "load_factor_credits_balance" field.
+func (m *UserMutation) SetLoadFactorCreditsBalance(i int) {
+	m.load_factor_credits_balance = &i
+	m.addload_factor_credits_balance = nil
+}
+
+// LoadFactorCreditsBalance returns the value of the "load_factor_credits_balance" field in the mutation.
+func (m *UserMutation) LoadFactorCreditsBalance() (r int, exists bool) {
+	v := m.load_factor_credits_balance
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLoadFactorCreditsBalance returns the old "load_factor_credits_balance" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldLoadFactorCreditsBalance(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLoadFactorCreditsBalance is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLoadFactorCreditsBalance requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLoadFactorCreditsBalance: %w", err)
+	}
+	return oldValue.LoadFactorCreditsBalance, nil
+}
+
+// AddLoadFactorCreditsBalance adds i to the "load_factor_credits_balance" field.
+func (m *UserMutation) AddLoadFactorCreditsBalance(i int) {
+	if m.addload_factor_credits_balance != nil {
+		*m.addload_factor_credits_balance += i
+	} else {
+		m.addload_factor_credits_balance = &i
+	}
+}
+
+// AddedLoadFactorCreditsBalance returns the value that was added to the "load_factor_credits_balance" field in this mutation.
+func (m *UserMutation) AddedLoadFactorCreditsBalance() (r int, exists bool) {
+	v := m.addload_factor_credits_balance
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetLoadFactorCreditsBalance resets all changes to the "load_factor_credits_balance" field.
+func (m *UserMutation) ResetLoadFactorCreditsBalance() {
+	m.load_factor_credits_balance = nil
+	m.addload_factor_credits_balance = nil
+}
+
+// SetLoadFactorCreditsUsedTotal sets the "load_factor_credits_used_total" field.
+func (m *UserMutation) SetLoadFactorCreditsUsedTotal(i int) {
+	m.load_factor_credits_used_total = &i
+	m.addload_factor_credits_used_total = nil
+}
+
+// LoadFactorCreditsUsedTotal returns the value of the "load_factor_credits_used_total" field in the mutation.
+func (m *UserMutation) LoadFactorCreditsUsedTotal() (r int, exists bool) {
+	v := m.load_factor_credits_used_total
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLoadFactorCreditsUsedTotal returns the old "load_factor_credits_used_total" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldLoadFactorCreditsUsedTotal(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLoadFactorCreditsUsedTotal is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLoadFactorCreditsUsedTotal requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLoadFactorCreditsUsedTotal: %w", err)
+	}
+	return oldValue.LoadFactorCreditsUsedTotal, nil
+}
+
+// AddLoadFactorCreditsUsedTotal adds i to the "load_factor_credits_used_total" field.
+func (m *UserMutation) AddLoadFactorCreditsUsedTotal(i int) {
+	if m.addload_factor_credits_used_total != nil {
+		*m.addload_factor_credits_used_total += i
+	} else {
+		m.addload_factor_credits_used_total = &i
+	}
+}
+
+// AddedLoadFactorCreditsUsedTotal returns the value that was added to the "load_factor_credits_used_total" field in this mutation.
+func (m *UserMutation) AddedLoadFactorCreditsUsedTotal() (r int, exists bool) {
+	v := m.addload_factor_credits_used_total
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetLoadFactorCreditsUsedTotal resets all changes to the "load_factor_credits_used_total" field.
+func (m *UserMutation) ResetLoadFactorCreditsUsedTotal() {
+	m.load_factor_credits_used_total = nil
+	m.addload_factor_credits_used_total = nil
 }
 
 // SetPreferPointsBilling sets the "prefer_points_billing" field.
@@ -53228,6 +53827,60 @@ func (m *UserMutation) ResetOwnedAccounts() {
 	m.removedowned_accounts = nil
 }
 
+// AddOwnedProxyIDs adds the "owned_proxies" edge to the Proxy entity by ids.
+func (m *UserMutation) AddOwnedProxyIDs(ids ...int64) {
+	if m.owned_proxies == nil {
+		m.owned_proxies = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.owned_proxies[ids[i]] = struct{}{}
+	}
+}
+
+// ClearOwnedProxies clears the "owned_proxies" edge to the Proxy entity.
+func (m *UserMutation) ClearOwnedProxies() {
+	m.clearedowned_proxies = true
+}
+
+// OwnedProxiesCleared reports if the "owned_proxies" edge to the Proxy entity was cleared.
+func (m *UserMutation) OwnedProxiesCleared() bool {
+	return m.clearedowned_proxies
+}
+
+// RemoveOwnedProxyIDs removes the "owned_proxies" edge to the Proxy entity by IDs.
+func (m *UserMutation) RemoveOwnedProxyIDs(ids ...int64) {
+	if m.removedowned_proxies == nil {
+		m.removedowned_proxies = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.owned_proxies, ids[i])
+		m.removedowned_proxies[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedOwnedProxies returns the removed IDs of the "owned_proxies" edge to the Proxy entity.
+func (m *UserMutation) RemovedOwnedProxiesIDs() (ids []int64) {
+	for id := range m.removedowned_proxies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// OwnedProxiesIDs returns the "owned_proxies" edge IDs in the mutation.
+func (m *UserMutation) OwnedProxiesIDs() (ids []int64) {
+	for id := range m.owned_proxies {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetOwnedProxies resets all changes to the "owned_proxies" edge.
+func (m *UserMutation) ResetOwnedProxies() {
+	m.owned_proxies = nil
+	m.clearedowned_proxies = false
+	m.removedowned_proxies = nil
+}
+
 // AddAuthIdentityIDs adds the "auth_identities" edge to the AuthIdentity entity by ids.
 func (m *UserMutation) AddAuthIdentityIDs(ids ...int64) {
 	if m.auth_identities == nil {
@@ -53370,7 +54023,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 25)
+	fields := make([]string, 0, 27)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -53394,6 +54047,12 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.points_balance != nil {
 		fields = append(fields, user.FieldPointsBalance)
+	}
+	if m.load_factor_credits_balance != nil {
+		fields = append(fields, user.FieldLoadFactorCreditsBalance)
+	}
+	if m.load_factor_credits_used_total != nil {
+		fields = append(fields, user.FieldLoadFactorCreditsUsedTotal)
 	}
 	if m.prefer_points_billing != nil {
 		fields = append(fields, user.FieldPreferPointsBilling)
@@ -53470,6 +54129,10 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.Balance()
 	case user.FieldPointsBalance:
 		return m.PointsBalance()
+	case user.FieldLoadFactorCreditsBalance:
+		return m.LoadFactorCreditsBalance()
+	case user.FieldLoadFactorCreditsUsedTotal:
+		return m.LoadFactorCreditsUsedTotal()
 	case user.FieldPreferPointsBilling:
 		return m.PreferPointsBilling()
 	case user.FieldConcurrency:
@@ -53529,6 +54192,10 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldBalance(ctx)
 	case user.FieldPointsBalance:
 		return m.OldPointsBalance(ctx)
+	case user.FieldLoadFactorCreditsBalance:
+		return m.OldLoadFactorCreditsBalance(ctx)
+	case user.FieldLoadFactorCreditsUsedTotal:
+		return m.OldLoadFactorCreditsUsedTotal(ctx)
 	case user.FieldPreferPointsBilling:
 		return m.OldPreferPointsBilling(ctx)
 	case user.FieldConcurrency:
@@ -53627,6 +54294,20 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPointsBalance(v)
+		return nil
+	case user.FieldLoadFactorCreditsBalance:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLoadFactorCreditsBalance(v)
+		return nil
+	case user.FieldLoadFactorCreditsUsedTotal:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLoadFactorCreditsUsedTotal(v)
 		return nil
 	case user.FieldPreferPointsBilling:
 		v, ok := value.(bool)
@@ -53761,6 +54442,12 @@ func (m *UserMutation) AddedFields() []string {
 	if m.addpoints_balance != nil {
 		fields = append(fields, user.FieldPointsBalance)
 	}
+	if m.addload_factor_credits_balance != nil {
+		fields = append(fields, user.FieldLoadFactorCreditsBalance)
+	}
+	if m.addload_factor_credits_used_total != nil {
+		fields = append(fields, user.FieldLoadFactorCreditsUsedTotal)
+	}
 	if m.addconcurrency != nil {
 		fields = append(fields, user.FieldConcurrency)
 	}
@@ -53785,6 +54472,10 @@ func (m *UserMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedBalance()
 	case user.FieldPointsBalance:
 		return m.AddedPointsBalance()
+	case user.FieldLoadFactorCreditsBalance:
+		return m.AddedLoadFactorCreditsBalance()
+	case user.FieldLoadFactorCreditsUsedTotal:
+		return m.AddedLoadFactorCreditsUsedTotal()
 	case user.FieldConcurrency:
 		return m.AddedConcurrency()
 	case user.FieldBalanceNotifyThreshold:
@@ -53815,6 +54506,20 @@ func (m *UserMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPointsBalance(v)
+		return nil
+	case user.FieldLoadFactorCreditsBalance:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLoadFactorCreditsBalance(v)
+		return nil
+	case user.FieldLoadFactorCreditsUsedTotal:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLoadFactorCreditsUsedTotal(v)
 		return nil
 	case user.FieldConcurrency:
 		v, ok := value.(int)
@@ -53934,6 +54639,12 @@ func (m *UserMutation) ResetField(name string) error {
 	case user.FieldPointsBalance:
 		m.ResetPointsBalance()
 		return nil
+	case user.FieldLoadFactorCreditsBalance:
+		m.ResetLoadFactorCreditsBalance()
+		return nil
+	case user.FieldLoadFactorCreditsUsedTotal:
+		m.ResetLoadFactorCreditsUsedTotal()
+		return nil
 	case user.FieldPreferPointsBilling:
 		m.ResetPreferPointsBilling()
 		return nil
@@ -53991,7 +54702,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 19)
+	edges := make([]string, 0, 20)
 	if m.api_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -54042,6 +54753,9 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.owned_accounts != nil {
 		edges = append(edges, user.EdgeOwnedAccounts)
+	}
+	if m.owned_proxies != nil {
+		edges = append(edges, user.EdgeOwnedProxies)
 	}
 	if m.auth_identities != nil {
 		edges = append(edges, user.EdgeAuthIdentities)
@@ -54158,6 +54872,12 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeOwnedProxies:
+		ids := make([]ent.Value, 0, len(m.owned_proxies))
+		for id := range m.owned_proxies {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeAuthIdentities:
 		ids := make([]ent.Value, 0, len(m.auth_identities))
 		for id := range m.auth_identities {
@@ -54176,7 +54896,7 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 19)
+	edges := make([]string, 0, 20)
 	if m.removedapi_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -54227,6 +54947,9 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedowned_accounts != nil {
 		edges = append(edges, user.EdgeOwnedAccounts)
+	}
+	if m.removedowned_proxies != nil {
+		edges = append(edges, user.EdgeOwnedProxies)
 	}
 	if m.removedauth_identities != nil {
 		edges = append(edges, user.EdgeAuthIdentities)
@@ -54343,6 +55066,12 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeOwnedProxies:
+		ids := make([]ent.Value, 0, len(m.removedowned_proxies))
+		for id := range m.removedowned_proxies {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeAuthIdentities:
 		ids := make([]ent.Value, 0, len(m.removedauth_identities))
 		for id := range m.removedauth_identities {
@@ -54361,7 +55090,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 19)
+	edges := make([]string, 0, 20)
 	if m.clearedapi_keys {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -54413,6 +55142,9 @@ func (m *UserMutation) ClearedEdges() []string {
 	if m.clearedowned_accounts {
 		edges = append(edges, user.EdgeOwnedAccounts)
 	}
+	if m.clearedowned_proxies {
+		edges = append(edges, user.EdgeOwnedProxies)
+	}
 	if m.clearedauth_identities {
 		edges = append(edges, user.EdgeAuthIdentities)
 	}
@@ -54460,6 +55192,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedshop_balance_ledger
 	case user.EdgeOwnedAccounts:
 		return m.clearedowned_accounts
+	case user.EdgeOwnedProxies:
+		return m.clearedowned_proxies
 	case user.EdgeAuthIdentities:
 		return m.clearedauth_identities
 	case user.EdgePendingAuthSessions:
@@ -54530,6 +55264,9 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeOwnedAccounts:
 		m.ResetOwnedAccounts()
+		return nil
+	case user.EdgeOwnedProxies:
+		m.ResetOwnedProxies()
 		return nil
 	case user.EdgeAuthIdentities:
 		m.ResetAuthIdentities()

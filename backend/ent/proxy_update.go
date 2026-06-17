@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 )
 
 // ProxyUpdate is the builder for updating Proxy entities.
@@ -158,6 +159,26 @@ func (_u *ProxyUpdate) ClearPassword() *ProxyUpdate {
 	return _u
 }
 
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *ProxyUpdate) SetOwnerUserID(v int64) *ProxyUpdate {
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *ProxyUpdate) SetNillableOwnerUserID(v *int64) *ProxyUpdate {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *ProxyUpdate) ClearOwnerUserID() *ProxyUpdate {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *ProxyUpdate) SetStatus(v string) *ProxyUpdate {
 	_u.mutation.SetStatus(v)
@@ -208,6 +229,25 @@ func (_u *ProxyUpdate) AddAccounts(v ...*Account) *ProxyUpdate {
 	return _u.AddAccountIDs(ids...)
 }
 
+// SetOwnerID sets the "owner" edge to the User entity by ID.
+func (_u *ProxyUpdate) SetOwnerID(id int64) *ProxyUpdate {
+	_u.mutation.SetOwnerID(id)
+	return _u
+}
+
+// SetNillableOwnerID sets the "owner" edge to the User entity by ID if the given value is not nil.
+func (_u *ProxyUpdate) SetNillableOwnerID(id *int64) *ProxyUpdate {
+	if id != nil {
+		_u = _u.SetOwnerID(*id)
+	}
+	return _u
+}
+
+// SetOwner sets the "owner" edge to the User entity.
+func (_u *ProxyUpdate) SetOwner(v *User) *ProxyUpdate {
+	return _u.SetOwnerID(v.ID)
+}
+
 // Mutation returns the ProxyMutation object of the builder.
 func (_u *ProxyUpdate) Mutation() *ProxyMutation {
 	return _u.mutation
@@ -232,6 +272,12 @@ func (_u *ProxyUpdate) RemoveAccounts(v ...*Account) *ProxyUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAccountIDs(ids...)
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (_u *ProxyUpdate) ClearOwner() *ProxyUpdate {
+	_u.mutation.ClearOwner()
+	return _u
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -413,6 +459,35 @@ func (_u *ProxyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.OwnerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   proxy.OwnerTable,
+			Columns: []string{proxy.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   proxy.OwnerTable,
+			Columns: []string{proxy.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{proxy.Label}
@@ -562,6 +637,26 @@ func (_u *ProxyUpdateOne) ClearPassword() *ProxyUpdateOne {
 	return _u
 }
 
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *ProxyUpdateOne) SetOwnerUserID(v int64) *ProxyUpdateOne {
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillableOwnerUserID(v *int64) *ProxyUpdateOne {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *ProxyUpdateOne) ClearOwnerUserID() *ProxyUpdateOne {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *ProxyUpdateOne) SetStatus(v string) *ProxyUpdateOne {
 	_u.mutation.SetStatus(v)
@@ -612,6 +707,25 @@ func (_u *ProxyUpdateOne) AddAccounts(v ...*Account) *ProxyUpdateOne {
 	return _u.AddAccountIDs(ids...)
 }
 
+// SetOwnerID sets the "owner" edge to the User entity by ID.
+func (_u *ProxyUpdateOne) SetOwnerID(id int64) *ProxyUpdateOne {
+	_u.mutation.SetOwnerID(id)
+	return _u
+}
+
+// SetNillableOwnerID sets the "owner" edge to the User entity by ID if the given value is not nil.
+func (_u *ProxyUpdateOne) SetNillableOwnerID(id *int64) *ProxyUpdateOne {
+	if id != nil {
+		_u = _u.SetOwnerID(*id)
+	}
+	return _u
+}
+
+// SetOwner sets the "owner" edge to the User entity.
+func (_u *ProxyUpdateOne) SetOwner(v *User) *ProxyUpdateOne {
+	return _u.SetOwnerID(v.ID)
+}
+
 // Mutation returns the ProxyMutation object of the builder.
 func (_u *ProxyUpdateOne) Mutation() *ProxyMutation {
 	return _u.mutation
@@ -636,6 +750,12 @@ func (_u *ProxyUpdateOne) RemoveAccounts(v ...*Account) *ProxyUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAccountIDs(ids...)
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (_u *ProxyUpdateOne) ClearOwner() *ProxyUpdateOne {
+	_u.mutation.ClearOwner()
+	return _u
 }
 
 // Where appends a list predicates to the ProxyUpdate builder.
@@ -840,6 +960,35 @@ func (_u *ProxyUpdateOne) sqlSave(ctx context.Context) (_node *Proxy, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.OwnerCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   proxy.OwnerTable,
+			Columns: []string{proxy.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.OwnerIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   proxy.OwnerTable,
+			Columns: []string{proxy.OwnerColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

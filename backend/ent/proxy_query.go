@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/user"
 )
 
 // ProxyQuery is the builder for querying Proxy entities.
@@ -26,6 +27,7 @@ type ProxyQuery struct {
 	inters       []Interceptor
 	predicates   []predicate.Proxy
 	withAccounts *AccountQuery
+	withOwner    *UserQuery
 	modifiers    []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
@@ -78,6 +80,28 @@ func (_q *ProxyQuery) QueryAccounts() *AccountQuery {
 			sqlgraph.From(proxy.Table, proxy.FieldID, selector),
 			sqlgraph.To(account.Table, account.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, true, proxy.AccountsTable, proxy.AccountsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryOwner chains the current query on the "owner" edge.
+func (_q *ProxyQuery) QueryOwner() *UserQuery {
+	query := (&UserClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(proxy.Table, proxy.FieldID, selector),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, proxy.OwnerTable, proxy.OwnerColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -278,6 +302,7 @@ func (_q *ProxyQuery) Clone() *ProxyQuery {
 		inters:       append([]Interceptor{}, _q.inters...),
 		predicates:   append([]predicate.Proxy{}, _q.predicates...),
 		withAccounts: _q.withAccounts.Clone(),
+		withOwner:    _q.withOwner.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -292,6 +317,17 @@ func (_q *ProxyQuery) WithAccounts(opts ...func(*AccountQuery)) *ProxyQuery {
 		opt(query)
 	}
 	_q.withAccounts = query
+	return _q
+}
+
+// WithOwner tells the query-builder to eager-load the nodes that are connected to
+// the "owner" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *ProxyQuery) WithOwner(opts ...func(*UserQuery)) *ProxyQuery {
+	query := (&UserClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withOwner = query
 	return _q
 }
 
@@ -373,8 +409,9 @@ func (_q *ProxyQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Proxy,
 	var (
 		nodes       = []*Proxy{}
 		_spec       = _q.querySpec()
-		loadedTypes = [1]bool{
+		loadedTypes = [2]bool{
 			_q.withAccounts != nil,
+			_q.withOwner != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -402,6 +439,12 @@ func (_q *ProxyQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Proxy,
 		if err := _q.loadAccounts(ctx, query, nodes,
 			func(n *Proxy) { n.Edges.Accounts = []*Account{} },
 			func(n *Proxy, e *Account) { n.Edges.Accounts = append(n.Edges.Accounts, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withOwner; query != nil {
+		if err := _q.loadOwner(ctx, query, nodes, nil,
+			func(n *Proxy, e *User) { n.Edges.Owner = e }); err != nil {
 			return nil, err
 		}
 	}
@@ -441,6 +484,38 @@ func (_q *ProxyQuery) loadAccounts(ctx context.Context, query *AccountQuery, nod
 	}
 	return nil
 }
+func (_q *ProxyQuery) loadOwner(ctx context.Context, query *UserQuery, nodes []*Proxy, init func(*Proxy), assign func(*Proxy, *User)) error {
+	ids := make([]int64, 0, len(nodes))
+	nodeids := make(map[int64][]*Proxy)
+	for i := range nodes {
+		if nodes[i].OwnerUserID == nil {
+			continue
+		}
+		fk := *nodes[i].OwnerUserID
+		if _, ok := nodeids[fk]; !ok {
+			ids = append(ids, fk)
+		}
+		nodeids[fk] = append(nodeids[fk], nodes[i])
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	query.Where(user.IDIn(ids...))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		nodes, ok := nodeids[n.ID]
+		if !ok {
+			return fmt.Errorf(`unexpected foreign-key "owner_user_id" returned %v`, n.ID)
+		}
+		for i := range nodes {
+			assign(nodes[i], n)
+		}
+	}
+	return nil
+}
 
 func (_q *ProxyQuery) sqlCount(ctx context.Context) (int, error) {
 	_spec := _q.querySpec()
@@ -469,6 +544,9 @@ func (_q *ProxyQuery) querySpec() *sqlgraph.QuerySpec {
 			if fields[i] != proxy.FieldID {
 				_spec.Node.Columns = append(_spec.Node.Columns, fields[i])
 			}
+		}
+		if _q.withOwner != nil {
+			_spec.Node.AddColumnOnce(proxy.FieldOwnerUserID)
 		}
 	}
 	if ps := _q.predicates; len(ps) > 0 {

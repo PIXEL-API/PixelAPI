@@ -48,6 +48,8 @@ const (
 	FieldStatus = "status"
 	// FieldDeliveredCards holds the string denoting the delivered_cards field in the database.
 	FieldDeliveredCards = "delivered_cards"
+	// FieldLoadFactorCreditsAwarded holds the string denoting the load_factor_credits_awarded field in the database.
+	FieldLoadFactorCreditsAwarded = "load_factor_credits_awarded"
 	// FieldPaidAt holds the string denoting the paid_at field in the database.
 	FieldPaidAt = "paid_at"
 	// FieldCompletedAt holds the string denoting the completed_at field in the database.
@@ -131,6 +133,7 @@ var Columns = []string{
 	FieldPaymentOrderID,
 	FieldStatus,
 	FieldDeliveredCards,
+	FieldLoadFactorCreditsAwarded,
 	FieldPaidAt,
 	FieldCompletedAt,
 	FieldCancelledAt,
@@ -173,6 +176,8 @@ var (
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	StatusValidator func(string) error
+	// DefaultLoadFactorCreditsAwarded holds the default value on creation for the "load_factor_credits_awarded" field.
+	DefaultLoadFactorCreditsAwarded int
 )
 
 // OrderOption defines the ordering options for the ShopOrder queries.
@@ -261,6 +266,11 @@ func ByPaymentOrderID(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByLoadFactorCreditsAwarded orders the results by the load_factor_credits_awarded field.
+func ByLoadFactorCreditsAwarded(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLoadFactorCreditsAwarded, opts...).ToFunc()
 }
 
 // ByPaidAt orders the results by the paid_at field.

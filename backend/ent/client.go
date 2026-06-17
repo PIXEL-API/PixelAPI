@@ -4260,6 +4260,22 @@ func (c *ProxyClient) QueryAccounts(_m *Proxy) *AccountQuery {
 	return query
 }
 
+// QueryOwner queries the owner edge of a Proxy.
+func (c *ProxyClient) QueryOwner(_m *Proxy) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(proxy.Table, proxy.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, proxy.OwnerTable, proxy.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *ProxyClient) Hooks() []Hook {
 	hooks := c.hooks.Proxy
@@ -7151,6 +7167,22 @@ func (c *UserClient) QueryOwnedAccounts(_m *User) *AccountQuery {
 			sqlgraph.From(user.Table, user.FieldID, id),
 			sqlgraph.To(account.Table, account.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.OwnedAccountsTable, user.OwnedAccountsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryOwnedProxies queries the owned_proxies edge of a User.
+func (c *UserClient) QueryOwnedProxies(_m *User) *ProxyQuery {
+	query := (&ProxyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(proxy.Table, proxy.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.OwnedProxiesTable, user.OwnedProxiesColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil

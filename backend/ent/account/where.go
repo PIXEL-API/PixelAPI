@@ -130,6 +130,11 @@ func LoadFactor(v int) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldLoadFactor, v))
 }
 
+// LoadFactorPaidCeiling applies equality check predicate on the "load_factor_paid_ceiling" field. It's identical to LoadFactorPaidCeilingEQ.
+func LoadFactorPaidCeiling(v int) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldLoadFactorPaidCeiling, v))
+}
+
 // Priority applies equality check predicate on the "priority" field. It's identical to PriorityEQ.
 func Priority(v int) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldPriority, v))
@@ -1003,6 +1008,46 @@ func LoadFactorIsNil() predicate.Account {
 // LoadFactorNotNil applies the NotNil predicate on the "load_factor" field.
 func LoadFactorNotNil() predicate.Account {
 	return predicate.Account(sql.FieldNotNull(FieldLoadFactor))
+}
+
+// LoadFactorPaidCeilingEQ applies the EQ predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingEQ(v int) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldLoadFactorPaidCeiling, v))
+}
+
+// LoadFactorPaidCeilingNEQ applies the NEQ predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingNEQ(v int) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldLoadFactorPaidCeiling, v))
+}
+
+// LoadFactorPaidCeilingIn applies the In predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingIn(vs ...int) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldLoadFactorPaidCeiling, vs...))
+}
+
+// LoadFactorPaidCeilingNotIn applies the NotIn predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingNotIn(vs ...int) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldLoadFactorPaidCeiling, vs...))
+}
+
+// LoadFactorPaidCeilingGT applies the GT predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingGT(v int) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldLoadFactorPaidCeiling, v))
+}
+
+// LoadFactorPaidCeilingGTE applies the GTE predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingGTE(v int) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldLoadFactorPaidCeiling, v))
+}
+
+// LoadFactorPaidCeilingLT applies the LT predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingLT(v int) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldLoadFactorPaidCeiling, v))
+}
+
+// LoadFactorPaidCeilingLTE applies the LTE predicate on the "load_factor_paid_ceiling" field.
+func LoadFactorPaidCeilingLTE(v int) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldLoadFactorPaidCeiling, v))
 }
 
 // PriorityEQ applies the EQ predicate on the "priority" field.

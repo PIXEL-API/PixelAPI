@@ -289,6 +289,27 @@ func (_u *AccountUpdate) ClearLoadFactor() *AccountUpdate {
 	return _u
 }
 
+// SetLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field.
+func (_u *AccountUpdate) SetLoadFactorPaidCeiling(v int) *AccountUpdate {
+	_u.mutation.ResetLoadFactorPaidCeiling()
+	_u.mutation.SetLoadFactorPaidCeiling(v)
+	return _u
+}
+
+// SetNillableLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableLoadFactorPaidCeiling(v *int) *AccountUpdate {
+	if v != nil {
+		_u.SetLoadFactorPaidCeiling(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorPaidCeiling adds value to the "load_factor_paid_ceiling" field.
+func (_u *AccountUpdate) AddLoadFactorPaidCeiling(v int) *AccountUpdate {
+	_u.mutation.AddLoadFactorPaidCeiling(v)
+	return _u
+}
+
 // SetPriority sets the "priority" field.
 func (_u *AccountUpdate) SetPriority(v int) *AccountUpdate {
 	_u.mutation.ResetPriority()
@@ -868,6 +889,12 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.LoadFactorCleared() {
 		_spec.ClearField(account.FieldLoadFactor, field.TypeInt)
 	}
+	if value, ok := _u.mutation.LoadFactorPaidCeiling(); ok {
+		_spec.SetField(account.FieldLoadFactorPaidCeiling, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorPaidCeiling(); ok {
+		_spec.AddField(account.FieldLoadFactorPaidCeiling, field.TypeInt, value)
+	}
 	if value, ok := _u.mutation.Priority(); ok {
 		_spec.SetField(account.FieldPriority, field.TypeInt, value)
 	}
@@ -1389,6 +1416,27 @@ func (_u *AccountUpdateOne) AddLoadFactor(v int) *AccountUpdateOne {
 // ClearLoadFactor clears the value of the "load_factor" field.
 func (_u *AccountUpdateOne) ClearLoadFactor() *AccountUpdateOne {
 	_u.mutation.ClearLoadFactor()
+	return _u
+}
+
+// SetLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field.
+func (_u *AccountUpdateOne) SetLoadFactorPaidCeiling(v int) *AccountUpdateOne {
+	_u.mutation.ResetLoadFactorPaidCeiling()
+	_u.mutation.SetLoadFactorPaidCeiling(v)
+	return _u
+}
+
+// SetNillableLoadFactorPaidCeiling sets the "load_factor_paid_ceiling" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableLoadFactorPaidCeiling(v *int) *AccountUpdateOne {
+	if v != nil {
+		_u.SetLoadFactorPaidCeiling(*v)
+	}
+	return _u
+}
+
+// AddLoadFactorPaidCeiling adds value to the "load_factor_paid_ceiling" field.
+func (_u *AccountUpdateOne) AddLoadFactorPaidCeiling(v int) *AccountUpdateOne {
+	_u.mutation.AddLoadFactorPaidCeiling(v)
 	return _u
 }
 
@@ -2000,6 +2048,12 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if _u.mutation.LoadFactorCleared() {
 		_spec.ClearField(account.FieldLoadFactor, field.TypeInt)
+	}
+	if value, ok := _u.mutation.LoadFactorPaidCeiling(); ok {
+		_spec.SetField(account.FieldLoadFactorPaidCeiling, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedLoadFactorPaidCeiling(); ok {
+		_spec.AddField(account.FieldLoadFactorPaidCeiling, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.Priority(); ok {
 		_spec.SetField(account.FieldPriority, field.TypeInt, value)

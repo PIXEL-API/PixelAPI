@@ -175,6 +175,27 @@ func (_u *ChannelMonitorUpdate) AddIntervalSeconds(v int) *ChannelMonitorUpdate 
 	return _u
 }
 
+// SetJitterSeconds sets the "jitter_seconds" field.
+func (_u *ChannelMonitorUpdate) SetJitterSeconds(v int) *ChannelMonitorUpdate {
+	_u.mutation.ResetJitterSeconds()
+	_u.mutation.SetJitterSeconds(v)
+	return _u
+}
+
+// SetNillableJitterSeconds sets the "jitter_seconds" field if the given value is not nil.
+func (_u *ChannelMonitorUpdate) SetNillableJitterSeconds(v *int) *ChannelMonitorUpdate {
+	if v != nil {
+		_u.SetJitterSeconds(*v)
+	}
+	return _u
+}
+
+// AddJitterSeconds adds value to the "jitter_seconds" field.
+func (_u *ChannelMonitorUpdate) AddJitterSeconds(v int) *ChannelMonitorUpdate {
+	_u.mutation.AddJitterSeconds(v)
+	return _u
+}
+
 // SetLastCheckedAt sets the "last_checked_at" field.
 func (_u *ChannelMonitorUpdate) SetLastCheckedAt(v time.Time) *ChannelMonitorUpdate {
 	_u.mutation.SetLastCheckedAt(v)
@@ -443,6 +464,11 @@ func (_u *ChannelMonitorUpdate) check() error {
 			return &ValidationError{Name: "interval_seconds", err: fmt.Errorf(`ent: validator failed for field "ChannelMonitor.interval_seconds": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.JitterSeconds(); ok {
+		if err := channelmonitor.JitterSecondsValidator(v); err != nil {
+			return &ValidationError{Name: "jitter_seconds", err: fmt.Errorf(`ent: validator failed for field "ChannelMonitor.jitter_seconds": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.BodyOverrideMode(); ok {
 		if err := channelmonitor.BodyOverrideModeValidator(v); err != nil {
 			return &ValidationError{Name: "body_override_mode", err: fmt.Errorf(`ent: validator failed for field "ChannelMonitor.body_override_mode": %w`, err)}
@@ -503,6 +529,12 @@ func (_u *ChannelMonitorUpdate) sqlSave(ctx context.Context) (_node int, err err
 	}
 	if value, ok := _u.mutation.AddedIntervalSeconds(); ok {
 		_spec.AddField(channelmonitor.FieldIntervalSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.JitterSeconds(); ok {
+		_spec.SetField(channelmonitor.FieldJitterSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedJitterSeconds(); ok {
+		_spec.AddField(channelmonitor.FieldJitterSeconds, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.LastCheckedAt(); ok {
 		_spec.SetField(channelmonitor.FieldLastCheckedAt, field.TypeTime, value)
@@ -810,6 +842,27 @@ func (_u *ChannelMonitorUpdateOne) AddIntervalSeconds(v int) *ChannelMonitorUpda
 	return _u
 }
 
+// SetJitterSeconds sets the "jitter_seconds" field.
+func (_u *ChannelMonitorUpdateOne) SetJitterSeconds(v int) *ChannelMonitorUpdateOne {
+	_u.mutation.ResetJitterSeconds()
+	_u.mutation.SetJitterSeconds(v)
+	return _u
+}
+
+// SetNillableJitterSeconds sets the "jitter_seconds" field if the given value is not nil.
+func (_u *ChannelMonitorUpdateOne) SetNillableJitterSeconds(v *int) *ChannelMonitorUpdateOne {
+	if v != nil {
+		_u.SetJitterSeconds(*v)
+	}
+	return _u
+}
+
+// AddJitterSeconds adds value to the "jitter_seconds" field.
+func (_u *ChannelMonitorUpdateOne) AddJitterSeconds(v int) *ChannelMonitorUpdateOne {
+	_u.mutation.AddJitterSeconds(v)
+	return _u
+}
+
 // SetLastCheckedAt sets the "last_checked_at" field.
 func (_u *ChannelMonitorUpdateOne) SetLastCheckedAt(v time.Time) *ChannelMonitorUpdateOne {
 	_u.mutation.SetLastCheckedAt(v)
@@ -1091,6 +1144,11 @@ func (_u *ChannelMonitorUpdateOne) check() error {
 			return &ValidationError{Name: "interval_seconds", err: fmt.Errorf(`ent: validator failed for field "ChannelMonitor.interval_seconds": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.JitterSeconds(); ok {
+		if err := channelmonitor.JitterSecondsValidator(v); err != nil {
+			return &ValidationError{Name: "jitter_seconds", err: fmt.Errorf(`ent: validator failed for field "ChannelMonitor.jitter_seconds": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.BodyOverrideMode(); ok {
 		if err := channelmonitor.BodyOverrideModeValidator(v); err != nil {
 			return &ValidationError{Name: "body_override_mode", err: fmt.Errorf(`ent: validator failed for field "ChannelMonitor.body_override_mode": %w`, err)}
@@ -1168,6 +1226,12 @@ func (_u *ChannelMonitorUpdateOne) sqlSave(ctx context.Context) (_node *ChannelM
 	}
 	if value, ok := _u.mutation.AddedIntervalSeconds(); ok {
 		_spec.AddField(channelmonitor.FieldIntervalSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.JitterSeconds(); ok {
+		_spec.SetField(channelmonitor.FieldJitterSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedJitterSeconds(); ok {
+		_spec.AddField(channelmonitor.FieldJitterSeconds, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.LastCheckedAt(); ok {
 		_spec.SetField(channelmonitor.FieldLastCheckedAt, field.TypeTime, value)
