@@ -186,26 +186,28 @@ const (
 	SettingKeyOIDCConnectUserInfoUsernamePath = "oidc_connect_userinfo_username_path"
 
 	// OEM设置
-	SettingKeySiteName                       = "site_name"                     // 网站名称
-	SettingKeySiteLogo                       = "site_logo"                     // 网站Logo (base64)
-	SettingKeySiteSubtitle                   = "site_subtitle"                 // 网站副标题
-	SettingKeyAPIBaseURL                     = "api_base_url"                  // API端点地址（用于客户端配置和导入）
-	SettingKeyContactInfo                    = "contact_info"                  // 客服联系方式
-	SettingKeyDocURL                         = "doc_url"                       // 文档链接
-	SettingKeyHomeContent                    = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
-	SettingKeyHideCcsImportButton            = "hide_ccs_import_button"        // 是否隐藏 API Keys 页面的导入 CCS 按钮
-	SettingKeyPurchaseSubscriptionEnabled    = "purchase_subscription_enabled" // 是否展示"购买订阅"页面入口
-	SettingKeyPurchaseSubscriptionURL        = "purchase_subscription_url"     // "购买订阅"页面 URL（作为 iframe src）
-	SettingKeyTableDefaultPageSize           = "table_default_page_size"       // 表格默认每页条数
-	SettingKeyTablePageSizeOptions           = "table_page_size_options"       // 表格可选每页条数（JSON 数组）
-	SettingKeyCustomMenuItems                = "custom_menu_items"             // 自定义菜单项（JSON 数组）
-	SettingKeyCustomEndpoints                = "custom_endpoints"              // 自定义端点列表（JSON 数组）
-	SettingKeyRiskControlEnabled             = "risk_control_enabled"          // 是否启用风控中心
-	SettingKeyContentModerationConfig        = "content_moderation_config"     // 内容审计配置（JSON）
-	SettingKeyLoginAgreementEnabled          = "login_agreement_enabled"       // 登录前是否要求同意条款
-	SettingKeyLoginAgreementMode             = "login_agreement_mode"          // 条款确认展示模式：modal / checkbox
-	SettingKeyLoginAgreementUpdatedAt        = "login_agreement_updated_at"    // 条款更新日期（展示用）
-	SettingKeyLoginAgreementDocuments        = "login_agreement_documents"     // 条款文档列表（JSON，Markdown 内容）
+	SettingKeySiteName                       = "site_name"                       // 网站名称
+	SettingKeySiteLogo                       = "site_logo"                       // 网站Logo (base64)
+	SettingKeySiteSubtitle                   = "site_subtitle"                   // 网站副标题
+	SettingKeyAPIBaseURL                     = "api_base_url"                    // API端点地址（用于客户端配置和导入）
+	SettingKeyContactInfo                    = "contact_info"                    // 客服联系方式
+	SettingKeyDocURL                         = "doc_url"                         // 文档链接
+	SettingKeyHomeContent                    = "home_content"                    // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
+	SettingKeyHideCcsImportButton            = "hide_ccs_import_button"          // 是否隐藏 API Keys 页面的导入 CCS 按钮
+	SettingKeyPurchaseSubscriptionEnabled    = "purchase_subscription_enabled"   // 是否展示"购买订阅"页面入口
+	SettingKeyPurchaseSubscriptionURL        = "purchase_subscription_url"       // "购买订阅"页面 URL（作为 iframe src）
+	SettingKeyTableDefaultPageSize           = "table_default_page_size"         // 表格默认每页条数
+	SettingKeyTablePageSizeOptions           = "table_page_size_options"         // 表格可选每页条数（JSON 数组）
+	SettingKeyCustomMenuItems                = "custom_menu_items"               // 自定义菜单项（JSON 数组）
+	SettingKeyCustomEndpoints                = "custom_endpoints"                // 自定义端点列表（JSON 数组）
+	SettingKeyRiskControlEnabled             = "risk_control_enabled"            // 是否启用风控中心
+	SettingKeyContentModerationConfig        = "content_moderation_config"       // 内容审计配置（JSON）
+	SettingKeyCyberSessionBlockEnabled       = "cyber_session_block_enabled"     // cyber 命中后会话级自动屏蔽总开关（默认关）
+	SettingKeyCyberSessionBlockTTLSeconds    = "cyber_session_block_ttl_seconds" // 会话屏蔽 TTL 秒数（默认 3600）
+	SettingKeyLoginAgreementEnabled          = "login_agreement_enabled"         // 登录前是否要求同意条款
+	SettingKeyLoginAgreementMode             = "login_agreement_mode"            // 条款确认展示模式：modal / checkbox
+	SettingKeyLoginAgreementUpdatedAt        = "login_agreement_updated_at"      // 条款更新日期（展示用）
+	SettingKeyLoginAgreementDocuments        = "login_agreement_documents"       // 条款文档列表（JSON，Markdown 内容）
 	SettingKeyGitHubOAuthEnabled             = "github_oauth_enabled"
 	SettingKeyGitHubOAuthClientID            = "github_oauth_client_id"
 	SettingKeyGitHubOAuthClientSecret        = "github_oauth_client_secret"
@@ -318,6 +320,9 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
+	// SettingKeyUserAccountImportLimit controls the per-request import limit for user-owned accounts.
+	SettingKeyUserAccountImportLimit = "user_account_import_limit"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================
@@ -374,12 +379,6 @@ const (
 	// SettingKeyBackendModeEnabled Backend 模式：禁用用户注册和自助服务，仅管理员可登录
 	SettingKeyBackendModeEnabled = "backend_mode_enabled"
 
-	// SettingKeyMasterDataPlaneEnabled 主站数据面开关：开启时主站允许临时承接模型请求。
-	SettingKeyMasterDataPlaneEnabled = "master_data_plane_enabled"
-
-	// SettingKeySubsiteOnlyGatewayEnabled legacy inverse of master_data_plane_enabled.
-	SettingKeySubsiteOnlyGatewayEnabled = "subsite_only_gateway_enabled"
-
 	// Gateway Forwarding Behavior
 	// SettingKeyEnableFingerprintUnification 是否统一 OAuth 账号的 X-Stainless-* 指纹头（默认 true）
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
@@ -387,6 +386,12 @@ const (
 	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
 	// SettingKeyEnableCCHSigning 是否对 billing header 中的 cch 进行 xxHash64 签名（默认 false）
 	SettingKeyEnableCCHSigning = "enable_cch_signing"
+	// SettingKeyEnableClaudeOAuthSystemPromptInjection 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
+	SettingKeyEnableClaudeOAuthSystemPromptInjection = "enable_claude_oauth_system_prompt_injection"
+	// SettingKeyClaudeOAuthSystemPrompt Claude OAuth mimic 路径注入的通用扩展 system prompt（空值使用内置默认）
+	SettingKeyClaudeOAuthSystemPrompt = "claude_oauth_system_prompt"
+	// SettingKeyClaudeOAuthSystemPromptBlocks Claude OAuth mimic 路径注入的 system blocks JSON 配置（空值使用内置默认）
+	SettingKeyClaudeOAuthSystemPromptBlocks = "claude_oauth_system_prompt_blocks"
 	// SettingKeyOpenAICleanRelayEnabled 是否启用 OpenAI 洁净中继模式（默认 false）
 	SettingKeyOpenAICleanRelayEnabled = "openai_clean_relay_enabled"
 	// SettingKeyEnableAnthropicCacheTTL1hInjection 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）

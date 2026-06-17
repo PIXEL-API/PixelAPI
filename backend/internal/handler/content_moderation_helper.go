@@ -27,7 +27,17 @@ func contentModerationStatus(decision *service.ContentModerationDecision) int {
 }
 
 func contentModerationErrorCode(decision *service.ContentModerationDecision) string {
+	if decision != nil && decision.Action == service.ContentModerationActionCyberBlock {
+		return "cyber_abuse_blocked"
+	}
 	return "content_policy_violation"
+}
+
+func cyberPreflightErrorCode(decision *service.ContentModerationDecision) string {
+	if decision != nil && decision.Action == service.ContentModerationActionCyberBlock {
+		return "cyber_abuse_blocked"
+	}
+	return contentModerationErrorCode(decision)
 }
 
 func (h *OpenAIGatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
@@ -37,9 +47,54 @@ func (h *OpenAIGatewayHandler) checkContentModeration(c *gin.Context, reqLog *za
 	return runContentModeration(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
 }
 
+func (h *OpenAIGatewayHandler) checkContentModerationWithContext(ctx context.Context, c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+	if h == nil || h.contentModerationService == nil {
+		return nil
+	}
+	return runContentModerationWithContext(ctx, c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
+}
+
+func (h *GatewayHandler) checkCyberPreflight(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+	if h == nil || h.contentModerationService == nil {
+		return nil
+	}
+	return runCyberPreflight(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
+}
+
+func (h *OpenAIGatewayHandler) checkCyberPreflight(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+	if h == nil || h.contentModerationService == nil {
+		return nil
+	}
+	return runCyberPreflight(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
+}
+
+func (h *OpenAIGatewayHandler) checkCyberPreflightWithContext(ctx context.Context, c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+	if h == nil || h.contentModerationService == nil {
+		return nil
+	}
+	return runCyberPreflightWithContext(ctx, c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
+}
+
 func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	return runContentModerationWithContext(c.Request.Context(), c, reqLog, svc, apiKey, subject, protocol, model, body)
+}
+
+func runCyberPreflight(c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	return runCyberPreflightWithContext(c.Request.Context(), c, reqLog, svc, apiKey, subject, protocol, model, body)
+}
+
+func runContentModerationWithContext(ctx context.Context, c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
 	if svc == nil || c == nil || c.Request == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = c.Request.Context()
 	}
 	input := buildContentModerationInput(c, apiKey, subject, protocol, model, body)
 	if reqLog != nil {
@@ -57,7 +112,7 @@ func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.Conte
 			zap.Int("body_bytes", len(body)),
 		)
 	}
-	decision, err := svc.Check(c.Request.Context(), input)
+	decision, err := svc.Check(ctx, input)
 	if err != nil {
 		if reqLog != nil {
 			reqLog.Warn("content_moderation.check_failed", zap.Error(err))
@@ -72,6 +127,41 @@ func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.Conte
 			zap.Bool("flagged", decision.Flagged),
 			zap.String("action", decision.Action),
 			zap.Int("status_code", decision.StatusCode),
+			zap.String("highest_category", decision.HighestCategory),
+			zap.Float64("highest_score", decision.HighestScore),
+		)
+	}
+	return decision
+}
+
+func runCyberPreflightWithContext(ctx context.Context, c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+	if svc == nil || c == nil || c.Request == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = c.Request.Context()
+	}
+	input := buildContentModerationInput(c, apiKey, subject, protocol, model, body)
+	decision, err := svc.CheckCyberPreflight(ctx, input)
+	if err != nil {
+		if reqLog != nil {
+			reqLog.Warn("content_moderation.cyber_preflight_failed", zap.Error(err))
+		}
+		return nil
+	}
+	if reqLog != nil && decision != nil && decision.Blocked {
+		reqLog.Info("content_moderation.cyber_preflight_blocked",
+			zap.String("request_id", input.RequestID),
+			zap.Int64("user_id", input.UserID),
+			zap.Int64("api_key_id", input.APIKeyID),
+			zap.String("api_key_name", input.APIKeyName),
+			zap.Int64p("group_id", input.GroupID),
+			zap.String("group_name", input.GroupName),
+			zap.String("endpoint", input.Endpoint),
+			zap.String("provider", input.Provider),
+			zap.String("protocol", input.Protocol),
+			zap.String("model", input.Model),
+			zap.String("action", decision.Action),
 			zap.String("highest_category", decision.HighestCategory),
 			zap.Float64("highest_score", decision.HighestScore),
 		)

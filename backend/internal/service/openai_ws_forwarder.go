@@ -398,14 +398,24 @@ func parseOpenAIWSResponseUsageFromCompletedEvent(message []byte, usage *OpenAIU
 	values := gjson.GetManyBytes(
 		message,
 		"response.usage.input_tokens",
+		"response.usage.input_tokens_details.text_tokens",
+		"response.usage.input_tokens_details.image_tokens",
 		"response.usage.output_tokens",
+		"response.usage.output_tokens_details.text_tokens",
 		"response.usage.input_tokens_details.cached_tokens",
+		"response.usage.input_tokens_details.cached_text_tokens",
+		"response.usage.input_tokens_details.cached_image_tokens",
 		"response.usage.output_tokens_details.image_tokens",
 	)
 	usage.InputTokens = int(values[0].Int())
-	usage.OutputTokens = int(values[1].Int())
-	usage.CacheReadInputTokens = int(values[2].Int())
-	usage.ImageOutputTokens = int(values[3].Int())
+	usage.TextInputTokens = int(values[1].Int())
+	usage.ImageInputTokens = int(values[2].Int())
+	usage.OutputTokens = int(values[3].Int())
+	usage.TextOutputTokens = int(values[4].Int())
+	usage.CacheReadInputTokens = int(values[5].Int())
+	usage.TextCacheReadInputTokens = int(values[6].Int())
+	usage.ImageCacheReadInputTokens = int(values[7].Int())
+	usage.ImageOutputTokens = int(values[8].Int())
 }
 
 func parseOpenAIWSErrorEventFields(message []byte) (code string, errType string, errMessage string) {
@@ -4174,15 +4184,9 @@ func populateOpenAIUsageFromResponseJSON(body []byte, usage *OpenAIUsage) {
 	if usage == nil || len(body) == 0 {
 		return
 	}
-	values := gjson.GetManyBytes(
-		body,
-		"usage.input_tokens",
-		"usage.output_tokens",
-		"usage.input_tokens_details.cached_tokens",
-	)
-	usage.InputTokens = int(values[0].Int())
-	usage.OutputTokens = int(values[1].Int())
-	usage.CacheReadInputTokens = int(values[2].Int())
+	if parsed, ok := extractOpenAIUsageFromJSONBytes(body); ok {
+		*usage = parsed
+	}
 }
 
 func getOpenAIGroupIDFromContext(c *gin.Context) int64 {

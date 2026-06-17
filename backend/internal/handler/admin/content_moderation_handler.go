@@ -7,49 +7,60 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 type ContentModerationHandler struct {
-	service *service.ContentModerationService
+	service                 *service.ContentModerationService
+	accountShareModeService *service.AccountShareModeService
 }
 
-func NewContentModerationHandler(svc *service.ContentModerationService) *ContentModerationHandler {
-	return &ContentModerationHandler{service: svc}
+func NewContentModerationHandler(svc *service.ContentModerationService, accountShareModeSvc ...*service.AccountShareModeService) *ContentModerationHandler {
+	h := &ContentModerationHandler{service: svc}
+	if len(accountShareModeSvc) > 0 {
+		h.accountShareModeService = accountShareModeSvc[0]
+	}
+	return h
 }
 
 type contentModerationConfigRequest struct {
-	Enabled              *bool     `json:"enabled"`
-	Mode                 *string   `json:"mode"`
-	BaseURL              *string   `json:"base_url"`
-	Model                *string   `json:"model"`
-	APIKey               *string   `json:"api_key"`
-	APIKeys              *[]string `json:"api_keys"`
-	APIKeysMode          string    `json:"api_keys_mode"`
-	DeleteAPIKeyHashes   *[]string `json:"delete_api_key_hashes"`
-	ClearAPIKey          bool      `json:"clear_api_key"`
-	TimeoutMS            *int      `json:"timeout_ms"`
-	SampleRate           *int      `json:"sample_rate"`
-	AllGroups            *bool     `json:"all_groups"`
-	GroupIDs             *[]int64  `json:"group_ids"`
-	RecordNonHits        *bool     `json:"record_non_hits"`
-	WorkerCount          *int      `json:"worker_count"`
-	QueueSize            *int      `json:"queue_size"`
-	BlockStatus          *int      `json:"block_status"`
-	BlockMessage         *string   `json:"block_message"`
-	EmailOnHit           *bool     `json:"email_on_hit"`
-	AutoBanEnabled       *bool     `json:"auto_ban_enabled"`
-	BanThreshold         *int      `json:"ban_threshold"`
-	ViolationWindowHours *int      `json:"violation_window_hours"`
-	RetryCount           *int      `json:"retry_count"`
-	HitRetentionDays     *int      `json:"hit_retention_days"`
-	NonHitRetentionDays  *int      `json:"non_hit_retention_days"`
-	PreHashCheckEnabled  *bool     `json:"pre_hash_check_enabled"`
+	Enabled               *bool                                                 `json:"enabled"`
+	CyberPreflightEnabled *bool                                                 `json:"cyber_preflight_enabled"`
+	CyberPreflightRules   *service.ContentModerationCyberPreflightRulesConfig   `json:"cyber_preflight_rules"`
+	Mode                  *string                                               `json:"mode"`
+	Provider              *string                                               `json:"provider"`
+	BaseURL               *string                                               `json:"base_url"`
+	Model                 *string                                               `json:"model"`
+	APIKey                *string                                               `json:"api_key"`
+	APIKeys               *[]string                                             `json:"api_keys"`
+	APIKeysMode           string                                                `json:"api_keys_mode"`
+	DeleteAPIKeyHashes    *[]string                                             `json:"delete_api_key_hashes"`
+	ClearAPIKey           bool                                                  `json:"clear_api_key"`
+	TimeoutMS             *int                                                  `json:"timeout_ms"`
+	SampleRate            *int                                                  `json:"sample_rate"`
+	AllGroups             *bool                                                 `json:"all_groups"`
+	GroupIDs              *[]int64                                              `json:"group_ids"`
+	RecordNonHits         *bool                                                 `json:"record_non_hits"`
+	WorkerCount           *int                                                  `json:"worker_count"`
+	QueueSize             *int                                                  `json:"queue_size"`
+	BlockStatus           *int                                                  `json:"block_status"`
+	BlockMessage          *string                                               `json:"block_message"`
+	EmailOnHit            *bool                                                 `json:"email_on_hit"`
+	AutoBanEnabled        *bool                                                 `json:"auto_ban_enabled"`
+	BanThreshold          *int                                                  `json:"ban_threshold"`
+	ViolationWindowHours  *int                                                  `json:"violation_window_hours"`
+	RetryCount            *int                                                  `json:"retry_count"`
+	HitRetentionDays      *int                                                  `json:"hit_retention_days"`
+	NonHitRetentionDays   *int                                                  `json:"non_hit_retention_days"`
+	PreHashCheckEnabled   *bool                                                 `json:"pre_hash_check_enabled"`
+	AccountShareModeScope *service.ContentModerationAccountShareModeScopeConfig `json:"account_share_mode_scope"`
 }
 
 type contentModerationAPIKeyTestRequest struct {
 	APIKeys   []string `json:"api_keys"`
+	Provider  string   `json:"provider"`
 	BaseURL   string   `json:"base_url"`
 	Model     string   `json:"model"`
 	TimeoutMS int      `json:"timeout_ms"`
@@ -77,32 +88,36 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 	cfg, err := h.service.UpdateConfig(c.Request.Context(), service.UpdateContentModerationConfigInput{
-		Enabled:              req.Enabled,
-		Mode:                 req.Mode,
-		BaseURL:              req.BaseURL,
-		Model:                req.Model,
-		APIKey:               req.APIKey,
-		APIKeys:              req.APIKeys,
-		APIKeysMode:          req.APIKeysMode,
-		DeleteAPIKeyHashes:   req.DeleteAPIKeyHashes,
-		ClearAPIKey:          req.ClearAPIKey,
-		TimeoutMS:            req.TimeoutMS,
-		SampleRate:           req.SampleRate,
-		AllGroups:            req.AllGroups,
-		GroupIDs:             req.GroupIDs,
-		RecordNonHits:        req.RecordNonHits,
-		WorkerCount:          req.WorkerCount,
-		QueueSize:            req.QueueSize,
-		BlockStatus:          req.BlockStatus,
-		BlockMessage:         req.BlockMessage,
-		EmailOnHit:           req.EmailOnHit,
-		AutoBanEnabled:       req.AutoBanEnabled,
-		BanThreshold:         req.BanThreshold,
-		ViolationWindowHours: req.ViolationWindowHours,
-		RetryCount:           req.RetryCount,
-		HitRetentionDays:     req.HitRetentionDays,
-		NonHitRetentionDays:  req.NonHitRetentionDays,
-		PreHashCheckEnabled:  req.PreHashCheckEnabled,
+		Enabled:               req.Enabled,
+		CyberPreflightEnabled: req.CyberPreflightEnabled,
+		CyberPreflightRules:   req.CyberPreflightRules,
+		Mode:                  req.Mode,
+		Provider:              req.Provider,
+		BaseURL:               req.BaseURL,
+		Model:                 req.Model,
+		APIKey:                req.APIKey,
+		APIKeys:               req.APIKeys,
+		APIKeysMode:           req.APIKeysMode,
+		DeleteAPIKeyHashes:    req.DeleteAPIKeyHashes,
+		ClearAPIKey:           req.ClearAPIKey,
+		TimeoutMS:             req.TimeoutMS,
+		SampleRate:            req.SampleRate,
+		AllGroups:             req.AllGroups,
+		GroupIDs:              req.GroupIDs,
+		RecordNonHits:         req.RecordNonHits,
+		WorkerCount:           req.WorkerCount,
+		QueueSize:             req.QueueSize,
+		BlockStatus:           req.BlockStatus,
+		BlockMessage:          req.BlockMessage,
+		EmailOnHit:            req.EmailOnHit,
+		AutoBanEnabled:        req.AutoBanEnabled,
+		BanThreshold:          req.BanThreshold,
+		ViolationWindowHours:  req.ViolationWindowHours,
+		RetryCount:            req.RetryCount,
+		HitRetentionDays:      req.HitRetentionDays,
+		NonHitRetentionDays:   req.NonHitRetentionDays,
+		PreHashCheckEnabled:   req.PreHashCheckEnabled,
+		AccountShareModeScope: req.AccountShareModeScope,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -119,6 +134,7 @@ func (h *ContentModerationHandler) TestAPIKeys(c *gin.Context) {
 	}
 	result, err := h.service.TestAPIKeys(c.Request.Context(), service.TestContentModerationAPIKeysInput{
 		APIKeys:   req.APIKeys,
+		Provider:  req.Provider,
 		BaseURL:   req.BaseURL,
 		Model:     req.Model,
 		TimeoutMS: req.TimeoutMS,
@@ -130,6 +146,34 @@ func (h *ContentModerationHandler) TestAPIKeys(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+func (h *ContentModerationHandler) ListAccountShareModeListings(c *gin.Context) {
+	if h == nil || h.accountShareModeService == nil {
+		response.InternalError(c, "Account share mode service unavailable")
+		return
+	}
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	page, pageSize := response.ParsePagination(c)
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 100
+	}
+	listings, result, err := h.accountShareModeService.ListListings(
+		c.Request.Context(),
+		subject.UserID,
+		true,
+		service.AccountShareListingFilters{Tab: service.AccountShareModeListingTabMine},
+		pagination.PaginationParams{Page: page, PageSize: pageSize},
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, listings, result.Total, result.Page, result.PageSize)
 }
 
 func (h *ContentModerationHandler) GetStatus(c *gin.Context) {

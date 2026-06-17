@@ -23,12 +23,17 @@ type FrameConn interface {
 }
 
 type Usage struct {
-	InputTokens              int
-	OutputTokens             int
-	CacheCreationInputTokens int
-	CacheReadInputTokens     int
-	ImageOutputTokens        int
-	ImageCount               int
+	InputTokens               int
+	TextInputTokens           int
+	ImageInputTokens          int
+	OutputTokens              int
+	TextOutputTokens          int
+	CacheCreationInputTokens  int
+	CacheReadInputTokens      int
+	TextCacheReadInputTokens  int
+	ImageCacheReadInputTokens int
+	ImageOutputTokens         int
+	ImageCount                int
 }
 
 type RelayResult struct {
@@ -795,15 +800,26 @@ func parseUsageAndAccumulate(
 	}
 
 	inputResult := gjson.GetBytes(message, "response.usage.input_tokens")
+	textInputResult := gjson.GetBytes(message, "response.usage.input_tokens_details.text_tokens")
+	imageInputResult := gjson.GetBytes(message, "response.usage.input_tokens_details.image_tokens")
 	outputResult := gjson.GetBytes(message, "response.usage.output_tokens")
+	textOutputResult := gjson.GetBytes(message, "response.usage.output_tokens_details.text_tokens")
 	cachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_tokens")
+	textCachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_text_tokens")
+	imageCachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_image_tokens")
 	imageTokensResult := gjson.GetBytes(message, "response.usage.output_tokens_details.image_tokens")
 
 	inputTokens, inputOK := parseUsageIntField(inputResult, true)
+	textInputTokens, textInputOK := parseUsageIntField(textInputResult, false)
+	imageInputTokens, imageInputOK := parseUsageIntField(imageInputResult, false)
 	outputTokens, outputOK := parseUsageIntField(outputResult, true)
+	textOutputTokens, textOutputOK := parseUsageIntField(textOutputResult, false)
 	cachedTokens, cachedOK := parseUsageIntField(cachedResult, false)
+	textCachedTokens, textCachedOK := parseUsageIntField(textCachedResult, false)
+	imageCachedTokens, imageCachedOK := parseUsageIntField(imageCachedResult, false)
 	imageTokens, imageTokensOK := parseUsageIntField(imageTokensResult, false)
-	if !inputOK || !outputOK || !cachedOK || !imageTokensOK {
+	if !inputOK || !textInputOK || !imageInputOK || !outputOK || !textOutputOK || !cachedOK ||
+		!textCachedOK || !imageCachedOK || !imageTokensOK {
 		recordUsageParseFailure()
 		if onParseFailure != nil {
 			onParseFailure(eventType, usageRaw)
@@ -812,18 +828,28 @@ func parseUsageAndAccumulate(
 		return Usage{}
 	}
 	parsedUsage := Usage{
-		InputTokens:          inputTokens,
-		OutputTokens:         outputTokens,
-		CacheReadInputTokens: cachedTokens,
-		ImageOutputTokens:    imageTokens,
+		InputTokens:               inputTokens,
+		TextInputTokens:           textInputTokens,
+		ImageInputTokens:          imageInputTokens,
+		OutputTokens:              outputTokens,
+		TextOutputTokens:          textOutputTokens,
+		CacheReadInputTokens:      cachedTokens,
+		TextCacheReadInputTokens:  textCachedTokens,
+		ImageCacheReadInputTokens: imageCachedTokens,
+		ImageOutputTokens:         imageTokens,
 	}
 	if state.imageCounter != nil {
 		parsedUsage.ImageCount = state.imageCounter.Count()
 	}
 
 	state.usage.InputTokens += parsedUsage.InputTokens
+	state.usage.TextInputTokens += parsedUsage.TextInputTokens
+	state.usage.ImageInputTokens += parsedUsage.ImageInputTokens
 	state.usage.OutputTokens += parsedUsage.OutputTokens
+	state.usage.TextOutputTokens += parsedUsage.TextOutputTokens
 	state.usage.CacheReadInputTokens += parsedUsage.CacheReadInputTokens
+	state.usage.TextCacheReadInputTokens += parsedUsage.TextCacheReadInputTokens
+	state.usage.ImageCacheReadInputTokens += parsedUsage.ImageCacheReadInputTokens
 	state.usage.ImageOutputTokens += parsedUsage.ImageOutputTokens
 	state.usage.ImageCount = parsedUsage.ImageCount
 	return parsedUsage

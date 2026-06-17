@@ -502,6 +502,46 @@ func buildOpenAIImagesStreamErrorBody(message string) []byte {
 	return body
 }
 
+func openAIImagesResponsesFailure(body []byte) (int, string, bool) {
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimRight(line, "\r")
+		data, ok := extractOpenAISSEDataLine(string(line))
+		if !ok || data == "" || data == "[DONE]" {
+			continue
+		}
+		payload := []byte(data)
+		if !gjson.ValidBytes(payload) {
+			continue
+		}
+		eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+		if eventType != "response.failed" && !(eventType == "response.completed" && strings.TrimSpace(gjson.GetBytes(payload, "response.status").String()) == "failed") {
+			continue
+		}
+		message := strings.TrimSpace(gjson.GetBytes(payload, "response.error.message").String())
+		if message == "" {
+			message = strings.TrimSpace(gjson.GetBytes(payload, "error.message").String())
+		}
+		if message == "" {
+			message = "OpenAI image generation failed"
+		}
+		status := int(gjson.GetBytes(payload, "response.error.status").Int())
+		if status <= 0 {
+			status = http.StatusBadGateway
+		}
+		return status, sanitizeUpstreamErrorMessage(message), true
+	}
+	return 0, "", false
+}
+
+func openAIImagesFailoverBody(message string) []byte {
+	body := []byte(`{"error":{"message":""}}`)
+	if strings.TrimSpace(message) == "" {
+		message = "upstream image generation failed"
+	}
+	body, _ = sjson.SetBytes(body, "error.message", truncateString(message, 1024))
+	return body
+}
+
 func (s *OpenAIGatewayService) writeOpenAIImagesStreamEvent(c *gin.Context, flusher http.Flusher, eventName string, payload []byte) error {
 	if strings.TrimSpace(eventName) != "" {
 		if _, err := fmt.Fprintf(c.Writer, "event: %s\n", eventName); err != nil {
@@ -525,6 +565,12 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 	if err != nil {
 		return OpenAIUsage{}, 0, err
 	}
+	if status, message, failed := openAIImagesResponsesFailure(body); failed {
+		return OpenAIUsage{}, 0, &UpstreamFailoverError{
+			StatusCode:   status,
+			ResponseBody: openAIImagesFailoverBody(message),
+		}
+	}
 
 	var usage OpenAIUsage
 	for _, line := range bytes.Split(body, []byte("\n")) {
@@ -541,7 +587,10 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 		return OpenAIUsage{}, 0, err
 	}
 	if len(results) == 0 {
-		return OpenAIUsage{}, 0, fmt.Errorf("upstream did not return image output")
+		return OpenAIUsage{}, 0, &UpstreamFailoverError{
+			StatusCode:   http.StatusBadGateway,
+			ResponseBody: openAIImagesFailoverBody("upstream did not return image output"),
+		}
 	}
 	if strings.TrimSpace(firstMeta.Model) == "" {
 		firstMeta.Model = strings.TrimSpace(fallbackModel)

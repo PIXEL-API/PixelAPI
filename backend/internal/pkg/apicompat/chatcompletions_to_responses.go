@@ -389,6 +389,17 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func strictOrFalse(v *bool) *bool {
+	if v != nil {
+		return v
+	}
+	return boolPtr(false)
+}
+
 // convertChatToolsToResponses maps Chat Completions tool definitions and legacy
 // function definitions to Responses API tool definitions.
 func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []ResponsesTool {
@@ -403,7 +414,7 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
 			Parameters:  t.Function.Parameters,
-			Strict:      t.Function.Strict,
+			Strict:      strictOrFalse(t.Function.Strict),
 		}
 		out = append(out, rt)
 	}
@@ -415,7 +426,7 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 			Name:        f.Name,
 			Description: f.Description,
 			Parameters:  f.Parameters,
-			Strict:      f.Strict,
+			Strict:      strictOrFalse(f.Strict),
 		}
 		out = append(out, rt)
 	}

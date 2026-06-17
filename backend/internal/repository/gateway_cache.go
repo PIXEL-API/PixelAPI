@@ -53,6 +53,22 @@ func (c *gatewayCache) DeleteSessionAccountID(ctx context.Context, groupID int64
 	return c.rdb.Del(ctx, key).Err()
 }
 
+var _ service.CyberSessionBlockStore = (*gatewayCache)(nil)
+
+const cyberSessionBlockPrefix = "cyber_session_block:"
+
+func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, key string, ttl time.Duration) error {
+	return c.rdb.Set(ctx, cyberSessionBlockPrefix+key, "1", ttl).Err()
+}
+
+func (c *gatewayCache) IsCyberSessionBlocked(ctx context.Context, key string) (bool, error) {
+	n, err := c.rdb.Exists(ctx, cyberSessionBlockPrefix+key).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func (c *gatewayCache) GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error) {
 	key := buildSessionKey(groupID, sessionHash)
 	value, err := c.rdb.Get(ctx, key).Result()

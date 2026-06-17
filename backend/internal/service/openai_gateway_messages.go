@@ -379,6 +379,19 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
 		return nil, fmt.Errorf("upstream stream ended without terminal event")
 	}
+	if strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") && finalResponse.Error != nil &&
+		strings.EqualFold(strings.TrimSpace(finalResponse.Error.Code), "cyber_policy") {
+		clientMsg := openAICyberPolicyClientMessage(finalResponse.Error.Message)
+		MarkOpsCyberPolicy(c, CyberPolicyMark{
+			Message:        clientMsg,
+			UpstreamStatus: http.StatusOK,
+			UpstreamInTok:  usage.InputTokens,
+			UpstreamOutTok: usage.OutputTokens,
+		})
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+		return resultForOpenAICompatFailure(requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
+			fmt.Errorf("openai cyber_policy: %s", clientMsg)
+	}
 
 	// When the terminal event has an empty output array, reconstruct from
 	// accumulated delta events so the client receives the full content.
@@ -433,6 +446,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var firstTokenMs *int
 	var responseServiceTier string
 	firstChunk := true
+	var terminalErr error
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -486,6 +500,23 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			if event.Response.Usage.InputTokensDetails != nil {
 				usage.CacheReadInputTokens = event.Response.Usage.InputTokensDetails.CachedTokens
+			}
+		}
+		if event.Type == "response.failed" {
+			if hit, _, msg := detectOpenAICyberPolicy([]byte(payload)); hit {
+				clientMsg := openAICyberPolicyClientMessage(msg)
+				MarkOpsCyberPolicy(c, CyberPolicyMark{
+					Message:        clientMsg,
+					Body:           truncateString(payload, 4096),
+					UpstreamStatus: http.StatusOK,
+					UpstreamInTok:  usage.InputTokens,
+					UpstreamOutTok: usage.OutputTokens,
+				})
+				terminalErr = fmt.Errorf("openai cyber_policy: %s", clientMsg)
+				if writeAnthropicStreamError(c, "invalid_request_error", clientMsg) {
+					return true
+				}
+				return true
 			}
 		}
 
@@ -553,7 +584,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				continue
 			}
 			if processDataLine(payload) {
-				return resultWithUsage(), nil
+				return resultWithUsage(), terminalErr
 			}
 		}
 		handleScanErr(scanner.Err())
@@ -610,7 +641,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				continue
 			}
 			if processDataLine(payload) {
-				return resultWithUsage(), nil
+				return resultWithUsage(), terminalErr
 			}
 
 		case <-keepaliveTicker.C:
@@ -639,4 +670,23 @@ func writeAnthropicError(c *gin.Context, statusCode int, errType, message string
 			"message": message,
 		},
 	})
+}
+
+func writeAnthropicStreamError(c *gin.Context, errType, message string) bool {
+	payload, err := json.Marshal(gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    errType,
+			"message": message,
+		},
+	})
+	if err != nil {
+		logger.L().Warn("openai messages stream: failed to marshal error event", zap.Error(err))
+		return false
+	}
+	if _, err := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", payload); err != nil {
+		return true
+	}
+	c.Writer.Flush()
+	return false
 }

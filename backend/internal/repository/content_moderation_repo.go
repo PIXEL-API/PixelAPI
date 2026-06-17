@@ -51,16 +51,19 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	err = r.db.QueryRowContext(ctx, `
 INSERT INTO content_moderation_logs (
     request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
+    scope_type, account_share_listing_id, account_id, owner_user_id, consumer_user_id, membership_id,
     endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
     category_scores, threshold_snapshot, input_excerpt, upstream_latency_ms, error,
     violation_count, auto_banned, email_sent, queue_delay_ms
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11, $12, $13, $14, $15,
-    $16::jsonb, $17::jsonb, $18, $19, $20,
-    $21, $22, $23, $24
+    $8, $9, $10, $11, $12, $13,
+    $14, $15, $16, $17, $18, $19, $20, $21,
+    $22::jsonb, $23::jsonb, $24, $25, $26,
+    $27, $28, $29, $30
 ) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
+		log.ScopeType, nullableInt64Ptr(log.AccountShareListingID), nullableInt64Ptr(log.AccountID), nullableInt64Ptr(log.OwnerUserID), nullableInt64Ptr(log.ConsumerUserID), nullableInt64Ptr(log.MembershipID),
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
 		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, latency, log.Error,
 		log.ViolationCount, log.AutoBanned, log.EmailSent, nullableIntPtr(log.QueueDelayMS),
@@ -95,6 +98,7 @@ func (r *contentModerationRepository) ListLogs(ctx context.Context, filter servi
 	rows, err := r.db.QueryContext(ctx, `
 SELECT
     l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
+    l.scope_type, l.account_share_listing_id, l.account_id, l.owner_user_id, l.consumer_user_id, l.membership_id,
     l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
     l.category_scores, l.threshold_snapshot, l.input_excerpt, l.upstream_latency_ms, l.error,
     l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
@@ -112,7 +116,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 	items := make([]service.ContentModerationLog, 0)
 	for rows.Next() {
 		var item service.ContentModerationLog
-		var userID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
+		var userID, apiKeyID, groupID, accountShareListingID, accountID, ownerUserID, consumerUserID, membershipID, latency, queueDelay sql.NullInt64
 		var scoresRaw, thresholdsRaw []byte
 		if err := rows.Scan(
 			&item.ID,
@@ -123,6 +127,12 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&item.APIKeyName,
 			&groupID,
 			&item.GroupName,
+			&item.ScopeType,
+			&accountShareListingID,
+			&accountID,
+			&ownerUserID,
+			&consumerUserID,
+			&membershipID,
 			&item.Endpoint,
 			&item.Provider,
 			&item.Model,
@@ -156,6 +166,29 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		if groupID.Valid {
 			v := groupID.Int64
 			item.GroupID = &v
+		}
+		if accountShareListingID.Valid {
+			v := accountShareListingID.Int64
+			item.AccountShareListingID = &v
+		}
+		if accountID.Valid {
+			v := accountID.Int64
+			item.AccountID = &v
+		}
+		if ownerUserID.Valid {
+			v := ownerUserID.Int64
+			item.OwnerUserID = &v
+		}
+		if consumerUserID.Valid {
+			v := consumerUserID.Int64
+			item.ConsumerUserID = &v
+		}
+		if membershipID.Valid {
+			v := membershipID.Int64
+			item.MembershipID = &v
+		}
+		if strings.TrimSpace(item.ScopeType) == "" {
+			item.ScopeType = "group"
 		}
 		if latency.Valid {
 			v := int(latency.Int64)
@@ -235,6 +268,13 @@ func nullableIntPtr(value *int) any {
 	return *value
 }
 
+func nullableInt64Ptr(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) ([]string, []any) {
 	where := []string{"l.id IS NOT NULL"}
 	args := make([]any, 0)
@@ -246,7 +286,7 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 	case "hit", "flagged":
 		where = append(where, "l.flagged = TRUE")
 	case "blocked", "block":
-		where = append(where, "l.action = 'block'")
+		where = append(where, "l.action IN ('block', 'hash_block', 'cyber_preflight_block')")
 	case "pass", "allow":
 		where = append(where, "l.flagged = FALSE AND l.error = ''")
 	case "error":

@@ -969,6 +969,89 @@ func NormalizeClaudeOutputEffort(raw string) *string {
 	}
 }
 
+// DefaultEffortForThinkingEnabled 给开启 thinking 但协议层没有 effort 档位的国产模型写入默认记录值。
+func DefaultEffortForThinkingEnabled(mappedModel string) *string {
+	if ResolveThinkingProtocol(mappedModel) != ThinkingProtocolPassbackRequired {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mappedModel)), "deepseek-") {
+		return nil
+	}
+	effort := "high"
+	return &effort
+}
+
+func OpenAIBodyHasThinkingEnabled(body []byte) bool {
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	return thinkingType == "enabled" || thinkingType == "adaptive"
+}
+
+func ApplyThinkingEnabledFallback(effort *string, body []byte, mappedModel string) *string {
+	if effort != nil {
+		return effort
+	}
+	if !OpenAIBodyHasThinkingEnabled(body) {
+		return nil
+	}
+	return DefaultEffortForThinkingEnabled(mappedModel)
+}
+
+func OpenAIRequestMapHasThinkingEnabled(reqBody map[string]any) bool {
+	if len(reqBody) == 0 {
+		return false
+	}
+	thinking, ok := reqBody["thinking"].(map[string]any)
+	if !ok {
+		return false
+	}
+	thinkingType, _ := thinking["type"].(string)
+	switch strings.ToLower(strings.TrimSpace(thinkingType)) {
+	case "enabled", "adaptive":
+		return true
+	default:
+		return false
+	}
+}
+
+func ApplyThinkingEnabledFallbackFromMap(effort *string, reqBody map[string]any, mappedModel string) *string {
+	if effort != nil {
+		return effort
+	}
+	if !OpenAIRequestMapHasThinkingEnabled(reqBody) {
+		return nil
+	}
+	return DefaultEffortForThinkingEnabled(mappedModel)
+}
+
+// NormalizeChineseLLMThinking rewrites vendor-specific thinking options for Anthropic-compatible Chinese LLMs.
+func NormalizeChineseLLMThinking(body []byte, mappedModel string) ([]byte, bool) {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(mappedModel)), "minimax-m") {
+		return body, false
+	}
+	if gjson.GetBytes(body, "thinking.type").String() != "enabled" {
+		return body, false
+	}
+	modified, err := sjson.SetBytes(body, "thinking.type", "adaptive")
+	if err != nil {
+		return body, false
+	}
+	return modified, true
+}
+
+func FilterThinkingBlocksForRetryForModel(body []byte, mappedModel string) []byte {
+	if !ShouldApplyRetryFilters(mappedModel) {
+		return body
+	}
+	return FilterThinkingBlocksForRetry(body)
+}
+
+func FilterSignatureSensitiveBlocksForRetryForModel(body []byte, mappedModel string) []byte {
+	if !ShouldApplyRetryFilters(mappedModel) {
+		return body
+	}
+	return FilterSignatureSensitiveBlocksForRetry(body)
+}
+
 // =========================
 // Thinking Budget Rectifier
 // =========================

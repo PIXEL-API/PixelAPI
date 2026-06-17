@@ -55,18 +55,9 @@ func (r *gatewayRouteSettingRepo) GetAll(context.Context) (map[string]string, er
 func (r *gatewayRouteSettingRepo) Delete(context.Context, string) error { return nil }
 
 func newGatewayRoutesTestRouter() *gin.Engine {
-	return newGatewayRoutesTestRouterWithMasterDataPlane(true)
-}
-
-func newGatewayRoutesTestRouterWithMasterDataPlane(enabled bool) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	settingSvc := service.NewSettingService(&gatewayRouteSettingRepo{values: map[string]string{
-		service.SettingKeyMasterDataPlaneEnabled: map[bool]string{true: "true", false: "false"}[enabled],
-	}}, &config.Config{})
-	_ = settingSvc.UpdateSettings(context.Background(), &service.SystemSettings{
-		MasterDataPlaneEnabled: enabled,
-	})
+	settingSvc := service.NewSettingService(&gatewayRouteSettingRepo{values: map[string]string{}}, &config.Config{})
 
 	RegisterGatewayRoutes(
 		router,
@@ -90,18 +81,6 @@ func newGatewayRoutesTestRouterWithMasterDataPlane(enabled bool) *gin.Engine {
 	)
 
 	return router
-}
-
-func TestGatewayRoutesRejectMasterDataPlaneWhenDisabled(t *testing.T) {
-	router := newGatewayRoutesTestRouterWithMasterDataPlane(false)
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5"}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusServiceUnavailable, w.Code)
-	require.Contains(t, w.Body.String(), "MASTER_DATA_PLANE_DISABLED")
 }
 
 func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {

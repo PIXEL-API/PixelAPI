@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -252,6 +253,61 @@ func TestOpenAICleanRelay_PreselectsCachedAccountBeforeScheduler(t *testing.T) {
 	require.Equal(t, cachedAccount.ID, selection.Account.ID)
 	require.Equal(t, openAIAccountScheduleLayerCleanRelay, decision.Layer)
 	require.True(t, decision.StickySessionHit)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAICleanRelay_AccountShareModeUsesMembershipAccount(t *testing.T) {
+	modeGroupID := int64(61711)
+	privateGroupID := int64(61761)
+	ownerUserID := int64(1)
+	boundAccount := Account{
+		ID:          416100,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		OwnerUserID: &ownerUserID,
+		GroupIDs:    []int64{privateGroupID},
+		AccountGroups: []AccountGroup{
+			{AccountID: 416100, GroupID: privateGroupID},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: 5580, APIKeyID: 20103},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	baseCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(5580))
+	ctx := WithAccountShareModeRequest(baseCtx, 5580, 20103)
+	c := newCleanRelayGinContext(5580, modeGroupID)
+
+	selection, decision, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&modeGroupID,
+		"",
+		"",
+		"gpt-5.5",
+		"gpt-5.5",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+		[]byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`),
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, boundAccount.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerAccountShareMode, decision.Layer)
+	require.Equal(t, boundAccount.ID, decision.SelectedAccountID)
+	require.Equal(t, 1, shareRepo.bindingCalls)
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}

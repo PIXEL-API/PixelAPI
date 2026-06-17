@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
@@ -514,6 +515,52 @@ func TestOpenAISelectAccountWithLoadAwareness_FiltersUnschedulable(t *testing.T)
 	}
 	if selection.Account.ID != available.ID {
 		t.Fatalf("expected account %d, got %d", available.ID, selection.Account.ID)
+	}
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUsesMembershipAccount(t *testing.T) {
+	modeGroupID := int64(61711)
+	privateGroupID := int64(61761)
+	ownerUserID := int64(1)
+	boundAccount := Account{
+		ID:          416100,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		OwnerUserID: &ownerUserID,
+		GroupIDs:    []int64{privateGroupID},
+		AccountGroups: []AccountGroup{
+			{AccountID: 416100, GroupID: privateGroupID},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: 5580, APIKeyID: 20103},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	baseCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, int64(5580))
+	ctx := WithAccountShareModeRequest(baseCtx, 5580, 20103)
+
+	selection, err := svc.SelectAccountWithLoadAwareness(ctx, &modeGroupID, "", "gpt-4", nil)
+	if err != nil {
+		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
+	}
+	if selection == nil || selection.Account == nil {
+		t.Fatalf("expected selection with account")
+	}
+	if selection.Account.ID != boundAccount.ID {
+		t.Fatalf("expected bound account %d, got %d", boundAccount.ID, selection.Account.ID)
+	}
+	if shareRepo.bindingCalls != 1 {
+		t.Fatalf("expected one account-share binding lookup, got %d", shareRepo.bindingCalls)
 	}
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
@@ -1974,6 +2021,30 @@ func TestOpenAIValidateUpstreamBaseURLEnabledEnforcesAllowlist(t *testing.T) {
 	}
 }
 
+func TestOpenAIValidateUpstreamBaseURLEnabledAllowsConfiguredIPPort(t *testing.T) {
+	cfg := &config.Config{
+		Security: config.SecurityConfig{
+			URLAllowlist: config.URLAllowlistConfig{
+				Enabled:           true,
+				AllowInsecureHTTP: true,
+				UpstreamHosts:     []string{"203.0.113.10:8080"},
+			},
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	normalized, err := svc.validateUpstreamBaseURL("http://203.0.113.10:8080/v1/")
+	if err != nil {
+		t.Fatalf("expected allowlisted ip:port to pass, got %v", err)
+	}
+	if normalized != "http://203.0.113.10:8080/v1" {
+		t.Fatalf("expected normalized url, got %q", normalized)
+	}
+	if _, err := svc.validateUpstreamBaseURL("http://203.0.113.10:9090/v1"); err == nil {
+		t.Fatalf("expected different port to fail")
+	}
+}
+
 func TestOpenAIUpdateCodexUsageSnapshotFromHeaders(t *testing.T) {
 	repo := &snapshotUpdateAccountRepo{updateExtraCalls: make(chan map[string]any, 1)}
 	svc := &OpenAIGatewayService{accountRepo: repo}
@@ -2456,6 +2527,40 @@ func TestParseSSEUsage_SelectiveParsing(t *testing.T) {
 	require.Equal(t, 13, usage.InputTokens)
 	require.Equal(t, 15, usage.OutputTokens)
 	require.Equal(t, 4, usage.CacheReadInputTokens)
+}
+
+func TestExtractOpenAIUsageFromJSONBytes_ImageTokenDetails(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"input_tokens": 22,
+			"input_tokens_details": {
+				"text_tokens": 22,
+				"image_tokens": 0
+			},
+			"output_tokens": 196,
+			"output_tokens_details": {
+				"text_tokens": 0,
+				"image_tokens": 196
+			}
+		}
+	}`)
+
+	usage, ok := extractOpenAIUsageFromJSONBytes(body)
+	require.True(t, ok)
+	require.Equal(t, 22, usage.InputTokens)
+	require.Equal(t, 22, usage.TextInputTokens)
+	require.Equal(t, 0, usage.ImageInputTokens)
+	require.Equal(t, 196, usage.OutputTokens)
+	require.Equal(t, 0, usage.TextOutputTokens)
+	require.Equal(t, 196, usage.ImageOutputTokens)
+
+	tokens, actualInputTokens := openAIUsageTokens(usage)
+	require.Equal(t, 22, actualInputTokens)
+	require.Equal(t, 0, tokens.InputTokens)
+	require.Equal(t, 22, tokens.TextInputTokens)
+	require.Equal(t, 0, tokens.ImageInputTokens)
+	require.Equal(t, 196, tokens.OutputTokens)
+	require.Equal(t, 196, tokens.ImageOutputTokens)
 }
 
 func TestExtractCodexFinalResponse_SampleReplay(t *testing.T) {

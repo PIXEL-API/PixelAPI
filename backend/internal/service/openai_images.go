@@ -842,11 +842,26 @@ func mergeOpenAIUsage(dst *OpenAIUsage, body []byte) {
 		if parsed.InputTokens > 0 {
 			dst.InputTokens = parsed.InputTokens
 		}
+		if parsed.TextInputTokens > 0 {
+			dst.TextInputTokens = parsed.TextInputTokens
+		}
+		if parsed.ImageInputTokens > 0 {
+			dst.ImageInputTokens = parsed.ImageInputTokens
+		}
 		if parsed.OutputTokens > 0 {
 			dst.OutputTokens = parsed.OutputTokens
 		}
+		if parsed.TextOutputTokens > 0 {
+			dst.TextOutputTokens = parsed.TextOutputTokens
+		}
 		if parsed.CacheReadInputTokens > 0 {
 			dst.CacheReadInputTokens = parsed.CacheReadInputTokens
+		}
+		if parsed.TextCacheReadInputTokens > 0 {
+			dst.TextCacheReadInputTokens = parsed.TextCacheReadInputTokens
+		}
+		if parsed.ImageCacheReadInputTokens > 0 {
+			dst.ImageCacheReadInputTokens = parsed.ImageCacheReadInputTokens
 		}
 		if parsed.ImageOutputTokens > 0 {
 			dst.ImageOutputTokens = parsed.ImageOutputTokens

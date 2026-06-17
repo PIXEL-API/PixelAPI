@@ -151,8 +151,17 @@ routeLoop:
 
 		for {
 			reqLog.Debug("openai.images.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
+			selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
+			if decision := h.checkCyberPreflightWithContext(selectionCtx, c, reqLog, currentAPIKey, subject, service.ContentModerationProtocolOpenAIImages, parsed.Model, body); decision != nil && decision.Blocked {
+				h.handleStreamingAwareError(c, contentModerationStatus(decision), cyberPreflightErrorCode(decision), decision.Message, streamStarted)
+				return
+			}
+			if decision := h.checkContentModerationWithContext(selectionCtx, c, reqLog, currentAPIKey, subject, service.ContentModerationProtocolOpenAIImages, parsed.Model, body); decision != nil && decision.Blocked {
+				h.handleStreamingAwareError(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message, streamStarted)
+				return
+			}
 			selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForImages(
-				c.Request.Context(),
+				selectionCtx,
 				currentAPIKey.GroupID,
 				sessionHash,
 				parsed.Model,
@@ -164,6 +173,9 @@ routeLoop:
 					zap.Error(err),
 					zap.Int("excluded_account_count", len(failedAccountIDs)),
 				)
+				if h.handleAccountShareModeSelectionError(c, err, streamStarted) {
+					return
+				}
 				if len(failedAccountIDs) == 0 {
 					if routeCursor.switchToNext(apiKey.ID, "account_select_failed", reqLog, zap.Error(err)) {
 						continue routeLoop
@@ -227,6 +239,14 @@ routeLoop:
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+					if c.Writer.Size() != writerSizeBeforeForward {
+						reqLog.Warn("openai.images.upstream_failover_skipped_after_flush",
+							zap.Int64("account_id", account.ID),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+						)
+						h.handleFailoverExhausted(c, failoverErr, true)
+						return
+					}
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := account.GetPoolModeRetryCount()
 						if sameAccountRetryCount[account.ID] < retryLimit {
@@ -298,7 +318,8 @@ routeLoop:
 			}
 
 			h.submitUsageRecordTask(func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
+				if err := h.gatewayService.RecordUsage(usageCtx, &service.OpenAIRecordUsageInput{
 					Result:             result,
 					APIKey:             currentAPIKey,
 					User:               currentAPIKey.User,

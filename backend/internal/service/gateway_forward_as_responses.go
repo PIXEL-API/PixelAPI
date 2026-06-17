@@ -73,6 +73,7 @@ func (s *GatewayService) ForwardAsResponses(
 		}
 	}
 	anthropicReq.Model = mappedModel
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 
 	logger.L().Debug("gateway forward_as_responses: model mapping applied",
 		zap.Int64("account_id", account.ID),

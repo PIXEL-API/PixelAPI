@@ -263,6 +263,31 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_NoRecoverableStateIs
 	require.Empty(t, cache.deletedIDs)
 }
 
+func TestRateLimitService_RecoverAccountAfterSuccessfulTest_InvalidatesOAuthTokenCache(t *testing.T) {
+	repo := &rateLimitClearRepoStub{
+		getByIDAccount: &Account{
+			ID:          17,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Extra:       map[string]any{},
+		},
+	}
+	invalidator := &recoverTokenInvalidatorStub{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc.SetTokenCacheInvalidator(invalidator)
+
+	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 17)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.ClearedError)
+	require.False(t, result.ClearedRateLimit)
+	require.Equal(t, 0, repo.clearErrorCalls)
+	require.Len(t, invalidator.accounts, 1)
+	require.Equal(t, int64(17), invalidator.accounts[0].ID)
+}
+
 func TestRateLimitService_RecoverAccountAfterSuccessfulTest_ClearErrorFailed(t *testing.T) {
 	repo := &rateLimitClearRepoStub{
 		getByIDAccount: &Account{

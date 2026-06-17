@@ -49,18 +49,20 @@ func ValidateHTTPURL(raw string, allowInsecureHTTP bool, opts ValidationOptions)
 		return "", fmt.Errorf("host is not allowed: %s", host)
 	}
 
+	hostPort := host
 	if port := parsed.Port(); port != "" {
 		num, err := strconv.Atoi(port)
 		if err != nil || num <= 0 || num > 65535 {
 			return "", fmt.Errorf("invalid port: %s", port)
 		}
+		hostPort = strings.ToLower(net.JoinHostPort(host, strconv.Itoa(num)))
 	}
 
 	allowlist := normalizeAllowlist(opts.AllowedHosts)
 	if opts.RequireAllowlist && len(allowlist) == 0 {
 		return "", errors.New("allowlist is not configured")
 	}
-	if len(allowlist) > 0 && !isAllowedHost(host, allowlist) {
+	if len(allowlist) > 0 && !isAllowedHost(host, hostPort, allowlist) {
 		return "", fmt.Errorf("host is not allowed: %s", host)
 	}
 
@@ -135,15 +137,20 @@ func normalizeAllowlist(values []string) []string {
 		if entry == "" {
 			continue
 		}
-		if host, _, err := net.SplitHostPort(entry); err == nil {
-			entry = host
+		if host, port, err := net.SplitHostPort(entry); err == nil {
+			ip := net.ParseIP(strings.Trim(host, "[]"))
+			if ip != nil {
+				entry = strings.ToLower(net.JoinHostPort(ip.String(), port))
+			} else {
+				entry = strings.ToLower(strings.Trim(host, "[]"))
+			}
 		}
 		normalized = append(normalized, entry)
 	}
 	return normalized
 }
 
-func isAllowedHost(host string, allowlist []string) bool {
+func isAllowedHost(host, hostPort string, allowlist []string) bool {
 	for _, entry := range allowlist {
 		if entry == "" {
 			continue
@@ -155,7 +162,7 @@ func isAllowedHost(host string, allowlist []string) bool {
 			}
 			continue
 		}
-		if host == entry {
+		if host == entry || hostPort == entry {
 			return true
 		}
 	}

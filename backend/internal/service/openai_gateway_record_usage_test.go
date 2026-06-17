@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func openAIRecordUsagePtrFloat64(v float64) *float64 { return &v }
+
 type openAIRecordUsageLogRepoStub struct {
 	UsageLogRepository
 
@@ -248,6 +250,16 @@ func newOpenAIRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo U
 func newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo UsageLogRepository, billingRepo UsageBillingRepository, userRepo UserRepository, subRepo UserSubscriptionRepository, rateRepo UserGroupRateRepository) *OpenAIGatewayService {
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, rateRepo)
 	svc.usageBillingRepo = billingRepo
+	return svc
+}
+
+func newOpenAIRecordUsageChannelServiceForTest(cache *channelCache) *ChannelService {
+	if cache == nil {
+		cache = &channelCache{}
+	}
+	cache.loadedAt = time.Now()
+	svc := &ChannelService{}
+	svc.cache.Store(cache)
 	return svc
 }
 
@@ -1302,6 +1314,78 @@ func TestOpenAIGatewayServiceRecordUsage_ImageUsesPerImageBillingEvenWithUsageTo
 	require.InDelta(t, 0.0, usageRepo.lastLog.InputCost, 1e-12)
 	require.InDelta(t, 0.0, usageRepo.lastLog.OutputCost, 1e-12)
 	require.InDelta(t, 0.0, usageRepo.lastLog.ImageOutputCost, 1e-12)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_ImageUsesChannelTokenPricingWithOfficialUsage(t *testing.T) {
+	groupID := int64(12)
+
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+
+	channelService := newOpenAIRecordUsageChannelServiceForTest(&channelCache{
+		pricingByGroupModel: map[channelModelKey]*ChannelModelPricing{
+			{groupID: groupID, platform: PlatformOpenAI, model: "gpt-image-2"}: {
+				Platform:            PlatformOpenAI,
+				Models:              []string{"gpt-image-2"},
+				BillingMode:         BillingModeToken,
+				InputPrice:          openAIRecordUsagePtrFloat64(5e-6),
+				OutputPrice:         openAIRecordUsagePtrFloat64(0),
+				CacheReadPrice:      openAIRecordUsagePtrFloat64(1.25e-6),
+				ImageInputPrice:     openAIRecordUsagePtrFloat64(8e-6),
+				ImageCacheReadPrice: openAIRecordUsagePtrFloat64(2e-6),
+				ImageOutputPrice:    openAIRecordUsagePtrFloat64(30e-6),
+			},
+		},
+		channelByGroupID: map[int64]*Channel{
+			groupID: {ID: 4, Status: StatusActive},
+		},
+		groupPlatform:           map[int64]string{groupID: PlatformOpenAI},
+		wildcardByGroupPlatform: map[channelGroupPlatformKey][]*wildcardPricingEntry{},
+		mappingByGroupModel:     map[channelModelKey]string{},
+		wildcardMappingByGP:     map[channelGroupPlatformKey][]*wildcardMappingEntry{},
+		byID:                    map[int64]*Channel{},
+	})
+	svc.channelService = channelService
+	svc.resolver = NewModelPricingResolver(channelService, svc.billingService)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_image_official_token_usage",
+			Model:     "gpt-image-2",
+			Usage: OpenAIUsage{
+				InputTokens:       22,
+				TextInputTokens:   22,
+				OutputTokens:      196,
+				ImageOutputTokens: 196,
+			},
+			ImageCount: 1,
+			ImageSize:  "1K",
+			Duration:   time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      1010,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:             groupID,
+				RateMultiplier: 8.0,
+			},
+		},
+		User:    &User{ID: 2010},
+		Account: &Account{ID: 3010},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.BillingMode)
+	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
+	require.Equal(t, 1, usageRepo.lastLog.ImageCount)
+	require.InDelta(t, 22*5e-6, usageRepo.lastLog.InputCost, 1e-12)
+	require.InDelta(t, 0.0, usageRepo.lastLog.OutputCost, 1e-12)
+	require.InDelta(t, 196*30e-6, usageRepo.lastLog.ImageOutputCost, 1e-12)
+	require.InDelta(t, 0.00599, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, 0.04792, usageRepo.lastLog.ActualCost, 1e-12)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ResponseImageBillingModelNotOverriddenByRequestedModel(t *testing.T) {

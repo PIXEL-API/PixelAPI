@@ -69,6 +69,12 @@ func TestValidateHTTPURL(t *testing.T) {
 	if _, err := ValidateHTTPURL("https://sub.api.example.com", false, ValidationOptions{AllowedHosts: []string{"*.example.com"}}); err != nil {
 		t.Fatalf("expected wildcard allowlist to pass, got %v", err)
 	}
+	if _, err := ValidateHTTPURL("https://203.0.113.10:8443/v1", false, ValidationOptions{AllowedHosts: []string{"203.0.113.10:8443"}}); err != nil {
+		t.Fatalf("expected allowlisted ip:port to pass, got %v", err)
+	}
+	if _, err := ValidateHTTPURL("https://203.0.113.10:9443/v1", false, ValidationOptions{AllowedHosts: []string{"203.0.113.10:8443"}}); err == nil {
+		t.Fatalf("expected different port to fail for ip:port allowlist")
+	}
 	if _, err := ValidateHTTPURL("https://localhost", false, ValidationOptions{AllowPrivate: false}); err == nil {
 		t.Fatalf("expected localhost to be blocked when allow_private_hosts is false")
 	}
