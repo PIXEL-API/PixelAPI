@@ -60,6 +60,8 @@ const (
 // 可通过 gateway.upstream_response_read_max_bytes 配置项覆盖。
 const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
 
+const maxGatewaySchedulingIndexedCandidateLimit = 1024
+
 type Config struct {
 	Server                  ServerConfig                  `mapstructure:"server"`
 	Log                     LogConfig                     `mapstructure:"log"`
@@ -1071,9 +1073,9 @@ type GatewaySchedulingConfig struct {
 	SnapshotMGetChunkSize int `mapstructure:"snapshot_mget_chunk_size"`
 	// 快照重建时的缓存写入分块大小
 	SnapshotWriteChunkSize int `mapstructure:"snapshot_write_chunk_size"`
-	// 显式启用 Redis 候选索引的调度桶，格式为 "groupID:platform:mode"。
+	// 显式启用轻量候选采样的调度桶，格式为 "groupID:platform:mode"。
 	IndexedBuckets []string `mapstructure:"indexed_buckets"`
-	// 候选索引一次最多返回的账号数。
+	// 候选采样一次最多返回的账号数。
 	IndexedCandidateLimit int `mapstructure:"indexed_candidate_limit"`
 
 	// 过期槽位清理周期（0 表示禁用）
@@ -2862,6 +2864,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.Scheduling.IndexedCandidateLimit <= 0 {
 		return fmt.Errorf("gateway.scheduling.indexed_candidate_limit must be positive")
+	}
+	if c.Gateway.Scheduling.IndexedCandidateLimit > maxGatewaySchedulingIndexedCandidateLimit {
+		return fmt.Errorf("gateway.scheduling.indexed_candidate_limit must be <= %d", maxGatewaySchedulingIndexedCandidateLimit)
 	}
 	if c.Gateway.Scheduling.SlotCleanupInterval < 0 {
 		return fmt.Errorf("gateway.scheduling.slot_cleanup_interval must be non-negative")

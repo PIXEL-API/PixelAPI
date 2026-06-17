@@ -98,6 +98,15 @@ func ProvideOpenAITokenProvider(
 	return p
 }
 
+func ProvideOpenAIQuotaService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	tokenProvider *OpenAITokenProvider,
+	privacyClientFactory PrivacyClientFactory,
+) *OpenAIQuotaService {
+	return NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
+}
+
 // ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
 func ProvideGeminiTokenProvider(
 	accountRepo AccountRepository,
@@ -169,17 +178,6 @@ func ProvideAccountErrorCleanupService(accountRepo AccountRepository) *AccountEr
 // ProvideSubscriptionExpiryService creates and starts SubscriptionExpiryService.
 func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository) *SubscriptionExpiryService {
 	svc := NewSubscriptionExpiryService(userSubRepo, time.Minute)
-	svc.Start()
-	return svc
-}
-
-// ProvideSubsiteMaintenanceService creates and starts SubsiteMaintenanceService.
-func ProvideSubsiteMaintenanceService(
-	subsiteRepo SubsiteRepository,
-	leaseRepo AccountLeaseRepository,
-	reservationRepo QuotaReservationRepository,
-) *SubsiteMaintenanceService {
-	svc := NewSubsiteMaintenanceService(subsiteRepo, leaseRepo, reservationRepo)
 	svc.Start()
 	return svc
 }
@@ -465,6 +463,12 @@ func ProvideGroupRateScheduleService(
 	return svc
 }
 
+func ProvideAffiliateCodeCycleService(affiliateService *AffiliateService) *AffiliateCodeCycleService {
+	svc := NewAffiliateCodeCycleService(affiliateService)
+	svc.Start()
+	return svc
+}
+
 func ProvideAuthService(
 	entClient *dbent.Client,
 	userRepo UserRepository,
@@ -511,6 +515,30 @@ func ProvideAccountService(
 	svc.SetAccountSharePolicyRepository(accountSharePolicyRepo)
 	svc.SetUserPrivateGroupProvisioner(privateGroupProvisioner)
 	svc.SetSystemNoticeService(systemNoticeService)
+	return svc
+}
+
+func ProvideAccountShareModeService(
+	cfg *config.Config,
+	repo AccountShareModeRepository,
+	accountRepo AccountRepository,
+	apiKeyRepo APIKeyRepository,
+	userRepo UserRepository,
+	proxyRepo ProxyRepository,
+	openaiOAuthService *OpenAIOAuthService,
+	concurrencyService *ConcurrencyService,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	accountTestService *AccountTestService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+) *AccountShareModeService {
+	svc := NewAccountShareModeService(repo, accountRepo, apiKeyRepo, userRepo, proxyRepo, openaiOAuthService)
+	if cfg != nil {
+		svc.SetActionTokenSecret(cfg.JWT.Secret)
+	}
+	svc.SetRuntimeDependencies(concurrencyService, authCacheInvalidator, accountTestService, rateLimitService)
+	svc.SetBillingCacheService(billingCacheService)
+	svc.StartSeatBillingWorker()
 	return svc
 }
 
@@ -594,6 +622,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGroupRateScheduleService,
 	ProvideAccountService,
 	NewAccountSharePolicyService,
+	ProvideAccountShareModeService,
 	NewProxyService,
 	NewRedeemService,
 	NewPromoService,
@@ -602,11 +631,6 @@ var ProviderSet = wire.NewSet(
 	ProvidePricingService,
 	NewBillingService,
 	ProvideBillingCacheService,
-	NewSubsiteService,
-	NewSubsiteAuthService,
-	NewAccountLeaseService,
-	NewRequestAuthorizeService,
-	NewUsageIngestService,
 	ProvideAnnouncementService,
 	NewConversationService,
 	NewSystemNoticeService,
@@ -625,6 +649,7 @@ var ProviderSet = wire.NewSet(
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
 	ProvideOpenAITokenProvider,
+	ProvideOpenAIQuotaService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
@@ -657,7 +682,6 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountExpiryService,
 	ProvideAccountErrorCleanupService,
 	ProvideSubscriptionExpiryService,
-	ProvideSubsiteMaintenanceService,
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
@@ -680,6 +704,7 @@ var ProviderSet = wire.NewSet(
 	NewModelPricingResolver,
 	ProvideContentModerationService,
 	NewAffiliateService,
+	ProvideAffiliateCodeCycleService,
 	NewRevenueService,
 	NewReceiptCodeService,
 	NewWithdrawalService,
@@ -721,12 +746,14 @@ func ProvideContentModerationService(
 	repo ContentModerationRepository,
 	hashCache ContentModerationHashCache,
 	groupRepo GroupRepository,
+	accountShareModeService *AccountShareModeService,
 	userRepo UserRepository,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	emailService *EmailService,
 	systemNoticeService *SystemNoticeService,
 ) *ContentModerationService {
 	svc := NewContentModerationService(settingRepo, repo, hashCache, groupRepo, userRepo, authCacheInvalidator, emailService)
+	svc.SetAccountShareModeResolver(accountShareModeService)
 	svc.SetSystemNoticeService(systemNoticeService)
 	return svc
 }

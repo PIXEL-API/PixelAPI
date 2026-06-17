@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -68,6 +69,7 @@ type scheduledMonitor struct {
 	id       int64
 	name     string
 	interval time.Duration
+	jitter   time.Duration
 	cancel   context.CancelFunc
 }
 
@@ -165,6 +167,7 @@ func (r *ChannelMonitorRunner) Schedule(m *ChannelMonitor) {
 		id:       m.ID,
 		name:     m.Name,
 		interval: interval,
+		jitter:   time.Duration(m.JitterSeconds) * time.Second,
 		cancel:   cancel,
 	}
 	r.tasks[m.ID] = task
@@ -217,16 +220,34 @@ func (r *ChannelMonitorRunner) runScheduled(ctx context.Context, task *scheduled
 
 	r.fire(ctx, task)
 
-	ticker := time.NewTicker(task.interval)
-	defer ticker.Stop()
 	for {
+		delay := randomMonitorInterval(task.interval, task.jitter)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			r.fire(ctx, task)
 		}
 	}
+}
+
+func randomMonitorInterval(interval time.Duration, jitter time.Duration) time.Duration {
+	if interval <= 0 || jitter <= 0 {
+		return interval
+	}
+	maxJitter := int64(jitter)
+	if maxJitter <= 0 {
+		return interval
+	}
+	delta := time.Duration(rand.Int63n(maxJitter*2+1) - maxJitter)
+	next := interval + delta
+	minimum := time.Duration(monitorMinIntervalSeconds) * time.Second
+	if next < minimum {
+		return minimum
+	}
+	return next
 }
 
 // fire 提交一次检测到 worker 池。功能开关关闭时跳过本次（不取消任务，

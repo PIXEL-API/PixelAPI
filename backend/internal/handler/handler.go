@@ -11,6 +11,7 @@ type AdminHandlers struct {
 	Group                  *admin.GroupHandler
 	Account                *admin.AccountHandler
 	AccountSharePolicy     *admin.AccountSharePolicyHandler
+	AccountShareModePolicy *admin.AccountShareModePolicyHandler
 	Announcement           *admin.AnnouncementHandler
 	Conversation           *admin.ConversationHandler
 	DataManagement         *admin.DataManagementHandler
@@ -41,7 +42,6 @@ type AdminHandlers struct {
 	Withdrawal             *admin.WithdrawalHandler
 	Shop                   *admin.ShopHandler
 	Affiliate              *admin.AffiliateHandler
-	Subsite                *admin.SubsiteHandler
 }
 
 // Handlers contains all HTTP handlers
@@ -49,6 +49,7 @@ type Handlers struct {
 	Auth             *AuthHandler
 	User             *UserHandler
 	APIKey           *APIKeyHandler
+	AccountShareMode *AccountShareModeHandler
 	UserAccount      *UserAccountHandler
 	Usage            *UsageHandler
 	Redeem           *RedeemHandler
@@ -64,7 +65,6 @@ type Handlers struct {
 	Payment          *PaymentHandler
 	PaymentWebhook   *PaymentWebhookHandler
 	AvailableChannel *AvailableChannelHandler
-	SubsiteInternal  *SubsiteInternalHandler
 	ReceiptCode      *ReceiptCodeHandler
 	Withdrawal       *WithdrawalHandler
 	Shop             *ShopHandler

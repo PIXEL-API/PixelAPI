@@ -26,6 +26,19 @@ func validateInterval(sec int) error {
 	return nil
 }
 
+func validateMonitorSchedule(intervalSeconds int, jitterSeconds int) error {
+	if err := validateInterval(intervalSeconds); err != nil {
+		return err
+	}
+	if jitterSeconds < 0 {
+		return ErrChannelMonitorInvalidInterval
+	}
+	if intervalSeconds-jitterSeconds < monitorMinIntervalSeconds {
+		return ErrChannelMonitorInvalidInterval
+	}
+	return nil
+}
+
 // validateEndpoint 校验 endpoint：
 //   - scheme 强制 https（拒绝 http，避免明文凭证 + 部分 SSRF 利用面）
 //   - 必须为 origin（无 path/query/fragment），防止用户填 https://api.openai.com/v1

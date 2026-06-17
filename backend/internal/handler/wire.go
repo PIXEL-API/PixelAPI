@@ -14,6 +14,7 @@ func ProvideAdminHandlers(
 	groupHandler *admin.GroupHandler,
 	accountHandler *admin.AccountHandler,
 	accountSharePolicyHandler *admin.AccountSharePolicyHandler,
+	accountShareModePolicyHandler *admin.AccountShareModePolicyHandler,
 	announcementHandler *admin.AnnouncementHandler,
 	adminConversationHandler *admin.ConversationHandler,
 	dataManagementHandler *admin.DataManagementHandler,
@@ -44,7 +45,6 @@ func ProvideAdminHandlers(
 	withdrawalHandler *admin.WithdrawalHandler,
 	shopHandler *admin.ShopHandler,
 	affiliateHandler *admin.AffiliateHandler,
-	subsiteHandler *admin.SubsiteHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
@@ -52,6 +52,7 @@ func ProvideAdminHandlers(
 		Group:                  groupHandler,
 		Account:                accountHandler,
 		AccountSharePolicy:     accountSharePolicyHandler,
+		AccountShareModePolicy: accountShareModePolicyHandler,
 		Announcement:           announcementHandler,
 		Conversation:           adminConversationHandler,
 		DataManagement:         dataManagementHandler,
@@ -82,7 +83,6 @@ func ProvideAdminHandlers(
 		Withdrawal:             withdrawalHandler,
 		Shop:                   shopHandler,
 		Affiliate:              affiliateHandler,
-		Subsite:                subsiteHandler,
 	}
 }
 
@@ -96,11 +96,43 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 	return NewSettingHandler(settingService, buildInfo.Version)
 }
 
+func ProvideUserAccountHandler(
+	accountService *service.AccountService,
+	accountUsageService *service.AccountUsageService,
+	accountTestService *service.AccountTestService,
+	rateLimitService *service.RateLimitService,
+	settingService *service.SettingService,
+	oauthService *service.OAuthService,
+	openaiOAuthService *service.OpenAIOAuthService,
+	geminiOAuthService *service.GeminiOAuthService,
+	antigravityOAuthService *service.AntigravityOAuthService,
+	concurrencyService *service.ConcurrencyService,
+	sessionLimitCache service.SessionLimitCache,
+	rpmCache service.RPMCache,
+	accountBatchTaskService *service.AccountBatchTaskService,
+) *UserAccountHandler {
+	h := NewUserAccountHandler(
+		accountService,
+		accountUsageService,
+		accountTestService,
+		rateLimitService,
+		settingService,
+		oauthService,
+		openaiOAuthService,
+		geminiOAuthService,
+		antigravityOAuthService,
+		accountBatchTaskService,
+	)
+	h.SetRuntimeCapacityProviders(concurrencyService, sessionLimitCache, rpmCache)
+	return h
+}
+
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
 	authHandler *AuthHandler,
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
+	accountShareModeHandler *AccountShareModeHandler,
 	userAccountHandler *UserAccountHandler,
 	usageHandler *UsageHandler,
 	redeemHandler *RedeemHandler,
@@ -116,7 +148,6 @@ func ProvideHandlers(
 	paymentHandler *PaymentHandler,
 	paymentWebhookHandler *PaymentWebhookHandler,
 	availableChannelHandler *AvailableChannelHandler,
-	subsiteInternalHandler *SubsiteInternalHandler,
 	receiptCodeHandler *ReceiptCodeHandler,
 	withdrawalHandler *WithdrawalHandler,
 	shopHandler *ShopHandler,
@@ -127,6 +158,7 @@ func ProvideHandlers(
 		Auth:             authHandler,
 		User:             userHandler,
 		APIKey:           apiKeyHandler,
+		AccountShareMode: accountShareModeHandler,
 		UserAccount:      userAccountHandler,
 		Usage:            usageHandler,
 		Redeem:           redeemHandler,
@@ -142,7 +174,6 @@ func ProvideHandlers(
 		Payment:          paymentHandler,
 		PaymentWebhook:   paymentWebhookHandler,
 		AvailableChannel: availableChannelHandler,
-		SubsiteInternal:  subsiteInternalHandler,
 		ReceiptCode:      receiptCodeHandler,
 		Withdrawal:       withdrawalHandler,
 		Shop:             shopHandler,
@@ -155,7 +186,8 @@ var ProviderSet = wire.NewSet(
 	NewAuthHandler,
 	NewUserHandler,
 	NewAPIKeyHandler,
-	NewUserAccountHandler,
+	NewAccountShareModeHandler,
+	ProvideUserAccountHandler,
 	NewUsageHandler,
 	NewRedeemHandler,
 	NewSubscriptionHandler,
@@ -169,7 +201,6 @@ var ProviderSet = wire.NewSet(
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
 	NewAvailableChannelHandler,
-	NewSubsiteInternalHandler,
 	NewReceiptCodeHandler,
 	NewWithdrawalHandler,
 	NewShopHandler,
@@ -180,6 +211,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewGroupHandler,
 	admin.NewAccountHandler,
 	admin.NewAccountSharePolicyHandler,
+	admin.NewAccountShareModePolicyHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewConversationHandler,
 	admin.NewDataManagementHandler,
@@ -210,7 +242,6 @@ var ProviderSet = wire.NewSet(
 	admin.NewWithdrawalHandler,
 	admin.NewShopHandler,
 	admin.NewAffiliateHandler,
-	admin.NewSubsiteHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

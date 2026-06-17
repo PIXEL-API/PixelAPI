@@ -104,6 +104,9 @@ var migrationChecksumCompatibilityRules = map[string]migrationChecksumCompatibil
 	"155_image_generation_group_controls.sql":                 newMigrationChecksumCompatibilityRule("8a8bc4ad03b36bf001290c674a790597cf399ff79c7be298d6bb8071a66d8cf8", "f5afcb0b91287ca1422c2163a39471b4cddc3673d9e7ff71e2402b3088ab5e2e"),
 	"156_allow_email_oauth_provider_types.sql":                newMigrationChecksumCompatibilityRule("e5e3512fd7ff6e9225414bf79425fd8ddbf6d78a66998142bfb2441f8e7e4708", "deb09c00432066d3194255d952e8d1d78483ad885c43777f3b06a1c0369b1a02"),
 	"157_content_moderation.sql":                              newMigrationChecksumCompatibilityRule("f9545c941580e8cad2b6b5ca4c6522bf1a6335b5a5a04bdc2b143678b289df67", "ae967e621e3bf66bbce6dd0624ee6c647ac57643dbdb4449a3d7f77f6531937a"),
+	"176_drop_subsite_control_plane.sql":                      newMigrationChecksumCompatibilityRule("cb3b8a4c624acfe2356a3a0cf8faf84102f3e794b4300e6db6ba0279aeaa3abe", "d519b5390111295dd211ae53a5412ee74bfea986fc5578c7a0331498312e6ba7", "168f44f601ac2d02bfce1ea6718804f186f6dcae0e4ce08c2d7dfd75b0ea07ee", "145a3831e454138e4bed2c96d85cc5f025490cd7b6523b826e54b57bcf23da8d", "68573b8b435e8f9a8275a1ca9d84411d61af6372d1e390c9e5afcff91ccc9aca", "72e0d7cf198a6f9723669bb40a21e965712b015db58c90815741095008db1aa0"),
+	"177_user_load_factor_credits.sql":                        newMigrationChecksumCompatibilityRule("b56bca68828b774a12067f0e30e435e867cc5037cbc53859bcaa44783769766f", "2d3b9561c3af819708d568bf61528e94842b7a36a133ea562de3d134f67df292"),
+	"178_shop_load_factor_credits_products.sql":               newMigrationChecksumCompatibilityRule("6ead4c6f7ef19d792785d23e8f2dbd27e173e5aea3c43489a9e3ea2f3dadadcf", "ea0bc16821b2dde5ec041baab346a4c9b9abcb7a79b258a1d53cd30fb1dcd981"),
 }
 
 // ApplyMigrations 将嵌入的 SQL 迁移文件应用到指定的数据库。

@@ -27,6 +27,8 @@ const (
 	accountSlotKeyPrefix = "concurrency:account:"
 	// 格式: concurrency:user:{userID}
 	userSlotKeyPrefix = "concurrency:user:"
+	// 格式: concurrency:account_share_membership:{membershipID}
+	accountShareMembershipSlotKeyPrefix = "concurrency:account_share_membership:"
 	// 等待队列计数器格式: concurrency:wait:{userID}
 	waitQueueKeyPrefix = "concurrency:wait:"
 	// 账号级等待队列计数器格式: wait:account:{accountID}
@@ -219,6 +221,10 @@ func userSlotKey(userID int64) string {
 	return fmt.Sprintf("%s%d", userSlotKeyPrefix, userID)
 }
 
+func accountShareMembershipSlotKey(membershipID int64) string {
+	return fmt.Sprintf("%s%d", accountShareMembershipSlotKeyPrefix, membershipID)
+}
+
 func waitQueueKey(userID int64) string {
 	return fmt.Sprintf("%s%d", waitQueueKeyPrefix, userID)
 }
@@ -327,6 +333,37 @@ func (c *concurrencyCache) ReleaseUserSlot(ctx context.Context, userID int64, re
 
 func (c *concurrencyCache) GetUserConcurrency(ctx context.Context, userID int64) (int, error) {
 	key := userSlotKey(userID)
+	now, err := c.redisUnixTime(ctx)
+	if err != nil {
+		return 0, err
+	}
+	result, err := getCountScript.Run(ctx, c.rdb, []string{key}, c.slotTTLSeconds, now).Int()
+	if err != nil {
+		return 0, err
+	}
+	return result, nil
+}
+
+func (c *concurrencyCache) AcquireAccountShareMembershipSlot(ctx context.Context, membershipID int64, maxConcurrency int, requestID string) (bool, error) {
+	key := accountShareMembershipSlotKey(membershipID)
+	now, err := c.redisUnixTime(ctx)
+	if err != nil {
+		return false, err
+	}
+	result, err := acquireScript.Run(ctx, c.rdb, []string{key}, maxConcurrency, c.slotTTLSeconds, requestID, now).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) ReleaseAccountShareMembershipSlot(ctx context.Context, membershipID int64, requestID string) error {
+	key := accountShareMembershipSlotKey(membershipID)
+	return c.rdb.ZRem(ctx, key, requestID).Err()
+}
+
+func (c *concurrencyCache) GetAccountShareMembershipConcurrency(ctx context.Context, membershipID int64) (int, error) {
+	key := accountShareMembershipSlotKey(membershipID)
 	now, err := c.redisUnixTime(ctx)
 	if err != nil {
 		return 0, err
@@ -521,7 +558,7 @@ func (c *concurrencyCache) CleanupStaleProcessSlots(ctx context.Context, activeR
 	}
 
 	// 1. 清理有序集合中非当前进程前缀的成员
-	slotPatterns := []string{accountSlotKeyPrefix + "*", userSlotKeyPrefix + "*"}
+	slotPatterns := []string{accountSlotKeyPrefix + "*", userSlotKeyPrefix + "*", accountShareMembershipSlotKeyPrefix + "*"}
 	for _, pattern := range slotPatterns {
 		if err := c.cleanupSlotsByPattern(ctx, pattern, activeRequestPrefix); err != nil {
 			return err

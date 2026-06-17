@@ -149,7 +149,7 @@ func TestSchedulerCacheEmptySnapshotEvictsBucket(t *testing.T) {
 	require.False(t, isMember)
 }
 
-func TestSchedulerCacheCandidateIndexManualBucket(t *testing.T) {
+func TestSchedulerCacheCandidateSamplingManualBucket(t *testing.T) {
 	ctx := context.Background()
 	rdb := testRedis(t)
 	bucket := service.SchedulerBucket{GroupID: 18, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
@@ -178,11 +178,19 @@ func TestSchedulerCacheCandidateIndexManualBucket(t *testing.T) {
 	require.True(t, hit)
 	require.Len(t, candidates, 64)
 
-	version, err := rdb.Get(ctx, schedulerBucketKey(schedulerCandidateActivePrefix, bucket)).Result()
+	exists, err := rdb.Exists(
+		ctx,
+		schedulerBucketKey(schedulerCandidateActivePrefix, bucket),
+		schedulerBucketKey(schedulerCandidateReadyPrefix, bucket),
+	).Result()
 	require.NoError(t, err)
-	shards, err := rdb.HGet(ctx, schedulerCandidateMetaKey(bucket, version), "shards").Int()
+	require.Zero(t, exists)
+	legacyIndexKeys, err := rdb.Keys(ctx, schedulerCandidateIndexPrefix+"*").Result()
 	require.NoError(t, err)
-	require.Greater(t, shards, 1)
+	require.Empty(t, legacyIndexKeys)
+	legacyMetaKeys, err := rdb.Keys(ctx, schedulerCandidateMetaPrefix+"*").Result()
+	require.NoError(t, err)
+	require.Empty(t, legacyMetaKeys)
 
 	require.NoError(t, cache.SetSnapshot(ctx, bucket, accounts[:1]))
 	candidates, hit, err = candidateCache.GetCandidateSnapshot(ctx, bucket, 64)
@@ -191,7 +199,49 @@ func TestSchedulerCacheCandidateIndexManualBucket(t *testing.T) {
 	require.Nil(t, candidates)
 }
 
-func TestSchedulerCacheCandidateIndexManualSmallBucketMisses(t *testing.T) {
+func TestSchedulerCacheCandidateSamplingExpiresLegacyIndex(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	bucket := service.SchedulerBucket{GroupID: 18, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	cache := newSchedulerCacheWithOptions(rdb, 128, 256, []string{bucket.String()})
+
+	legacyVersion := "7"
+	require.NoError(t, rdb.Set(ctx, schedulerBucketKey(schedulerCandidateActivePrefix, bucket), legacyVersion, 0).Err())
+	require.NoError(t, rdb.Set(ctx, schedulerBucketKey(schedulerCandidateReadyPrefix, bucket), "1", 0).Err())
+	require.NoError(t, rdb.HSet(ctx, schedulerCandidateMetaKey(bucket, legacyVersion), "shards", 2).Err())
+	require.NoError(t, rdb.Set(ctx, schedulerCandidateShardKey(bucket, legacyVersion, 0), "legacy-0", 0).Err())
+	require.NoError(t, rdb.Set(ctx, schedulerCandidateShardKey(bucket, legacyVersion, 1), "legacy-1", 0).Err())
+
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{{
+		ID:          42,
+		Name:        "legacy-cleanup",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 3,
+		GroupIDs:    []int64{bucket.GroupID},
+	}}))
+
+	exists, err := rdb.Exists(
+		ctx,
+		schedulerBucketKey(schedulerCandidateActivePrefix, bucket),
+		schedulerBucketKey(schedulerCandidateReadyPrefix, bucket),
+	).Result()
+	require.NoError(t, err)
+	require.Zero(t, exists)
+	for _, key := range []string{
+		schedulerCandidateMetaKey(bucket, legacyVersion),
+		schedulerCandidateShardKey(bucket, legacyVersion, 0),
+		schedulerCandidateShardKey(bucket, legacyVersion, 1),
+	} {
+		ttl, err := rdb.TTL(ctx, key).Result()
+		require.NoError(t, err)
+		require.Greater(t, ttl, time.Duration(0))
+	}
+}
+
+func TestSchedulerCacheCandidateSamplingManualSmallBucketMisses(t *testing.T) {
 	ctx := context.Background()
 	rdb := testRedis(t)
 	bucket := service.SchedulerBucket{GroupID: 18, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
@@ -216,7 +266,7 @@ func TestSchedulerCacheCandidateIndexManualSmallBucketMisses(t *testing.T) {
 	require.Nil(t, candidates)
 }
 
-func TestSchedulerCacheCandidateIndexDisabledBucketMisses(t *testing.T) {
+func TestSchedulerCacheCandidateSamplingDisabledBucketMisses(t *testing.T) {
 	ctx := context.Background()
 	rdb := testRedis(t)
 	enabledBucket := service.SchedulerBucket{GroupID: 18, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}

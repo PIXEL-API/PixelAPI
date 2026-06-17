@@ -81,9 +81,9 @@ type SchedulerCache interface {
 }
 
 // SchedulerCandidateCache is an optional extension for caches that can return a
-// small indexed candidate set instead of materializing a whole scheduler bucket.
+// small sampled candidate set instead of materializing a whole scheduler bucket.
 type SchedulerCandidateCache interface {
-	// GetCandidateSnapshot reads a manually enabled candidate index for bucket.
+	// GetCandidateSnapshot reads a manually enabled candidate sample for bucket.
 	// hit=false means callers should fall back to the full scheduler snapshot.
 	GetCandidateSnapshot(ctx context.Context, bucket SchedulerBucket, limit int) ([]*Account, bool, error)
 }

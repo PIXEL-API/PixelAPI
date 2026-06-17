@@ -29,6 +29,7 @@ func RegisterAdminRoutes(
 		// 账号管理
 		registerAccountRoutes(admin, h)
 		registerAccountSharePolicyRoutes(admin, h)
+		registerAccountShareModePolicyRoutes(admin, h)
 
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
@@ -98,7 +99,6 @@ func RegisterAdminRoutes(
 
 		// 渠道监控
 		registerChannelMonitorRoutes(admin, h)
-		registerSubsiteRoutes(admin, h)
 
 		// 风控中心
 		registerContentModerationRoutes(admin, h)
@@ -115,6 +115,7 @@ func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers
 		risk.PUT("/config", h.Admin.ContentModeration.UpdateConfig)
 		risk.POST("/api-keys/test", h.Admin.ContentModeration.TestAPIKeys)
 		risk.GET("/status", h.Admin.ContentModeration.GetStatus)
+		risk.GET("/account-share/listings", h.Admin.ContentModeration.ListAccountShareModeListings)
 		risk.GET("/logs", h.Admin.ContentModeration.ListLogs)
 		risk.POST("/users/:user_id/unban", h.Admin.ContentModeration.UnbanUser)
 		risk.DELETE("/hashes", h.Admin.ContentModeration.DeleteFlaggedHash)
@@ -182,27 +183,6 @@ func registerAdminAPIKeyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	apiKeys := admin.Group("/api-keys")
 	{
 		apiKeys.PUT("/:id", h.Admin.APIKey.UpdateGroup)
-	}
-}
-
-func registerSubsiteRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	subsites := admin.Group("/subsites")
-	{
-		subsites.GET("", h.Admin.Subsite.List)
-		subsites.POST("", h.Admin.Subsite.Create)
-		subsites.PATCH("/:id", h.Admin.Subsite.Update)
-		subsites.POST("/:id/activate", h.Admin.Subsite.Activate)
-		subsites.POST("/:id/pause", h.Admin.Subsite.Pause)
-		subsites.POST("/:id/resume", h.Admin.Subsite.Resume)
-		subsites.POST("/:id/reset-secret", h.Admin.Subsite.ResetSecret)
-		subsites.GET("/:id/leases", h.Admin.Subsite.ListLeases)
-		subsites.GET("/:id/leases/active-account-ids", h.Admin.Subsite.ListLeaseActiveAccountIDs)
-		subsites.POST("/:id/leases", h.Admin.Subsite.CreateLease)
-		subsites.PATCH("/:id/leases/:lease_id", h.Admin.Subsite.UpdateLease)
-		subsites.DELETE("/:id/leases/:lease_id", h.Admin.Subsite.DeleteLease)
-		subsites.POST("/:id/leases/:lease_id/drain", h.Admin.Subsite.DrainLease)
-		subsites.POST("/:id/leases/:lease_id/release", h.Admin.Subsite.ReleaseLease)
-		subsites.POST("/:id/leases/:lease_id/renew", h.Admin.Subsite.RenewLease)
 	}
 }
 
@@ -326,6 +306,7 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		users.DELETE("/:id", h.Admin.User.Delete)
 		users.POST("/:id/balance", h.Admin.User.UpdateBalance)
 		users.POST("/:id/points", h.Admin.User.UpdatePoints)
+		users.POST("/:id/load-factor-credits", h.Admin.User.UpdateLoadFactorCredits)
 		users.GET("/:id/api-keys", h.Admin.User.GetUserAPIKeys)
 		users.GET("/:id/usage", h.Admin.User.GetUserUsage)
 		users.GET("/:id/balance-history", h.Admin.User.GetBalanceHistory)
@@ -426,6 +407,14 @@ func registerAccountSharePolicyRoutes(admin *gin.RouterGroup, h *handler.Handler
 	}
 }
 
+func registerAccountShareModePolicyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	policy := admin.Group("/account-share-mode-policy")
+	{
+		policy.GET("", h.Admin.AccountShareModePolicy.Get)
+		policy.PUT("", h.Admin.AccountShareModePolicy.Update)
+	}
+}
+
 func registerAnnouncementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	announcements := admin.Group("/announcements")
 	{
@@ -461,6 +450,8 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		openai.POST("/refresh-token", h.Admin.OpenAIOAuth.RefreshToken)
 		openai.POST("/accounts/:id/refresh", h.Admin.OpenAIOAuth.RefreshAccountToken)
 		openai.POST("/create-from-oauth", h.Admin.OpenAIOAuth.CreateAccountFromOAuth)
+		openai.GET("/accounts/:id/quota", h.Admin.OpenAIOAuth.QueryQuota)
+		openai.POST("/accounts/:id/reset-quota", h.Admin.OpenAIOAuth.ResetQuota)
 	}
 }
 
@@ -645,6 +636,7 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		usage.GET("", h.Admin.Usage.List)
 		usage.GET("/stats", h.Admin.Usage.Stats)
+		usage.GET("/balance-ledger", h.Admin.Usage.ListBalanceLedger)
 		usage.GET("/search-users", h.Admin.Usage.SearchUsers)
 		usage.GET("/search-api-keys", h.Admin.Usage.SearchAPIKeys)
 		usage.GET("/cleanup-tasks", h.Admin.Usage.ListCleanupTasks)
@@ -758,6 +750,7 @@ func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		{
 			users.GET("", h.Admin.Affiliate.ListUsers)
 			users.GET("/lookup", h.Admin.Affiliate.LookupUsers)
+			users.GET("/:user_id", h.Admin.Affiliate.GetUserSettings)
 			users.POST("/batch-rate", h.Admin.Affiliate.BatchSetRate)
 			users.POST("/:user_id/inviter", h.Admin.Affiliate.BindInviter)
 			users.PUT("/:user_id", h.Admin.Affiliate.UpdateUserSettings)

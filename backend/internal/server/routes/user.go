@@ -111,6 +111,7 @@ func RegisterUserRoutes(
 			accounts.POST("/batch-revalidate-public-share/async", h.UserAccount.CreateBatchRevalidatePublicShareTask)
 			accounts.GET("/batch-tasks/:task_id", h.UserAccount.GetBatchTask)
 			accounts.POST("/:id/test", h.UserAccount.Test)
+			accounts.POST("/:id/recover-state", h.UserAccount.RecoverState)
 			accounts.POST("/:id/verify-level", h.UserAccount.VerifyLevel)
 			accounts.POST("/:id/refresh", h.UserAccount.Refresh)
 			accounts.POST("/:id/set-privacy", h.UserAccount.SetPrivacy)
@@ -139,6 +140,23 @@ func RegisterUserRoutes(
 			accountOAuth.POST("/antigravity/refresh-token", h.UserAccount.RefreshAntigravityToken)
 		}
 
+		accountShare := authenticated.Group("/account-share")
+		{
+			accountShare.POST("/openai/auth-url", h.AccountShareMode.GenerateOpenAIAuthURL)
+			accountShare.POST("/openai/exchange-code", h.AccountShareMode.ExchangeOpenAICode)
+			accountShare.GET("/proxies", h.AccountShareMode.ListAvailableProxies)
+			accountShare.POST("/proxies", h.AccountShareMode.CreateProxy)
+			accountShare.GET("/listings", h.AccountShareMode.ListListings)
+			accountShare.GET("/listings/:id", h.AccountShareMode.GetListing)
+			accountShare.POST("/listings/:id/edit-session", h.AccountShareMode.BeginListingEdit)
+			accountShare.POST("/listings/:id/edit-session/release", h.AccountShareMode.ReleaseListingEdit)
+			accountShare.PATCH("/listings/:id", h.AccountShareMode.UpdateListing)
+			accountShare.POST("/listings/:id/join", h.AccountShareMode.JoinListing)
+			accountShare.PATCH("/memberships/:id/idle-timeout", h.AccountShareMode.UpdateMembershipIdleTimeout)
+			accountShare.POST("/memberships/:id/end-intent", h.AccountShareMode.CreateEndMembershipIntent)
+			accountShare.POST("/memberships/:id/end", h.AccountShareMode.EndMembership)
+		}
+
 		// 用户可用分组（非管理员接口）
 		groups := authenticated.Group("/groups")
 		{
@@ -156,7 +174,7 @@ func RegisterUserRoutes(
 		usage := authenticated.Group("/usage")
 		{
 			usage.GET("", h.Usage.List)
-			usage.GET("/:id", h.Usage.GetByID)
+			usage.GET("/balance-ledger", h.Usage.ListBalanceLedger)
 			usage.GET("/stats", h.Usage.Stats)
 			// User dashboard endpoints
 			usage.GET("/dashboard/stats", h.Usage.DashboardStats)
@@ -164,6 +182,7 @@ func RegisterUserRoutes(
 			usage.GET("/dashboard/models", h.Usage.DashboardModels)
 			usage.GET("/dashboard/account-sharing", h.Usage.DashboardAccountSharing)
 			usage.POST("/dashboard/api-keys-usage", h.Usage.DashboardAPIKeysUsage)
+			usage.GET("/:id", h.Usage.GetByID)
 		}
 
 		// 公告（用户可见）
