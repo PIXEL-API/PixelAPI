@@ -32,11 +32,13 @@ const (
 	oauthPendingSessionCookiePath = "/api/v1/auth/oauth"
 	oauthPendingSessionCookieName = "oauth_pending_session"
 	oauthLoginAgreementCookieName = "oauth_login_agreement_revision"
+	oauthPromoCodeCookieName      = "oauth_promo_code"
 	oauthPendingCookieMaxAgeSec   = 10 * 60
 	oauthPendingChoiceStep        = "choose_account_action_required"
 
 	oauthCompletionResponseKey = "completion_response"
 	oauthLoginAgreementKey     = "login_agreement_revision"
+	oauthPromoCodeStateKey     = "promo_code"
 )
 
 var pendingOAuthCreateAccountPreCommitHook func(context.Context, *dbent.PendingAuthSession) error
@@ -73,6 +75,7 @@ type createPendingOAuthAccountRequest struct {
 	Password               string `json:"password" binding:"required,min=6"`
 	InvitationCode         string `json:"invitation_code,omitempty"`
 	AffCode                string `json:"aff_code,omitempty"`
+	PromoCode              string `json:"promo_code,omitempty"`
 	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
 	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
 	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
@@ -185,6 +188,50 @@ func readOAuthLoginAgreementCookie(c *gin.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(revision)
+}
+
+func captureOAuthPromoCode(c *gin.Context, secure bool) {
+	code := strings.TrimSpace(firstNonEmpty(c.Query("promo_code"), c.Query("promo")))
+	if code == "" {
+		clearOAuthPromoCodeCookie(c, secure)
+		return
+	}
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthPromoCodeCookieName,
+		Value:    encodeCookieValue(code),
+		Path:     oauthPendingBrowserCookiePath,
+		MaxAge:   oauthPendingCookieMaxAgeSec,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearOAuthPromoCodeCookie(c *gin.Context, secure bool) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthPromoCodeCookieName,
+		Value:    "",
+		Path:     oauthPendingBrowserCookiePath,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func readOAuthPromoCode(c *gin.Context) string {
+	code, err := readCookieDecoded(c, oauthPromoCodeCookieName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(code)
+}
+
+func pendingOAuthPromoCode(session *dbent.PendingAuthSession) string {
+	if session == nil {
+		return ""
+	}
+	return pendingSessionStringValue(session.UpstreamIdentityClaims, oauthPromoCodeStateKey)
 }
 
 func clearOAuthPendingSessionCookie(c *gin.Context, secure bool) {
@@ -1434,6 +1481,7 @@ func readPendingOAuthBrowserSession(c *gin.Context, h *AuthHandler) (*service.Au
 	clearCookies := func() {
 		clearOAuthPendingSessionCookie(c, secureCookie)
 		clearOAuthPendingBrowserCookie(c, secureCookie)
+		clearOAuthPromoCodeCookie(c, secureCookie)
 	}
 
 	sessionToken, err := readOAuthPendingSessionCookie(c)
@@ -1751,12 +1799,16 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		return
 	}
 
+	affiliateCode := strings.TrimSpace(firstNonEmpty(
+		req.AffCode,
+		pendingSessionStringValue(session.UpstreamIdentityClaims, "aff_code"),
+	))
 	tokenPair, user, err := h.authService.RegisterOAuthEmailAccount(
 		c.Request.Context(),
 		email,
 		req.Password,
 		strings.TrimSpace(req.VerifyCode),
-		strings.TrimSpace(req.InvitationCode),
+		strings.TrimSpace(firstNonEmpty(req.InvitationCode, affiliateCode)),
 		strings.TrimSpace(session.ProviderType),
 	)
 	if err != nil {
@@ -1831,7 +1883,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		user,
 		strings.TrimSpace(req.InvitationCode),
 		strings.TrimSpace(session.ProviderType),
-		strings.TrimSpace(req.AffCode),
+		affiliateCode,
 	); err != nil {
 		_ = tx.Rollback()
 		if rollbackCreatedUser(err) {
@@ -1870,6 +1922,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		return
 	}
 
+	h.authService.ApplyOAuthSignupPromoCode(c.Request.Context(), user.ID, strings.TrimSpace(firstNonEmpty(req.PromoCode, pendingOAuthPromoCode(session))))
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	clearCookies()
 	writeOAuthTokenPairResponse(c, tokenPair)
@@ -1882,6 +1935,7 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 	clearCookies := func() {
 		clearOAuthPendingSessionCookie(c, secureCookie)
 		clearOAuthPendingBrowserCookie(c, secureCookie)
+		clearOAuthPromoCodeCookie(c, secureCookie)
 	}
 	adoptionDecision, err := bindOptionalOAuthAdoptionDecision(c)
 	if err != nil {

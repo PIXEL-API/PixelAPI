@@ -132,6 +132,8 @@ type SystemSettings struct {
 	DefaultConcurrency              int                          `json:"default_concurrency"`
 	DefaultBalance                  float64                      `json:"default_balance"`
 	RiskControlEnabled              bool                         `json:"risk_control_enabled"`
+	CyberSessionBlockEnabled        bool                         `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds     int                          `json:"cyber_session_block_ttl_seconds"`
 	AffiliateRebateRate             float64                      `json:"affiliate_rebate_rate"`
 	AffiliateRebateFreezeHours      int                          `json:"affiliate_rebate_freeze_hours"`
 	AffiliateRebateDurationDays     int                          `json:"affiliate_rebate_duration_days"`
@@ -171,15 +173,15 @@ type SystemSettings struct {
 	// Backend Mode
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
-	// Master data plane mode
-	MasterDataPlaneEnabled bool `json:"master_data_plane_enabled"`
-
 	// Gateway forwarding behavior
-	EnableFingerprintUnification       bool `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough          bool `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                   bool `json:"enable_cch_signing"`
-	OpenAICleanRelayEnabled            bool `json:"openai_clean_relay_enabled"`
-	EnableAnthropicCacheTTL1hInjection bool `json:"enable_anthropic_cache_ttl_1h_injection"`
+	EnableFingerprintUnification           bool   `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough              bool   `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                       bool   `json:"enable_cch_signing"`
+	EnableClaudeOAuthSystemPromptInjection bool   `json:"enable_claude_oauth_system_prompt_injection"`
+	ClaudeOAuthSystemPrompt                string `json:"claude_oauth_system_prompt"`
+	ClaudeOAuthSystemPromptBlocks          string `json:"claude_oauth_system_prompt_blocks"`
+	OpenAICleanRelayEnabled                bool   `json:"openai_clean_relay_enabled"`
+	EnableAnthropicCacheTTL1hInjection     bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool `json:"web_search_emulation_enabled"`
@@ -250,6 +252,9 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// User-owned account import limit
+	UserAccountImportLimit int `json:"user_account_import_limit"`
+
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
@@ -314,6 +319,8 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	UserAccountImportLimit int `json:"user_account_import_limit"`
 
 	AffiliateEnabled   bool `json:"affiliate_enabled"`
 	RiskControlEnabled bool `json:"risk_control_enabled"`

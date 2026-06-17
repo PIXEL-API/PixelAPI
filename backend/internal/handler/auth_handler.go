@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -584,29 +585,28 @@ func (h *AuthHandler) ValidateInvitationCode(c *gin.Context) {
 		return
 	}
 
-	// 验证邀请码
-	redeemCode, err := h.redeemService.GetByCode(c.Request.Context(), req.Code)
-	if err != nil {
+	if h.authService == nil {
 		response.Success(c, ValidateInvitationCodeResponse{
 			Valid:     false,
-			ErrorCode: "INVITATION_CODE_NOT_FOUND",
+			ErrorCode: "INVITATION_CODE_DISABLED",
 		})
 		return
 	}
-
-	// 检查类型和状态
-	if redeemCode.Type != service.RedeemTypeInvitation {
+	if err := h.authService.ValidateInvitationCode(c.Request.Context(), req.Code); err != nil {
+		errorCode := "INVITATION_CODE_INVALID"
+		switch {
+		case errors.Is(err, service.ErrAffiliateCodeExpired):
+			errorCode = "INVITATION_CODE_EXPIRED"
+		case errors.Is(err, service.ErrAffiliateCodeQuotaEmpty):
+			errorCode = "INVITATION_CODE_QUOTA_EXHAUSTED"
+		case errors.Is(err, service.ErrAffiliateProfileNotFound):
+			errorCode = "INVITATION_CODE_NOT_FOUND"
+		case errors.Is(err, service.ErrServiceUnavailable):
+			errorCode = "INVITATION_CODE_DISABLED"
+		}
 		response.Success(c, ValidateInvitationCodeResponse{
 			Valid:     false,
-			ErrorCode: "INVITATION_CODE_INVALID",
-		})
-		return
-	}
-
-	if redeemCode.Status != service.StatusUnused {
-		response.Success(c, ValidateInvitationCodeResponse{
-			Valid:     false,
-			ErrorCode: "INVITATION_CODE_USED",
+			ErrorCode: errorCode,
 		})
 		return
 	}

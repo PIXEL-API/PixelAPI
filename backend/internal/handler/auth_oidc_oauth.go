@@ -140,6 +140,7 @@ func (h *AuthHandler) OIDCOAuthStart(c *gin.Context) {
 
 	secureCookie := isRequestHTTPS(c)
 	loginAgreementRevision := strings.TrimSpace(c.Query("login_agreement_revision"))
+	captureOAuthPromoCode(c, secureCookie)
 	oidcSetCookie(c, oidcOAuthStateCookieName, encodeCookieValue(state), oidcOAuthCookieMaxAgeSec, secureCookie)
 	oidcSetCookie(c, oidcOAuthRedirectCookie, encodeCookieValue(redirectTo), oidcOAuthCookieMaxAgeSec, secureCookie)
 	intent := normalizeOAuthIntent(c.Query("intent"))
@@ -229,6 +230,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		oidcClearCookie(c, oidcOAuthIntentCookieName, secureCookie)
 		oidcClearCookie(c, oidcOAuthBindUserCookieName, secureCookie)
 		clearOAuthLoginAgreementCookie(c, secureCookie)
+		clearOAuthPromoCodeCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, oidcOAuthStateCookieName)
@@ -394,6 +396,9 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	}
 	if compatEmail != "" && !strings.EqualFold(strings.TrimSpace(compatEmail), strings.TrimSpace(email)) {
 		upstreamClaims["compat_email"] = compatEmail
+	}
+	if promoCode := readOAuthPromoCode(c); promoCode != "" {
+		upstreamClaims[oauthPromoCodeStateKey] = promoCode
 	}
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, oidcOAuthBindUserCookieName)
@@ -593,6 +598,7 @@ func (h *AuthHandler) createOIDCOAuthChoicePendingSession(
 type completeOIDCOAuthRequest struct {
 	InvitationCode         string `json:"invitation_code" binding:"required"`
 	AffCode                string `json:"aff_code,omitempty"`
+	PromoCode              string `json:"promo_code,omitempty"`
 	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
 	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
 	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
@@ -681,7 +687,7 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, req.InvitationCode, req.AffCode)
+	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(c.Request.Context(), email, username, req.InvitationCode, req.AffCode, strings.TrimSpace(firstNonEmpty(req.PromoCode, pendingOAuthPromoCode(session))))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -693,6 +699,7 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
+	clearOAuthPromoCodeCookie(c, secureCookie)
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,

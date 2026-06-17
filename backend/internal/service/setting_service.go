@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -81,26 +82,17 @@ const backendModeCacheTTL = 60 * time.Second
 const backendModeErrorTTL = 5 * time.Second
 const backendModeDBTimeout = 5 * time.Second
 
-type cachedMasterDataPlane struct {
-	value     bool
-	expiresAt int64 // unix nano
-}
-
-var masterDataPlaneCache atomic.Value // *cachedMasterDataPlane
-var masterDataPlaneSF singleflight.Group
-
-const masterDataPlaneCacheTTL = 60 * time.Second
-const masterDataPlaneErrorTTL = 5 * time.Second
-const masterDataPlaneDBTimeout = 5 * time.Second
-
 // cachedGatewayForwardingSettings 缓存网关转发行为设置（进程内缓存，60s TTL）
 type cachedGatewayForwardingSettings struct {
-	fingerprintUnification       bool
-	metadataPassthrough          bool
-	cchSigning                   bool
-	openAICleanRelay             bool
-	anthropicCacheTTL1hInjection bool
-	expiresAt                    int64 // unix nano
+	fingerprintUnification           bool
+	metadataPassthrough              bool
+	cchSigning                       bool
+	claudeOAuthSystemPromptInjection bool
+	claudeOAuthSystemPrompt          string
+	claudeOAuthSystemPromptBlocks    string
+	openAICleanRelay                 bool
+	anthropicCacheTTL1hInjection     bool
+	expiresAt                        int64 // unix nano
 }
 
 var gatewayForwardingCache atomic.Value // *cachedGatewayForwardingSettings
@@ -109,6 +101,19 @@ var gatewayForwardingSF singleflight.Group
 const gatewayForwardingCacheTTL = 60 * time.Second
 const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
+
+type cachedCyberSessionBlockRuntime struct {
+	enabled   bool
+	ttl       time.Duration
+	expiresAt int64 // unix nano
+}
+
+var cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
+var cyberSessionBlockRuntimeSF singleflight.Group
+
+const cyberSessionBlockRuntimeCacheTTL = 60 * time.Second
+const cyberSessionBlockRuntimeErrorTTL = 5 * time.Second
+const cyberSessionBlockRuntimeDBTimeout = 5 * time.Second
 
 // DefaultSubscriptionGroupReader validates group references used by default subscriptions.
 type DefaultSubscriptionGroupReader interface {
@@ -578,6 +583,58 @@ func (s *SettingService) GetFrontendURL(ctx context.Context) string {
 	return s.cfg.Server.FrontendURL
 }
 
+// GetCyberSessionBlockRuntime returns the cyber session block switch and TTL.
+// Defaults are deliberately conservative: disabled, 1 hour TTL.
+func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool, time.Duration) {
+	if cached, ok := cyberSessionBlockRuntimeCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.enabled, cached.ttl
+		}
+	}
+
+	result, _, _ := cyberSessionBlockRuntimeSF.Do("cyber_session_block_runtime", func() (any, error) {
+		if cached, ok := cyberSessionBlockRuntimeCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached, nil
+			}
+		}
+
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cyberSessionBlockRuntimeDBTimeout)
+		defer cancel()
+
+		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyCyberSessionBlockEnabled,
+			SettingKeyCyberSessionBlockTTLSeconds,
+		})
+		if err != nil {
+			slog.Warn("failed to get cyber session block runtime settings", "error", err)
+			entry := &cachedCyberSessionBlockRuntime{
+				enabled:   false,
+				ttl:       time.Hour,
+				expiresAt: time.Now().Add(cyberSessionBlockRuntimeErrorTTL).UnixNano(),
+			}
+			cyberSessionBlockRuntimeCache.Store(entry)
+			return entry, nil
+		}
+
+		ttl := time.Hour
+		if n, perr := strconv.Atoi(strings.TrimSpace(values[SettingKeyCyberSessionBlockTTLSeconds])); perr == nil && n > 0 {
+			ttl = time.Duration(n) * time.Second
+		}
+		entry := &cachedCyberSessionBlockRuntime{
+			enabled:   strings.TrimSpace(values[SettingKeyCyberSessionBlockEnabled]) == "true",
+			ttl:       ttl,
+			expiresAt: time.Now().Add(cyberSessionBlockRuntimeCacheTTL).UnixNano(),
+		}
+		cyberSessionBlockRuntimeCache.Store(entry)
+		return entry, nil
+	})
+	if entry, ok := result.(*cachedCyberSessionBlockRuntime); ok && entry != nil {
+		return entry.enabled, entry.ttl
+	}
+	return false, time.Hour
+}
+
 // GetPublicSettings 获取公开设置（无需登录）
 func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings, error) {
 	keys := []string{
@@ -627,8 +684,6 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyWeChatConnectRedirectURL,
 		SettingKeyWeChatConnectFrontendRedirectURL,
 		SettingKeyBackendModeEnabled,
-		SettingKeyMasterDataPlaneEnabled,
-		SettingKeySubsiteOnlyGatewayEnabled,
 		SettingPaymentEnabled,
 		SettingKeyOIDCConnectEnabled,
 		SettingKeyOIDCConnectProviderName,
@@ -645,6 +700,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
+		SettingKeyUserAccountImportLimit,
 		SettingKeyAffiliateEnabled,
 		SettingKeyRiskControlEnabled,
 	}
@@ -749,6 +805,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
 
+		UserAccountImportLimit: parseUserAccountImportLimit(settings[SettingKeyUserAccountImportLimit]),
+
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
 
 		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
@@ -785,6 +843,14 @@ func clampChannelMonitorInterval(v int) int {
 		return channelMonitorIntervalMax
 	}
 	return v
+}
+
+func parseUserAccountImportLimit(raw string) int {
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return DefaultUserAccountCredentialImportLimit
+	}
+	return NormalizeUserAccountCredentialImportLimit(v)
 }
 
 // ChannelMonitorRuntime is the lightweight view of the channel monitor feature
@@ -827,6 +893,17 @@ func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) Availa
 	return AvailableChannelsRuntime{
 		Enabled: vals[SettingKeyAvailableChannelsEnabled] == "true",
 	}
+}
+
+func (s *SettingService) GetUserAccountImportLimit(ctx context.Context) (int, error) {
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyUserAccountImportLimit)
+	if errors.Is(err, ErrSettingNotFound) {
+		return DefaultUserAccountCredentialImportLimit, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get user account import limit: %w", err)
+	}
+	return parseUserAccountImportLimit(raw), nil
 }
 
 // SetOnUpdateCallback sets a callback function to be called when settings are updated
@@ -905,6 +982,7 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
+	UserAccountImportLimit               int  `json:"user_account_import_limit"`
 	AffiliateEnabled                     bool `json:"affiliate_enabled"`
 	RiskControlEnabled                   bool `json:"risk_control_enabled"`
 }
@@ -966,6 +1044,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
+		UserAccountImportLimit:               settings.UserAccountImportLimit,
 		AffiliateEnabled:                     settings.AffiliateEnabled,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 	}, nil
@@ -1019,17 +1098,35 @@ func normalizeUpstreamURLAllowlistHost(value string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
-	if strings.ContainsAny(raw, "/\\?#@: \t\r\n") {
+	if strings.ContainsAny(raw, "/\\?#@ \t\r\n") {
 		return "", fmt.Errorf("invalid upstream allowlist host: %s", value)
 	}
 	if strings.HasPrefix(raw, "*.") {
 		suffix := strings.TrimPrefix(raw, "*.")
-		if suffix == "" || strings.Contains(suffix, "*") {
+		if suffix == "" || strings.ContainsAny(suffix, "*:") {
 			return "", fmt.Errorf("invalid upstream allowlist wildcard host: %s", value)
 		}
 		raw = "*." + suffix
 	} else if strings.Contains(raw, "*") {
 		return "", fmt.Errorf("invalid upstream allowlist wildcard host: %s", value)
+	}
+	if ip := net.ParseIP(raw); ip != nil {
+		return ip.String(), nil
+	}
+	if strings.Contains(raw, ":") {
+		host, port, err := net.SplitHostPort(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid upstream allowlist host: %s", value)
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil {
+			return "", fmt.Errorf("invalid upstream allowlist host: %s", value)
+		}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber <= 0 || portNumber > 65535 {
+			return "", fmt.Errorf("invalid upstream allowlist host: %s", value)
+		}
+		return net.JoinHostPort(ip.String(), strconv.Itoa(portNumber)), nil
 	}
 	if strings.HasPrefix(raw, ".") || strings.HasSuffix(raw, ".") || strings.Contains(raw, "..") {
 		return "", fmt.Errorf("invalid upstream allowlist host: %s", value)
@@ -1694,6 +1791,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// Available channels feature switch
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
 
+	// User-owned account import limit
+	updates[SettingKeyUserAccountImportLimit] = strconv.Itoa(NormalizeUserAccountCredentialImportLimit(settings.UserAccountImportLimit))
+
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
 
@@ -1707,14 +1807,16 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// Backend Mode
 	updates[SettingKeyBackendModeEnabled] = strconv.FormatBool(settings.BackendModeEnabled)
 
-	// Master data plane. Keep the legacy inverse key in sync for compatibility.
-	updates[SettingKeyMasterDataPlaneEnabled] = strconv.FormatBool(settings.MasterDataPlaneEnabled)
-	updates[SettingKeySubsiteOnlyGatewayEnabled] = strconv.FormatBool(!settings.MasterDataPlaneEnabled)
-
 	// Gateway forwarding behavior
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
+	updates[SettingKeyEnableClaudeOAuthSystemPromptInjection] = strconv.FormatBool(settings.EnableClaudeOAuthSystemPromptInjection)
+	updates[SettingKeyClaudeOAuthSystemPrompt] = settings.ClaudeOAuthSystemPrompt
+	if err := ValidateClaudeOAuthSystemPromptBlocksConfig(settings.ClaudeOAuthSystemPromptBlocks); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyClaudeOAuthSystemPromptBlocks] = settings.ClaudeOAuthSystemPromptBlocks
 	updates[SettingKeyOpenAICleanRelayEnabled] = strconv.FormatBool(settings.OpenAICleanRelayEnabled)
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
 	updates[SettingPaymentVisibleMethodAlipaySource] = settings.PaymentVisibleMethodAlipaySource
@@ -1728,6 +1830,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD] = strconv.FormatFloat(settings.OpenAIFreeAccountRepairWeeklyThresholdUSD, 'f', 8, 64)
 	updates[SettingKeyRiskControlEnabled] = strconv.FormatBool(settings.RiskControlEnabled)
+	updates[SettingKeyCyberSessionBlockEnabled] = strconv.FormatBool(settings.CyberSessionBlockEnabled)
+	if settings.CyberSessionBlockTTLSeconds <= 0 {
+		settings.CyberSessionBlockTTLSeconds = 3600
+	}
+	updates[SettingKeyCyberSessionBlockTTLSeconds] = strconv.Itoa(settings.CyberSessionBlockTTLSeconds)
 
 	// Balance low notification
 	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
@@ -1785,19 +1892,27 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		value:     settings.BackendModeEnabled,
 		expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
 	})
-	masterDataPlaneSF.Forget("master_data_plane")
-	masterDataPlaneCache.Store(&cachedMasterDataPlane{
-		value:     settings.MasterDataPlaneEnabled,
-		expiresAt: time.Now().Add(masterDataPlaneCacheTTL).UnixNano(),
-	})
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-		fingerprintUnification:       settings.EnableFingerprintUnification,
-		metadataPassthrough:          settings.EnableMetadataPassthrough,
-		cchSigning:                   settings.EnableCCHSigning,
-		openAICleanRelay:             settings.OpenAICleanRelayEnabled,
-		anthropicCacheTTL1hInjection: settings.EnableAnthropicCacheTTL1hInjection,
-		expiresAt:                    time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
+		fingerprintUnification:           settings.EnableFingerprintUnification,
+		metadataPassthrough:              settings.EnableMetadataPassthrough,
+		cchSigning:                       settings.EnableCCHSigning,
+		claudeOAuthSystemPromptInjection: settings.EnableClaudeOAuthSystemPromptInjection,
+		claudeOAuthSystemPrompt:          settings.ClaudeOAuthSystemPrompt,
+		claudeOAuthSystemPromptBlocks:    settings.ClaudeOAuthSystemPromptBlocks,
+		openAICleanRelay:                 settings.OpenAICleanRelayEnabled,
+		anthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
+		expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
+	})
+	cyberSessionBlockRuntimeSF.Forget("cyber_session_block_runtime")
+	ttl := time.Duration(settings.CyberSessionBlockTTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	cyberSessionBlockRuntimeCache.Store(&cachedCyberSessionBlockRuntime{
+		enabled:   settings.CyberSessionBlockEnabled,
+		ttl:       ttl,
+		expiresAt: time.Now().Add(cyberSessionBlockRuntimeCacheTTL).UnixNano(),
 	})
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
@@ -1904,74 +2019,23 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 	return false
 }
 
-func (s *SettingService) IsMasterDataPlaneEnabled(ctx context.Context) bool {
-	if cached, ok := masterDataPlaneCache.Load().(*cachedMasterDataPlane); ok && cached != nil {
-		if time.Now().UnixNano() < cached.expiresAt {
-			return cached.value
-		}
-	}
-	result, _, _ := masterDataPlaneSF.Do("master_data_plane", func() (any, error) {
-		if cached, ok := masterDataPlaneCache.Load().(*cachedMasterDataPlane); ok && cached != nil {
-			if time.Now().UnixNano() < cached.expiresAt {
-				return cached.value, nil
-			}
-		}
-		if s == nil || s.settingRepo == nil {
-			return true, nil
-		}
-		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), masterDataPlaneDBTimeout)
-		defer cancel()
-		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
-			SettingKeyMasterDataPlaneEnabled,
-			SettingKeySubsiteOnlyGatewayEnabled,
-		})
-		if err != nil {
-			slog.Warn("failed to get master data plane setting", "error", err)
-			masterDataPlaneCache.Store(&cachedMasterDataPlane{
-				value:     false,
-				expiresAt: time.Now().Add(masterDataPlaneErrorTTL).UnixNano(),
-			})
-			return false, nil
-		}
-		enabled := parseMasterDataPlaneEnabled(values)
-		masterDataPlaneCache.Store(&cachedMasterDataPlane{
-			value:     enabled,
-			expiresAt: time.Now().Add(masterDataPlaneCacheTTL).UnixNano(),
-		})
-		return enabled, nil
-	})
-	if val, ok := result.(bool); ok {
-		return val
-	}
-	return false
-}
-
-func parseMasterDataPlaneEnabled(settings map[string]string) bool {
-	if settings == nil {
-		return true
-	}
-	if raw, ok := settings[SettingKeyMasterDataPlaneEnabled]; ok && strings.TrimSpace(raw) != "" {
-		return strings.EqualFold(strings.TrimSpace(raw), "true")
-	}
-	if raw, ok := settings[SettingKeySubsiteOnlyGatewayEnabled]; ok && strings.TrimSpace(raw) != "" {
-		return !strings.EqualFold(strings.TrimSpace(raw), "true")
-	}
-	return true
-}
-
 type gatewayForwardingSettingsResult struct {
-	fp, mp, cch, cleanRelay, cacheTTL1h bool
+	fp, mp, cch, claudeOAuthSystemPromptInjection, cleanRelay, cacheTTL1h bool
+	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                string
 }
 
 func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context) gatewayForwardingSettingsResult {
 	if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return gatewayForwardingSettingsResult{
-				fp:         cached.fingerprintUnification,
-				mp:         cached.metadataPassthrough,
-				cch:        cached.cchSigning,
-				cleanRelay: cached.openAICleanRelay,
-				cacheTTL1h: cached.anthropicCacheTTL1hInjection,
+				fp:                               cached.fingerprintUnification,
+				mp:                               cached.metadataPassthrough,
+				cch:                              cached.cchSigning,
+				claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
+				claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
+				claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
+				cleanRelay:                       cached.openAICleanRelay,
+				cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 			}
 		}
 	}
@@ -1979,11 +2043,14 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return gatewayForwardingSettingsResult{
-					fp:         cached.fingerprintUnification,
-					mp:         cached.metadataPassthrough,
-					cch:        cached.cchSigning,
-					cleanRelay: cached.openAICleanRelay,
-					cacheTTL1h: cached.anthropicCacheTTL1hInjection,
+					fp:                               cached.fingerprintUnification,
+					mp:                               cached.metadataPassthrough,
+					cch:                              cached.cchSigning,
+					claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
+					claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
+					claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
+					cleanRelay:                       cached.openAICleanRelay,
+					cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 				}, nil
 			}
 		}
@@ -1993,20 +2060,24 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			SettingKeyEnableFingerprintUnification,
 			SettingKeyEnableMetadataPassthrough,
 			SettingKeyEnableCCHSigning,
+			SettingKeyEnableClaudeOAuthSystemPromptInjection,
+			SettingKeyClaudeOAuthSystemPrompt,
+			SettingKeyClaudeOAuthSystemPromptBlocks,
 			SettingKeyOpenAICleanRelayEnabled,
 			SettingKeyEnableAnthropicCacheTTL1hInjection,
 		})
 		if err != nil {
 			slog.Warn("failed to get gateway forwarding settings", "error", err)
 			gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-				fingerprintUnification:       true,
-				metadataPassthrough:          false,
-				cchSigning:                   false,
-				openAICleanRelay:             false,
-				anthropicCacheTTL1hInjection: false,
-				expiresAt:                    time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
+				fingerprintUnification:           true,
+				metadataPassthrough:              false,
+				cchSigning:                       false,
+				claudeOAuthSystemPromptInjection: true,
+				openAICleanRelay:                 false,
+				anthropicCacheTTL1hInjection:     false,
+				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{fp: true}, nil
+			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true}, nil
 		}
 		fp := true
 		if v, ok := values[SettingKeyEnableFingerprintUnification]; ok && v != "" {
@@ -2014,22 +2085,40 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		}
 		mp := values[SettingKeyEnableMetadataPassthrough] == "true"
 		cch := values[SettingKeyEnableCCHSigning] == "true"
+		systemPromptInjection := true
+		if v, ok := values[SettingKeyEnableClaudeOAuthSystemPromptInjection]; ok && v != "" {
+			systemPromptInjection = v == "true"
+		}
+		systemPrompt := values[SettingKeyClaudeOAuthSystemPrompt]
+		systemPromptBlocks := values[SettingKeyClaudeOAuthSystemPromptBlocks]
 		cleanRelay := values[SettingKeyOpenAICleanRelayEnabled] == "true"
 		cacheTTL1h := values[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-			fingerprintUnification:       fp,
-			metadataPassthrough:          mp,
-			cchSigning:                   cch,
-			openAICleanRelay:             cleanRelay,
-			anthropicCacheTTL1hInjection: cacheTTL1h,
-			expiresAt:                    time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
+			fingerprintUnification:           fp,
+			metadataPassthrough:              mp,
+			cchSigning:                       cch,
+			claudeOAuthSystemPromptInjection: systemPromptInjection,
+			claudeOAuthSystemPrompt:          systemPrompt,
+			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
+			openAICleanRelay:                 cleanRelay,
+			anthropicCacheTTL1hInjection:     cacheTTL1h,
+			expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 		})
-		return gatewayForwardingSettingsResult{fp: fp, mp: mp, cch: cch, cleanRelay: cleanRelay, cacheTTL1h: cacheTTL1h}, nil
+		return gatewayForwardingSettingsResult{
+			fp:                               fp,
+			mp:                               mp,
+			cch:                              cch,
+			claudeOAuthSystemPromptInjection: systemPromptInjection,
+			claudeOAuthSystemPrompt:          systemPrompt,
+			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
+			cleanRelay:                       cleanRelay,
+			cacheTTL1h:                       cacheTTL1h,
+		}, nil
 	})
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true}
+	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true}
 }
 
 // GetGatewayForwardingSettings returns cached gateway forwarding settings.
@@ -2048,6 +2137,11 @@ func (s *SettingService) IsAnthropicCacheTTL1hInjectionEnabled(ctx context.Conte
 // IsOpenAICleanRelayEnabled 检查是否启用 OpenAI 洁净中继模式。
 func (s *SettingService) IsOpenAICleanRelayEnabled(ctx context.Context) bool {
 	return s.getGatewayForwardingSettingsCached(ctx).cleanRelay
+}
+
+func (s *SettingService) GetClaudeOAuthSystemPromptInjectionSettings(ctx context.Context) (enabled bool, prompt string, blocks string) {
+	result := s.getGatewayForwardingSettingsCached(ctx)
+	return result.claudeOAuthSystemPromptInjection, result.claudeOAuthSystemPrompt, result.claudeOAuthSystemPromptBlocks
 }
 
 // IsEmailVerifyEnabled 检查是否开启邮件验证
@@ -2533,6 +2627,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
 
+		// User-owned account import limit
+		SettingKeyUserAccountImportLimit: strconv.Itoa(DefaultUserAccountCredentialImportLimit),
+
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
 
@@ -2542,6 +2639,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// 分组隔离（默认不允许未分组 Key 调度）
 		SettingKeyAllowUngroupedKeyScheduling:               "false",
+		SettingKeyEnableClaudeOAuthSystemPromptInjection:    "true",
+		SettingKeyClaudeOAuthSystemPrompt:                   "",
+		SettingKeyClaudeOAuthSystemPromptBlocks:             "",
 		SettingKeyOpenAICleanRelayEnabled:                   "false",
 		SettingKeyEnableAnthropicCacheTTL1hInjection:        "false",
 		SettingKeyUserPrivateGroupDailyLimitUSD:             "0",
@@ -2550,8 +2650,6 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyUserPrivateGroupRateMultiplier:            "1",
 		SettingKeyUserPrivateGroupRPMLimit:                  "0",
 		SettingKeyUserPrivateGroupCommissionRate:            "0.005",
-		SettingKeyMasterDataPlaneEnabled:                    "true",
-		SettingKeySubsiteOnlyGatewayEnabled:                 "false",
 		SettingPaymentVisibleMethodAlipaySource:             "",
 		SettingPaymentVisibleMethodWxpaySource:              "",
 		SettingPaymentVisibleMethodAlipayEnabled:            "false",
@@ -2560,6 +2658,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIFreeAccountRepairEnabled:            "false",
 		SettingKeyOpenAIFreeAccountRepairWeeklyThresholdUSD: "60",
 		SettingKeyRiskControlEnabled:                        "false",
+		SettingKeyCyberSessionBlockEnabled:                  "false",
+		SettingKeyCyberSessionBlockTTLSeconds:               "3600",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -2609,8 +2709,6 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
-		MasterDataPlaneEnabled:           parseMasterDataPlaneEnabled(settings),
-		SubsiteOnlyGatewayEnabled:        !parseMasterDataPlaneEnabled(settings),
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
@@ -2931,9 +3029,18 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	// Available channels feature (default: disabled; strict true)
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
 
+	// User-owned account import limit
+	result.UserAccountImportLimit = parseUserAccountImportLimit(settings[SettingKeyUserAccountImportLimit])
+
 	// Affiliate (邀请返利) feature (default: disabled; strict true)
 	result.AffiliateEnabled = settings[SettingKeyAffiliateEnabled] == "true"
 	result.RiskControlEnabled = settings[SettingKeyRiskControlEnabled] == "true"
+	result.CyberSessionBlockEnabled = settings[SettingKeyCyberSessionBlockEnabled] == "true"
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyCyberSessionBlockTTLSeconds])); err == nil && v > 0 {
+		result.CyberSessionBlockTTLSeconds = v
+	} else {
+		result.CyberSessionBlockTTLSeconds = 3600
+	}
 
 	// Claude Code version check
 	result.MinClaudeCodeVersion = settings[SettingKeyMinClaudeCodeVersion]
@@ -2950,6 +3057,13 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.EnableMetadataPassthrough = settings[SettingKeyEnableMetadataPassthrough] == "true"
 	result.EnableCCHSigning = settings[SettingKeyEnableCCHSigning] == "true"
+	if v, ok := settings[SettingKeyEnableClaudeOAuthSystemPromptInjection]; ok && v != "" {
+		result.EnableClaudeOAuthSystemPromptInjection = v == "true"
+	} else {
+		result.EnableClaudeOAuthSystemPromptInjection = true
+	}
+	result.ClaudeOAuthSystemPrompt = settings[SettingKeyClaudeOAuthSystemPrompt]
+	result.ClaudeOAuthSystemPromptBlocks = settings[SettingKeyClaudeOAuthSystemPromptBlocks]
 	result.OpenAICleanRelayEnabled = settings[SettingKeyOpenAICleanRelayEnabled] == "true"
 	result.EnableAnthropicCacheTTL1hInjection = settings[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 

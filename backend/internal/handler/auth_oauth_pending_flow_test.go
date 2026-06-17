@@ -1310,7 +1310,7 @@ func TestLogoutClearsPendingOAuthAndBindCookies(t *testing.T) {
 }
 
 func TestCreateOIDCOAuthAccountRollsBackCreatedUserWhenBindingFails(t *testing.T) {
-	handler, client := newOAuthPendingFlowTestHandlerWithEmailVerification(t, true, "fresh@example.com", "246810")
+	handler, client := newOAuthPendingFlowTestHandlerWithEmailVerification(t, false, "fresh@example.com", "246810")
 	ctx := context.Background()
 
 	conflictOwner, err := client.User.Create().
@@ -1333,14 +1333,6 @@ func TestCreateOIDCOAuthAccountRollsBackCreatedUserWhenBindingFails(t *testing.T
 		Save(ctx)
 	require.NoError(t, err)
 
-	invitation, err := client.RedeemCode.Create().
-		SetCode("INVITE123").
-		SetType(service.RedeemTypeInvitation).
-		SetStatus(service.StatusUnused).
-		SetValue(0).
-		Save(ctx)
-	require.NoError(t, err)
-
 	session, err := client.PendingAuthSession.Create().
 		SetSessionToken("create-account-conflict-session-token").
 		SetIntent("login").
@@ -1356,7 +1348,7 @@ func TestCreateOIDCOAuthAccountRollsBackCreatedUserWhenBindingFails(t *testing.T
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"fresh@example.com","verify_code":"246810","password":"secret-123","invitation_code":"INVITE123"}`)
+	body := bytes.NewBufferString(`{"email":"fresh@example.com","verify_code":"246810","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1372,12 +1364,6 @@ func TestCreateOIDCOAuthAccountRollsBackCreatedUserWhenBindingFails(t *testing.T
 	userCount, err := client.User.Query().Where(dbuser.EmailEQ("fresh@example.com")).Count(ctx)
 	require.NoError(t, err)
 	require.Zero(t, userCount)
-
-	storedInvitation, err := client.RedeemCode.Get(ctx, invitation.ID)
-	require.NoError(t, err)
-	require.Equal(t, service.StatusUnused, storedInvitation.Status)
-	require.Nil(t, storedInvitation.UsedBy)
-	require.Nil(t, storedInvitation.UsedAt)
 
 	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
 	require.NoError(t, err)

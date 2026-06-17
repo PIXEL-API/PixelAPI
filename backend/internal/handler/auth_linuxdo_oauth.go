@@ -112,6 +112,7 @@ func (h *AuthHandler) LinuxDoOAuthStart(c *gin.Context) {
 	intent := normalizeOAuthIntent(c.Query("intent"))
 	setCookie(c, linuxDoOAuthIntentCookieName, encodeCookieValue(intent), linuxDoOAuthCookieMaxAgeSec, secureCookie)
 	setOAuthLoginAgreementCookie(c, loginAgreementRevision, secureCookie)
+	captureOAuthPromoCode(c, secureCookie)
 	setOAuthPendingBrowserCookie(c, browserSessionKey, secureCookie)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	if intent == oauthIntentBindCurrentUser {
@@ -185,6 +186,7 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		clearCookie(c, linuxDoOAuthIntentCookieName, secureCookie)
 		clearCookie(c, linuxDoOAuthBindUserCookieName, secureCookie)
 		clearOAuthLoginAgreementCookie(c, secureCookie)
+		clearOAuthPromoCodeCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, linuxDoOAuthStateCookieName)
@@ -270,6 +272,9 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 	}
 	if compatEmail != "" && !strings.EqualFold(strings.TrimSpace(compatEmail), strings.TrimSpace(email)) {
 		upstreamClaims["compat_email"] = compatEmail
+	}
+	if promoCode := readOAuthPromoCode(c); promoCode != "" {
+		upstreamClaims[oauthPromoCodeStateKey] = promoCode
 	}
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, linuxDoOAuthBindUserCookieName)
@@ -445,6 +450,7 @@ func (h *AuthHandler) createLinuxDoOAuthChoicePendingSession(
 type completeLinuxDoOAuthRequest struct {
 	InvitationCode         string `json:"invitation_code" binding:"required"`
 	AffCode                string `json:"aff_code,omitempty"`
+	PromoCode              string `json:"promo_code,omitempty"`
 	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
 	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
 	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
@@ -533,7 +539,7 @@ func (h *AuthHandler) CompleteLinuxDoOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, req.InvitationCode, req.AffCode)
+	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(c.Request.Context(), email, username, req.InvitationCode, req.AffCode, strings.TrimSpace(firstNonEmpty(req.PromoCode, pendingOAuthPromoCode(session))))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -545,6 +551,7 @@ func (h *AuthHandler) CompleteLinuxDoOAuthRegistration(c *gin.Context) {
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
+	clearOAuthPromoCodeCookie(c, secureCookie)
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,

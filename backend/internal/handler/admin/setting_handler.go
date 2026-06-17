@@ -229,6 +229,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DefaultConcurrency:                        settings.DefaultConcurrency,
 		DefaultBalance:                            settings.DefaultBalance,
 		RiskControlEnabled:                        settings.RiskControlEnabled,
+		CyberSessionBlockEnabled:                  settings.CyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:               settings.CyberSessionBlockTTLSeconds,
 		AffiliateRebateRate:                       settings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                settings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:               settings.AffiliateRebateDurationDays,
@@ -256,10 +258,12 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                      settings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:               settings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                        settings.BackendModeEnabled,
-		MasterDataPlaneEnabled:                    settings.MasterDataPlaneEnabled,
 		EnableFingerprintUnification:              settings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:                 settings.EnableMetadataPassthrough,
 		EnableCCHSigning:                          settings.EnableCCHSigning,
+		EnableClaudeOAuthSystemPromptInjection:    settings.EnableClaudeOAuthSystemPromptInjection,
+		ClaudeOAuthSystemPrompt:                   settings.ClaudeOAuthSystemPrompt,
+		ClaudeOAuthSystemPromptBlocks:             settings.ClaudeOAuthSystemPromptBlocks,
 		OpenAICleanRelayEnabled:                   settings.OpenAICleanRelayEnabled,
 		EnableAnthropicCacheTTL1hInjection:        settings.EnableAnthropicCacheTTL1hInjection,
 		WebSearchEmulationEnabled:                 settings.WebSearchEmulationEnabled,
@@ -316,6 +320,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+
+		UserAccountImportLimit: settings.UserAccountImportLimit,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 	}
@@ -499,6 +505,8 @@ type UpdateSettingsRequest struct {
 	DefaultConcurrency                       int                               `json:"default_concurrency"`
 	DefaultBalance                           float64                           `json:"default_balance"`
 	RiskControlEnabled                       *bool                             `json:"risk_control_enabled"`
+	CyberSessionBlockEnabled                 *bool                             `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds              *int                              `json:"cyber_session_block_ttl_seconds"`
 	AffiliateRebateRate                      *float64                          `json:"affiliate_rebate_rate"`
 	AffiliateRebateFreezeHours               *int                              `json:"affiliate_rebate_freeze_hours"`
 	AffiliateRebateDurationDays              *int                              `json:"affiliate_rebate_duration_days"`
@@ -569,15 +577,15 @@ type UpdateSettingsRequest struct {
 	// Backend Mode
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
-	// Master data plane mode
-	MasterDataPlaneEnabled *bool `json:"master_data_plane_enabled"`
-
 	// Gateway forwarding behavior
-	EnableFingerprintUnification       *bool `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough          *bool `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                   *bool `json:"enable_cch_signing"`
-	OpenAICleanRelayEnabled            *bool `json:"openai_clean_relay_enabled"`
-	EnableAnthropicCacheTTL1hInjection *bool `json:"enable_anthropic_cache_ttl_1h_injection"`
+	EnableFingerprintUnification           *bool   `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough              *bool   `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                       *bool   `json:"enable_cch_signing"`
+	EnableClaudeOAuthSystemPromptInjection *bool   `json:"enable_claude_oauth_system_prompt_injection"`
+	ClaudeOAuthSystemPrompt                *string `json:"claude_oauth_system_prompt"`
+	ClaudeOAuthSystemPromptBlocks          *string `json:"claude_oauth_system_prompt_blocks"`
+	OpenAICleanRelayEnabled                *bool   `json:"openai_clean_relay_enabled"`
+	EnableAnthropicCacheTTL1hInjection     *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 
 	// Payment visible method routing
 	PaymentVisibleMethodAlipaySource  *string `json:"payment_visible_method_alipay_source"`
@@ -645,6 +653,9 @@ type UpdateSettingsRequest struct {
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
 
+	// User-owned account import limit
+	UserAccountImportLimit *int `json:"user_account_import_limit"`
+
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
 
@@ -693,6 +704,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if req.DefaultBalance < 0 {
 		req.DefaultBalance = 0
+	}
+	if req.CyberSessionBlockTTLSeconds != nil && *req.CyberSessionBlockTTLSeconds <= 0 {
+		response.Error(c, http.StatusBadRequest, "cyber_session_block_ttl_seconds must be greater than 0")
+		return
+	}
+	if req.UserAccountImportLimit != nil {
+		value := service.NormalizeUserAccountCredentialImportLimit(*req.UserAccountImportLimit)
+		req.UserAccountImportLimit = &value
 	}
 	affiliateRebateRate := previousSettings.AffiliateRebateRate
 	if req.AffiliateRebateRate != nil {
@@ -1478,6 +1497,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.RiskControlEnabled
 		}(),
+		CyberSessionBlockEnabled: func() bool {
+			if req.CyberSessionBlockEnabled != nil {
+				return *req.CyberSessionBlockEnabled
+			}
+			return previousSettings.CyberSessionBlockEnabled
+		}(),
+		CyberSessionBlockTTLSeconds: func() int {
+			if req.CyberSessionBlockTTLSeconds != nil {
+				return *req.CyberSessionBlockTTLSeconds
+			}
+			return previousSettings.CyberSessionBlockTTLSeconds
+		}(),
 		AffiliateRebateRate:             affiliateRebateRate,
 		AffiliateRebateFreezeHours:      affiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:     affiliateRebateDurationDays,
@@ -1501,12 +1532,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:            req.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:     req.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:              req.BackendModeEnabled,
-		MasterDataPlaneEnabled: func() bool {
-			if req.MasterDataPlaneEnabled != nil {
-				return *req.MasterDataPlaneEnabled
-			}
-			return previousSettings.MasterDataPlaneEnabled
-		}(),
 		OpsMonitoringEnabled: func() bool {
 			if req.OpsMonitoringEnabled != nil {
 				return *req.OpsMonitoringEnabled
@@ -1548,6 +1573,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.EnableCCHSigning
 			}
 			return previousSettings.EnableCCHSigning
+		}(),
+		EnableClaudeOAuthSystemPromptInjection: func() bool {
+			if req.EnableClaudeOAuthSystemPromptInjection != nil {
+				return *req.EnableClaudeOAuthSystemPromptInjection
+			}
+			return previousSettings.EnableClaudeOAuthSystemPromptInjection
+		}(),
+		ClaudeOAuthSystemPrompt: func() string {
+			if req.ClaudeOAuthSystemPrompt != nil {
+				return *req.ClaudeOAuthSystemPrompt
+			}
+			return previousSettings.ClaudeOAuthSystemPrompt
+		}(),
+		ClaudeOAuthSystemPromptBlocks: func() string {
+			if req.ClaudeOAuthSystemPromptBlocks != nil {
+				return *req.ClaudeOAuthSystemPromptBlocks
+			}
+			return previousSettings.ClaudeOAuthSystemPromptBlocks
 		}(),
 		OpenAICleanRelayEnabled: func() bool {
 			if req.OpenAICleanRelayEnabled != nil {
@@ -1650,6 +1693,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.AvailableChannelsEnabled
 			}
 			return previousSettings.AvailableChannelsEnabled
+		}(),
+		UserAccountImportLimit: func() int {
+			if req.UserAccountImportLimit != nil {
+				return *req.UserAccountImportLimit
+			}
+			return previousSettings.UserAccountImportLimit
 		}(),
 		AffiliateEnabled: func() bool {
 			if req.AffiliateEnabled != nil {
@@ -1892,6 +1941,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DefaultConcurrency:                        updatedSettings.DefaultConcurrency,
 		DefaultBalance:                            updatedSettings.DefaultBalance,
 		RiskControlEnabled:                        updatedSettings.RiskControlEnabled,
+		CyberSessionBlockEnabled:                  updatedSettings.CyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:               updatedSettings.CyberSessionBlockTTLSeconds,
 		AffiliateRebateRate:                       updatedSettings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                updatedSettings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:               updatedSettings.AffiliateRebateDurationDays,
@@ -1919,10 +1970,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                      updatedSettings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:               updatedSettings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                        updatedSettings.BackendModeEnabled,
-		MasterDataPlaneEnabled:                    updatedSettings.MasterDataPlaneEnabled,
 		EnableFingerprintUnification:              updatedSettings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:                 updatedSettings.EnableMetadataPassthrough,
 		EnableCCHSigning:                          updatedSettings.EnableCCHSigning,
+		EnableClaudeOAuthSystemPromptInjection:    updatedSettings.EnableClaudeOAuthSystemPromptInjection,
+		ClaudeOAuthSystemPrompt:                   updatedSettings.ClaudeOAuthSystemPrompt,
+		ClaudeOAuthSystemPromptBlocks:             updatedSettings.ClaudeOAuthSystemPromptBlocks,
 		OpenAICleanRelayEnabled:                   updatedSettings.OpenAICleanRelayEnabled,
 		EnableAnthropicCacheTTL1hInjection:        updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		PaymentVisibleMethodAlipaySource:          updatedSettings.PaymentVisibleMethodAlipaySource,
@@ -1978,6 +2031,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
+
+		UserAccountImportLimit: updatedSettings.UserAccountImportLimit,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 	}
@@ -2284,6 +2339,15 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	if !fieldProvided(fields, "risk_control_enabled") {
 		req.RiskControlEnabled = &previous.RiskControlEnabled
 	}
+	if !fieldProvided(fields, "cyber_session_block_enabled") {
+		req.CyberSessionBlockEnabled = &previous.CyberSessionBlockEnabled
+	}
+	if !fieldProvided(fields, "cyber_session_block_ttl_seconds") {
+		req.CyberSessionBlockTTLSeconds = &previous.CyberSessionBlockTTLSeconds
+	}
+	if !fieldProvided(fields, "user_account_import_limit") {
+		req.UserAccountImportLimit = &previous.UserAccountImportLimit
+	}
 	if !fieldProvided(fields, "default_user_rpm_limit") {
 		req.DefaultUserRPMLimit = previous.DefaultUserRPMLimit
 	}
@@ -2578,6 +2642,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.DefaultBalance != after.DefaultBalance {
 		changed = append(changed, "default_balance")
 	}
+	if before.RiskControlEnabled != after.RiskControlEnabled {
+		changed = append(changed, "risk_control_enabled")
+	}
+	if before.CyberSessionBlockEnabled != after.CyberSessionBlockEnabled {
+		changed = append(changed, "cyber_session_block_enabled")
+	}
+	if before.CyberSessionBlockTTLSeconds != after.CyberSessionBlockTTLSeconds {
+		changed = append(changed, "cyber_session_block_ttl_seconds")
+	}
 	if before.DefaultUserRPMLimit != after.DefaultUserRPMLimit {
 		changed = append(changed, "default_user_rpm_limit")
 	}
@@ -2659,9 +2732,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.BackendModeEnabled != after.BackendModeEnabled {
 		changed = append(changed, "backend_mode_enabled")
 	}
-	if before.MasterDataPlaneEnabled != after.MasterDataPlaneEnabled {
-		changed = append(changed, "master_data_plane_enabled")
-	}
 	if before.PurchaseSubscriptionEnabled != after.PurchaseSubscriptionEnabled {
 		changed = append(changed, "purchase_subscription_enabled")
 	}
@@ -2688,6 +2758,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.EnableCCHSigning != after.EnableCCHSigning {
 		changed = append(changed, "enable_cch_signing")
+	}
+	if before.EnableClaudeOAuthSystemPromptInjection != after.EnableClaudeOAuthSystemPromptInjection {
+		changed = append(changed, "enable_claude_oauth_system_prompt_injection")
+	}
+	if before.ClaudeOAuthSystemPrompt != after.ClaudeOAuthSystemPrompt {
+		changed = append(changed, "claude_oauth_system_prompt")
+	}
+	if before.ClaudeOAuthSystemPromptBlocks != after.ClaudeOAuthSystemPromptBlocks {
+		changed = append(changed, "claude_oauth_system_prompt_blocks")
 	}
 	if before.OpenAICleanRelayEnabled != after.OpenAICleanRelayEnabled {
 		changed = append(changed, "openai_clean_relay_enabled")
@@ -2740,6 +2819,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.UserAccountImportLimit != after.UserAccountImportLimit {
+		changed = append(changed, "user_account_import_limit")
 	}
 	if before.AffiliateEnabled != after.AffiliateEnabled {
 		changed = append(changed, "affiliate_enabled")

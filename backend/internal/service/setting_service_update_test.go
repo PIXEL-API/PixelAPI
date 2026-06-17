@@ -258,10 +258,10 @@ func TestSettingService_UpdateSettings_UpstreamAllowlistExtraHosts_Normalized(t 
 	svc := NewSettingService(repo, &config.Config{})
 
 	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		UpstreamURLAllowlistExtraHosts: []string{" NAICCC.com ", "*.Example.com", "naiccc.com"},
+		UpstreamURLAllowlistExtraHosts: []string{" NAICCC.com ", "*.Example.com", "naiccc.com", "203.0.113.10:8080"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, `["naiccc.com","*.example.com"]`, repo.updates[SettingKeyUpstreamURLAllowlistExtraHosts])
+	require.Equal(t, `["naiccc.com","*.example.com","203.0.113.10:8080"]`, repo.updates[SettingKeyUpstreamURLAllowlistExtraHosts])
 }
 
 func TestSettingService_UpdateSettings_UpstreamAllowlistExtraHosts_Invalid(t *testing.T) {

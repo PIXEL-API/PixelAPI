@@ -9,8 +9,8 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 func normalizeOAuthSignupSource(signupSource string) string {
@@ -54,27 +54,23 @@ func (s *AuthService) SendPendingOAuthVerifyCode(ctx context.Context, email stri
 	}, nil
 }
 
-func (s *AuthService) validateOAuthRegistrationInvitation(ctx context.Context, invitationCode string) (*RedeemCode, error) {
+func (s *AuthService) validateOAuthRegistrationInvitation(ctx context.Context, invitationCode string) (string, error) {
 	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
-		return nil, nil
+		return "", nil
 	}
-	if s.redeemRepo == nil && s.oauthEmailFlowClient(ctx) == nil {
-		return nil, ErrServiceUnavailable
+	if s.affiliateService == nil {
+		return "", ErrServiceUnavailable
 	}
 
 	invitationCode = strings.TrimSpace(invitationCode)
 	if invitationCode == "" {
-		return nil, ErrInvitationCodeRequired
+		return "", ErrInvitationCodeRequired
 	}
 
-	redeemCode, err := s.loadOAuthRegistrationInvitation(ctx, invitationCode)
-	if err != nil {
-		return nil, ErrInvitationCodeInvalid
+	if err := s.affiliateService.ValidateInvitationCode(ctx, invitationCode); err != nil {
+		return "", ErrInvitationCodeInvalid
 	}
-	if redeemCode.Type != RedeemTypeInvitation || redeemCode.Status != StatusUnused {
-		return nil, ErrInvitationCodeInvalid
-	}
-	return redeemCode, nil
+	return invitationCode, nil
 }
 
 // VerifyOAuthEmailCode verifies the locally entered email verification code for
@@ -264,67 +260,39 @@ func (s *AuthService) FinalizeOAuthEmailAccount(
 	}
 
 	signupSource = normalizeOAuthSignupSource(signupSource)
-	invitationRedeemCode, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode)
+	effectiveInvitationCode, invitationRequired, err := s.resolveRegistrationInvitationCode(ctx, invitationCode, affiliateCode)
 	if err != nil {
 		return err
 	}
-	if invitationRedeemCode != nil {
-		if err := s.useOAuthRegistrationInvitation(ctx, invitationRedeemCode.ID, user.ID); err != nil {
-			return ErrInvitationCodeInvalid
+	if effectiveInvitationCode != "" {
+		if s.affiliateService == nil {
+			if invitationRequired {
+				return ErrServiceUnavailable
+			}
+			logger.LegacyPrintf("service.auth", "[Auth] Skipping optional OAuth affiliate invitation code for user %d because affiliate service is unavailable", user.ID)
+		} else {
+			if err := s.affiliateService.ConsumeInvitationCode(ctx, user.ID, effectiveInvitationCode); err != nil {
+				if invitationRequired {
+					return ErrInvitationCodeInvalid
+				}
+				logger.LegacyPrintf("service.auth", "[Auth] Failed to consume optional OAuth affiliate invitation code for user %d: %v", user.ID, err)
+			}
 		}
 	}
 
 	s.updateOAuthSignupSource(ctx, user.ID, signupSource)
 	grantPlan := s.resolveSignupGrantPlan(ctx, signupSource)
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
-	s.bindOAuthAffiliate(ctx, user.ID, affiliateCode)
 	return nil
 }
 
-// RollbackOAuthEmailAccountCreation removes a partially-created local account
-// and restores any invitation code already consumed by that account.
+// RollbackOAuthEmailAccountCreation removes a partially-created local account.
 func (s *AuthService) RollbackOAuthEmailAccountCreation(ctx context.Context, userID int64, invitationCode string) error {
 	if s == nil || s.userRepo == nil || userID <= 0 {
 		return ErrServiceUnavailable
 	}
-	if err := s.restoreOAuthRegistrationInvitation(ctx, invitationCode, userID); err != nil {
-		return err
-	}
 	if err := s.userRepo.Delete(ctx, userID); err != nil {
 		return fmt.Errorf("delete created oauth user: %w", err)
-	}
-	return nil
-}
-
-func (s *AuthService) restoreOAuthRegistrationInvitation(ctx context.Context, invitationCode string, userID int64) error {
-	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
-		return nil
-	}
-	if s.redeemRepo == nil && s.oauthEmailFlowClient(ctx) == nil {
-		return ErrServiceUnavailable
-	}
-
-	invitationCode = strings.TrimSpace(invitationCode)
-	if invitationCode == "" || userID <= 0 {
-		return nil
-	}
-
-	redeemCode, err := s.loadOAuthRegistrationInvitation(ctx, invitationCode)
-	if err != nil {
-		if errors.Is(err, ErrRedeemCodeNotFound) {
-			return nil
-		}
-		return fmt.Errorf("load invitation code: %w", err)
-	}
-	if redeemCode.Type != RedeemTypeInvitation || redeemCode.Status != StatusUsed || redeemCode.UsedBy == nil || *redeemCode.UsedBy != userID {
-		return nil
-	}
-
-	redeemCode.Status = StatusUnused
-	redeemCode.UsedBy = nil
-	redeemCode.UsedAt = nil
-	if err := s.updateOAuthRegistrationInvitation(ctx, redeemCode); err != nil {
-		return fmt.Errorf("restore invitation code: %w", err)
 	}
 	return nil
 }
@@ -339,97 +307,12 @@ func (s *AuthService) oauthEmailFlowClient(ctx context.Context) *dbent.Client {
 	return s.entClient
 }
 
-func (s *AuthService) loadOAuthRegistrationInvitation(ctx context.Context, invitationCode string) (*RedeemCode, error) {
-	if client := s.oauthEmailFlowClient(ctx); client != nil {
-		entity, err := client.RedeemCode.Query().Where(redeemcode.CodeEQ(invitationCode)).Only(ctx)
-		if err != nil {
-			if dbent.IsNotFound(err) {
-				return nil, ErrRedeemCodeNotFound
-			}
-			return nil, err
-		}
-		return &RedeemCode{
-			ID:           entity.ID,
-			Code:         entity.Code,
-			Type:         entity.Type,
-			Value:        entity.Value,
-			Status:       entity.Status,
-			UsedBy:       entity.UsedBy,
-			UsedAt:       entity.UsedAt,
-			Notes:        oauthEmailFlowStringValue(entity.Notes),
-			CreatedAt:    entity.CreatedAt,
-			GroupID:      entity.GroupID,
-			ValidityDays: entity.ValidityDays,
-		}, nil
-	}
-	return s.redeemRepo.GetByCode(ctx, invitationCode)
-}
-
-func (s *AuthService) useOAuthRegistrationInvitation(ctx context.Context, invitationID, userID int64) error {
-	if client := s.oauthEmailFlowClient(ctx); client != nil {
-		affected, err := client.RedeemCode.Update().
-			Where(redeemcode.IDEQ(invitationID), redeemcode.StatusEQ(StatusUnused)).
-			SetStatus(StatusUsed).
-			SetUsedBy(userID).
-			SetUsedAt(time.Now().UTC()).
-			Save(ctx)
-		if err != nil {
-			return err
-		}
-		if affected == 0 {
-			return ErrRedeemCodeUsed
-		}
-		return nil
-	}
-	return s.redeemRepo.Use(ctx, invitationID, userID)
-}
-
-func (s *AuthService) updateOAuthRegistrationInvitation(ctx context.Context, code *RedeemCode) error {
-	if code == nil {
-		return nil
-	}
-	if client := s.oauthEmailFlowClient(ctx); client != nil {
-		update := client.RedeemCode.UpdateOneID(code.ID).
-			SetCode(code.Code).
-			SetType(code.Type).
-			SetValue(code.Value).
-			SetStatus(code.Status).
-			SetNotes(code.Notes).
-			SetValidityDays(code.ValidityDays)
-		if code.UsedBy != nil {
-			update = update.SetUsedBy(*code.UsedBy)
-		} else {
-			update = update.ClearUsedBy()
-		}
-		if code.UsedAt != nil {
-			update = update.SetUsedAt(*code.UsedAt)
-		} else {
-			update = update.ClearUsedAt()
-		}
-		if code.GroupID != nil {
-			update = update.SetGroupID(*code.GroupID)
-		} else {
-			update = update.ClearGroupID()
-		}
-		_, err := update.Save(ctx)
-		return err
-	}
-	return s.redeemRepo.Update(ctx, code)
-}
-
 func (s *AuthService) updateOAuthSignupSource(ctx context.Context, userID int64, signupSource string) {
 	client := s.oauthEmailFlowClient(ctx)
 	if client == nil || userID <= 0 || strings.TrimSpace(signupSource) == "" {
 		return
 	}
 	_ = client.User.UpdateOneID(userID).SetSignupSource(signupSource).Exec(ctx)
-}
-
-func oauthEmailFlowStringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 // ValidatePasswordCredentials checks the local password without completing the

@@ -26,7 +26,7 @@ type EmailOAuthIdentityInput struct {
 }
 
 func (s *AuthService) LoginOrRegisterVerifiedEmailOAuth(ctx context.Context, input EmailOAuthIdentityInput) (*TokenPair, *User, error) {
-	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, "", "")
+	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, "", "", "")
 }
 
 func (s *AuthService) LoginOrRegisterVerifiedEmailOAuthWithInvitation(
@@ -35,7 +35,17 @@ func (s *AuthService) LoginOrRegisterVerifiedEmailOAuthWithInvitation(
 	invitationCode string,
 	affiliateCode string,
 ) (*TokenPair, *User, error) {
-	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, invitationCode, affiliateCode)
+	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, invitationCode, affiliateCode, "")
+}
+
+func (s *AuthService) LoginOrRegisterVerifiedEmailOAuthWithSignupCodes(
+	ctx context.Context,
+	input EmailOAuthIdentityInput,
+	invitationCode string,
+	affiliateCode string,
+	promoCode string,
+) (*TokenPair, *User, error) {
+	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, invitationCode, affiliateCode, promoCode)
 }
 
 func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
@@ -43,6 +53,7 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	input EmailOAuthIdentityInput,
 	invitationCode string,
 	affiliateCode string,
+	promoCode string,
 ) (*TokenPair, *User, error) {
 	if s == nil || s.userRepo == nil || s.entClient == nil {
 		return nil, nil, ErrServiceUnavailable
@@ -127,6 +138,9 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to update username after %s oauth login: %v", providerType, err)
 		}
 	}
+	if created {
+		user = s.applyOAuthSignupPromoCode(ctx, user, promoCode)
+	}
 	if !created {
 		if err := s.ApplyProviderDefaultSettingsOnFirstBind(ctx, user.ID, providerType); err != nil {
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to apply %s first bind defaults: %v", providerType, err)
@@ -145,7 +159,7 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 		return nil, ErrRegDisabled
 	}
-	invitationRedeemCode, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode)
+	effectiveInvitationCode, invitationRequired, err := s.resolveRegistrationInvitationCode(ctx, invitationCode, affiliateCode)
 	if err != nil {
 		if errors.Is(err, ErrInvitationCodeRequired) {
 			return nil, ErrOAuthInvitationRequired
@@ -177,7 +191,7 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 		Status:       StatusActive,
 		SignupSource: providerType,
 	}
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	if err := s.createUserWithInvitation(ctx, user, effectiveInvitationCode, invitationRequired); err != nil {
 		if errors.Is(err, ErrEmailExists) {
 			existing, loadErr := s.userRepo.GetByEmail(ctx, email)
 			if loadErr != nil {
@@ -185,17 +199,13 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 			}
 			return existing, nil
 		}
-		return nil, ErrServiceUnavailable
+		if errors.Is(err, ErrInvitationCodeInvalid) {
+			return nil, ErrInvitationCodeInvalid
+		}
+		return nil, err
 	}
 	s.postAuthUserBootstrap(ctx, user, providerType, false)
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
-	s.bindOAuthAffiliate(ctx, user.ID, affiliateCode)
-	if invitationRedeemCode != nil {
-		if err := s.useOAuthRegistrationInvitation(ctx, invitationRedeemCode.ID, user.ID); err != nil {
-			_ = s.RollbackOAuthEmailAccountCreation(ctx, user.ID, invitationCode)
-			return nil, ErrInvitationCodeInvalid
-		}
-	}
 	return user, nil
 }
 

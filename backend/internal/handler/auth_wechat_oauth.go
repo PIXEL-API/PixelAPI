@@ -123,6 +123,7 @@ func (h *AuthHandler) WeChatOAuthStart(c *gin.Context) {
 	intent := normalizeWeChatOAuthIntent(c.Query("intent"))
 	secureCookie := isRequestHTTPS(c)
 	loginAgreementRevision := strings.TrimSpace(c.Query("login_agreement_revision"))
+	captureOAuthPromoCode(c, secureCookie)
 	wechatSetCookie(c, wechatOAuthStateCookieName, encodeCookieValue(state), wechatOAuthCookieMaxAgeSec, secureCookie)
 	wechatSetCookie(c, wechatOAuthRedirectCookieName, encodeCookieValue(redirectTo), wechatOAuthCookieMaxAgeSec, secureCookie)
 	wechatSetCookie(c, wechatOAuthIntentCookieName, encodeCookieValue(intent), wechatOAuthCookieMaxAgeSec, secureCookie)
@@ -175,6 +176,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		wechatClearCookie(c, wechatOAuthModeCookieName, secureCookie)
 		wechatClearCookie(c, wechatOAuthBindUserCookieName, secureCookie)
 		clearOAuthLoginAgreementCookie(c, secureCookie)
+		clearOAuthPromoCodeCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, wechatOAuthStateCookieName)
@@ -243,6 +245,9 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		"channel_subject":        openid,
 		"suggested_display_name": strings.TrimSpace(userInfo.Nickname),
 		"suggested_avatar_url":   strings.TrimSpace(userInfo.HeadImgURL),
+	}
+	if promoCode := readOAuthPromoCode(c); promoCode != "" {
+		upstreamClaims[oauthPromoCodeStateKey] = promoCode
 	}
 	identityRef := service.PendingAuthIdentityKey{
 		ProviderType:    "wechat",
@@ -497,6 +502,7 @@ func (h *AuthHandler) wechatPaymentResumeService() *service.PaymentResumeService
 type completeWeChatOAuthRequest struct {
 	InvitationCode         string `json:"invitation_code" binding:"required"`
 	AffCode                string `json:"aff_code,omitempty"`
+	PromoCode              string `json:"promo_code,omitempty"`
 	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
 	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
 	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
@@ -568,7 +574,7 @@ func (h *AuthHandler) CompleteWeChatOAuthRegistration(c *gin.Context) {
 		return
 	}
 
-	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, req.InvitationCode, req.AffCode)
+	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(c.Request.Context(), email, username, req.InvitationCode, req.AffCode, strings.TrimSpace(firstNonEmpty(req.PromoCode, pendingOAuthPromoCode(session))))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -594,6 +600,7 @@ func (h *AuthHandler) CompleteWeChatOAuthRegistration(c *gin.Context) {
 	}
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
+	clearOAuthPromoCodeCookie(c, secureCookie)
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,

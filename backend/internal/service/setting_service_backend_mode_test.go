@@ -103,15 +103,6 @@ func resetBackendModeTestCache(t *testing.T) {
 	})
 }
 
-func resetMasterDataPlaneTestCache(t *testing.T) {
-	t.Helper()
-
-	masterDataPlaneCache.Store((*cachedMasterDataPlane)(nil))
-	t.Cleanup(func() {
-		masterDataPlaneCache.Store((*cachedMasterDataPlane)(nil))
-	})
-}
-
 func TestIsBackendModeEnabled_ReturnsTrue(t *testing.T) {
 	resetBackendModeTestCache(t)
 
@@ -210,49 +201,4 @@ func TestUpdateSettings_InvalidatesBackendModeCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "false", repo.updates[SettingKeyBackendModeEnabled])
 	require.False(t, svc.IsBackendModeEnabled(context.Background()))
-}
-
-func TestIsMasterDataPlaneEnabled_ReturnsConfiguredValue(t *testing.T) {
-	resetMasterDataPlaneTestCache(t)
-
-	repo := &bmRepoStub{
-		getMultipleFn: func(ctx context.Context, keys []string) (map[string]string, error) {
-			require.Contains(t, keys, SettingKeyMasterDataPlaneEnabled)
-			return map[string]string{SettingKeyMasterDataPlaneEnabled: "false"}, nil
-		},
-	}
-	svc := NewSettingService(repo, &config.Config{})
-
-	require.False(t, svc.IsMasterDataPlaneEnabled(context.Background()))
-	require.Equal(t, 1, repo.calls)
-}
-
-func TestIsMasterDataPlaneEnabled_FallsBackToLegacyInverseKey(t *testing.T) {
-	resetMasterDataPlaneTestCache(t)
-
-	repo := &bmRepoStub{
-		getMultipleFn: func(ctx context.Context, keys []string) (map[string]string, error) {
-			require.Contains(t, keys, SettingKeySubsiteOnlyGatewayEnabled)
-			return map[string]string{SettingKeySubsiteOnlyGatewayEnabled: "true"}, nil
-		},
-	}
-	svc := NewSettingService(repo, &config.Config{})
-
-	require.False(t, svc.IsMasterDataPlaneEnabled(context.Background()))
-	require.Equal(t, 1, repo.calls)
-}
-
-func TestUpdateSettingsPersistsMasterDataPlaneAndLegacyInverse(t *testing.T) {
-	resetMasterDataPlaneTestCache(t)
-
-	repo := &bmUpdateRepoStub{}
-	svc := NewSettingService(repo, &config.Config{})
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		MasterDataPlaneEnabled: false,
-	})
-	require.NoError(t, err)
-	require.Equal(t, "false", repo.updates[SettingKeyMasterDataPlaneEnabled])
-	require.Equal(t, "true", repo.updates[SettingKeySubsiteOnlyGatewayEnabled])
-	require.False(t, svc.IsMasterDataPlaneEnabled(context.Background()))
 }

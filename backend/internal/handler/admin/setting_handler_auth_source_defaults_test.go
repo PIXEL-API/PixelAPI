@@ -233,7 +233,6 @@ func TestSettingHandler_UpdateSettings_PreservesOmittedSystemSettings(t *testing
 			service.SettingKeyEnableIdentityPatch:                  "true",
 			service.SettingKeyIdentityPatchPrompt:                  "custom prompt",
 			service.SettingKeyBackendModeEnabled:                   "true",
-			service.SettingKeyMasterDataPlaneEnabled:               "true",
 			service.SettingKeyOpsMonitoringEnabled:                 "true",
 			service.SettingKeyOpsRealtimeMonitoringEnabled:         "true",
 			service.SettingKeyOpsQueryModeDefault:                  "raw",
