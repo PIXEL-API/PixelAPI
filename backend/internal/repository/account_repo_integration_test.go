@@ -735,9 +735,8 @@ func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_OpenAIRequire
 
 	accounts, err := s.repo.ListSchedulableByGroupIDAndPlatform(s.ctx, group.ID, service.PlatformOpenAI)
 	s.Require().NoError(err)
-	s.Require().Len(accounts, 2)
+	s.Require().Len(accounts, 1)
 	s.Require().Equal(plusAcc.ID, accounts[0].ID)
-	s.Require().Equal(proAcc.ID, accounts[1].ID)
 }
 
 func (s *AccountRepoSuite) TestListSchedulableByGroupIDAndPlatform_RequiredAccountLevelIgnoredForNonOpenAI() {

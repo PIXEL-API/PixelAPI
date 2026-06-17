@@ -66,6 +66,8 @@ func TestAPIContracts(t *testing.T) {
 					"balance_notify_extra_emails": null,
 					"total_recharged": 0,
 					"linuxdo_bound": false,
+					"load_factor_credits_balance": 0,
+					"load_factor_credits_used_total": 0,
 					"oidc_bound": false,
 					"points_balance": 0,
 					"prefer_points_billing": false,
@@ -490,6 +492,8 @@ func TestAPIContracts(t *testing.T) {
 					"total_input_tokens": 15,
 					"total_output_tokens": 35,
 					"total_cache_tokens": 3,
+					"total_cache_creation_tokens": 0,
+					"total_cache_read_tokens": 0,
 					"total_tokens": 53,
 					"total_cost": 0.75,
 					"total_actual_cost": 0.75,
@@ -701,12 +705,16 @@ func TestAPIContracts(t *testing.T) {
 						"ops_realtime_monitoring_enabled": true,
 						"ops_query_mode_default": "auto",
 						"ops_metrics_interval_seconds": 60,
+						"claude_oauth_system_prompt": "",
+						"claude_oauth_system_prompt_blocks": "",
 						"site_name": "Sub2API",
 						"site_logo": "",
 						"site_subtitle": "Subtitle",
 						"api_base_url": "https://api.example.com",
 					"contact_info": "support",
 					"doc_url": "https://docs.example.com",
+					"cyber_session_block_enabled": false,
+					"cyber_session_block_ttl_seconds": 3600,
 					"auth_source_default_email_balance": 0,
 					"auth_source_default_email_concurrency": 5,
 					"auth_source_default_email_subscriptions": [],
@@ -741,6 +749,7 @@ func TestAPIContracts(t *testing.T) {
 					"user_private_group_daily_limit_usd": null,
 					"user_private_group_weekly_limit_usd": null,
 					"user_private_group_monthly_limit_usd": null,
+					"user_account_import_limit": 100,
 					"user_private_group_rate_multiplier": 1,
 					"user_private_group_rpm_limit": 0,
 					"user_private_group_commission_rate": 0.005,
@@ -790,6 +799,7 @@ func TestAPIContracts(t *testing.T) {
 					"allow_ungrouped_key_scheduling": false,
 					"backend_mode_enabled": false,
 					"enable_cch_signing": false,
+					"enable_claude_oauth_system_prompt_injection": true,
 					"enable_anthropic_cache_ttl_1h_injection": false,
 					"enable_fingerprint_unification": true,
 					"enable_metadata_passthrough": false,
@@ -967,6 +977,8 @@ func TestAPIContracts(t *testing.T) {
 					"oidc_connect_userinfo_id_path": "",
 					"oidc_connect_userinfo_username_path": "",
 					"site_name": "Sub2API",
+					"claude_oauth_system_prompt": "",
+					"claude_oauth_system_prompt_blocks": "",
 					"site_logo": "",
 					"site_subtitle": "Subscription to API Conversion Platform",
 					"api_base_url": "",
@@ -987,6 +999,8 @@ func TestAPIContracts(t *testing.T) {
 					"login_agreement_enabled": false,
 					"login_agreement_mode": "modal",
 					"login_agreement_updated_at": "2026-03-31",
+					"cyber_session_block_enabled": false,
+					"cyber_session_block_ttl_seconds": 3600,
 					"login_agreement_documents": [
 						{"id": "terms", "title": "服务条款", "content_md": ""},
 						{"id": "usage-policy", "title": "使用政策", "content_md": ""},
@@ -1025,6 +1039,7 @@ func TestAPIContracts(t *testing.T) {
 					"enable_fingerprint_unification": true,
 					"enable_metadata_passthrough": false,
 					"enable_cch_signing": false,
+					"enable_claude_oauth_system_prompt_injection": true,
 					"enable_anthropic_cache_ttl_1h_injection": false,
 					"web_search_emulation_enabled": false,
 					"payment_visible_method_alipay_source": "",
@@ -1142,6 +1157,7 @@ func TestAPIContracts(t *testing.T) {
 					"user_private_group_daily_limit_usd": null,
 					"user_private_group_weekly_limit_usd": null,
 					"user_private_group_monthly_limit_usd": null,
+					"user_account_import_limit": 100,
 					"user_private_group_rate_multiplier": 1,
 					"user_private_group_rpm_limit": 0,
 					"user_private_group_commission_rate": 0.005
@@ -1805,6 +1821,18 @@ func (stubProxyRepo) ListActive(ctx context.Context) ([]service.Proxy, error) {
 
 func (stubProxyRepo) ListActiveWithAccountCount(ctx context.Context) ([]service.ProxyWithAccountCount, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (stubProxyRepo) ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]service.ProxyWithAccountCount, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (stubProxyRepo) GetVisibleByID(ctx context.Context, userID, id int64) (*service.Proxy, error) {
+	return nil, service.ErrProxyNotFound
+}
+
+func (stubProxyRepo) FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*service.Proxy, error) {
+	return nil, service.ErrProxyNotFound
 }
 
 func (stubProxyRepo) ExistsByHostPortAuth(ctx context.Context, host string, port int, username, password string) (bool, error) {

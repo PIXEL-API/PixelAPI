@@ -514,7 +514,8 @@ func openAIImagesResponsesFailure(body []byte) (int, string, bool) {
 			continue
 		}
 		eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
-		if eventType != "response.failed" && !(eventType == "response.completed" && strings.TrimSpace(gjson.GetBytes(payload, "response.status").String()) == "failed") {
+		responseStatus := strings.TrimSpace(gjson.GetBytes(payload, "response.status").String())
+		if eventType != "response.failed" && (eventType != "response.completed" || responseStatus != "failed") {
 			continue
 		}
 		message := strings.TrimSpace(gjson.GetBytes(payload, "response.error.message").String())

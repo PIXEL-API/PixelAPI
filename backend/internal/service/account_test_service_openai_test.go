@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 )
 
@@ -219,7 +220,9 @@ func TestAccountTestService_OpenAIAPIKeyRootBaseURLUsesV1ResponsesPath(t *testin
 	ctx, _ := newTestContext()
 
 	resp := newJSONResponse(http.StatusOK, "")
-	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.output_item.done","item":{"type":"function_call","name":"probe_ping"}}
+
+data: {"type":"response.completed"}
 
 `))
 	account := &Account{
@@ -234,6 +237,7 @@ func TestAccountTestService_OpenAIAPIKeyRootBaseURLUsesV1ResponsesPath(t *testin
 	}
 	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
 	svc := &AccountTestService{
+		cfg:          &config.Config{},
 		httpUpstream: upstream,
 	}
 

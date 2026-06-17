@@ -141,18 +141,18 @@ func newOAuthEmailFlowAuthService(
 	)
 }
 
+type failingRefreshTokenCacheStub struct {
+	refreshTokenCacheStub
+	storeErr error
+}
+
+func (s *failingRefreshTokenCacheStub) StoreRefreshToken(context.Context, string, *RefreshTokenData, time.Duration) error {
+	return s.storeErr
+}
+
 func TestRegisterOAuthEmailAccountRollsBackCreatedUserWhenTokenPairGenerationFails(t *testing.T) {
 	userRepo := &userRepoStub{nextID: 42}
-	redeemRepo := &redeemCodeRepoStub{
-		codesByCode: map[string]*RedeemCode{
-			"INVITE123": {
-				ID:     7,
-				Code:   "INVITE123",
-				Type:   RedeemTypeInvitation,
-				Status: StatusUnused,
-			},
-		},
-	}
+	redeemRepo := &redeemCodeRepoStub{}
 	emailCache := &emailCacheStub{
 		data: &VerificationCodeData{
 			Code:      "246810",
@@ -164,11 +164,10 @@ func TestRegisterOAuthEmailAccountRollsBackCreatedUserWhenTokenPairGenerationFai
 	authService := newOAuthEmailFlowAuthService(
 		userRepo,
 		redeemRepo,
-		nil,
+		&failingRefreshTokenCacheStub{storeErr: errors.New("cache unavailable")},
 		map[string]string{
-			SettingKeyRegistrationEnabled:   "true",
-			SettingKeyInvitationCodeEnabled: "true",
-			SettingKeyEmailVerifyEnabled:    "true",
+			SettingKeyRegistrationEnabled: "true",
+			SettingKeyEmailVerifyEnabled:  "true",
 		},
 		emailCache,
 	)
@@ -178,7 +177,7 @@ func TestRegisterOAuthEmailAccountRollsBackCreatedUserWhenTokenPairGenerationFai
 		"fresh@example.com",
 		"secret-123",
 		"246810",
-		"INVITE123",
+		"",
 		"oidc",
 	)
 
@@ -266,7 +265,7 @@ func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing
 	require.Equal(t, "email", userRepo.created[0].SignupSource)
 }
 
-func TestRollbackOAuthEmailAccountCreationRestoresInvitationUsage(t *testing.T) {
+func TestRollbackOAuthEmailAccountCreationDeletesUserWithoutMutatingInvitation(t *testing.T) {
 	userRepo := &userRepoStub{}
 	redeemRepo := &redeemCodeRepoStub{
 		codesByCode: map[string]*RedeemCode{
@@ -301,10 +300,7 @@ func TestRollbackOAuthEmailAccountCreationRestoresInvitationUsage(t *testing.T) 
 
 	require.NoError(t, err)
 	require.Equal(t, []int64{42}, userRepo.deletedIDs)
-	require.Len(t, redeemRepo.updateCalls, 1)
-	require.Equal(t, StatusUnused, redeemRepo.updateCalls[0].Status)
-	require.Nil(t, redeemRepo.updateCalls[0].UsedBy)
-	require.Nil(t, redeemRepo.updateCalls[0].UsedAt)
+	require.Empty(t, redeemRepo.updateCalls)
 }
 
 func TestRollbackOAuthEmailAccountCreationPropagatesDeleteError(t *testing.T) {

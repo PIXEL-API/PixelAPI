@@ -483,7 +483,9 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	listings := make([]service.AccountShareListing, 0, limit)
 	for rows.Next() {
@@ -573,7 +575,7 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 		if err != nil {
 			return nil, err
 		}
-		if activeSeats > 0 && !(actorIsAdmin && input.ForceActiveEdit) {
+		if activeSeats > 0 && (!actorIsAdmin || !input.ForceActiveEdit) {
 			return nil, service.ErrAccountShareListingInUse
 		}
 		if input.ProxyID != nil {
@@ -819,7 +821,7 @@ func (r *accountShareModeRepository) BeginListingEdit(ctx context.Context, actor
 	if err != nil {
 		return nil, err
 	}
-	if activeSeats > 0 && !(actorIsAdmin && input.Force) {
+	if activeSeats > 0 && (!actorIsAdmin || !input.Force) {
 		return nil, service.ErrAccountShareListingInUse
 	}
 
@@ -1373,7 +1375,9 @@ func (r *accountShareModeRepository) ListIdleMembershipCandidates(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	candidates := make([]service.AccountShareIdleMembershipCandidate, 0, limit)
 	for rows.Next() {
@@ -1478,7 +1482,9 @@ func (r *accountShareModeRepository) ProcessUnavailableMemberships(ctx context.C
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	ids := make([]int64, 0, limit)
 	for rows.Next() {
@@ -1520,7 +1526,9 @@ func (r *accountShareModeRepository) EndUnavailableAccountMemberships(ctx contex
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	ids := make([]int64, 0, limit)
 	for rows.Next() {
@@ -1568,7 +1576,9 @@ func (r *accountShareModeRepository) DisablePermanentlyUnavailableListings(ctx c
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	processed := 0
 	for rows.Next() {
@@ -1661,7 +1671,9 @@ func (r *accountShareModeRepository) ProcessSeatBilling(ctx context.Context, now
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	ids := make([]int64, 0, limit)
 	for rows.Next() {
@@ -1700,7 +1712,9 @@ func (r *accountShareModeRepository) ProcessSeatBillingForJoin(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	ids := make([]int64, 0, service.AccountShareModeSeatBillingBatchSize)
 	for rows.Next() {
@@ -1735,7 +1749,9 @@ func (r *accountShareModeRepository) ProcessSeatBillingForRequest(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	ids := make([]int64, 0, service.AccountShareModeSeatBillingBatchSize)
 	for rows.Next() {

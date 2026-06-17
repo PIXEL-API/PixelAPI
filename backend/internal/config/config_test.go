@@ -16,13 +16,30 @@ import (
 
 func resetViperWithJWTSecret(t *testing.T) {
 	t.Helper()
-	viper.Reset()
+	resetViperWithEmptyConfig(t)
 	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
 	t.Setenv("TOTP_ENCRYPTION_KEY", strings.Repeat("a", 64))
 }
 
-func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
+func resetViperWithEmptyConfig(t *testing.T) {
+	t.Helper()
 	viper.Reset()
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "config.yaml"), []byte("{}\n"), 0o644))
+	t.Setenv("DATA_DIR", tempDir)
+}
+
+func resetViperWithConfig(t *testing.T, content string) string {
+	t.Helper()
+	viper.Reset()
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "config.yaml"), []byte(content), 0o644))
+	t.Setenv("DATA_DIR", tempDir)
+	return tempDir
+}
+
+func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
+	resetViperWithEmptyConfig(t)
 	t.Setenv("JWT_SECRET", "")
 	t.Setenv("TOTP_ENCRYPTION_KEY", "")
 
@@ -36,8 +53,7 @@ func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
 }
 
 func TestLoadRequiresConfiguredTotpEncryptionKey(t *testing.T) {
-	viper.Reset()
-	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
+	resetViperWithConfig(t, "jwt:\n  secret: "+strings.Repeat("x", 32)+"\n")
 	t.Setenv("TOTP_ENCRYPTION_KEY", "")
 
 	_, err := Load()

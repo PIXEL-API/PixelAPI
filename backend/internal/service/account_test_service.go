@@ -1162,7 +1162,7 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 	if isOAuth {
 		payload["store"] = false
 	} else {
-		payload["max_output_tokens"] = 512
+		payload["max_output_tokens"] = openAITestMaxOutputTokens
 		payload["tools"] = []map[string]any{
 			{
 				"type":        "function",

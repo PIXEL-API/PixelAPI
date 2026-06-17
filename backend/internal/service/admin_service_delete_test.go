@@ -285,6 +285,18 @@ func (s *proxyRepoStub) ListActiveWithAccountCount(ctx context.Context) ([]Proxy
 	panic("unexpected ListActiveWithAccountCount call")
 }
 
+func (s *proxyRepoStub) ListActiveVisibleWithAccountCount(ctx context.Context, userID int64) ([]ProxyWithAccountCount, error) {
+	panic("unexpected ListActiveVisibleWithAccountCount call")
+}
+
+func (s *proxyRepoStub) GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error) {
+	panic("unexpected GetVisibleByID call")
+}
+
+func (s *proxyRepoStub) FindVisibleActiveByEndpoint(ctx context.Context, userID int64, protocol, host string, port int, username, password string) (*Proxy, error) {
+	panic("unexpected FindVisibleActiveByEndpoint call")
+}
+
 func (s *proxyRepoStub) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	panic("unexpected ListWithFiltersAndAccountCount call")
 }

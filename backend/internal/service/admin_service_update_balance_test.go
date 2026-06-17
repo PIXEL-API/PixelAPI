@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 	_ "modernc.org/sqlite"
 )
 
@@ -100,7 +102,16 @@ func (s *authCacheInvalidatorStub) InvalidateAuthCacheByGroupID(ctx context.Cont
 
 func newAdminBalanceTestClient(t *testing.T) *dbent.Client {
 	t.Helper()
-	client := enttest.Open(t, dialect.SQLite, "file:admin_balance_test?mode=memory&cache=shared&_fk=1")
+
+	db, err := sql.Open("sqlite", "file:admin_balance_test?mode=memory&cache=shared&_fk=1")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
 	t.Cleanup(func() { _ = client.Close() })
 	return client
 }

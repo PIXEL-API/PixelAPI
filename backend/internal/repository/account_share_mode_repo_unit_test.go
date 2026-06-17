@@ -18,7 +18,9 @@ func TestAccountShareModeRepositoryUpdateListingRequiresOwnerForUser(t *testing.
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	mock.ExpectBegin()
@@ -42,7 +44,9 @@ func TestAccountShareModeRepositoryUpdateListingAllowsAdminWithoutOwnerFilter(t 
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 	updateErr := errors.New("stop after update")
 
@@ -71,7 +75,9 @@ func TestAccountShareModeRepositoryUpdateListingSyncsAllowedModelsToAccount(t *t
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 	commitErr := errors.New("stop after account sync")
 	models := []string{"gpt-5.5", "gpt-5.4"}
@@ -106,7 +112,9 @@ func TestAccountShareModeRepositoryBeginListingEditRejectsActiveSeatsForOwner(t 
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	mock.ExpectBegin()
@@ -136,7 +144,9 @@ func TestAccountShareModeRepositoryBeginListingEditAllowsOwnerWithoutActiveSeats
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	now := time.Now().UTC()
@@ -181,7 +191,9 @@ func TestAccountShareModeRepositoryJoinListingRejectsActiveEditSession(t *testin
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	mock.ExpectBegin()
@@ -238,7 +250,9 @@ func TestAccountShareModeRepositorySeatBillingUsesSettlementRefForLedgers(t *tes
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	now := time.Date(2026, 6, 13, 11, 30, 0, 0, time.UTC)
@@ -366,7 +380,9 @@ func TestAccountShareModeRepositorySeatBillingRefundsSeatChargeWhenWaiverMinimum
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	now := time.Date(2026, 6, 13, 11, 30, 0, 0, time.UTC)
@@ -491,7 +507,9 @@ func TestAccountShareModeRepositorySeatBillingEndsUnavailableAccount(t *testing.
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	now := time.Date(2026, 6, 13, 11, 30, 0, 0, time.UTC)
@@ -627,7 +645,9 @@ func TestAccountShareModeRepositoryProcessUnavailableMembershipsIncludesDeletedA
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	now := time.Date(2026, 6, 14, 8, 30, 0, 0, time.UTC)
@@ -675,7 +695,9 @@ func TestAccountShareModeRepositoryDisablePermanentlyUnavailableListingsUsesPerm
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	now := time.Date(2026, 6, 14, 8, 35, 0, 0, time.UTC)
@@ -747,7 +769,9 @@ func TestAccountShareModeRepositoryGetActiveMembershipForRequestUsesMembershipOn
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	repo := &accountShareModeRepository{db: db}
 
 	mock.ExpectQuery("active request membership query").
