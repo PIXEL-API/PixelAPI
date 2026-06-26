@@ -38,6 +38,9 @@ func (h *OpenAIGatewayHandler) handleAccountShareModeSelectionError(c *gin.Conte
 	case errors.Is(err, service.ErrAccountSharePerUserConcurrencyExceeded):
 		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "account_share_concurrency_exceeded", "共享账号单用户并发已达上限", streamStarted)
 		return true
+	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
+		h.handleStreamingAwareError(c, http.StatusBadRequest, "account_share_model_unsupported", "模型不支持", streamStarted)
+		return true
 	default:
 		return false
 	}
@@ -53,6 +56,9 @@ func (h *OpenAIGatewayHandler) handleAccountShareModeAnthropicError(c *gin.Conte
 		return true
 	case errors.Is(err, service.ErrAccountSharePerUserConcurrencyExceeded):
 		h.anthropicStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "共享账号单用户并发已达上限", streamStarted)
+		return true
+	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
+		h.anthropicStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "模型不支持", streamStarted)
 		return true
 	default:
 		return false

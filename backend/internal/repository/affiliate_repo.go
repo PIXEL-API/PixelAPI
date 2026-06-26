@@ -48,19 +48,19 @@ func (r *affiliateRepository) GetAffiliateByCode(ctx context.Context, code strin
 	return queryAffiliateByCode(ctx, client, code)
 }
 
-func (r *affiliateRepository) ValidateAffiliateCode(ctx context.Context, code string, cycle service.AffiliateCodeCycle) (*service.AffiliateSummary, error) {
+func (r *affiliateRepository) ValidateAffiliateCode(ctx context.Context, code string, cycle service.AffiliateCodeCycle, enforceWeeklyLimit bool) (*service.AffiliateSummary, error) {
 	client := clientFromContext(ctx, r.client)
 	summary, err := queryAffiliateByCode(ctx, client, code)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateAffiliateCodeCycle(summary, normalizeAffiliateCycle(cycle)); err != nil {
+	if err := validateAffiliateCodeCycle(summary, normalizeAffiliateCycle(cycle), enforceWeeklyLimit); err != nil {
 		return nil, err
 	}
 	return summary, nil
 }
 
-func (r *affiliateRepository) ConsumeAffiliateCode(ctx context.Context, userID int64, code string, cycle service.AffiliateCodeCycle) (*service.AffiliateSummary, error) {
+func (r *affiliateRepository) ConsumeAffiliateCode(ctx context.Context, userID int64, code string, cycle service.AffiliateCodeCycle, enforceWeeklyLimit bool) (*service.AffiliateSummary, error) {
 	if userID <= 0 {
 		return nil, service.ErrUserNotFound
 	}
@@ -99,7 +99,7 @@ func (r *affiliateRepository) ConsumeAffiliateCode(ctx context.Context, userID i
 			inviterSummary = refreshed
 		}
 
-		if err := validateAffiliateCodeCycle(inviterSummary, cycle); err != nil {
+		if err := validateAffiliateCodeCycle(inviterSummary, cycle, enforceWeeklyLimit); err != nil {
 			return err
 		}
 
@@ -140,10 +140,19 @@ func (r *affiliateRepository) ConsumeAffiliateCode(ctx context.Context, userID i
 		if _, err = txClient.ExecContext(txCtx, `
 UPDATE user_affiliates
 SET aff_count = aff_count + 1,
-    aff_weekly_used = aff_weekly_used + 1,
     updated_at = NOW()
 WHERE user_id = $1`, inviterSummary.UserID); err != nil {
-			return fmt.Errorf("increment inviter code usage: %w", err)
+			return fmt.Errorf("increment inviter count: %w", err)
+		}
+
+		if enforceWeeklyLimit {
+			if _, err = txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_weekly_used = aff_weekly_used + 1,
+    updated_at = NOW()
+WHERE user_id = $1`, inviterSummary.UserID); err != nil {
+				return fmt.Errorf("increment inviter weekly code usage: %w", err)
+			}
 		}
 
 		inviter, err = queryAffiliateByUserID(txCtx, txClient, inviterSummary.UserID)
@@ -1144,7 +1153,7 @@ func isAffiliateCodeExpired(summary *service.AffiliateSummary, cycle service.Aff
 	return !cycle.Now.Before(summary.AffCodeExpiresAt.UTC())
 }
 
-func validateAffiliateCodeCycle(summary *service.AffiliateSummary, cycle service.AffiliateCodeCycle) error {
+func validateAffiliateCodeCycle(summary *service.AffiliateSummary, cycle service.AffiliateCodeCycle, enforceWeeklyLimit bool) error {
 	if summary == nil || summary.UserID <= 0 {
 		return service.ErrAffiliateCodeInvalid
 	}
@@ -1153,6 +1162,10 @@ func validateAffiliateCodeCycle(summary *service.AffiliateSummary, cycle service
 	}
 	if isAffiliateCodeExpired(summary, cycle) {
 		return service.ErrAffiliateCodeExpired
+	}
+
+	if !enforceWeeklyLimit {
+		return nil
 	}
 
 	used := summary.AffWeeklyUsed

@@ -190,6 +190,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import Icon from '@/components/icons/Icon.vue'
+import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
 import type { Proxy } from '@/types'
 
 const { t } = useI18n()
@@ -249,15 +250,6 @@ const selectedLabel = computed(() => {
   const usage = proxy.account_count !== undefined ? ` · ${formatProxyUsage(proxy)}` : ''
   return props.hideEndpoint ? `${proxy.name}${usage}` : `${proxy.name} (${formatProxyEndpoint(proxy)}${usage})`
 })
-
-const normalizeProxyAccountCount = (proxy: Proxy): number => proxy.account_count || 0
-
-const normalizeProxyMaxAccounts = (proxy: Proxy): number => proxy.max_accounts || 0
-
-const isProxyAccountFull = (proxy: Proxy): boolean => {
-  const maxAccounts = normalizeProxyMaxAccounts(proxy)
-  return maxAccounts > 0 && normalizeProxyAccountCount(proxy) >= maxAccounts
-}
 
 const isProxyOptionDisabled = (proxy: Proxy): boolean =>
   props.disableFull && isProxyAccountFull(proxy)

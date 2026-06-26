@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 	"time"
@@ -31,10 +32,135 @@ const (
 	accountShareSeatWaiverRefundReason         = "account_share_mode_seat_waiver_refund"
 	accountShareSeatIncomeReason               = "account_share_mode_income"
 	accountShareModeSettlementRefType          = "account_share_mode_settlement"
+	accountShareSeatPrepayRefType              = "account_share_mode_seat_prepay_ref"
 )
 
 func NewAccountShareModeRepository(_ *dbent.Client, sqlDB *sql.DB) service.AccountShareModeRepository {
 	return &accountShareModeRepository{db: sqlDB}
+}
+
+func NewAccountShareModeAPIKeyBindingChecker(_ *dbent.Client, sqlDB *sql.DB) service.AccountShareAPIKeyBindingChecker {
+	return &accountShareModeRepository{db: sqlDB}
+}
+
+func (r *accountShareModeRepository) HasActiveOrQueuedMembershipForAPIKey(ctx context.Context, consumerUserID, apiKeyID int64) (bool, error) {
+	if consumerUserID <= 0 || apiKeyID <= 0 {
+		return false, nil
+	}
+
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM account_share_memberships
+			WHERE consumer_user_id = $1
+				AND api_key_id = $2
+				AND status IN ($3, $4)
+				AND deleted_at IS NULL
+		)
+	`, consumerUserID, apiKeyID, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func accountShareSeatPrepayRefID(membershipID int64, paidUntil time.Time) int64 {
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "%d:%d", membershipID, paidUntil.UTC().UnixNano())
+	refID := int64(h.Sum64() & 0x7fffffffffffffff)
+	if refID == 0 {
+		return 1
+	}
+	return refID
+}
+
+func ensureAccountShareAccountIdentityInTx(ctx context.Context, tx *sql.Tx, account *service.Account) (*int64, error) {
+	if tx == nil || account == nil || account.ID <= 0 {
+		return nil, nil
+	}
+	email := accountShareAccountIdentityEmail(account)
+	if email == "" {
+		return nil, nil
+	}
+	platform := strings.ToLower(strings.TrimSpace(account.Platform))
+	if platform == "" {
+		return nil, nil
+	}
+	var identityID int64
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO account_share_account_identities (
+			platform, identity_type, identity_value, identity_hint,
+			first_account_id, last_account_id, created_at, updated_at
+		)
+		VALUES ($1, 'email', $2, $3, $4, $4, NOW(), NOW())
+		ON CONFLICT (platform, identity_type, identity_value) WHERE deleted_at IS NULL
+		DO UPDATE SET
+			identity_hint = EXCLUDED.identity_hint,
+			last_account_id = EXCLUDED.last_account_id,
+			updated_at = NOW()
+		RETURNING id
+	`, platform, email, accountShareIdentityHint(email), account.ID).Scan(&identityID)
+	if err != nil {
+		return nil, err
+	}
+	return &identityID, nil
+}
+
+func accountShareAccountIdentityEmail(account *service.Account) string {
+	if account == nil {
+		return ""
+	}
+	for _, value := range []string{
+		accountShareStringFromMap(account.Credentials, "email"),
+		accountShareStringFromMap(account.Credentials, "email_address"),
+		accountShareStringFromMap(account.Extra, "email"),
+		accountShareStringFromMap(account.Extra, "email_address"),
+	} {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func accountShareStringFromMap(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func accountShareIdentityHint(email string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return ""
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return ""
+	}
+	local := parts[0]
+	domain := parts[1]
+	if local == "" || domain == "" {
+		return ""
+	}
+	if len(local) == 1 {
+		return local + "***@" + domain
+	}
+	return local[:1] + "***" + local[len(local)-1:] + "@" + domain
 }
 
 func (r *accountShareModeRepository) EnsureModeGroup(ctx context.Context, platform string) (*service.Group, error) {
@@ -173,7 +299,7 @@ func (r *accountShareModeRepository) EnsureListingNameAvailable(ctx context.Cont
 	return nil
 }
 
-func (r *accountShareModeRepository) CreateOpenAIListing(ctx context.Context, account *service.Account, listing *service.AccountShareListing, modeGroupID int64) (*service.AccountShareListing, error) {
+func (r *accountShareModeRepository) CreatePlatformListing(ctx context.Context, account *service.Account, listing *service.AccountShareListing, modeGroupID int64) (*service.AccountShareListing, error) {
 	if account == nil || listing == nil || modeGroupID <= 0 {
 		return nil, service.ErrAccountNilInput
 	}
@@ -262,6 +388,14 @@ func (r *accountShareModeRepository) CreateOpenAIListing(ctx context.Context, ac
 		return nil, err
 	}
 
+	accountIdentityID, err := ensureAccountShareAccountIdentityInTx(ctx, tx, account)
+	if err != nil {
+		return nil, err
+	}
+	if accountIdentityID != nil {
+		listing.AccountIdentityID = accountIdentityID
+	}
+
 	listing.AccountID = account.ID
 	listing.OwnerUserID = ownerUserID
 	if listing.Status == "" {
@@ -279,12 +413,12 @@ func (r *accountShareModeRepository) CreateOpenAIListing(ctx context.Context, ac
 		INSERT INTO account_share_listings (
 			account_id, owner_user_id, status, seat_limit, rate_multiplier, allowed_models,
 			per_user_concurrency, hourly_rate, hourly_fee_waiver_minimum, min_balance_required, codex_cli_only,
-			codex_5h_limit_percent, codex_7d_limit_percent, created_at, updated_at
+			codex_5h_limit_percent, codex_7d_limit_percent, account_identity_id, created_at, updated_at
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6::jsonb,
 			$7, $8, $9, $10, $11,
-			$12, $13, NOW(), NOW()
+			$12, $13, $14, NOW(), NOW()
 		)
 		RETURNING id
 	`,
@@ -301,9 +435,15 @@ func (r *accountShareModeRepository) CreateOpenAIListing(ctx context.Context, ac
 		listing.CodexCLIOnly,
 		listing.Codex5hLimitPercent,
 		listing.Codex7dLimitPercent,
+		nullableInt64(listing.AccountIdentityID),
 	).Scan(&listingID)
 	if err != nil {
 		return nil, err
+	}
+	if listing.AccountIdentityID != nil {
+		if err := refreshAccountShareListingRatingsInTx(ctx, tx, *listing.AccountIdentityID); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := enqueueSchedulerOutbox(ctx, tx, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload([]int64{modeGroupID})); err != nil {
@@ -356,10 +496,10 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 	}
 	switch filters.Tab {
 	case service.AccountShareModeListingTabUsing:
-		whereParts = append(whereParts, "cm.id IS NOT NULL")
+		whereParts = append(whereParts, "qm.id IS NOT NULL")
 		applyStatusFilter(false)
 	case service.AccountShareModeListingTabHistory:
-		whereParts = append(whereParts, "hm.id IS NOT NULL", "cm.id IS NULL")
+		whereParts = append(whereParts, "hm.id IS NOT NULL", "qm.id IS NULL")
 		if filters.Status == "" {
 			whereParts = append(whereParts, "l.status <> '"+service.AccountShareListingStatusDisabled+"'")
 		} else {
@@ -373,10 +513,18 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 	default:
 		applyStatusFilter(true)
 	}
+	if filters.Platform != "" {
+		whereParts = append(whereParts, "a.platform = "+addArg(filters.Platform))
+	}
+	if filters.OwnerUserID > 0 {
+		whereParts = append(whereParts, "l.owner_user_id = "+addArg(filters.OwnerUserID))
+	}
 	if filters.AvailableOnly {
 		whereParts = append(whereParts, accountShareListingAvailableConditionSQL("NOW()"))
 	}
-	if filters.SeatLimit >= service.AccountShareModeMinSeats && filters.SeatLimit <= service.AccountShareModeMaxSeats {
+	if len(filters.SeatLimits) > 0 {
+		whereParts = append(whereParts, "l.seat_limit = ANY("+addArg(pq.Array(filters.SeatLimits))+")")
+	} else if filters.SeatLimit >= service.AccountShareModeMinSeats && filters.SeatLimit <= service.AccountShareModeMaxSeats {
 		whereParts = append(whereParts, "l.seat_limit = "+addArg(filters.SeatLimit))
 	}
 	if filters.Search != "" {
@@ -393,30 +541,6 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 			)
 		)`, placeholder))
 	}
-	if filters.PerUserConcurrencyMin != nil {
-		whereParts = append(whereParts, "l.per_user_concurrency >= "+addArg(*filters.PerUserConcurrencyMin))
-	}
-	if filters.PerUserConcurrencyMax != nil {
-		whereParts = append(whereParts, "l.per_user_concurrency <= "+addArg(*filters.PerUserConcurrencyMax))
-	}
-	if filters.MinBalanceRequiredMin != nil {
-		whereParts = append(whereParts, "l.min_balance_required >= "+addArg(*filters.MinBalanceRequiredMin))
-	}
-	if filters.MinBalanceRequiredMax != nil {
-		whereParts = append(whereParts, "l.min_balance_required <= "+addArg(*filters.MinBalanceRequiredMax))
-	}
-	if filters.HourlyRateMin != nil {
-		whereParts = append(whereParts, "l.hourly_rate >= "+addArg(*filters.HourlyRateMin))
-	}
-	if filters.HourlyRateMax != nil {
-		whereParts = append(whereParts, "l.hourly_rate <= "+addArg(*filters.HourlyRateMax))
-	}
-	if filters.HourlyFeeWaiverMin != nil {
-		whereParts = append(whereParts, "l.hourly_fee_waiver_minimum >= "+addArg(*filters.HourlyFeeWaiverMin))
-	}
-	if filters.HourlyFeeWaiverMax != nil {
-		whereParts = append(whereParts, "l.hourly_fee_waiver_minimum <= "+addArg(*filters.HourlyFeeWaiverMax))
-	}
 	if len(filters.Models) > 0 {
 		whereParts = append(whereParts, fmt.Sprintf(`EXISTS (
 			SELECT 1
@@ -427,9 +551,25 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 	if filters.AccountLevel != "" {
 		whereParts = append(whereParts, fmt.Sprintf("%s = %s", accountShareEffectiveAccountLevelSQL(), addArg(filters.AccountLevel)))
 	}
+	for _, feature := range filters.FeatureTags {
+		switch feature {
+		case service.AccountShareListingFeatureHourlyFeeWaiver:
+			whereParts = append(whereParts, "l.hourly_fee_waiver_minimum > 0")
+		case service.AccountShareListingFeatureImageGeneration:
+			whereParts = append(whereParts, accountShareListingSupportsImageGenerationSQL())
+		case service.AccountShareListingFeatureNoHourlyFee:
+			whereParts = append(whereParts, "l.hourly_rate = 0")
+		case service.AccountShareListingFeatureCodexCLIOnly:
+			whereParts = append(whereParts, "l.codex_cli_only = TRUE")
+		case service.AccountShareListingFeatureNonCodexCLIOnly:
+			whereParts = append(whereParts, "l.codex_cli_only = FALSE")
+		case service.AccountShareListingFeatureAvailable:
+			whereParts = append(whereParts, accountShareListingAvailableConditionSQL("NOW()"))
+		}
+	}
 	whereSQL := strings.Join(whereParts, " AND ")
 
-	approximatePagination := accountShareListingUsesApproximatePagination(filters)
+	approximatePagination := filters.SkipTotal || accountShareListingUsesApproximatePagination(filters)
 	var total int64
 	if !approximatePagination {
 		countQuery := fmt.Sprintf(`
@@ -453,13 +593,23 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 				FROM account_share_memberships m
 				WHERE m.listing_id = l.id
 					AND m.consumer_user_id = $1
+					AND m.status IN ('%s', '%s')
+					AND m.deleted_at IS NULL
+				ORDER BY m.queue_rank ASC, m.id ASC
+				LIMIT 1
+			) qm ON TRUE
+			LEFT JOIN LATERAL (
+				SELECT m.id
+				FROM account_share_memberships m
+				WHERE m.listing_id = l.id
+					AND m.consumer_user_id = $1
 					AND m.status = '%s'
 					AND m.deleted_at IS NULL
 				ORDER BY COALESCE(m.ended_at, m.updated_at) DESC
 				LIMIT 1
 			) hm ON TRUE
 			WHERE %s
-		`, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusEnded, whereSQL)
+		`, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued, service.AccountShareMembershipStatusEnded, whereSQL)
 		if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 			return nil, nil, err
 		}
@@ -473,12 +623,9 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 	query := fmt.Sprintf(`
 		%s
 		WHERE %s
-		ORDER BY
-			CASE WHEN cm.id IS NOT NULL THEN 0 ELSE 1 END,
-			COALESCE(cm.joined_at, hm.ended_at, l.updated_at) DESC,
-			l.id DESC
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d
-	`, accountShareListingSelectSQL(), whereSQL, len(args)-1, len(args))
+	`, accountShareListingSelectSQL(), whereSQL, accountShareListingOrderSQL(filters), len(args)-1, len(args))
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
@@ -520,6 +667,270 @@ func (r *accountShareModeRepository) ListListings(ctx context.Context, viewerUse
 		PageSize: limit,
 		Pages:    pages,
 	}, nil
+}
+
+func (r *accountShareModeRepository) GetMySpendSummary(ctx context.Context, query service.AccountShareMySpendQuery) (*service.AccountShareMySpendSummary, error) {
+	if query.ListingID <= 0 || query.ConsumerID <= 0 {
+		return nil, service.ErrAccountShareListingNotFound
+	}
+	listing, err := r.getMySpendListing(ctx, query.ListingID)
+	if err != nil {
+		return nil, err
+	}
+	membership, err := r.resolveMySpendMembership(ctx, query.ListingID, query.ConsumerID, query.MembershipID)
+	if err != nil {
+		return nil, err
+	}
+	startTime := query.StartTime
+	endTime := query.EndTime
+	filterMembershipID := int64(0)
+	if query.Range == service.AccountShareSpendRangeCurrentMembership {
+		if membership == nil {
+			startTime = endTime
+		} else {
+			filterMembershipID = membership.ID
+			startTime = membership.JoinedAt
+			if membership.EndedAt != nil && membership.EndedAt.Before(endTime) {
+				endTime = *membership.EndedAt
+			}
+		}
+	}
+	summary := &service.AccountShareMySpendSummary{
+		Range:          query.Range,
+		StartTime:      startTime,
+		EndTime:        endTime,
+		Listing:        *listing,
+		Membership:     membership,
+		ModelBreakdown: []service.AccountShareMySpendModelBreakdown{},
+	}
+	if startTime.IsZero() || endTime.IsZero() || !endTime.After(startTime) {
+		return summary, nil
+	}
+	if err := r.fillMySpendTotals(ctx, summary, query.ListingID, query.ConsumerID, filterMembershipID); err != nil {
+		return nil, err
+	}
+	models, err := r.listMySpendModelBreakdown(ctx, query.ListingID, query.ConsumerID, filterMembershipID, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	summary.ModelBreakdown = models
+	return summary, nil
+}
+
+func (r *accountShareModeRepository) getMySpendListing(ctx context.Context, listingID int64) (*service.AccountShareMySpendListing, error) {
+	var listing service.AccountShareMySpendListing
+	err := r.db.QueryRowContext(ctx, `
+		SELECT
+			l.id,
+			l.account_id,
+			COALESCE(a.name, ''),
+			a.platform,
+			l.owner_user_id,
+			COALESCE(u.username, '')
+		FROM account_share_listings l
+		JOIN accounts a ON a.id = l.account_id AND a.deleted_at IS NULL
+		LEFT JOIN users u ON u.id = l.owner_user_id
+		WHERE l.id = $1
+			AND l.deleted_at IS NULL
+	`, listingID).Scan(
+		&listing.ID,
+		&listing.AccountID,
+		&listing.AccountName,
+		&listing.Platform,
+		&listing.OwnerUserID,
+		&listing.OwnerUsername,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrAccountShareListingNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &listing, nil
+}
+
+func (r *accountShareModeRepository) resolveMySpendMembership(ctx context.Context, listingID, consumerID int64, membershipID *int64) (*service.AccountShareMySpendMembership, error) {
+	args := []any{listingID, consumerID}
+	membershipPredicate := ""
+	if membershipID != nil {
+		if *membershipID <= 0 {
+			return nil, service.ErrAccountShareListingNotFound
+		}
+		args = append(args, *membershipID)
+		membershipPredicate = fmt.Sprintf("AND m.id = $%d", len(args))
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			m.id,
+			m.api_key_id,
+			m.status,
+			m.queue_rank,
+			m.joined_at,
+			m.last_request_at,
+			m.ended_at,
+			m.ended_reason,
+			m.paid_until,
+			m.billed_until,
+			m.hourly_rate_snapshot,
+			m.hourly_fee_waiver_minimum_snapshot,
+			m.idle_timeout_minutes
+		FROM account_share_memberships m
+		WHERE m.listing_id = $1
+			AND m.consumer_user_id = $2
+			AND m.deleted_at IS NULL
+			%s
+		ORDER BY
+			CASE m.status
+				WHEN '%s' THEN 0
+				WHEN '%s' THEN 1
+				WHEN '%s' THEN 2
+				ELSE 3
+			END,
+			COALESCE(m.ended_at, m.updated_at, m.joined_at) DESC,
+			m.id DESC
+		LIMIT 1
+	`, membershipPredicate, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued, service.AccountShareMembershipStatusEnded)
+	var membership service.AccountShareMySpendMembership
+	var lastRequestAt, endedAt, paidUntil, billedUntil sql.NullTime
+	var endedReason sql.NullString
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(
+		&membership.ID,
+		&membership.APIKeyID,
+		&membership.Status,
+		&membership.QueueRank,
+		&membership.JoinedAt,
+		&lastRequestAt,
+		&endedAt,
+		&endedReason,
+		&paidUntil,
+		&billedUntil,
+		&membership.HourlyRate,
+		&membership.WaiverMinimum,
+		&membership.IdleTimeoutMinutes,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		if membershipID != nil {
+			return nil, service.ErrAccountShareListingNotFound
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	membership.LastRequestAt = sqlNullTimePtr(lastRequestAt)
+	membership.EndedAt = sqlNullTimePtr(endedAt)
+	membership.PaidUntil = sqlNullTimePtr(paidUntil)
+	membership.BilledUntil = sqlNullTimePtr(billedUntil)
+	if endedReason.Valid {
+		membership.EndedReason = endedReason.String
+	}
+	return &membership, nil
+}
+
+func (r *accountShareModeRepository) fillMySpendTotals(ctx context.Context, summary *service.AccountShareMySpendSummary, listingID, consumerID, membershipID int64) error {
+	whereSQL, args := accountShareMySpendWhere(listingID, consumerID, membershipID, summary.StartTime, summary.EndTime)
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(e.id) FILTER (WHERE e.settlement_type = 'usage_request')::bigint,
+			COALESCE(SUM(COALESCE(ul.input_tokens, 0)) FILTER (WHERE e.settlement_type = 'usage_request'), 0)::bigint,
+			COALESCE(SUM(COALESCE(ul.output_tokens, 0)) FILTER (WHERE e.settlement_type = 'usage_request'), 0)::bigint,
+			COALESCE(SUM(COALESCE(ul.cache_creation_tokens, 0)) FILTER (WHERE e.settlement_type = 'usage_request'), 0)::bigint,
+			COALESCE(SUM(COALESCE(ul.cache_read_tokens, 0)) FILTER (WHERE e.settlement_type = 'usage_request'), 0)::bigint,
+			COALESCE(SUM(e.total_charge) FILTER (WHERE e.settlement_type = 'usage_request'), 0)::double precision,
+			COALESCE(SUM(e.hourly_charge) FILTER (WHERE e.settlement_type = 'seat_charge'), 0)::double precision,
+			COALESCE(SUM(e.refund_amount) FILTER (WHERE e.settlement_type = 'seat_refund'), 0)::double precision,
+			COALESCE(SUM(e.refund_amount) FILTER (WHERE e.settlement_type = 'seat_waiver_refund'), 0)::double precision,
+			MAX(e.created_at)
+		FROM account_share_mode_settlement_entries e
+		LEFT JOIN usage_logs ul ON ul.id = e.usage_log_id
+		WHERE %s
+	`, whereSQL)
+	var lastActivityAt sql.NullTime
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(
+		&summary.RequestCount,
+		&summary.InputTokens,
+		&summary.OutputTokens,
+		&summary.CacheCreationTokens,
+		&summary.CacheReadTokens,
+		&summary.RequestCost,
+		&summary.HourlyCharge,
+		&summary.HourlyRefund,
+		&summary.HourlyWaiverRefund,
+		&lastActivityAt,
+	); err != nil {
+		return err
+	}
+	summary.TotalTokens = summary.InputTokens + summary.OutputTokens + summary.CacheCreationTokens + summary.CacheReadTokens
+	summary.HourlyNetCost = summary.HourlyCharge - summary.HourlyRefund - summary.HourlyWaiverRefund
+	summary.TotalCost = summary.RequestCost + summary.HourlyNetCost
+	summary.LastActivityAt = sqlNullTimePtr(lastActivityAt)
+	return nil
+}
+
+func (r *accountShareModeRepository) listMySpendModelBreakdown(ctx context.Context, listingID, consumerID, membershipID int64, startTime, endTime time.Time) ([]service.AccountShareMySpendModelBreakdown, error) {
+	whereSQL, args := accountShareMySpendWhere(listingID, consumerID, membershipID, startTime, endTime)
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(NULLIF(ul.model, ''), 'unknown') AS model,
+			COUNT(ul.id)::bigint,
+			COALESCE(SUM(COALESCE(ul.input_tokens, 0)), 0)::bigint,
+			COALESCE(SUM(COALESCE(ul.output_tokens, 0)), 0)::bigint,
+			COALESCE(SUM(COALESCE(ul.cache_creation_tokens, 0)), 0)::bigint,
+			COALESCE(SUM(COALESCE(ul.cache_read_tokens, 0)), 0)::bigint,
+			COALESCE(SUM(e.total_charge), 0)::double precision
+		FROM account_share_mode_settlement_entries e
+		JOIN usage_logs ul ON ul.id = e.usage_log_id
+		WHERE %s
+			AND e.settlement_type = 'usage_request'
+		GROUP BY COALESCE(NULLIF(ul.model, ''), 'unknown')
+		ORDER BY COALESCE(SUM(e.total_charge), 0) DESC, COUNT(ul.id) DESC, model ASC
+	`, whereSQL)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	items := make([]service.AccountShareMySpendModelBreakdown, 0)
+	for rows.Next() {
+		var item service.AccountShareMySpendModelBreakdown
+		if err := rows.Scan(
+			&item.Model,
+			&item.RequestCount,
+			&item.InputTokens,
+			&item.OutputTokens,
+			&item.CacheCreationTokens,
+			&item.CacheReadTokens,
+			&item.RequestCost,
+		); err != nil {
+			return nil, err
+		}
+		item.TotalTokens = item.InputTokens + item.OutputTokens + item.CacheCreationTokens + item.CacheReadTokens
+		if item.RequestCount > 0 {
+			item.AverageRequestCost = item.RequestCost / float64(item.RequestCount)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func accountShareMySpendWhere(listingID, consumerID, membershipID int64, startTime, endTime time.Time) (string, []any) {
+	args := []any{listingID, consumerID, startTime, endTime}
+	where := []string{
+		"e.listing_id = $1",
+		"e.consumer_user_id = $2",
+		"e.created_at >= $3",
+		"e.created_at < $4",
+	}
+	if membershipID > 0 {
+		args = append(args, membershipID)
+		where = append(where, fmt.Sprintf("e.membership_id = $%d", len(args)))
+	}
+	return strings.Join(where, " AND "), args
 }
 
 func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, input service.UpdateAccountShareListingInput) (*service.AccountShareListing, error) {
@@ -660,6 +1071,12 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 	if input.Codex7dLimitPercent != nil {
 		setParts = append(setParts, "codex_7d_limit_percent = "+addArg(*input.Codex7dLimitPercent))
 	}
+	if input.Anthropic5hLimitPercent != nil {
+		setParts = append(setParts, "codex_5h_limit_percent = "+addArg(*input.Anthropic5hLimitPercent))
+	}
+	if input.Anthropic7dLimitPercent != nil {
+		setParts = append(setParts, "codex_7d_limit_percent = "+addArg(*input.Anthropic7dLimitPercent))
+	}
 	if configUpdate {
 		setParts = append(setParts,
 			"edit_session_id = NULL",
@@ -737,6 +1154,16 @@ func (r *accountShareModeRepository) UpdateListing(ctx context.Context, actorUse
 	}
 	if input.Codex7dLimitPercent != nil {
 		if err := addExtraSet("codex_7d_limit_percent", *input.Codex7dLimitPercent); err != nil {
+			return nil, err
+		}
+	}
+	if input.Anthropic5hLimitPercent != nil {
+		if err := addExtraSet("anthropic_5h_limit_percent", *input.Anthropic5hLimitPercent); err != nil {
+			return nil, err
+		}
+	}
+	if input.Anthropic7dLimitPercent != nil {
+		if err := addExtraSet("anthropic_7d_limit_percent", *input.Anthropic7dLimitPercent); err != nil {
 			return nil, err
 		}
 	}
@@ -913,6 +1340,8 @@ func accountShareListingConfigUpdateRequiresEditSession(input service.UpdateAcco
 		input.CodexCLIOnly == nil &&
 		input.Codex5hLimitPercent == nil &&
 		input.Codex7dLimitPercent == nil &&
+		input.Anthropic5hLimitPercent == nil &&
+		input.Anthropic7dLimitPercent == nil &&
 		input.Concurrency == nil &&
 		!input.ForceActiveEdit {
 		return false
@@ -929,6 +1358,8 @@ func accountShareListingConfigUpdateRequiresEditSession(input service.UpdateAcco
 		input.CodexCLIOnly != nil ||
 		input.Codex5hLimitPercent != nil ||
 		input.Codex7dLimitPercent != nil ||
+		input.Anthropic5hLimitPercent != nil ||
+		input.Anthropic7dLimitPercent != nil ||
 		input.Concurrency != nil
 }
 
@@ -967,9 +1398,7 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 	if editSession.Valid && editingExpiresAt.Valid && editingExpiresAt.Time.After(time.Now().UTC()) {
 		return nil, service.ErrAccountShareListingEditing
 	}
-	if ownerUserID == consumerUserID {
-		return nil, service.ErrAccountShareOwnerCannotJoin
-	}
+	ownerSelfUse := ownerUserID == consumerUserID
 	if status != service.AccountShareListingStatusActive {
 		return nil, service.ErrAccountShareListingNotActive
 	}
@@ -980,6 +1409,10 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 	}
 	if unavailable {
 		return nil, service.ErrAccountShareAccountUnavailable
+	}
+	if ownerSelfUse {
+		hourlyRate = 0
+		hourlyFeeWaiverMinimum = 0
 	}
 	prepayDuration := service.AccountShareModeSeatPrepayDuration
 	prepayAmount := accountShareSeatCharge(hourlyRate, prepayDuration)
@@ -996,62 +1429,86 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 	} else if err != nil {
 		return nil, err
 	}
-	if userBalance < minBalanceRequired {
+	if !ownerSelfUse && userBalance < minBalanceRequired {
 		return nil, service.ErrAccountShareBalanceBelowMinimum
 	}
-	if prepayAmount > 0 && userBalance < minBalanceRequired+prepayAmount {
+	if !ownerSelfUse && prepayAmount > 0 && userBalance < minBalanceRequired+prepayAmount {
 		return nil, service.ErrAccountShareModePrepayInsufficient
 	}
 
-	var activeSeats int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM account_share_memberships
-		WHERE listing_id = $1
-			AND status = $2
-			AND deleted_at IS NULL
-			AND (hourly_rate_snapshot <= 0 OR paid_until IS NULL OR paid_until > NOW())
-			AND (idle_timeout_minutes <= 0 OR COALESCE(last_request_at, joined_at) + (idle_timeout_minutes * INTERVAL '1 minute') > NOW())
-	`, listingID, service.AccountShareMembershipStatusActive).Scan(&activeSeats); err != nil {
-		return nil, err
+	existing, err := scanAccountShareMembership(tx.QueryRowContext(ctx, `
+		SELECT
+			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+		WHERE m.consumer_user_id = $1
+			AND m.api_key_id = $2
+			AND m.listing_id = $3
+			AND m.status IN ($4, $5)
+			AND m.deleted_at IS NULL
+		LIMIT 1
+	`, consumerUserID, apiKeyID, listingID, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued))
+	if err == nil {
+		return existing, nil
 	}
-	if activeSeats >= seatLimit {
-		return nil, service.ErrAccountShareListingFull
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
 	}
 
-	if exists, err := existsInTx(ctx, tx, `
-		SELECT 1
+	var queueCount, maxQueueRank int
+	var hasActive bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)::int,
+			COALESCE(MAX(queue_rank), 0)::int,
+			COALESCE(BOOL_OR(status = $3), FALSE)
 		FROM account_share_memberships
 		WHERE consumer_user_id = $1
-			AND status = $2
+			AND api_key_id = $2
+			AND status IN ($3, $4)
 			AND deleted_at IS NULL
-		LIMIT 1
-	`, consumerUserID, service.AccountShareMembershipStatusActive); err != nil {
+	`, consumerUserID, apiKeyID, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued).Scan(&queueCount, &maxQueueRank, &hasActive); err != nil {
 		return nil, err
-	} else if exists {
-		return nil, service.ErrAccountShareAlreadyUsing
 	}
-	if exists, err := existsInTx(ctx, tx, `
-		SELECT 1
-		FROM account_share_memberships
-		WHERE api_key_id = $1
-			AND status = $2
-			AND deleted_at IS NULL
-		LIMIT 1
-	`, apiKeyID, service.AccountShareMembershipStatusActive); err != nil {
-		return nil, err
-	} else if exists {
-		return nil, service.ErrAccountShareAPIKeyAlreadyBound
+	if queueCount >= service.AccountShareModeQueueMaxItems {
+		return nil, service.ErrAccountShareQueueFull
+	}
+	queueRank := maxQueueRank + 1
+	activateNow := !hasActive
+	if activateNow {
+		var activeSeats int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM account_share_memberships
+			WHERE listing_id = $1
+				AND status = $2
+				AND deleted_at IS NULL
+				AND consumer_user_id <> $3
+				AND (hourly_rate_snapshot <= 0 OR paid_until IS NULL OR paid_until > NOW())
+				AND (idle_timeout_minutes <= 0 OR COALESCE(last_request_at, joined_at) + (idle_timeout_minutes * INTERVAL '1 minute') > NOW())
+		`, listingID, service.AccountShareMembershipStatusActive, ownerUserID).Scan(&activeSeats); err != nil {
+			return nil, err
+		}
+		if !ownerSelfUse && activeSeats >= seatLimit {
+			return nil, service.ErrAccountShareListingFull
+		}
 	}
 
 	membership := &service.AccountShareMembership{}
 	var endedAt, lastRequestAt sql.NullTime
-	var paidUntilScan, billedUntilScan sql.NullTime
+	var paidUntilScan, billedUntilScan, dispatchFailedAt, dispatchCooldownUntil sql.NullTime
 	var endedReason sql.NullString
 	var paidUntilValue any
-	var billedUntilValue any = now
-	if prepayAmount > 0 {
+	var billedUntilValue any
+	membershipStatus := service.AccountShareMembershipStatusQueued
+	if activateNow {
+		membershipStatus = service.AccountShareMembershipStatusActive
+	}
+	if activateNow && prepayAmount > 0 {
 		paidUntilValue = paidUntil
+		billedUntilValue = now
 	} else {
 		paidUntilValue = nil
 		billedUntilValue = nil
@@ -1059,20 +1516,21 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO account_share_memberships (
 			listing_id, account_id, consumer_user_id, api_key_id, status,
-			hourly_rate_snapshot, hourly_fee_waiver_minimum_snapshot, idle_timeout_minutes, joined_at, last_request_at,
-			ended_reason, paid_until, billed_until, created_at, updated_at
+			queue_rank, hourly_rate_snapshot, hourly_fee_waiver_minimum_snapshot, idle_timeout_minutes, joined_at, last_request_at,
+			ended_reason, paid_until, billed_until, dispatch_failed_at, dispatch_cooldown_until, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL, $10, $11, NOW(), NOW())
-		RETURNING id, listing_id, account_id, consumer_user_id, api_key_id, status,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, $11, $12, NULL, NULL, NOW(), NOW())
+		RETURNING id, listing_id, account_id, consumer_user_id, api_key_id, status, queue_rank,
 			hourly_rate_snapshot, hourly_fee_waiver_minimum_snapshot, idle_timeout_minutes, joined_at, last_request_at, ended_at,
-			ended_reason, paid_until, billed_until, created_at, updated_at
-	`, listingID, accountID, consumerUserID, apiKeyID, service.AccountShareMembershipStatusActive, hourlyRate, hourlyFeeWaiverMinimum, idleTimeoutMinutes, now, paidUntilValue, billedUntilValue).Scan(
+			ended_reason, paid_until, billed_until, dispatch_failed_at, dispatch_cooldown_until, created_at, updated_at
+	`, listingID, accountID, consumerUserID, apiKeyID, membershipStatus, queueRank, hourlyRate, hourlyFeeWaiverMinimum, idleTimeoutMinutes, now, paidUntilValue, billedUntilValue).Scan(
 		&membership.ID,
 		&membership.ListingID,
 		&membership.AccountID,
 		&membership.ConsumerUserID,
 		&membership.APIKeyID,
 		&membership.Status,
+		&membership.QueueRank,
 		&membership.HourlyRateSnapshot,
 		&membership.HourlyFeeWaiverMinimumSnapshot,
 		&membership.IdleTimeoutMinutes,
@@ -1082,6 +1540,8 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 		&endedReason,
 		&paidUntilScan,
 		&billedUntilScan,
+		&dispatchFailedAt,
+		&dispatchCooldownUntil,
 		&membership.CreatedAt,
 		&membership.UpdatedAt,
 	)
@@ -1103,8 +1563,14 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 	if billedUntilScan.Valid {
 		membership.BilledUntil = &billedUntilScan.Time
 	}
+	if dispatchFailedAt.Valid {
+		membership.DispatchFailedAt = &dispatchFailedAt.Time
+	}
+	if dispatchCooldownUntil.Valid {
+		membership.DispatchCooldownUntil = &dispatchCooldownUntil.Time
+	}
 	membership.OwnerUserID = ownerUserID
-	if prepayAmount > 0 {
+	if activateNow && prepayAmount > 0 {
 		newBalance := userBalance - prepayAmount
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE users
@@ -1116,16 +1582,18 @@ func (r *accountShareModeRepository) JoinListing(ctx context.Context, consumerUs
 			return nil, err
 		}
 		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-			UserID:       consumerUserID,
-			Direction:    "debit",
-			Amount:       decimalFromFloat(prepayAmount),
-			Reason:       accountShareSeatPrepayReason,
-			RefType:      "account_share_membership",
-			RefID:        membership.ID,
-			BalanceAfter: decimalFromSignedFloat(newBalance),
+			UserID:          consumerUserID,
+			Direction:       "debit",
+			Amount:          decimalFromFloat(prepayAmount),
+			Reason:          accountShareSeatPrepayReason,
+			RefType:         accountShareSeatPrepayRefType,
+			RefID:           accountShareSeatPrepayRefID(membership.ID, paidUntil),
+			BalanceAfter:    decimalFromSignedFloat(newBalance),
+			RequireInserted: true,
 			Metadata: map[string]any{
 				"listing_id":    listingID,
 				"account_id":    accountID,
+				"membership_id": membership.ID,
 				"hourly_rate":   hourlyRate,
 				"duration_ms":   int(prepayDuration.Milliseconds()),
 				"paid_until":    paidUntil.Format(time.RFC3339),
@@ -1156,93 +1624,68 @@ func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumer
 		}
 	}()
 
-	membership := &service.AccountShareMembership{}
-	var endedAt, lastRequestAt, paidUntil, billedUntil sql.NullTime
-	var endedReason sql.NullString
-	err = tx.QueryRowContext(ctx, `
+	membership, err := scanAccountShareMembership(tx.QueryRowContext(ctx, `
 		SELECT
 			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
-			m.status, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes, m.joined_at, m.last_request_at,
-			m.ended_at, m.ended_reason, m.paid_until, m.billed_until, m.created_at, m.updated_at
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
 		FROM account_share_memberships m
 		JOIN account_share_listings l ON l.id = m.listing_id
 		WHERE m.id = $1
 			AND m.consumer_user_id = $2
-			AND m.status = $3
+			AND m.status IN ($3, $4)
 			AND m.deleted_at IS NULL
 		FOR UPDATE OF m
 	`,
 		membershipID,
 		consumerUserID,
 		service.AccountShareMembershipStatusActive,
-	).Scan(
-		&membership.ID,
-		&membership.ListingID,
-		&membership.AccountID,
-		&membership.OwnerUserID,
-		&membership.ConsumerUserID,
-		&membership.APIKeyID,
-		&membership.Status,
-		&membership.HourlyRateSnapshot,
-		&membership.HourlyFeeWaiverMinimumSnapshot,
-		&membership.IdleTimeoutMinutes,
-		&membership.JoinedAt,
-		&lastRequestAt,
-		&endedAt,
-		&endedReason,
-		&paidUntil,
-		&billedUntil,
-		&membership.CreatedAt,
-		&membership.UpdatedAt,
-	)
+		service.AccountShareMembershipStatusQueued,
+	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if paidUntil.Valid {
-		membership.PaidUntil = &paidUntil.Time
-	}
-	if billedUntil.Valid {
-		membership.BilledUntil = &billedUntil.Time
-	}
-	if lastRequestAt.Valid {
-		membership.LastRequestAt = &lastRequestAt.Time
-	}
-	if endedReason.Valid {
-		membership.EndedReason = endedReason.String
-	}
 
 	now := time.Now().UTC()
-	settledUntil, _, _, err := r.settleSeatChargeInTx(ctx, tx, membership, now)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.refundUnusedSeatPrepayInTx(ctx, tx, membership, now); err != nil {
-		return nil, err
+	var settledUntil *time.Time
+	if membership.Status == service.AccountShareMembershipStatusActive {
+		settledUntil, _, _, err = r.settleSeatChargeInTx(ctx, tx, membership, now, true, now)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.refundUnusedSeatPrepayInTx(ctx, tx, membership, now); err != nil {
+			return nil, err
+		}
 	}
 	if settledUntil == nil {
 		settledUntil = &now
 	}
 	endedAtValue := now
+	var endedAt, paidUntil, billedUntil, dispatchFailedAt, dispatchCooldownUntil sql.NullTime
+	var endedReason sql.NullString
 	err = tx.QueryRowContext(ctx, `
 		UPDATE account_share_memberships
 		SET status = $1,
 			ended_at = $2,
 			ended_reason = $3,
 			paid_until = $4,
-			billed_until = $4,
+			billed_until = $5,
+			dispatch_cooldown_until = NULL,
 			updated_at = NOW()
-		WHERE id = $5
-		RETURNING status, ended_at, ended_reason, paid_until, billed_until, updated_at
+		WHERE id = $6
+		RETURNING status, ended_at, ended_reason, paid_until, billed_until, dispatch_failed_at, dispatch_cooldown_until, updated_at
 	`,
 		service.AccountShareMembershipStatusEnded,
 		endedAtValue,
 		service.AccountShareMembershipEndReasonManual,
 		*settledUntil,
+		*settledUntil,
 		membership.ID,
-	).Scan(&membership.Status, &endedAt, &endedReason, &paidUntil, &billedUntil, &membership.UpdatedAt)
+	).Scan(&membership.Status, &endedAt, &endedReason, &paidUntil, &billedUntil, &dispatchFailedAt, &dispatchCooldownUntil, &membership.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1258,6 +1701,16 @@ func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumer
 	if billedUntil.Valid {
 		membership.BilledUntil = &billedUntil.Time
 	}
+	if dispatchFailedAt.Valid {
+		membership.DispatchFailedAt = &dispatchFailedAt.Time
+	} else {
+		membership.DispatchFailedAt = nil
+	}
+	if dispatchCooldownUntil.Valid {
+		membership.DispatchCooldownUntil = &dispatchCooldownUntil.Time
+	} else {
+		membership.DispatchCooldownUntil = nil
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -1266,42 +1719,78 @@ func (r *accountShareModeRepository) EndMembership(ctx context.Context, consumer
 }
 
 func (r *accountShareModeRepository) UpdateMembershipIdleTimeout(ctx context.Context, consumerUserID int64, membershipID int64, idleTimeoutMinutes int) (*service.AccountShareMembership, error) {
-	membership := &service.AccountShareMembership{}
-	var endedAt, lastRequestAt, paidUntil, billedUntil sql.NullTime
-	var endedReason sql.NullString
-	err := r.db.QueryRowContext(ctx, `
+	membership, err := scanAccountShareMembership(r.db.QueryRowContext(ctx, `
 		UPDATE account_share_memberships m
 		SET idle_timeout_minutes = $1,
 			updated_at = NOW()
 		FROM account_share_listings l
 		WHERE m.id = $2
 			AND m.consumer_user_id = $3
-			AND m.status = $4
+			AND m.status IN ($4, $5)
 			AND m.deleted_at IS NULL
 			AND l.id = m.listing_id
 		RETURNING
 			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
-			m.status, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes, m.joined_at, m.last_request_at,
-			m.ended_at, m.ended_reason, m.paid_until, m.billed_until, m.created_at, m.updated_at
-	`, idleTimeoutMinutes, membershipID, consumerUserID, service.AccountShareMembershipStatusActive).Scan(
-		&membership.ID,
-		&membership.ListingID,
-		&membership.AccountID,
-		&membership.OwnerUserID,
-		&membership.ConsumerUserID,
-		&membership.APIKeyID,
-		&membership.Status,
-		&membership.HourlyRateSnapshot,
-		&membership.HourlyFeeWaiverMinimumSnapshot,
-		&membership.IdleTimeoutMinutes,
-		&membership.JoinedAt,
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
+	`, idleTimeoutMinutes, membershipID, consumerUserID, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrAccountShareListingNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return membership, nil
+}
+
+func (r *accountShareModeRepository) SubmitReview(ctx context.Context, consumerUserID int64, membershipID int64, input service.SubmitAccountShareReviewInput) (*service.AccountShareReview, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var listingID, accountID, ownerUserID int64
+	var accountIdentityID sql.NullInt64
+	var lastRequestAt sql.NullTime
+	var membershipStatus, accountName, platform string
+	var credentialsRaw, extraRaw []byte
+	err = tx.QueryRowContext(ctx, `
+		SELECT
+			m.listing_id,
+			m.account_id,
+			l.account_identity_id,
+			l.owner_user_id,
+			m.last_request_at,
+			m.status,
+			a.name,
+			a.platform,
+			a.credentials,
+			a.extra
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+		JOIN accounts a ON a.id = m.account_id
+		WHERE m.id = $1
+			AND m.consumer_user_id = $2
+			AND m.deleted_at IS NULL
+			AND l.deleted_at IS NULL
+		FOR UPDATE OF m, l
+	`, membershipID, consumerUserID).Scan(
+		&listingID,
+		&accountID,
+		&accountIdentityID,
+		&ownerUserID,
 		&lastRequestAt,
-		&endedAt,
-		&endedReason,
-		&paidUntil,
-		&billedUntil,
-		&membership.CreatedAt,
-		&membership.UpdatedAt,
+		&membershipStatus,
+		&accountName,
+		&platform,
+		&credentialsRaw,
+		&extraRaw,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrAccountShareListingNotFound
@@ -1309,8 +1798,383 @@ func (r *accountShareModeRepository) UpdateMembershipIdleTimeout(ctx context.Con
 	if err != nil {
 		return nil, err
 	}
-	applyAccountShareMembershipNullableFields(membership, lastRequestAt, endedAt, endedReason, paidUntil, billedUntil)
-	return membership, nil
+	if ownerUserID == consumerUserID {
+		return nil, service.ErrAccountShareReviewSelfUse
+	}
+	if membershipStatus != service.AccountShareMembershipStatusEnded || !lastRequestAt.Valid {
+		return nil, service.ErrAccountShareReviewNoUsage
+	}
+
+	identityID := accountIdentityID.Int64
+	if identityID <= 0 {
+		credentials, err := unmarshalAccountShareJSONMap(credentialsRaw)
+		if err != nil {
+			return nil, err
+		}
+		extra, err := unmarshalAccountShareJSONMap(extraRaw)
+		if err != nil {
+			return nil, err
+		}
+		account := &service.Account{
+			ID:          accountID,
+			Name:        accountName,
+			Platform:    platform,
+			Credentials: credentials,
+			Extra:       extra,
+		}
+		resolvedIdentityID, err := ensureAccountShareAccountIdentityInTx(ctx, tx, account)
+		if err != nil {
+			return nil, err
+		}
+		if resolvedIdentityID == nil || *resolvedIdentityID <= 0 {
+			return nil, service.ErrAccountShareReviewIdentityMissing
+		}
+		identityID = *resolvedIdentityID
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE account_share_listings
+			SET account_identity_id = $1
+			WHERE id = $2
+				AND account_identity_id IS NULL
+		`, identityID, listingID); err != nil {
+			return nil, err
+		}
+	}
+
+	comment := strings.TrimSpace(input.Comment)
+	commentStatus := service.AccountShareReviewCommentStatusNone
+	var moderationRequestedAt any
+	var moderationNextRetryAt any
+	if comment != "" {
+		commentStatus = service.AccountShareReviewCommentStatusPending
+		now := time.Now().UTC()
+		moderationRequestedAt = now
+		moderationNextRetryAt = now
+	}
+
+	var reviewID int64
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO account_share_reviews (
+			account_identity_id, listing_id, account_id, membership_id,
+			owner_user_id, consumer_user_id, score, comment, comment_status,
+			moderation_requested_at, moderation_next_retry_at, created_at, updated_at
+		)
+		VALUES (
+			$1, $2, $3, $4,
+			$5, $6, $7, $8, $9,
+			$10, $11, NOW(), NOW()
+		)
+		RETURNING id
+	`, identityID, listingID, accountID, membershipID, ownerUserID, consumerUserID, input.Score, comment, commentStatus, moderationRequestedAt, moderationNextRetryAt).Scan(&reviewID)
+	if err != nil {
+		if isAccountShareReviewUniqueViolation(err) {
+			return nil, service.ErrAccountShareReviewAlreadyExists.WithCause(err)
+		}
+		return nil, err
+	}
+	if err := refreshAccountShareListingRatingsInTx(ctx, tx, identityID); err != nil {
+		return nil, err
+	}
+	review, err := getAccountShareReviewByIDTx(ctx, tx, reviewID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	tx = nil
+	return review, nil
+}
+
+func (r *accountShareModeRepository) ListListingReviews(ctx context.Context, viewerUserID int64, listingID int64, params pagination.PaginationParams) ([]service.AccountShareReview, *pagination.PaginationResult, error) {
+	page := params.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := params.Limit()
+	offset := (page - 1) * limit
+
+	var total int64
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM account_share_reviews r
+		JOIN account_share_listings l ON l.id = $1
+		WHERE r.account_identity_id = l.account_identity_id
+			AND r.comment_status = $2
+			AND r.comment <> ''
+			AND r.deleted_at IS NULL
+			AND l.deleted_at IS NULL
+	`, listingID, service.AccountShareReviewCommentStatusApproved).Scan(&total); err != nil {
+		return nil, nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, accountShareReviewSelectSQL()+`
+		JOIN account_share_listings target_l ON target_l.id = $1
+		WHERE r.account_identity_id = target_l.account_identity_id
+			AND r.comment_status = $2
+			AND r.comment <> ''
+			AND r.deleted_at IS NULL
+			AND target_l.deleted_at IS NULL
+		ORDER BY r.created_at DESC, r.id DESC
+		LIMIT $3 OFFSET $4
+	`, listingID, service.AccountShareReviewCommentStatusApproved, limit, offset)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	reviews, err := scanAccountShareReviews(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	return reviews, accountShareReviewPagination(total, page, limit), nil
+}
+
+func (r *accountShareModeRepository) ListOwnerReviews(ctx context.Context, viewerUserID int64, ownerUserID int64, params pagination.PaginationParams) ([]service.AccountShareReview, *pagination.PaginationResult, error) {
+	page := params.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := params.Limit()
+	offset := (page - 1) * limit
+
+	var total int64
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM account_share_reviews r
+		WHERE r.owner_user_id = $1
+			AND r.comment_status = $2
+			AND r.comment <> ''
+			AND r.deleted_at IS NULL
+	`, ownerUserID, service.AccountShareReviewCommentStatusApproved).Scan(&total); err != nil {
+		return nil, nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, accountShareReviewSelectSQL()+`
+		WHERE r.owner_user_id = $1
+			AND r.comment_status = $2
+			AND r.comment <> ''
+			AND r.deleted_at IS NULL
+		ORDER BY r.created_at DESC, r.id DESC
+		LIMIT $3 OFFSET $4
+	`, ownerUserID, service.AccountShareReviewCommentStatusApproved, limit, offset)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	reviews, err := scanAccountShareReviews(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	return reviews, accountShareReviewPagination(total, page, limit), nil
+}
+
+func (r *accountShareModeRepository) ClaimPendingReviewModerations(ctx context.Context, now time.Time, limit int) ([]service.AccountShareReview, error) {
+	if limit <= 0 {
+		limit = service.AccountShareReviewModerationBatchSize
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		WITH picked AS (
+			SELECT id
+			FROM account_share_reviews
+			WHERE deleted_at IS NULL
+				AND comment <> ''
+				AND comment_status IN ($2, $3)
+				AND moderation_attempts < $4
+				AND (moderation_next_retry_at IS NULL OR moderation_next_retry_at <= $1)
+			ORDER BY COALESCE(moderation_next_retry_at, created_at), id
+			LIMIT $5
+			FOR UPDATE SKIP LOCKED
+		), claimed AS (
+			UPDATE account_share_reviews r_claim
+			SET comment_status = $2,
+				moderation_attempts = r_claim.moderation_attempts + 1,
+				moderation_requested_at = $1,
+				moderation_next_retry_at = NULL,
+				updated_at = NOW()
+			FROM picked
+			WHERE r_claim.id = picked.id
+			RETURNING r_claim.id
+		)
+		`+accountShareReviewSelectSQL()+`
+		JOIN claimed ON claimed.id = r.id
+		ORDER BY r.created_at ASC, r.id ASC
+	`, now, service.AccountShareReviewCommentStatusPending, service.AccountShareReviewCommentStatusFailed, service.AccountShareReviewModerationMaxAttempts, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	return scanAccountShareReviews(rows)
+}
+
+func (r *accountShareModeRepository) CompleteReviewModeration(ctx context.Context, reviewID int64, result service.AccountShareReviewModerationResult) error {
+	status := service.AccountShareReviewCommentStatusApproved
+	reason := ""
+	if !result.Passed {
+		status = service.AccountShareReviewCommentStatusRejected
+		reason = strings.TrimSpace(result.RejectReason)
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE account_share_reviews
+		SET comment_status = $2,
+			comment_reject_reason = $3,
+			moderation_last_error = '',
+			moderated_at = NOW(),
+			moderation_model_snapshot = $4,
+			moderation_url_snapshot = $5,
+			updated_at = NOW()
+		WHERE id = $1
+			AND deleted_at IS NULL
+			AND comment <> ''
+	`, reviewID, status, reason, strings.TrimSpace(result.ModelSnapshot), strings.TrimSpace(result.URLSnapshot))
+	return err
+}
+
+func (r *accountShareModeRepository) FailReviewModeration(ctx context.Context, reviewID int64, reason string, nextRetryAt time.Time, maxAttempts int) error {
+	if maxAttempts <= 0 {
+		maxAttempts = service.AccountShareReviewModerationMaxAttempts
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE account_share_reviews
+		SET comment_status = $2,
+			moderation_last_error = $3,
+			moderation_next_retry_at = CASE
+				WHEN moderation_attempts >= $5 THEN NULL
+				ELSE $4
+			END,
+			updated_at = NOW()
+		WHERE id = $1
+			AND deleted_at IS NULL
+			AND comment <> ''
+	`, reviewID, service.AccountShareReviewCommentStatusFailed, strings.TrimSpace(reason), nextRetryAt, maxAttempts)
+	return err
+}
+
+func (r *accountShareModeRepository) ListMembershipQueue(ctx context.Context, consumerUserID int64, apiKeyID int64) ([]service.AccountShareMembership, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+		WHERE m.consumer_user_id = $1
+			AND m.api_key_id = $2
+			AND m.status IN ($3, $4)
+			AND m.deleted_at IS NULL
+		ORDER BY m.queue_rank ASC, m.id ASC
+	`, consumerUserID, apiKeyID, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	memberships := make([]service.AccountShareMembership, 0, service.AccountShareModeQueueMaxItems)
+	for rows.Next() {
+		membership, err := scanAccountShareMembership(rows)
+		if err != nil {
+			return nil, err
+		}
+		memberships = append(memberships, *membership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return memberships, nil
+}
+
+func (r *accountShareModeRepository) ReorderMembershipQueue(ctx context.Context, consumerUserID int64, apiKeyID int64, membershipIDs []int64) ([]service.AccountShareMembership, error) {
+	if len(membershipIDs) == 0 || len(membershipIDs) > service.AccountShareModeQueueMaxItems {
+		return nil, service.ErrAccountShareQueueInvalid
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT
+			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+		WHERE m.consumer_user_id = $1
+			AND m.api_key_id = $2
+			AND m.status IN ($3, $4)
+			AND m.deleted_at IS NULL
+		ORDER BY m.queue_rank ASC, m.id ASC
+		FOR UPDATE OF m
+	`, consumerUserID, apiKeyID, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued)
+	if err != nil {
+		return nil, err
+	}
+	current := make(map[int64]*service.AccountShareMembership)
+	for rows.Next() {
+		membership, err := scanAccountShareMembership(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		current[membership.ID] = membership
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(current) != len(membershipIDs) {
+		return nil, service.ErrAccountShareQueueInvalid
+	}
+	for _, id := range membershipIDs {
+		if _, ok := current[id]; !ok {
+			return nil, service.ErrAccountShareQueueInvalid
+		}
+	}
+	for index, id := range membershipIDs {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE account_share_memberships
+			SET queue_rank = $1,
+				updated_at = NOW()
+			WHERE id = $2
+		`, 100+index, id); err != nil {
+			return nil, err
+		}
+	}
+	for index, id := range membershipIDs {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE account_share_memberships
+			SET queue_rank = $1,
+				updated_at = NOW()
+			WHERE id = $2
+		`, index+1, id); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	tx = nil
+
+	out := make([]service.AccountShareMembership, 0, len(membershipIDs))
+	for _, id := range membershipIDs {
+		item := *current[id]
+		item.QueueRank = len(out) + 1
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 func (r *accountShareModeRepository) TouchMembershipLastRequest(ctx context.Context, membershipID int64, at time.Time) error {
@@ -1415,7 +2279,7 @@ func (r *accountShareModeRepository) EndIdleMembership(ctx context.Context, memb
 	if !ok || deadline.After(endedAt.UTC()) {
 		return nil, service.ErrAccountShareListingNotFound
 	}
-	settledUntil, _, _, err := r.settleSeatChargeInTx(ctx, tx, membership, deadline)
+	settledUntil, _, _, err := r.settleSeatChargeInTx(ctx, tx, membership, deadline, true, endedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1824,12 +2688,13 @@ func (r *accountShareModeRepository) processSeatBillingMembership(ctx context.Co
 		return result, nil
 	}
 
-	settledUntil, settlementID, creditUserIDs, err := r.settleSeatChargeInTx(ctx, tx, membership, *membership.PaidUntil)
+	settledUntil, settlementID, creditUserIDs, err := r.settleSeatChargeInTx(ctx, tx, membership, *membership.PaidUntil, false, now)
 	if err != nil {
 		return nil, err
 	}
-	if settledUntil == nil {
-		settledUntil = membership.PaidUntil
+	if settledUntil != nil {
+		settled := settledUntil.UTC()
+		membership.BilledUntil = &settled
 	}
 
 	nextDuration := service.AccountShareModeSeatPrepayDuration
@@ -1848,31 +2713,70 @@ func (r *accountShareModeRepository) processSeatBillingMembership(ctx context.Co
 	}
 
 	result := &service.AccountShareSeatBillingResult{CreditUserIDs: creditUserIDs}
-	if prepayAmount <= 0 || userBalance < prepayAmount {
-		err = tx.QueryRowContext(ctx, `
-			UPDATE account_share_memberships
-			SET status = $1,
-				ended_at = $2,
-				ended_reason = $3,
-				billed_until = $2,
-				paid_until = $2,
-				updated_at = NOW()
-			WHERE id = $4
-			RETURNING updated_at
-		`, service.AccountShareMembershipStatusEnded, *settledUntil, service.AccountShareMembershipEndReasonPrepay, membership.ID).Scan(&membership.UpdatedAt)
+	canRenewSeat := prepayAmount > 0 && userBalance >= prepayAmount
+	if !canRenewSeat {
+		forcedUntil, forcedSettlementID, forcedCreditUserIDs, err := r.settleSeatChargeInTx(ctx, tx, membership, *membership.PaidUntil, true, now)
 		if err != nil {
 			return nil, err
 		}
-		result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, membership.ConsumerUserID)
-		if err := tx.Commit(); err != nil {
-			return nil, err
+		if forcedUntil != nil {
+			settledUntil = forcedUntil
+			settled := forcedUntil.UTC()
+			membership.BilledUntil = &settled
 		}
-		tx = nil
-		return result, nil
+		if forcedSettlementID > 0 {
+			settlementID = forcedSettlementID
+		}
+		if len(forcedCreditUserIDs) > 0 {
+			result.CreditUserIDs = append(result.CreditUserIDs, forcedCreditUserIDs...)
+			if err := tx.QueryRowContext(ctx, `
+				SELECT balance
+				FROM users
+				WHERE id = $1
+					AND deleted_at IS NULL
+				FOR UPDATE
+			`, membership.ConsumerUserID).Scan(&userBalance); errors.Is(err, sql.ErrNoRows) {
+				return nil, service.ErrUserNotFound
+			} else if err != nil {
+				return nil, err
+			}
+		}
+		canRenewSeat = prepayAmount > 0 && userBalance >= prepayAmount
+		if !canRenewSeat {
+			if settledUntil == nil {
+				settledUntil = membership.PaidUntil
+			}
+			err = tx.QueryRowContext(ctx, `
+				UPDATE account_share_memberships
+				SET status = $1,
+					ended_at = $2,
+					ended_reason = $3,
+					billed_until = $2,
+					paid_until = $2,
+					updated_at = NOW()
+				WHERE id = $4
+				RETURNING updated_at
+			`, service.AccountShareMembershipStatusEnded, *settledUntil, service.AccountShareMembershipEndReasonPrepay, membership.ID).Scan(&membership.UpdatedAt)
+			if err != nil {
+				return nil, err
+			}
+			result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, membership.ConsumerUserID)
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+			tx = nil
+			return result, nil
+		}
 	}
 
 	newPaidUntil := membership.PaidUntil.Add(nextDuration)
 	newBalance := userBalance - prepayAmount
+	refType := accountShareModeSettlementRefType
+	refID := nullablePositiveInt64(settlementID)
+	if settlementID <= 0 {
+		refType = accountShareSeatPrepayRefType
+		refID = accountShareSeatPrepayRefID(membership.ID, newPaidUntil)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE users
 		SET balance = $1::numeric,
@@ -1883,13 +2787,14 @@ func (r *accountShareModeRepository) processSeatBillingMembership(ctx context.Co
 		return nil, err
 	}
 	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-		UserID:       membership.ConsumerUserID,
-		Direction:    "debit",
-		Amount:       decimalFromFloat(prepayAmount),
-		Reason:       accountShareSeatPrepayReason,
-		RefType:      accountShareModeSettlementRefType,
-		RefID:        nullablePositiveInt64(settlementID),
-		BalanceAfter: decimalFromSignedFloat(newBalance),
+		UserID:          membership.ConsumerUserID,
+		Direction:       "debit",
+		Amount:          decimalFromFloat(prepayAmount),
+		Reason:          accountShareSeatPrepayReason,
+		RefType:         refType,
+		RefID:           refID,
+		BalanceAfter:    decimalFromSignedFloat(newBalance),
+		RequireInserted: true,
 		Metadata: map[string]any{
 			"listing_id":    membership.ListingID,
 			"account_id":    membership.AccountID,
@@ -1907,11 +2812,11 @@ func (r *accountShareModeRepository) processSeatBillingMembership(ctx context.Co
 	err = tx.QueryRowContext(ctx, `
 		UPDATE account_share_memberships
 		SET paid_until = $1,
-			billed_until = $2,
+			billed_until = COALESCE($2::timestamptz, billed_until),
 			updated_at = NOW()
 		WHERE id = $3
 		RETURNING updated_at
-	`, newPaidUntil, *settledUntil, membership.ID).Scan(&membership.UpdatedAt)
+	`, newPaidUntil, nullableTimePtr(settledUntil), membership.ID).Scan(&membership.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1928,7 +2833,7 @@ func (r *accountShareModeRepository) endSeatBillingMembershipInTx(ctx context.Co
 		return nil, nil
 	}
 	endedAt = endedAt.UTC()
-	settledUntil, _, creditUserIDs, err := r.settleSeatChargeInTx(ctx, tx, membership, endedAt)
+	settledUntil, _, creditUserIDs, err := r.settleSeatChargeInTx(ctx, tx, membership, endedAt, true, endedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -2066,8 +2971,9 @@ func (r *accountShareModeRepository) lockSeatBillingMembershipInTx(ctx context.C
 	query := `
 		SELECT
 			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
-			m.status, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes, m.joined_at, m.last_request_at,
-			m.ended_at, m.ended_reason, m.paid_until, m.billed_until, m.created_at, m.updated_at
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
 		FROM account_share_memberships m
 		JOIN account_share_listings l ON l.id = m.listing_id
 		WHERE m.id = $1
@@ -2081,51 +2987,14 @@ func (r *accountShareModeRepository) lockSeatBillingMembershipInTx(ctx context.C
 	}
 	query += " FOR UPDATE OF m"
 
-	membership := &service.AccountShareMembership{}
-	var endedAt, lastRequestAt, paidUntil, billedUntil sql.NullTime
-	var endedReason sql.NullString
-	err := tx.QueryRowContext(ctx, query, args...).Scan(
-		&membership.ID,
-		&membership.ListingID,
-		&membership.AccountID,
-		&membership.OwnerUserID,
-		&membership.ConsumerUserID,
-		&membership.APIKeyID,
-		&membership.Status,
-		&membership.HourlyRateSnapshot,
-		&membership.HourlyFeeWaiverMinimumSnapshot,
-		&membership.IdleTimeoutMinutes,
-		&membership.JoinedAt,
-		&lastRequestAt,
-		&endedAt,
-		&endedReason,
-		&paidUntil,
-		&billedUntil,
-		&membership.CreatedAt,
-		&membership.UpdatedAt,
-	)
+	membership, err := scanAccountShareMembership(tx.QueryRowContext(ctx, query, args...))
 	if err != nil {
 		return nil, err
-	}
-	if endedAt.Valid {
-		membership.EndedAt = &endedAt.Time
-	}
-	if lastRequestAt.Valid {
-		membership.LastRequestAt = &lastRequestAt.Time
-	}
-	if endedReason.Valid {
-		membership.EndedReason = endedReason.String
-	}
-	if paidUntil.Valid {
-		membership.PaidUntil = &paidUntil.Time
-	}
-	if billedUntil.Valid {
-		membership.BilledUntil = &billedUntil.Time
 	}
 	return membership, nil
 }
 
-func (r *accountShareModeRepository) settleSeatChargeInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, at time.Time) (*time.Time, int64, []int64, error) {
+func (r *accountShareModeRepository) settleSeatChargeInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, at time.Time, forceClose bool, settleAt time.Time) (*time.Time, int64, []int64, error) {
 	if membership == nil || membership.HourlyRateSnapshot <= 0 || membership.PaidUntil == nil {
 		return nil, 0, nil, nil
 	}
@@ -2133,32 +3002,88 @@ func (r *accountShareModeRepository) settleSeatChargeInTx(ctx context.Context, t
 	if membership.BilledUntil != nil {
 		start = *membership.BilledUntil
 	}
-	end := at.UTC()
-	if membership.PaidUntil.Before(end) {
-		end = *membership.PaidUntil
+	start = start.UTC()
+	targetEnd := at.UTC()
+	if membership.PaidUntil.Before(targetEnd) {
+		targetEnd = membership.PaidUntil.UTC()
 	}
-	if !end.After(start) {
+	settleAt = settleAt.UTC()
+	if settleAt.IsZero() {
+		settleAt = time.Now().UTC()
+	}
+	if !targetEnd.After(start) {
 		return &start, 0, nil, nil
+	}
+
+	if membership.HourlyFeeWaiverMinimumSnapshot <= 0 {
+		settlementID, creditUserIDs, err := r.settleSeatChargeWindowInTx(ctx, tx, membership, start, targetEnd)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		return &targetEnd, settlementID, creditUserIDs, nil
+	}
+
+	windowMax := service.AccountShareModeSeatWaiverWindowMax
+	if windowMax <= 0 {
+		windowMax = time.Hour
+	}
+	cursor := start
+	var settledUntil *time.Time
+	var lastSettlementID int64
+	creditUserIDs := make([]int64, 0, 2)
+	for cursor.Before(targetEnd) {
+		windowEnd := cursor.Add(windowMax)
+		end := targetEnd
+		if windowEnd.Before(end) {
+			end = windowEnd
+		}
+		if !forceClose && end.Before(windowEnd) {
+			break
+		}
+		if !forceClose && !accountShareSeatWaiverWindowReadyAt(settleAt, end) {
+			break
+		}
+		settlementID, windowCreditUserIDs, err := r.settleSeatChargeWindowInTx(ctx, tx, membership, cursor, end)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		if settlementID > 0 {
+			lastSettlementID = settlementID
+		}
+		creditUserIDs = append(creditUserIDs, windowCreditUserIDs...)
+		settled := end.UTC()
+		settledUntil = &settled
+		cursor = end
+	}
+	if settledUntil == nil {
+		return nil, 0, nil, nil
+	}
+	return settledUntil, lastSettlementID, creditUserIDs, nil
+}
+
+func (r *accountShareModeRepository) settleSeatChargeWindowInTx(ctx context.Context, tx *sql.Tx, membership *service.AccountShareMembership, start, end time.Time) (int64, []int64, error) {
+	if membership == nil || !end.After(start) {
+		return 0, nil, nil
 	}
 	duration := end.Sub(start)
 	charge := accountShareSeatCharge(membership.HourlyRateSnapshot, duration)
 	if charge <= 0 {
-		return &end, 0, nil, nil
+		return 0, nil, nil
 	}
 	waiver, err := r.resolveSeatChargeWaiverInTx(ctx, tx, membership, start, end, charge)
 	if err != nil {
-		return nil, 0, nil, err
+		return 0, nil, err
 	}
 	if waiver.Eligible {
 		settlementID, err := r.refundSeatChargeWaiverInTx(ctx, tx, membership, start, end, charge, waiver)
 		if err != nil {
-			return nil, 0, nil, err
+			return 0, nil, err
 		}
-		return &end, settlementID, []int64{membership.ConsumerUserID}, nil
+		return settlementID, []int64{membership.ConsumerUserID}, nil
 	}
-	policy, err := r.resolveAccountShareModePolicyInTx(ctx, tx, service.PlatformOpenAI)
+	policy, err := r.resolveAccountShareModePolicyInTx(ctx, tx, service.AccountShareModePolicyPlatformUnified)
 	if err != nil {
-		return nil, 0, nil, err
+		return 0, nil, err
 	}
 	ownerRatio, platformRatio := accountShareModeSettlementRatios(policy.OwnerShareRatio, policy.PlatformShareRatio)
 	totalCharge := decimalFromFloat(charge)
@@ -2169,22 +3094,23 @@ func (r *accountShareModeRepository) settleSeatChargeInTx(ctx context.Context, t
 	platformCredit := totalCharge.Mul(platformRatio).Round(10)
 	settlementID, err := r.insertSeatSettlementInTx(ctx, tx, membership, accountShareSeatSettlementTypeCharge, start, end, charge, 0, ownerCredit, platformCredit)
 	if err != nil {
-		return nil, 0, nil, err
+		return 0, nil, err
 	}
 	creditUserIDs := make([]int64, 0, 1)
 	if ownerCredit.GreaterThan(decimal.Zero) {
 		newBalance, err := creditUsageBillingBalance(ctx, tx, membership.OwnerUserID, ownerCredit)
 		if err != nil {
-			return nil, 0, nil, err
+			return 0, nil, err
 		}
 		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-			UserID:       membership.OwnerUserID,
-			Direction:    "credit",
-			Amount:       ownerCredit,
-			Reason:       accountShareSeatIncomeReason,
-			RefType:      accountShareModeSettlementRefType,
-			RefID:        nullablePositiveInt64(settlementID),
-			BalanceAfter: decimalFromSignedFloat(newBalance),
+			UserID:          membership.OwnerUserID,
+			Direction:       "credit",
+			Amount:          ownerCredit,
+			Reason:          accountShareSeatIncomeReason,
+			RefType:         accountShareModeSettlementRefType,
+			RefID:           nullablePositiveInt64(settlementID),
+			BalanceAfter:    decimalFromSignedFloat(newBalance),
+			RequireInserted: true,
 			Metadata: map[string]any{
 				"listing_id":       membership.ListingID,
 				"account_id":       membership.AccountID,
@@ -2198,11 +3124,11 @@ func (r *accountShareModeRepository) settleSeatChargeInTx(ctx context.Context, t
 				"period_ended":     end.Format(time.RFC3339),
 			},
 		}); err != nil {
-			return nil, 0, nil, err
+			return 0, nil, err
 		}
 		creditUserIDs = append(creditUserIDs, membership.OwnerUserID)
 	}
-	return &end, settlementID, creditUserIDs, nil
+	return settlementID, creditUserIDs, nil
 }
 
 type accountShareSeatChargeWaiver struct {
@@ -2246,13 +3172,40 @@ func (r *accountShareModeRepository) accountShareModeUsageChargeInTx(ctx context
 	}
 	var totalRaw string
 	err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(e.total_charge), 0)::text
-		FROM account_share_mode_settlement_entries e
-		LEFT JOIN usage_logs ul ON ul.id = e.usage_log_id
-		WHERE e.membership_id = $1
-			AND e.settlement_type = 'usage_request'
-			AND COALESCE(ul.created_at, e.created_at) >= $2
-			AND COALESCE(ul.created_at, e.created_at) < $3
+		WITH usage_rows AS (
+			SELECT
+				e.total_charge,
+				COALESCE(
+					e.period_started_at,
+					COALESCE(ul.created_at, e.created_at) - (GREATEST(e.duration_ms, 0) * INTERVAL '1 millisecond')
+				) AS request_started_at,
+				COALESCE(e.period_ended_at, COALESCE(ul.created_at, e.created_at)) AS request_ended_at,
+				COALESCE(ul.created_at, e.created_at) AS occurred_at
+			FROM account_share_mode_settlement_entries e
+			LEFT JOIN usage_logs ul ON ul.id = e.usage_log_id
+			WHERE e.membership_id = $1
+				AND e.settlement_type = 'usage_request'
+				AND COALESCE(
+					e.period_started_at,
+					COALESCE(ul.created_at, e.created_at) - (GREATEST(e.duration_ms, 0) * INTERVAL '1 millisecond')
+				) < $3
+				AND COALESCE(e.period_ended_at, COALESCE(ul.created_at, e.created_at)) >= $2
+		)
+		SELECT COALESCE(SUM(
+			CASE
+				WHEN request_ended_at > request_started_at
+					AND LEAST(request_ended_at, $3) > GREATEST(request_started_at, $2)
+				THEN total_charge
+					* EXTRACT(EPOCH FROM (LEAST(request_ended_at, $3) - GREATEST(request_started_at, $2)))::numeric
+					/ NULLIF(EXTRACT(EPOCH FROM (request_ended_at - request_started_at))::numeric, 0)
+				WHEN request_ended_at = request_started_at
+					AND occurred_at >= $2
+					AND occurred_at < $3
+				THEN total_charge
+				ELSE 0
+			END
+		), 0)::text
+		FROM usage_rows
 	`, membershipID, periodStart, periodEnd).Scan(&totalRaw)
 	if err != nil {
 		return decimal.Zero, err
@@ -2284,13 +3237,14 @@ func (r *accountShareModeRepository) refundSeatChargeWaiverInTx(ctx context.Cont
 		return 0, err
 	}
 	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-		UserID:       membership.ConsumerUserID,
-		Direction:    "credit",
-		Amount:       refund,
-		Reason:       accountShareSeatWaiverRefundReason,
-		RefType:      accountShareModeSettlementRefType,
-		RefID:        nullablePositiveInt64(settlementID),
-		BalanceAfter: decimalFromSignedFloat(newBalance),
+		UserID:          membership.ConsumerUserID,
+		Direction:       "credit",
+		Amount:          refund,
+		Reason:          accountShareSeatWaiverRefundReason,
+		RefType:         accountShareModeSettlementRefType,
+		RefID:           nullablePositiveInt64(settlementID),
+		BalanceAfter:    decimalFromSignedFloat(newBalance),
+		RequireInserted: true,
 		Metadata: map[string]any{
 			"listing_id":      membership.ListingID,
 			"account_id":      membership.AccountID,
@@ -2326,16 +3280,18 @@ func (r *accountShareModeRepository) refundUnusedSeatPrepayInTx(ctx context.Cont
 		return err
 	}
 	if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
-		UserID:       membership.ConsumerUserID,
-		Direction:    "credit",
-		Amount:       decimalFromFloat(refund),
-		Reason:       accountShareSeatRefundReason,
-		RefType:      "account_share_membership",
-		RefID:        membership.ID,
-		BalanceAfter: decimalFromSignedFloat(newBalance),
+		UserID:          membership.ConsumerUserID,
+		Direction:       "credit",
+		Amount:          decimalFromFloat(refund),
+		Reason:          accountShareSeatRefundReason,
+		RefType:         "account_share_membership",
+		RefID:           membership.ID,
+		BalanceAfter:    decimalFromSignedFloat(newBalance),
+		RequireInserted: true,
 		Metadata: map[string]any{
 			"listing_id":      membership.ListingID,
 			"account_id":      membership.AccountID,
+			"membership_id":   membership.ID,
 			"hourly_rate":     membership.HourlyRateSnapshot,
 			"duration_ms":     int(duration.Milliseconds()),
 			"refund_until":    membership.PaidUntil.Format(time.RFC3339),
@@ -2513,6 +3469,14 @@ func accountShareSeatCharge(hourlyRate float64, duration time.Duration) float64 
 	return hourlyRate * float64(duration.Milliseconds()) / 3600000.0
 }
 
+func accountShareSeatWaiverWindowReadyAt(settleAt time.Time, windowEnd time.Time) bool {
+	grace := service.AccountShareModeSeatWaiverSettlementGrace
+	if grace <= 0 {
+		return true
+	}
+	return !settleAt.UTC().Before(windowEnd.UTC().Add(grace))
+}
+
 func ratioFromCredits(part, total decimal.Decimal) decimal.Decimal {
 	if total.LessThanOrEqual(decimal.Zero) || part.LessThanOrEqual(decimal.Zero) {
 		return decimal.Zero
@@ -2529,17 +3493,261 @@ func (r *accountShareModeRepository) GetActiveMembershipForAPIKey(ctx context.Co
 func (r *accountShareModeRepository) GetActiveMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*service.AccountShareMembership, *service.AccountShareListing, error) {
 	// The active membership is the source of truth for account-share mode routing.
 	// account_groups is scheduler metadata and can be rewritten by generic owned-account repair flows.
-	_ = groupID
 	return r.queryActiveMembership(ctx, `
 		m.consumer_user_id = $1
 		AND m.api_key_id = $2
-	`, userID, apiKeyID)
+		AND a.platform = (
+			SELECT mg.platform
+			FROM account_share_mode_groups mg
+			WHERE mg.group_id = $3
+		)
+	`, userID, apiKeyID, groupID)
+}
+
+func (r *accountShareModeRepository) ActivateNextQueuedMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*service.AccountShareMembership, *service.AccountShareListing, error) {
+	now = now.UTC()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var membershipID, listingID, accountID, ownerUserID int64
+	var queueRank, idleTimeoutMinutes int
+	var hourlyRate, hourlyFeeWaiverMinimum, minBalanceRequired float64
+	err = tx.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT
+			m.id, m.listing_id, m.account_id, l.owner_user_id, m.queue_rank, m.idle_timeout_minutes,
+			l.hourly_rate, l.hourly_fee_waiver_minimum, l.min_balance_required
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+			AND l.deleted_at IS NULL
+		JOIN accounts a ON a.id = m.account_id
+			AND a.deleted_at IS NULL
+		WHERE m.consumer_user_id = $1
+			AND m.api_key_id = $2
+			AND m.status = $3
+			AND m.deleted_at IS NULL
+			AND a.platform = (
+				SELECT mg.platform
+				FROM account_share_mode_groups mg
+				WHERE mg.group_id = $4
+			)
+			AND (m.dispatch_cooldown_until IS NULL OR m.dispatch_cooldown_until <= $5)
+			AND %s
+		ORDER BY CASE WHEN m.queue_rank > $6 THEN 0 ELSE 1 END,
+			m.queue_rank ASC,
+			m.id ASC
+		LIMIT 1
+		FOR UPDATE OF m, l
+	`, accountShareQueuedActivationConditionSQL("$5", "$1")),
+		userID,
+		apiKeyID,
+		service.AccountShareMembershipStatusQueued,
+		groupID,
+		now,
+		afterRank,
+	).Scan(
+		&membershipID,
+		&listingID,
+		&accountID,
+		&ownerUserID,
+		&queueRank,
+		&idleTimeoutMinutes,
+		&hourlyRate,
+		&hourlyFeeWaiverMinimum,
+		&minBalanceRequired,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, service.ErrAccountShareListingNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ownerSelfUse := ownerUserID == userID
+	if ownerSelfUse {
+		hourlyRate = 0
+		hourlyFeeWaiverMinimum = 0
+	}
+	var userBalance float64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT balance
+		FROM users
+		WHERE id = $1
+			AND deleted_at IS NULL
+		FOR UPDATE
+	`, userID).Scan(&userBalance); errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, service.ErrUserNotFound
+	} else if err != nil {
+		return nil, nil, err
+	}
+	prepayDuration := service.AccountShareModeSeatPrepayDuration
+	prepayAmount := accountShareSeatCharge(hourlyRate, prepayDuration)
+	paidUntil := now.Add(prepayDuration)
+	if !ownerSelfUse && userBalance < minBalanceRequired {
+		return nil, nil, service.ErrAccountShareBalanceBelowMinimum
+	}
+	if !ownerSelfUse && prepayAmount > 0 && userBalance < minBalanceRequired+prepayAmount {
+		return nil, nil, service.ErrAccountShareModePrepayInsufficient
+	}
+	var paidUntilValue any
+	var billedUntilValue any
+	if prepayAmount > 0 {
+		paidUntilValue = paidUntil
+		billedUntilValue = now
+	}
+
+	membership, err := scanAccountShareMembership(tx.QueryRowContext(ctx, `
+		UPDATE account_share_memberships m
+		SET status = $1,
+			hourly_rate_snapshot = $2,
+			hourly_fee_waiver_minimum_snapshot = $3,
+			idle_timeout_minutes = $4,
+			joined_at = $5,
+			last_request_at = NULL,
+			ended_at = NULL,
+			ended_reason = NULL,
+			paid_until = $6,
+			billed_until = $7,
+			dispatch_failed_at = NULL,
+			dispatch_cooldown_until = NULL,
+			updated_at = NOW()
+		FROM account_share_listings l
+		WHERE m.id = $8
+			AND l.id = m.listing_id
+		RETURNING
+			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
+	`,
+		service.AccountShareMembershipStatusActive,
+		hourlyRate,
+		hourlyFeeWaiverMinimum,
+		idleTimeoutMinutes,
+		now,
+		paidUntilValue,
+		billedUntilValue,
+		membershipID,
+	))
+	if err != nil {
+		return nil, nil, translateAccountShareMembershipConflict(err)
+	}
+	membership.QueueRank = queueRank
+	if prepayAmount > 0 {
+		newBalance := userBalance - prepayAmount
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE users
+			SET balance = $1::numeric,
+				updated_at = NOW()
+			WHERE id = $2
+				AND deleted_at IS NULL
+		`, decimalFromSignedFloat(newBalance).StringFixed(10), userID); err != nil {
+			return nil, nil, err
+		}
+		if err := insertUserBalanceLedger(ctx, tx, userBalanceLedgerInput{
+			UserID:          userID,
+			Direction:       "debit",
+			Amount:          decimalFromFloat(prepayAmount),
+			Reason:          accountShareSeatPrepayReason,
+			RefType:         accountShareSeatPrepayRefType,
+			RefID:           accountShareSeatPrepayRefID(membership.ID, paidUntil),
+			BalanceAfter:    decimalFromSignedFloat(newBalance),
+			RequireInserted: true,
+			Metadata: map[string]any{
+				"listing_id":    listingID,
+				"account_id":    accountID,
+				"membership_id": membership.ID,
+				"hourly_rate":   hourlyRate,
+				"duration_ms":   int(prepayDuration.Milliseconds()),
+				"paid_until":    paidUntil.Format(time.RFC3339),
+				"prepay_stage":  "queue_activation",
+				"seat_billing":  true,
+				"consumer_user": userID,
+			},
+		}); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	tx = nil
+	listing, err := r.GetListingByID(ctx, membership.ListingID, membership.ConsumerUserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return membership, listing, nil
+}
+
+func (r *accountShareModeRepository) SuspendMembershipForDispatchFailure(ctx context.Context, membershipID int64, failedAt time.Time, cooldownUntil time.Time) (*service.AccountShareMembership, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	failedAt = failedAt.UTC()
+	cooldownUntil = cooldownUntil.UTC()
+	membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrAccountShareListingNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	settledUntil, _, _, err := r.settleSeatChargeInTx(ctx, tx, membership, failedAt, true, failedAt)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.refundUnusedSeatPrepayInTx(ctx, tx, membership, failedAt); err != nil {
+		return nil, err
+	}
+	if settledUntil == nil {
+		settledUntil = &failedAt
+	}
+	membership, err = scanAccountShareMembership(tx.QueryRowContext(ctx, `
+		UPDATE account_share_memberships m
+		SET status = $1,
+			paid_until = NULL,
+			billed_until = $2,
+			dispatch_failed_at = $3,
+			dispatch_cooldown_until = $4,
+			updated_at = NOW()
+		FROM account_share_listings l
+		WHERE m.id = $5
+			AND l.id = m.listing_id
+		RETURNING
+			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id,
+			m.status, m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
+	`, service.AccountShareMembershipStatusQueued, *settledUntil, failedAt, cooldownUntil, membershipID))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	tx = nil
+	return membership, nil
 }
 
 func (r *accountShareModeRepository) ResolvePolicy(ctx context.Context, platform string) (*service.AccountShareModePolicy, error) {
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	if platform == "" {
-		platform = service.PlatformOpenAI
+		platform = service.AccountShareModePolicyPlatformUnified
+	}
+	if platform != service.AccountShareModePolicyPlatformUnified {
+		platform = service.AccountShareModePolicyPlatformUnified
 	}
 	policy := &service.AccountShareModePolicy{}
 	err := r.db.QueryRowContext(ctx, `
@@ -2573,7 +3781,10 @@ func (r *accountShareModeRepository) ResolvePolicy(ctx context.Context, platform
 func (r *accountShareModeRepository) UpsertPolicy(ctx context.Context, input service.UpdateAccountShareModePolicyInput) (*service.AccountShareModePolicy, error) {
 	platform := strings.ToLower(strings.TrimSpace(input.Platform))
 	if platform == "" {
-		platform = service.PlatformOpenAI
+		platform = service.AccountShareModePolicyPlatformUnified
+	}
+	if platform != service.AccountShareModePolicyPlatformUnified {
+		platform = service.AccountShareModePolicyPlatformUnified
 	}
 	platformRatio := service.AccountShareModeDefaultPlatformShareRatio
 	if input.PlatformShareRatio != nil {
@@ -2643,8 +3854,9 @@ func (r *accountShareModeRepository) queryActiveMembership(ctx context.Context, 
 	query := fmt.Sprintf(`
 		SELECT
 			m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id, m.status,
-			m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes, m.joined_at, m.last_request_at, m.ended_at,
-			m.ended_reason, m.paid_until, m.billed_until, m.created_at, m.updated_at
+			m.queue_rank, m.hourly_rate_snapshot, m.hourly_fee_waiver_minimum_snapshot, m.idle_timeout_minutes,
+			m.joined_at, m.last_request_at, m.ended_at, m.ended_reason, m.paid_until, m.billed_until,
+			m.dispatch_failed_at, m.dispatch_cooldown_until, m.created_at, m.updated_at
 		FROM account_share_memberships m
 		JOIN account_share_listings l ON l.id = m.listing_id
 			AND l.deleted_at IS NULL
@@ -2658,49 +3870,12 @@ func (r *accountShareModeRepository) queryActiveMembership(ctx context.Context, 
 		ORDER BY m.joined_at DESC
 		LIMIT 1
 	`, service.AccountShareListingStatusActive, service.AccountShareMembershipStatusActive, predicate)
-	membership := &service.AccountShareMembership{}
-	var endedAt, lastRequestAt, paidUntil, billedUntil sql.NullTime
-	var endedReason sql.NullString
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(
-		&membership.ID,
-		&membership.ListingID,
-		&membership.AccountID,
-		&membership.OwnerUserID,
-		&membership.ConsumerUserID,
-		&membership.APIKeyID,
-		&membership.Status,
-		&membership.HourlyRateSnapshot,
-		&membership.HourlyFeeWaiverMinimumSnapshot,
-		&membership.IdleTimeoutMinutes,
-		&membership.JoinedAt,
-		&lastRequestAt,
-		&endedAt,
-		&endedReason,
-		&paidUntil,
-		&billedUntil,
-		&membership.CreatedAt,
-		&membership.UpdatedAt,
-	)
+	membership, err := scanAccountShareMembership(r.db.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, service.ErrAccountShareListingNotFound
 	}
 	if err != nil {
 		return nil, nil, err
-	}
-	if endedAt.Valid {
-		membership.EndedAt = &endedAt.Time
-	}
-	if lastRequestAt.Valid {
-		membership.LastRequestAt = &lastRequestAt.Time
-	}
-	if endedReason.Valid {
-		membership.EndedReason = endedReason.String
-	}
-	if paidUntil.Valid {
-		membership.PaidUntil = &paidUntil.Time
-	}
-	if billedUntil.Valid {
-		membership.BilledUntil = &billedUntil.Time
 	}
 	listing, err := r.GetListingByID(ctx, membership.ListingID, membership.ConsumerUserID)
 	if err != nil {
@@ -2722,18 +3897,73 @@ func lowerAccountShareModels(models []string) []string {
 
 func accountShareListingUsesApproximatePagination(filters service.AccountShareListingFilters) bool {
 	return filters.SeatLimit > 0 ||
+		len(filters.SeatLimits) > 0 ||
 		strings.TrimSpace(filters.Search) != "" ||
 		strings.TrimSpace(filters.Status) != "" ||
-		filters.PerUserConcurrencyMin != nil ||
-		filters.PerUserConcurrencyMax != nil ||
-		filters.MinBalanceRequiredMin != nil ||
-		filters.MinBalanceRequiredMax != nil ||
-		filters.HourlyRateMin != nil ||
-		filters.HourlyRateMax != nil ||
-		filters.HourlyFeeWaiverMin != nil ||
-		filters.HourlyFeeWaiverMax != nil ||
+		filters.OwnerUserID > 0 ||
 		len(filters.Models) > 0 ||
-		strings.TrimSpace(filters.AccountLevel) != ""
+		strings.TrimSpace(filters.AccountLevel) != "" ||
+		len(filters.FeatureTags) > 0
+}
+
+func accountShareListingOrderSQL(filters service.AccountShareListingFilters) string {
+	sorts := filters.Sorts
+	if len(sorts) == 0 && strings.TrimSpace(filters.SortBy) != "" {
+		sorts = []service.AccountShareListingSortCriterion{{SortBy: filters.SortBy, SortOrder: filters.SortOrder}}
+	}
+	if len(sorts) == 0 {
+		return `CASE WHEN qm.id IS NOT NULL THEN 0 ELSE 1 END,
+			qm.queue_rank ASC NULLS LAST,
+			COALESCE(cm.joined_at, hm.ended_at, l.updated_at) DESC,
+			l.id DESC`
+	}
+	orderParts := make([]string, 0, len(sorts)+1)
+	lastDirection := "ASC"
+	for _, sort := range sorts {
+		expr := accountShareListingSortExpressionSQL(sort.SortBy)
+		if expr == "" {
+			continue
+		}
+		direction := "ASC"
+		if sort.SortOrder == service.AccountShareListingSortOrderDesc {
+			direction = "DESC"
+		}
+		lastDirection = direction
+		orderParts = append(orderParts, fmt.Sprintf("%s %s", expr, direction))
+	}
+	if len(orderParts) == 0 {
+		return `CASE WHEN qm.id IS NOT NULL THEN 0 ELSE 1 END,
+			qm.queue_rank ASC NULLS LAST,
+			COALESCE(cm.joined_at, hm.ended_at, l.updated_at) DESC,
+			l.id DESC`
+	}
+	orderParts = append(orderParts, fmt.Sprintf("l.id %s", lastDirection))
+	return strings.Join(orderParts, ", ")
+}
+
+func accountShareListingSortExpressionSQL(sortBy string) string {
+	switch sortBy {
+	case service.AccountShareListingSortAccountConcurrency:
+		return "a.concurrency"
+	case service.AccountShareListingSortPerUserConcurrency:
+		return "l.per_user_concurrency"
+	case service.AccountShareListingSortMinBalanceRequired:
+		return "l.min_balance_required"
+	case service.AccountShareListingSortHourlyRate:
+		return "l.hourly_rate"
+	case service.AccountShareListingSortHourlyFeeWaiver:
+		return "l.hourly_fee_waiver_minimum"
+	case service.AccountShareListingSortRateMultiplier:
+		return "l.rate_multiplier"
+	case service.AccountShareListingSortRemainingSeats:
+		return "(l.seat_limit - COALESCE(ac.active_seats, 0))"
+	case service.AccountShareListingSortRating:
+		return "(CASE WHEN l.rating_count > 0 THEN l.rating_avg ELSE -1 END)"
+	case service.AccountShareListingSortUpdatedAt:
+		return "l.updated_at"
+	default:
+		return ""
+	}
 }
 
 func applyAccountShareMembershipNullableFields(membership *service.AccountShareMembership, lastRequestAt, endedAt sql.NullTime, endedReason sql.NullString, paidUntil, billedUntil sql.NullTime) {
@@ -2782,6 +4012,30 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 		accountShareCodexQuotaProtectedSQL("codex_5h_used_percent", "codex_5h_reset_at", "codex_5h_limit_percent", nowExpr),
 		accountShareCodexQuotaProtectedSQL("codex_7d_used_percent", "codex_7d_reset_at", "codex_7d_limit_percent", nowExpr),
 	)
+	anthropicProtectedSQL := fmt.Sprintf(`(
+		a.platform = '%s'
+		AND a.type IN ('%s', '%s')
+		AND (
+			%s
+			OR %s
+		)
+	)`,
+		service.PlatformAnthropic,
+		service.AccountTypeOAuth,
+		service.AccountTypeSetupToken,
+		accountShareAnthropicQuotaProtectedSQL(
+			"session_window_utilization",
+			"anthropic_5h_limit_percent",
+			fmt.Sprintf("COALESCE(a.session_window_end, %s, %s)", accountShareExtraTimeSQL("anthropic_5h_reset_at"), accountShareExtraTimeSQL("session_window_reset_at")),
+			nowExpr,
+		),
+		accountShareAnthropicQuotaProtectedSQL(
+			"passive_usage_7d_utilization",
+			"anthropic_7d_limit_percent",
+			fmt.Sprintf("COALESCE(%s, %s)", accountShareExtraTimeSQL("anthropic_7d_reset_at"), accountShareExtraTimeSQL("passive_usage_7d_reset")),
+			nowExpr,
+		),
+	)
 	return fmt.Sprintf(`(
 		a.status <> '%s'
 		OR a.schedulable = FALSE
@@ -2790,6 +4044,7 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 		OR (a.rate_limit_reset_at IS NOT NULL AND a.rate_limit_reset_at > %s)
 		OR (a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > %s)
 		OR %s
+		OR %s
 	)`,
 		service.StatusActive,
 		nowExpr,
@@ -2797,6 +4052,7 @@ func accountShareAccountUnavailableConditionSQL(nowExpr string) string {
 		nowExpr,
 		nowExpr,
 		codexProtectedSQL,
+		anthropicProtectedSQL,
 	)
 }
 
@@ -2811,6 +4067,7 @@ func accountShareListingAvailableConditionSQL(nowExpr string) string {
 			WHERE m_available.listing_id = l.id
 				AND m_available.status = '%[4]s'
 				AND m_available.deleted_at IS NULL
+				AND m_available.consumer_user_id <> l.owner_user_id
 				AND (m_available.hourly_rate_snapshot <= 0 OR m_available.paid_until IS NULL OR m_available.paid_until > %[2]s)
 				AND (m_available.idle_timeout_minutes <= 0 OR COALESCE(m_available.last_request_at, m_available.joined_at) + (m_available.idle_timeout_minutes * INTERVAL '1 minute') > %[2]s)
 		)
@@ -2820,6 +4077,41 @@ func accountShareListingAvailableConditionSQL(nowExpr string) string {
 		accountShareAccountUnavailableConditionSQL(nowExpr),
 		service.AccountShareMembershipStatusActive,
 	)
+}
+
+func accountShareQueuedActivationConditionSQL(nowExpr string, consumerUserIDExpr string) string {
+	return fmt.Sprintf(`(
+		l.status = '%[1]s'
+		AND NOT %[4]s
+		AND (l.editing_expires_at IS NULL OR l.editing_expires_at <= %[2]s)
+		AND (
+			l.owner_user_id = %[3]s
+			OR l.seat_limit > (
+				SELECT COUNT(*)::int
+				FROM account_share_memberships m_available
+				WHERE m_available.listing_id = l.id
+					AND m_available.status = '%[5]s'
+					AND m_available.deleted_at IS NULL
+					AND m_available.consumer_user_id <> l.owner_user_id
+					AND (m_available.hourly_rate_snapshot <= 0 OR m_available.paid_until IS NULL OR m_available.paid_until > %[2]s)
+					AND (m_available.idle_timeout_minutes <= 0 OR COALESCE(m_available.last_request_at, m_available.joined_at) + (m_available.idle_timeout_minutes * INTERVAL '1 minute') > %[2]s)
+			)
+		)
+	)`,
+		service.AccountShareListingStatusActive,
+		nowExpr,
+		consumerUserIDExpr,
+		accountShareAccountUnavailableConditionSQL(nowExpr),
+		service.AccountShareMembershipStatusActive,
+	)
+}
+
+func accountShareListingSupportsImageGenerationSQL() string {
+	return `EXISTS (
+		SELECT 1
+		FROM jsonb_array_elements_text(l.allowed_models) AS image_model(value)
+		WHERE lower(image_model.value) ~ '(^|[/_:])(gpt-image(-|$)|dall-e(-|$)|dalle(-|$))'
+	)`
 }
 
 func accountShareAccountUnavailableOrMissingConditionSQL(nowExpr string) string {
@@ -2856,6 +4148,33 @@ func accountShareCodexQuotaProtectedSQL(usedKey, resetKey, limitKey, nowExpr str
 	)
 	resetAt := accountShareExtraTimeSQL(resetKey)
 	return fmt.Sprintf(`COALESCE(((%s) >= (%s) AND (%s) > %s), FALSE)`, used, limit, resetAt, nowExpr)
+}
+
+func accountShareAnthropicQuotaProtectedSQL(utilizationKey, limitKey, resetExpr, nowExpr string) string {
+	utilization := fmt.Sprintf("COALESCE((%s), 0)", accountShareAnthropicUtilizationPercentSQL(utilizationKey))
+	limitRaw := accountShareExtraNumberSQL(limitKey)
+	minLimit := strconv.FormatFloat(service.AnthropicQuotaMinLimitPercent, 'f', 1, 64)
+	maxLimit := strconv.FormatFloat(service.AnthropicQuotaMaxLimitPercent, 'f', 1, 64)
+	defaultLimit := strconv.FormatFloat(service.AnthropicQuotaDefaultLimitPercent, 'f', 1, 64)
+	limit := fmt.Sprintf(`CASE WHEN (%s) >= %s AND (%s) <= %s THEN (%s) ELSE %s END`,
+		limitRaw,
+		minLimit,
+		limitRaw,
+		maxLimit,
+		limitRaw,
+		defaultLimit,
+	)
+	return fmt.Sprintf(`COALESCE(((%s) >= (%s) AND (%s) > %s), FALSE)`, utilization, limit, resetExpr, nowExpr)
+}
+
+func accountShareAnthropicUtilizationPercentSQL(key string) string {
+	raw := accountShareExtraNumberSQL(key)
+	return fmt.Sprintf(`CASE
+		WHEN (%[1]s) IS NULL THEN NULL
+		WHEN (%[1]s) < 0 THEN 0
+		WHEN (%[1]s) <= 1.5 THEN (%[1]s) * 100
+		ELSE (%[1]s)
+	END`, raw)
 }
 
 func accountShareExtraNumberSQL(key string) string {
@@ -2911,6 +4230,10 @@ func accountShareListingSelectSQL() string {
 			l.status,
 			l.seat_limit,
 			COALESCE(ac.active_seats, 0),
+			l.account_identity_id,
+			l.rating_count,
+			l.rating_score_sum,
+			l.rating_avg,
 			l.rate_multiplier,
 			l.allowed_models,
 			l.per_user_concurrency,
@@ -2933,6 +4256,9 @@ func accountShareListingSelectSQL() string {
 			a.overload_until,
 			a.temp_unschedulable_until,
 			a.temp_unschedulable_reason,
+			a.session_window_start,
+			a.session_window_end,
+			a.session_window_status,
 			a.credentials,
 			a.extra,
 			COALESCE(NULLIF(a.credentials->>'subscription_expires_at', ''), NULLIF(a.extra->>'subscription_expires_at', '')),
@@ -2943,6 +4269,12 @@ func accountShareListingSelectSQL() string {
 			cm.billed_until,
 			cm.idle_timeout_minutes,
 			cm.last_request_at,
+			qm.id,
+			qm.api_key_id,
+			qm.queue_rank,
+			qm.status,
+			qm.idle_timeout_minutes,
+			qm.dispatch_cooldown_until,
 			hm.id,
 			hm.ended_at,
 			CASE WHEN l.editing_expires_at > NOW() THEN l.editing_by_user_id ELSE NULL END,
@@ -2962,6 +4294,7 @@ func accountShareListingSelectSQL() string {
 			WHERE m.listing_id = l.id
 				AND m.status = '%s'
 				AND m.deleted_at IS NULL
+				AND m.consumer_user_id <> l.owner_user_id
 				AND (m.hourly_rate_snapshot <= 0 OR m.paid_until IS NULL OR m.paid_until > NOW())
 				AND (m.idle_timeout_minutes <= 0 OR COALESCE(m.last_request_at, m.joined_at) + (m.idle_timeout_minutes * INTERVAL '1 minute') > NOW())
 		) ac ON TRUE
@@ -2978,6 +4311,16 @@ func accountShareListingSelectSQL() string {
 			LIMIT 1
 		) cm ON TRUE
 		LEFT JOIN LATERAL (
+			SELECT m.id, m.api_key_id, m.queue_rank, m.status, m.idle_timeout_minutes, m.dispatch_cooldown_until
+			FROM account_share_memberships m
+			WHERE m.listing_id = l.id
+				AND m.consumer_user_id = $1
+				AND m.status IN ('%s', '%s')
+				AND m.deleted_at IS NULL
+			ORDER BY m.queue_rank ASC, m.id ASC
+			LIMIT 1
+		) qm ON TRUE
+		LEFT JOIN LATERAL (
 			SELECT m.id, COALESCE(m.ended_at, m.updated_at) AS ended_at
 			FROM account_share_memberships m
 			WHERE m.listing_id = l.id
@@ -2987,22 +4330,198 @@ func accountShareListingSelectSQL() string {
 			ORDER BY COALESCE(m.ended_at, m.updated_at) DESC
 			LIMIT 1
 		) hm ON TRUE
-	`, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusEnded)
+	`, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusQueued, service.AccountShareMembershipStatusEnded)
 }
 
 type accountShareListingScanner interface {
 	Scan(dest ...any) error
 }
 
+type accountShareMembershipScanner interface {
+	Scan(dest ...any) error
+}
+
+type accountShareReviewScanner interface {
+	Scan(dest ...any) error
+}
+
+func accountShareReviewSelectSQL() string {
+	return `
+		SELECT
+			r.id,
+			r.account_identity_id,
+			COALESCE(r.listing_id, 0),
+			COALESCE(r.account_id, 0),
+			r.membership_id,
+			r.owner_user_id,
+			COALESCE(ou.username, ''),
+			r.consumer_user_id,
+			COALESCE(cu.username, ''),
+			COALESCE(a.name, ''),
+			COALESCE(i.platform, ''),
+			r.score,
+			r.comment,
+			r.comment_status,
+			r.comment_reject_reason,
+			r.created_at,
+			r.updated_at
+		FROM account_share_reviews r
+		JOIN account_share_account_identities i ON i.id = r.account_identity_id
+		LEFT JOIN account_share_listings l ON l.id = r.listing_id
+		LEFT JOIN accounts a ON a.id = COALESCE(r.account_id, l.account_id)
+		LEFT JOIN users ou ON ou.id = r.owner_user_id
+		LEFT JOIN users cu ON cu.id = r.consumer_user_id
+	`
+}
+
+func getAccountShareReviewByIDTx(ctx context.Context, tx *sql.Tx, reviewID int64) (*service.AccountShareReview, error) {
+	return scanAccountShareReview(tx.QueryRowContext(ctx, accountShareReviewSelectSQL()+`
+		WHERE r.id = $1
+			AND r.deleted_at IS NULL
+	`, reviewID))
+}
+
+func scanAccountShareReview(scanner accountShareReviewScanner) (*service.AccountShareReview, error) {
+	review := &service.AccountShareReview{}
+	err := scanner.Scan(
+		&review.ID,
+		&review.AccountIdentityID,
+		&review.ListingID,
+		&review.AccountID,
+		&review.MembershipID,
+		&review.OwnerUserID,
+		&review.OwnerUsername,
+		&review.ConsumerUserID,
+		&review.ConsumerUsername,
+		&review.AccountName,
+		&review.Platform,
+		&review.Score,
+		&review.Comment,
+		&review.CommentStatus,
+		&review.CommentRejectReason,
+		&review.CreatedAt,
+		&review.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return review, nil
+}
+
+func scanAccountShareReviews(rows *sql.Rows) ([]service.AccountShareReview, error) {
+	reviews := make([]service.AccountShareReview, 0)
+	for rows.Next() {
+		review, err := scanAccountShareReview(rows)
+		if err != nil {
+			return nil, err
+		}
+		reviews = append(reviews, *review)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return reviews, nil
+}
+
+func accountShareReviewPagination(total int64, page, limit int) *pagination.PaginationResult {
+	pages := 0
+	if total > 0 {
+		pages = int((total + int64(limit) - 1) / int64(limit))
+	}
+	return &pagination.PaginationResult{
+		Total:    total,
+		Page:     page,
+		PageSize: limit,
+		Pages:    pages,
+	}
+}
+
+func refreshAccountShareListingRatingsInTx(ctx context.Context, tx *sql.Tx, accountIdentityID int64) error {
+	if tx == nil || accountIdentityID <= 0 {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE account_share_listings l
+		SET rating_count = COALESCE((
+				SELECT COUNT(*)::int
+				FROM account_share_reviews r
+				WHERE r.account_identity_id = $1
+					AND r.deleted_at IS NULL
+			), 0),
+			rating_score_sum = COALESCE((
+				SELECT SUM(r.score)::int
+				FROM account_share_reviews r
+				WHERE r.account_identity_id = $1
+					AND r.deleted_at IS NULL
+			), 0),
+			rating_avg = COALESCE((
+				SELECT ROUND(AVG(r.score)::numeric, 2)
+				FROM account_share_reviews r
+				WHERE r.account_identity_id = $1
+					AND r.deleted_at IS NULL
+			), 0)
+		WHERE l.account_identity_id = $1
+			AND l.deleted_at IS NULL
+	`, accountIdentityID)
+	return err
+}
+
+func isAccountShareReviewUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) &&
+		pqErr.Code == "23505" &&
+		pqErr.Constraint == "uq_account_share_reviews_membership_live"
+}
+
+func scanAccountShareMembership(scanner accountShareMembershipScanner) (*service.AccountShareMembership, error) {
+	membership := &service.AccountShareMembership{}
+	var endedAt, lastRequestAt, paidUntil, billedUntil, dispatchFailedAt, dispatchCooldownUntil sql.NullTime
+	var endedReason sql.NullString
+	err := scanner.Scan(
+		&membership.ID,
+		&membership.ListingID,
+		&membership.AccountID,
+		&membership.OwnerUserID,
+		&membership.ConsumerUserID,
+		&membership.APIKeyID,
+		&membership.Status,
+		&membership.QueueRank,
+		&membership.HourlyRateSnapshot,
+		&membership.HourlyFeeWaiverMinimumSnapshot,
+		&membership.IdleTimeoutMinutes,
+		&membership.JoinedAt,
+		&lastRequestAt,
+		&endedAt,
+		&endedReason,
+		&paidUntil,
+		&billedUntil,
+		&dispatchFailedAt,
+		&dispatchCooldownUntil,
+		&membership.CreatedAt,
+		&membership.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	applyAccountShareMembershipNullableFields(membership, lastRequestAt, endedAt, endedReason, paidUntil, billedUntil)
+	if dispatchFailedAt.Valid {
+		membership.DispatchFailedAt = &dispatchFailedAt.Time
+	}
+	if dispatchCooldownUntil.Valid {
+		membership.DispatchCooldownUntil = &dispatchCooldownUntil.Time
+	}
+	return membership, nil
+}
+
 func scanAccountShareListing(scanner accountShareListingScanner) (*service.AccountShareListing, error) {
 	listing := &service.AccountShareListing{}
 	var allowedModelsRaw []byte
-	var proxyID, currentMembershipID, currentAPIKeyID, currentIdleTimeoutMinutes, lastUsedMembershipID, editingByUserID sql.NullInt64
-	var currentJoinedAt, currentPaidUntil, currentBilledUntil, currentLastRequestAt, lastUsedAt, editingExpiresAt sql.NullTime
+	var proxyID, accountIdentityID, currentMembershipID, currentAPIKeyID, currentIdleTimeoutMinutes, queueMembershipID, queueAPIKeyID, queueRank, queueIdleTimeoutMinutes, lastUsedMembershipID, editingByUserID sql.NullInt64
+	var currentJoinedAt, currentPaidUntil, currentBilledUntil, currentLastRequestAt, queueDispatchCooldownUntil, lastUsedAt, editingExpiresAt sql.NullTime
 	var accountPlatform, accountType, accountLevel, accountStatus string
 	var accountSchedulable bool
-	var accountExpiresAt, accountLastUsedAt, rateLimitedAt, rateLimitResetAt, overloadUntil, tempUnschedulableUntil sql.NullTime
-	var tempUnschedulableReason, subscriptionExpiresAtRaw sql.NullString
+	var accountExpiresAt, accountLastUsedAt, rateLimitedAt, rateLimitResetAt, overloadUntil, tempUnschedulableUntil, sessionWindowStart, sessionWindowEnd sql.NullTime
+	var tempUnschedulableReason, sessionWindowStatus, subscriptionExpiresAtRaw, queueStatus sql.NullString
 	var editingByUsername, editSessionID string
 	var credentialsRaw, extraRaw []byte
 	err := scanner.Scan(
@@ -3015,6 +4534,10 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 		&listing.Status,
 		&listing.SeatLimit,
 		&listing.ActiveSeats,
+		&accountIdentityID,
+		&listing.RatingCount,
+		&listing.RatingScoreSum,
+		&listing.RatingAvg,
 		&listing.RateMultiplier,
 		&allowedModelsRaw,
 		&listing.PerUserConcurrency,
@@ -3037,6 +4560,9 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 		&overloadUntil,
 		&tempUnschedulableUntil,
 		&tempUnschedulableReason,
+		&sessionWindowStart,
+		&sessionWindowEnd,
+		&sessionWindowStatus,
 		&credentialsRaw,
 		&extraRaw,
 		&subscriptionExpiresAtRaw,
@@ -3047,6 +4573,12 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 		&currentBilledUntil,
 		&currentIdleTimeoutMinutes,
 		&currentLastRequestAt,
+		&queueMembershipID,
+		&queueAPIKeyID,
+		&queueRank,
+		&queueStatus,
+		&queueIdleTimeoutMinutes,
+		&queueDispatchCooldownUntil,
 		&lastUsedMembershipID,
 		&lastUsedAt,
 		&editingByUserID,
@@ -3066,6 +4598,7 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 		}
 	}
 	listing.ProxyID = sqlNullInt64Ptr(proxyID)
+	listing.AccountIdentityID = sqlNullInt64Ptr(accountIdentityID)
 	credentials, err := unmarshalAccountShareJSONMap(credentialsRaw)
 	if err != nil {
 		return nil, err
@@ -3089,9 +4622,13 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 		OverloadUntil:           sqlNullTimePtr(overloadUntil),
 		TempUnschedulableUntil:  sqlNullTimePtr(tempUnschedulableUntil),
 		TempUnschedulableReason: tempUnschedulableReason.String,
+		SessionWindowStart:      sqlNullTimePtr(sessionWindowStart),
+		SessionWindowEnd:        sqlNullTimePtr(sessionWindowEnd),
+		SessionWindowStatus:     sessionWindowStatus.String,
 		Schedulable:             accountSchedulable,
 	}
 	now := time.Now()
+	listing.Platform = strings.ToLower(strings.TrimSpace(account.Platform))
 	listing.AccountLevel = service.NormalizeOpenAIAccountLevel(account.Platform, account.AccountLevel, account.Credentials, account.Extra)
 	listing.AccountPlanType = service.OpenAIAccountPlanType(account.Credentials, account.Extra)
 	listing.AccountStatus = account.Status
@@ -3111,6 +4648,15 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 	listing.Codex5hUsage = account.CodexUsageProgress(service.CodexQuotaWindow5h, now)
 	listing.Codex7dUsage = account.CodexUsageProgress(service.CodexQuotaWindow7d, now)
 	listing.CodexUsageUpdatedAt = account.CodexUsageUpdatedAt()
+	listing.Anthropic5hLimitPercent = listing.Codex5hLimitPercent
+	listing.Anthropic7dLimitPercent = listing.Codex7dLimitPercent
+	if reason := account.AnthropicQuotaProtectionReasonAt(now); reason != "" {
+		listing.AnthropicQuotaProtectionReason = &reason
+		listing.AnthropicQuotaProtectionResetAt = account.AnthropicQuotaProtectionResetAt(now)
+	}
+	listing.Anthropic5hUsage = account.AnthropicUsageProgress(service.AnthropicQuotaWindow5h, now)
+	listing.Anthropic7dUsage = account.AnthropicUsageProgress(service.AnthropicQuotaWindow7d, now)
+	listing.AnthropicUsageUpdatedAt = account.AnthropicUsageUpdatedAt()
 	if currentMembershipID.Valid {
 		listing.CurrentMembershipID = &currentMembershipID.Int64
 	}
@@ -3143,6 +4689,26 @@ func scanAccountShareListing(scanner accountShareListingScanner) (*service.Accou
 	}
 	if currentLastRequestAt.Valid && listing.CurrentLastRequestAt == nil {
 		listing.CurrentLastRequestAt = &currentLastRequestAt.Time
+	}
+	if queueMembershipID.Valid {
+		listing.QueueMembershipID = &queueMembershipID.Int64
+	}
+	if queueAPIKeyID.Valid {
+		listing.QueueAPIKeyID = &queueAPIKeyID.Int64
+	}
+	if queueRank.Valid {
+		rank := int(queueRank.Int64)
+		listing.QueueRank = &rank
+	}
+	if queueStatus.Valid {
+		listing.QueueStatus = queueStatus.String
+	}
+	if queueIdleTimeoutMinutes.Valid {
+		minutes := int(queueIdleTimeoutMinutes.Int64)
+		listing.QueueIdleTimeoutMinutes = &minutes
+	}
+	if queueDispatchCooldownUntil.Valid {
+		listing.QueueDispatchCooldownUntil = &queueDispatchCooldownUntil.Time
 	}
 	if lastUsedMembershipID.Valid {
 		listing.LastUsedMembershipID = &lastUsedMembershipID.Int64
@@ -3310,12 +4876,15 @@ func activeAccountShareSeatCountInTx(ctx context.Context, tx *sql.Tx, listingID 
 	var activeSeats int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*)::int
-		FROM account_share_memberships
-		WHERE listing_id = $1
-			AND status = $2
-			AND deleted_at IS NULL
-			AND (hourly_rate_snapshot <= 0 OR paid_until IS NULL OR paid_until > NOW())
-			AND (idle_timeout_minutes <= 0 OR COALESCE(last_request_at, joined_at) + (idle_timeout_minutes * INTERVAL '1 minute') > NOW())
+		FROM account_share_memberships m
+		JOIN account_share_listings l ON l.id = m.listing_id
+			AND l.deleted_at IS NULL
+		WHERE m.listing_id = $1
+			AND m.status = $2
+			AND m.deleted_at IS NULL
+			AND m.consumer_user_id <> l.owner_user_id
+			AND (m.hourly_rate_snapshot <= 0 OR m.paid_until IS NULL OR m.paid_until > NOW())
+			AND (m.idle_timeout_minutes <= 0 OR COALESCE(m.last_request_at, m.joined_at) + (m.idle_timeout_minutes * INTERVAL '1 minute') > NOW())
 	`, listingID, service.AccountShareMembershipStatusActive).Scan(&activeSeats); err != nil {
 		return 0, err
 	}
@@ -3415,6 +4984,10 @@ func translateAccountShareMembershipConflict(err error) error {
 			return service.ErrAccountShareAlreadyUsing.WithCause(err)
 		case "uq_account_share_memberships_active_api_key":
 			return service.ErrAccountShareAPIKeyAlreadyBound.WithCause(err)
+		case "uq_account_share_memberships_queue_rank":
+			return service.ErrAccountShareQueueInvalid.WithCause(err)
+		case "uq_account_share_memberships_active_or_queued_listing_consumer":
+			return service.ErrAccountShareAlreadyUsing.WithCause(err)
 		default:
 			return service.ErrAccountShareAlreadyUsing.WithCause(err)
 		}

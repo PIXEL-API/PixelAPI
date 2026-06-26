@@ -567,6 +567,158 @@ func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUsesMembershipAcco
 	}
 }
 
+func TestGatewayServiceAccountShareModeUnsupportedModelDoesNotDeferMembership(t *testing.T) {
+	modeGroupID := int64(61711)
+	consumerUserID := int64(5580)
+	apiKeyID := int64(20103)
+	boundAccount := Account{
+		ID:          416101,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-6": "claude-sonnet-4-6",
+			},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &GatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	selection, handled, err := svc.selectAccountShareModeBoundAccount(ctx, &modeGroupID, "", "claude-3-5-haiku-20241022", nil)
+
+	require.True(t, handled)
+	require.Nil(t, selection)
+	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
+	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
+	require.NotNil(t, shareRepo.membership)
+}
+
+func TestGatewayServiceAccountShareModeUsesPrivateOwnerAccount(t *testing.T) {
+	modeGroupID := int64(66866)
+	consumerUserID := int64(5580)
+	apiKeyID := int64(20103)
+	ownerUserID := int64(1)
+	boundAccount := Account{
+		ID:          447296,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		OwnerUserID: &ownerUserID,
+		ShareMode:   AccountShareModePrivate,
+		ShareStatus: AccountShareStatusApproved,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-6": "claude-sonnet-4-6",
+			},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, AccountID: boundAccount.ID, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive},
+	}
+	svc := &GatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	baseCtx := context.WithValue(context.Background(), ctxkey.AuthenticatedUserID, consumerUserID)
+	ctx := WithAccountShareModeRequest(baseCtx, consumerUserID, apiKeyID)
+
+	selection, handled, err := svc.selectAccountShareModeBoundAccount(ctx, &modeGroupID, "", "claude-sonnet-4-6", nil)
+
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, boundAccount.ID, selection.Account.ID)
+	require.Equal(t, 1, shareRepo.bindingCalls)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_AccountShareModeUnsupportedModelDoesNotDeferMembership(t *testing.T) {
+	modeGroupID := int64(61711)
+	consumerUserID := int64(5580)
+	apiKeyID := int64(20103)
+	boundAccount := Account{
+		ID:          416102,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-4o": "gpt-4o",
+			},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	selection, err := svc.SelectAccountWithLoadAwareness(ctx, &modeGroupID, "", "gpt-unsupported", nil)
+
+	require.Nil(t, selection)
+	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
+	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
+	require.NotNil(t, shareRepo.membership)
+}
+
+func TestOpenAISelectAccountWithScheduler_AccountShareModeUnsupportedModelDoesNotDeferMembership(t *testing.T) {
+	modeGroupID := int64(61711)
+	consumerUserID := int64(5580)
+	apiKeyID := int64(20103)
+	boundAccount := Account{
+		ID:          416103,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 20,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-4o": "gpt-4o",
+			},
+		},
+	}
+	shareRepo := &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 1, AccountID: boundAccount.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 1, OwnerUserID: 1, Status: AccountShareListingStatusActive},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{boundAccount}},
+		accountShareModeService: &AccountShareModeService{repo: shareRepo},
+	}
+	ctx := WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+
+	selection, decision, err := svc.selectAccountWithScheduler(ctx, &modeGroupID, "", "", "gpt-unsupported", nil, OpenAIUpstreamTransportHTTPSSE, "", false)
+
+	require.Nil(t, selection)
+	require.Equal(t, openAIAccountScheduleLayerAccountShareMode, decision.Layer)
+	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
+	require.Equal(t, 0, shareRepo.dispatchFailureCalls)
+	require.NotNil(t, shareRepo.membership)
+}
+
 func TestOpenAISelectAccountWithLoadAwareness_FiltersUnschedulableWhenNoConcurrencyService(t *testing.T) {
 	now := time.Now()
 	resetAt := now.Add(10 * time.Minute)

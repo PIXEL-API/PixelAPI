@@ -21,6 +21,21 @@ export interface ContentModerationCyberPreflightRules {
   defensive_markers: string[]
 }
 
+export interface ContentModerationDynamicSamplingConfig {
+  enabled: boolean
+  new_user_full_audit_count: number
+  trusted_sample_rate: number
+  trusted_ttl_hours: number
+  high_trusted_sample_rate: number
+  high_trusted_min_hours: number
+  high_trusted_min_requests: number
+  high_trusted_min_audits: number
+  risk_full_audit_ttl_hours: number
+  min_audit_every_requests: number
+  min_audit_every_minutes: number
+  large_text_runes: number
+}
+
 export interface RiskControlAccountShareListing {
   id: number
   account_id: number
@@ -57,6 +72,7 @@ export interface ContentModerationConfig {
   api_key_statuses: ContentModerationAPIKeyStatus[]
   timeout_ms: number
   sample_rate: number
+  dynamic_sampling: ContentModerationDynamicSamplingConfig
   all_groups: boolean
   group_ids: number[]
   record_non_hits: boolean
@@ -134,6 +150,7 @@ export interface UpdateContentModerationConfig {
   clear_api_key?: boolean
   timeout_ms?: number
   sample_rate?: number
+  dynamic_sampling?: ContentModerationDynamicSamplingConfig
   all_groups?: boolean
   group_ids?: number[]
   record_non_hits?: boolean
@@ -168,6 +185,14 @@ export interface ContentModerationRuntimeStatus {
   dropped: number
   processed: number
   errors: number
+  dynamic_sampling: {
+    enabled: boolean
+    skipped: number
+    forced: number
+    sampled: number
+    audited: number
+    risk_events: number
+  }
   api_key_statuses: ContentModerationAPIKeyStatus[]
   flagged_hash_count: number
   last_cleanup_at?: string

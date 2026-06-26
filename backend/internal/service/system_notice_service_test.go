@@ -78,6 +78,55 @@ func TestSystemNoticeSendBestEffortIgnoresDuplicateSource(t *testing.T) {
 	})
 }
 
+func TestSystemNoticeWithdrawalEventsIncludeStatusAndAdminNote(t *testing.T) {
+	created := make([]*Conversation, 0)
+	messages := make([]*ConversationMessage, 0)
+	repo := &conversationRepoStub{
+		createWithMessageFunc: func(_ context.Context, conv *Conversation, msg *ConversationMessage) error {
+			cp := *conv
+			cp.ID = int64(len(created) + 1)
+			created = append(created, &cp)
+			msgCp := *msg
+			messages = append(messages, &msgCp)
+			return nil
+		},
+		getNoticeBySourceFunc: func(context.Context, int64, string, string) (*Conversation, error) {
+			return nil, ErrConversationNotFound
+		},
+	}
+	svc := NewSystemNoticeService(NewConversationService(repo, &conversationUserRepoStub{
+		users: map[int64]*User{7: {ID: 7, Status: StatusActive}},
+	}))
+	rejectNote := "收款码信息不一致"
+
+	svc.NotifyWithdrawal(context.Background(), "rejected", &WithdrawalRequest{
+		ID:            31,
+		UserID:        7,
+		Amount:        12.30,
+		TotalDeducted: 12.40,
+		AdminNote:     &rejectNote,
+	})
+	svc.NotifyWithdrawal(context.Background(), "settled", &WithdrawalRequest{
+		ID:            32,
+		UserID:        7,
+		Amount:        8.00,
+		TotalDeducted: 8.00,
+	})
+
+	require.Len(t, created, 2)
+	require.Len(t, messages, 2)
+	require.Equal(t, SystemNoticeSourceWithdrawal, created[0].Source)
+	require.Equal(t, "31_rejected", created[0].SourceID)
+	require.Equal(t, ConversationTypeBilling, created[0].Type)
+	require.Equal(t, "提现已拒绝", created[0].Subject)
+	require.Contains(t, messages[0].Content, "已被拒绝")
+	require.Contains(t, messages[0].Content, "12.40 CNY")
+	require.Contains(t, messages[0].Content, "拒绝备注：收款码信息不一致")
+	require.Equal(t, "32_settled", created[1].SourceID)
+	require.Equal(t, "提现已打款", created[1].Subject)
+	require.Contains(t, messages[1].Content, "已完成打款")
+}
+
 func TestSystemNoticeAccountChangedOnlyNotifiesOwnerAndTrackedFields(t *testing.T) {
 	created := make([]*Conversation, 0)
 	repo := &conversationRepoStub{

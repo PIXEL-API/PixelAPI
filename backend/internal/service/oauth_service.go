@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
+
+var ErrAnthropicOAuthSessionNotFound = infraerrors.New(http.StatusBadRequest, "ANTHROPIC_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
 
 // OpenAIOAuthClient interface for OpenAI OAuth operations
 type OpenAIOAuthClient interface {
@@ -131,7 +135,7 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, input *ExchangeCodeInpu
 	// Get session
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
-		return nil, fmt.Errorf("session not found or expired")
+		return nil, ErrAnthropicOAuthSessionNotFound
 	}
 
 	// Get proxy URL

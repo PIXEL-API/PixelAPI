@@ -47,6 +47,8 @@ export async function getRealtimeMetrics(): Promise<{
 export interface TrendParams {
   start_date?: string
   end_date?: string
+  start_time?: string
+  end_time?: string
   granularity?: 'day' | 'hour'
   user_id?: number
   api_key_id?: number
@@ -78,6 +80,8 @@ export async function getUsageTrend(params?: TrendParams): Promise<TrendResponse
 export interface ModelStatsParams {
   start_date?: string
   end_date?: string
+  start_time?: string
+  end_time?: string
   user_id?: number
   api_key_id?: number
   model?: string
@@ -108,6 +112,8 @@ export async function getModelStats(params?: ModelStatsParams): Promise<ModelSta
 export interface GroupStatsParams {
   start_date?: string
   end_date?: string
+  start_time?: string
+  end_time?: string
   user_id?: number
   api_key_id?: number
   account_id?: number
@@ -161,6 +167,8 @@ export async function getGroupStats(params?: GroupStatsParams): Promise<GroupSta
 export interface UserBreakdownParams {
   start_date?: string
   end_date?: string
+  start_time?: string
+  end_time?: string
   group_id?: number
   model?: string
   model_source?: 'requested' | 'upstream' | 'mapping'
@@ -236,7 +244,7 @@ export interface UserTrendResponse {
 }
 
 export interface UserSpendingRankingParams
-  extends Pick<TrendParams, 'start_date' | 'end_date'> {
+  extends Pick<TrendParams, 'start_date' | 'end_date' | 'start_time' | 'end_time'> {
   limit?: number
 }
 
@@ -269,7 +277,11 @@ export async function getUserSpendingRanking(
 export interface BatchUserUsageStats {
   user_id: number
   today_actual_cost: number
+  today_request_actual_cost: number
+  today_hourly_cost: number
   total_actual_cost: number
+  total_request_actual_cost: number
+  total_hourly_cost: number
 }
 
 export interface BatchUsersUsageResponse {
@@ -291,7 +303,11 @@ export async function getBatchUsersUsage(userIds: number[]): Promise<BatchUsersU
 export interface BatchApiKeyUsageStats {
   api_key_id: number
   today_actual_cost: number
+  today_request_actual_cost: number
+  today_hourly_cost: number
   total_actual_cost: number
+  total_request_actual_cost: number
+  total_hourly_cost: number
 }
 
 export interface BatchApiKeysUsageResponse {

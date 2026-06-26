@@ -56,6 +56,8 @@ type DashboardStats struct {
 	TotalCacheCreationTokens int64   `json:"total_cache_creation_tokens"`
 	TotalCacheReadTokens     int64   `json:"total_cache_read_tokens"`
 	TotalTokens              int64   `json:"total_tokens"`
+	TotalRequestActualCost   float64 `json:"total_request_actual_cost"`
+	TotalHourlyCost          float64 `json:"total_hourly_cost"`
 	TotalCost                float64 `json:"total_cost"`         // 累计标准计费
 	TotalActualCost          float64 `json:"total_actual_cost"`  // 累计实际扣除
 	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号成本
@@ -67,6 +69,8 @@ type DashboardStats struct {
 	TodayCacheCreationTokens int64   `json:"today_cache_creation_tokens"`
 	TodayCacheReadTokens     int64   `json:"today_cache_read_tokens"`
 	TodayTokens              int64   `json:"today_tokens"`
+	TodayRequestActualCost   float64 `json:"today_request_actual_cost"`
+	TodayHourlyCost          float64 `json:"today_hourly_cost"`
 	TodayCost                float64 `json:"today_cost"`         // 今日标准计费
 	TodayActualCost          float64 `json:"today_actual_cost"`  // 今日实际扣除
 	TodayAccountCost         float64 `json:"today_account_cost"` // 今日账号成本
@@ -211,6 +215,8 @@ type UserDashboardStats struct {
 	TotalCacheCreationTokens int64   `json:"total_cache_creation_tokens"`
 	TotalCacheReadTokens     int64   `json:"total_cache_read_tokens"`
 	TotalTokens              int64   `json:"total_tokens"`
+	TotalRequestActualCost   float64 `json:"total_request_actual_cost"`
+	TotalHourlyCost          float64 `json:"total_hourly_cost"`
 	TotalCost                float64 `json:"total_cost"`        // 累计标准计费
 	TotalActualCost          float64 `json:"total_actual_cost"` // 累计实际扣除
 
@@ -221,6 +227,8 @@ type UserDashboardStats struct {
 	TodayCacheCreationTokens int64   `json:"today_cache_creation_tokens"`
 	TodayCacheReadTokens     int64   `json:"today_cache_read_tokens"`
 	TodayTokens              int64   `json:"today_tokens"`
+	TodayRequestActualCost   float64 `json:"today_request_actual_cost"`
+	TodayHourlyCost          float64 `json:"today_hourly_cost"`
 	TodayCost                float64 `json:"today_cost"`        // 今日标准计费
 	TodayActualCost          float64 `json:"today_actual_cost"` // 今日实际扣除
 
@@ -258,6 +266,8 @@ type UsageStats struct {
 	TotalCacheCreationTokens int64          `json:"total_cache_creation_tokens"`
 	TotalCacheReadTokens     int64          `json:"total_cache_read_tokens"`
 	TotalTokens              int64          `json:"total_tokens"`
+	TotalRequestActualCost   float64        `json:"total_request_actual_cost"`
+	TotalHourlyCost          float64        `json:"total_hourly_cost"`
 	TotalCost                float64        `json:"total_cost"`
 	TotalActualCost          float64        `json:"total_actual_cost"`
 	TotalAccountCost         *float64       `json:"total_account_cost,omitempty"`
@@ -269,16 +279,24 @@ type UsageStats struct {
 
 // BatchUserUsageStats represents usage stats for a single user
 type BatchUserUsageStats struct {
-	UserID          int64   `json:"user_id"`
-	TodayActualCost float64 `json:"today_actual_cost"`
-	TotalActualCost float64 `json:"total_actual_cost"`
+	UserID                 int64   `json:"user_id"`
+	TodayActualCost        float64 `json:"today_actual_cost"`
+	TodayRequestActualCost float64 `json:"today_request_actual_cost"`
+	TodayHourlyCost        float64 `json:"today_hourly_cost"`
+	TotalActualCost        float64 `json:"total_actual_cost"`
+	TotalRequestActualCost float64 `json:"total_request_actual_cost"`
+	TotalHourlyCost        float64 `json:"total_hourly_cost"`
 }
 
 // BatchAPIKeyUsageStats represents usage stats for a single API key
 type BatchAPIKeyUsageStats struct {
-	APIKeyID        int64   `json:"api_key_id"`
-	TodayActualCost float64 `json:"today_actual_cost"`
-	TotalActualCost float64 `json:"total_actual_cost"`
+	APIKeyID               int64   `json:"api_key_id"`
+	TodayActualCost        float64 `json:"today_actual_cost"`
+	TodayRequestActualCost float64 `json:"today_request_actual_cost"`
+	TodayHourlyCost        float64 `json:"today_hourly_cost"`
+	TotalActualCost        float64 `json:"total_actual_cost"`
+	TotalRequestActualCost float64 `json:"total_request_actual_cost"`
+	TotalHourlyCost        float64 `json:"total_hourly_cost"`
 }
 
 // AccountUsageHistory represents daily usage history for an account

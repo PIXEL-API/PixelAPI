@@ -2390,6 +2390,10 @@ func (r *stubUsageLogRepo) GetUserStatsAggregated(ctx context.Context, userID in
 	}, nil
 }
 
+func (r *stubUsageLogRepo) GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, model string, startTime, endTime time.Time) (*service.AccountShareRecommendationUsageProfileStats, error) {
+	return &service.AccountShareRecommendationUsageProfileStats{}, nil
+}
+
 func (r *stubUsageLogRepo) GetAPIKeyStatsAggregated(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
 	return nil, errors.New("not implemented")
 }

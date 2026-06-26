@@ -156,6 +156,47 @@ func TestUsageServiceListBalanceLedgerFastPaginationWithoutExactTotal(t *testing
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageServiceGetBalanceLedgerStatsUsesFiltersAndPreservesDecimalText(t *testing.T) {
+	svc, mock := newUsageBalanceLedgerSQLMock(t)
+	ctx := context.Background()
+	userID := int64(42)
+	start := time.Date(2026, 6, 16, 12, 30, 15, 0, time.UTC)
+	end := start.Add(2 * time.Hour)
+
+	mock.ExpectQuery(`(?s)SELECT\s+COUNT\(\*\)::bigint,\s+COUNT\(\*\) FILTER \(WHERE l\.direction = 'credit'\)::bigint,\s+COUNT\(\*\) FILTER \(WHERE l\.direction = 'debit'\)::bigint,\s+COALESCE\(SUM\(CASE WHEN l\.direction = 'credit' THEN l\.amount ELSE 0 END\), 0\)::text,\s+COALESCE\(SUM\(CASE WHEN l\.direction = 'debit' THEN l\.amount ELSE 0 END\), 0\)::text,\s+COALESCE\(SUM\(CASE\s+WHEN l\.direction = 'credit' THEN l\.amount\s+WHEN l\.direction = 'debit' THEN -l\.amount\s+ELSE 0\s+END\), 0\)::text\s+FROM user_balance_ledger l\s+WHERE l\.user_id = \$1 AND l\.created_at >= \$2 AND l\.created_at < \$3`).
+		WithArgs(userID, start, end).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"total_entries",
+			"credit_entries",
+			"debit_entries",
+			"credit_amount",
+			"debit_amount",
+			"net_amount",
+		}).AddRow(
+			int64(5),
+			int64(2),
+			int64(3),
+			"10.1234567891",
+			"4.1000000001",
+			"6.0234567890",
+		))
+
+	stats, err := svc.GetBalanceLedgerStats(ctx, UserBalanceLedgerFilters{
+		UserID:    userID,
+		StartTime: &start,
+		EndTime:   &end,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(5), stats.TotalEntries)
+	require.Equal(t, int64(2), stats.CreditEntries)
+	require.Equal(t, int64(3), stats.DebitEntries)
+	require.Equal(t, "10.1234567891", stats.CreditAmount)
+	require.Equal(t, "4.1000000001", stats.DebitAmount)
+	require.Equal(t, "6.0234567890", stats.NetAmount)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestUsageServiceListBalanceLedgerRejectsInvalidDirection(t *testing.T) {
 	svc, mock := newUsageBalanceLedgerSQLMock(t)
 

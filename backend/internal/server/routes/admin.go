@@ -77,7 +77,9 @@ func RegisterAdminRoutes(
 		registerUsageRoutes(admin, h)
 		registerRevenueRoutes(admin, h)
 		registerWithdrawalRoutes(admin, h)
+		registerInvoiceRoutes(admin, h)
 		registerShopRoutes(admin, h)
+		registerActivityRoutes(admin, h)
 
 		// 用户属性管理
 		registerUserAttributeRoutes(admin, h)
@@ -108,6 +110,25 @@ func RegisterAdminRoutes(
 	}
 }
 
+func registerActivityRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	activities := admin.Group("/activities")
+	{
+		activities.GET("", h.Admin.Activity.ListCampaigns)
+		activities.POST("", h.Admin.Activity.CreateCampaign)
+		activities.GET("/:id", h.Admin.Activity.GetCampaign)
+		activities.GET("/:id/stats", h.Admin.Activity.GetCampaignStats)
+		activities.PUT("/:id", h.Admin.Activity.UpdateCampaign)
+		activities.DELETE("/:id", h.Admin.Activity.EndCampaign)
+		activities.POST("/:id/draw", h.Admin.Activity.RunDraw)
+	}
+	winners := admin.Group("/activity-winners")
+	{
+		winners.GET("", h.Admin.Activity.ListWinners)
+		winners.POST("/:id/deliver", h.Admin.Activity.MarkWinnerDelivered)
+		winners.POST("/:id/reject", h.Admin.Activity.RejectWinner)
+	}
+}
+
 func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	risk := admin.Group("/risk-control")
 	{
@@ -130,6 +151,16 @@ func registerWithdrawalRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		withdrawals.GET("/:id", h.Admin.Withdrawal.Get)
 		withdrawals.POST("/:id/settle", h.Admin.Withdrawal.Settle)
 		withdrawals.POST("/:id/reject", h.Admin.Withdrawal.Reject)
+	}
+}
+
+func registerInvoiceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	invoices := admin.Group("/invoices")
+	{
+		invoices.GET("", h.Admin.Invoice.List)
+		invoices.GET("/:id", h.Admin.Invoice.Get)
+		invoices.POST("/:id/issue", h.Admin.Invoice.Issue)
+		invoices.POST("/:id/reject", h.Admin.Invoice.Reject)
 	}
 }
 
@@ -636,6 +667,7 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		usage.GET("", h.Admin.Usage.List)
 		usage.GET("/stats", h.Admin.Usage.Stats)
+		usage.GET("/balance-ledger/stats", h.Admin.Usage.BalanceLedgerStats)
 		usage.GET("/balance-ledger", h.Admin.Usage.ListBalanceLedger)
 		usage.GET("/search-users", h.Admin.Usage.SearchUsers)
 		usage.GET("/search-api-keys", h.Admin.Usage.SearchAPIKeys)

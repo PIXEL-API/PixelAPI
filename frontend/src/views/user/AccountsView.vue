@@ -288,6 +288,8 @@
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :usage-loader="accountsAPI.getUsage"
+              :query-openai-quota="accountsAPI.queryOpenAIQuota"
+              :reset-openai-quota="accountsAPI.resetOpenAIQuota"
               usage-cache-scope="user"
               :manual-refresh-token="usageManualRefreshToken"
             />

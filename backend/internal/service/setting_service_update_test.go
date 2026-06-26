@@ -275,6 +275,58 @@ func TestSettingService_UpdateSettings_UpstreamAllowlistExtraHosts_Invalid(t *te
 	require.Equal(t, "INVALID_UPSTREAM_URL_ALLOWLIST_EXTRA_HOSTS", infraerrors.Reason(err))
 }
 
+func TestSettingService_UpdateSettings_AccountShareCommentReviewRejectsInvalidURL(t *testing.T) {
+	repo := &settingValueRepoStub{
+		values: map[string]string{
+			SettingKeyAccountShareCommentReviewAPIKey: "stored-key",
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		AccountShareCommentReviewEnabled: true,
+		AccountShareCommentReviewURL:     "api.example.com/v1/chat/completions",
+		AccountShareCommentReviewModel:   "review-model",
+	})
+	require.Error(t, err)
+	require.Equal(t, "ACCOUNT_SHARE_COMMENT_REVIEW_CONFIG_INVALID", infraerrors.Reason(err))
+	require.NotContains(t, repo.values, SettingKeyAccountShareCommentReviewEnabled)
+}
+
+func TestSettingService_UpdateSettings_AccountShareCommentReviewRejectsMissingAPIKeyWhenEnabled(t *testing.T) {
+	repo := &settingValueRepoStub{values: map[string]string{}}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		AccountShareCommentReviewEnabled: true,
+		AccountShareCommentReviewURL:     "https://api.example.com/v1/chat/completions",
+		AccountShareCommentReviewModel:   "review-model",
+	})
+	require.Error(t, err)
+	require.Equal(t, "ACCOUNT_SHARE_COMMENT_REVIEW_CONFIG_INVALID", infraerrors.Reason(err))
+	require.NotContains(t, repo.values, SettingKeyAccountShareCommentReviewEnabled)
+}
+
+func TestSettingService_UpdateSettings_AccountShareCommentReviewKeepsStoredAPIKey(t *testing.T) {
+	repo := &settingValueRepoStub{
+		values: map[string]string{
+			SettingKeyAccountShareCommentReviewAPIKey: "stored-key",
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		AccountShareCommentReviewEnabled: true,
+		AccountShareCommentReviewURL:     " https://api.example.com/v1/chat/completions ",
+		AccountShareCommentReviewModel:   " review-model ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "true", repo.values[SettingKeyAccountShareCommentReviewEnabled])
+	require.Equal(t, "https://api.example.com/v1/chat/completions", repo.values[SettingKeyAccountShareCommentReviewURL])
+	require.Equal(t, "review-model", repo.values[SettingKeyAccountShareCommentReviewModel])
+	require.Equal(t, "stored-key", repo.values[SettingKeyAccountShareCommentReviewAPIKey])
+}
+
 func TestSettingService_GetUpstreamURLAllowlistHosts_MergesConfigAndDB(t *testing.T) {
 	repo := &settingValueRepoStub{
 		values: map[string]string{

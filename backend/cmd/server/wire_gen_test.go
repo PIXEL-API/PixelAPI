@@ -62,7 +62,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // affiliateCodeCycle
 		tokenRefreshSvc,
 		accountExpirySvc,
-		nil, // accountErrorCleanup
 		subscriptionExpirySvc,
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
@@ -75,9 +74,11 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		openAIOAuthSvc,
 		geminiOAuthSvc,
 		antigravityOAuthSvc,
+		nil, // accountShareMode
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
 		nil, // backupSvc
+		nil, // activityAutoDraw
 		nil, // paymentOrderExpiry
 		nil, // channelMonitorRunner
 	)

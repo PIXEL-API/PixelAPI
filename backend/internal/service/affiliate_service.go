@@ -132,8 +132,8 @@ type AffiliateDetail struct {
 type AffiliateRepository interface {
 	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
-	ValidateAffiliateCode(ctx context.Context, code string, cycle AffiliateCodeCycle) (*AffiliateSummary, error)
-	ConsumeAffiliateCode(ctx context.Context, userID int64, code string, cycle AffiliateCodeCycle) (*AffiliateSummary, error)
+	ValidateAffiliateCode(ctx context.Context, code string, cycle AffiliateCodeCycle, enforceWeeklyLimit bool) (*AffiliateSummary, error)
+	ConsumeAffiliateCode(ctx context.Context, userID int64, code string, cycle AffiliateCodeCycle, enforceWeeklyLimit bool) (*AffiliateSummary, error)
 	RefreshUserAffiliateCodeCycle(ctx context.Context, userID int64, cycle AffiliateCodeCycle) (*AffiliateSummary, error)
 	RefreshExpiredAffiliateCodeCycles(ctx context.Context, cycle AffiliateCodeCycle, limit int) (int, error)
 	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
@@ -319,6 +319,10 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64,
 }
 
 func (s *AffiliateService) ValidateInvitationCode(ctx context.Context, rawCode string) error {
+	return s.ValidateInvitationCodeWithWeeklyLimit(ctx, rawCode, true)
+}
+
+func (s *AffiliateService) ValidateInvitationCodeWithWeeklyLimit(ctx context.Context, rawCode string, enforceWeeklyLimit bool) error {
 	code := strings.ToUpper(strings.TrimSpace(rawCode))
 	if code == "" {
 		return ErrAffiliateCodeInvalid
@@ -332,7 +336,7 @@ func (s *AffiliateService) ValidateInvitationCode(ctx context.Context, rawCode s
 	if !isValidAffiliateCodeFormat(code) {
 		return ErrAffiliateCodeInvalid
 	}
-	_, err := s.repo.ValidateAffiliateCode(ctx, code, currentAffiliateCodeCycle(time.Now()))
+	_, err := s.repo.ValidateAffiliateCode(ctx, code, currentAffiliateCodeCycle(time.Now()), enforceWeeklyLimit)
 	if errors.Is(err, ErrAffiliateProfileNotFound) {
 		return ErrAffiliateCodeInvalid
 	}
@@ -340,6 +344,10 @@ func (s *AffiliateService) ValidateInvitationCode(ctx context.Context, rawCode s
 }
 
 func (s *AffiliateService) ConsumeInvitationCode(ctx context.Context, userID int64, rawCode string) error {
+	return s.ConsumeInvitationCodeWithWeeklyLimit(ctx, userID, rawCode, true)
+}
+
+func (s *AffiliateService) ConsumeInvitationCodeWithWeeklyLimit(ctx context.Context, userID int64, rawCode string, enforceWeeklyLimit bool) error {
 	code := strings.ToUpper(strings.TrimSpace(rawCode))
 	if code == "" {
 		return ErrAffiliateCodeInvalid
@@ -356,7 +364,7 @@ func (s *AffiliateService) ConsumeInvitationCode(ctx context.Context, userID int
 	if !isValidAffiliateCodeFormat(code) {
 		return ErrAffiliateCodeInvalid
 	}
-	if _, err := s.repo.ConsumeAffiliateCode(ctx, userID, code, currentAffiliateCodeCycle(time.Now())); err != nil {
+	if _, err := s.repo.ConsumeAffiliateCode(ctx, userID, code, currentAffiliateCodeCycle(time.Now()), enforceWeeklyLimit); err != nil {
 		if errors.Is(err, ErrAffiliateProfileNotFound) {
 			return ErrAffiliateCodeInvalid
 		}

@@ -219,6 +219,9 @@ func isAllowedStructuredOAuthSKToken(key, lowerValue string, opts credentialSafe
 	if opts.AllowOAuthTokenValues && key == "access_token" && strings.HasPrefix(lowerValue, "sk-ant-oat") {
 		return true
 	}
+	if opts.AllowOAuthTokenValues && key == "refresh_token" && strings.HasPrefix(lowerValue, "sk-ant-ort") {
+		return true
+	}
 	if opts.AllowClaudeSessionKeyFields && isClaudeSessionKeyField(key) && strings.HasPrefix(lowerValue, "sk-ant-sid") {
 		return true
 	}

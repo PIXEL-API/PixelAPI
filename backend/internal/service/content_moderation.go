@@ -145,6 +145,7 @@ type ContentModerationConfig struct {
 	APIKeys                    []string                                     `json:"api_keys,omitempty"`
 	TimeoutMS                  int                                          `json:"timeout_ms"`
 	SampleRate                 int                                          `json:"sample_rate"`
+	DynamicSampling            ContentModerationDynamicSamplingConfig       `json:"dynamic_sampling"`
 	AllGroups                  bool                                         `json:"all_groups"`
 	GroupIDs                   []int64                                      `json:"group_ids"`
 	RecordNonHits              bool                                         `json:"record_non_hits"`
@@ -180,6 +181,7 @@ type ContentModerationConfigView struct {
 	APIKeyStatuses             []ContentModerationAPIKeyStatus              `json:"api_key_statuses"`
 	TimeoutMS                  int                                          `json:"timeout_ms"`
 	SampleRate                 int                                          `json:"sample_rate"`
+	DynamicSampling            ContentModerationDynamicSamplingConfig       `json:"dynamic_sampling"`
 	AllGroups                  bool                                         `json:"all_groups"`
 	GroupIDs                   []int64                                      `json:"group_ids"`
 	RecordNonHits              bool                                         `json:"record_non_hits"`
@@ -273,6 +275,7 @@ type UpdateContentModerationConfigInput struct {
 	ClearAPIKey           bool                                          `json:"clear_api_key"`
 	TimeoutMS             *int                                          `json:"timeout_ms"`
 	SampleRate            *int                                          `json:"sample_rate"`
+	DynamicSampling       *ContentModerationDynamicSamplingConfig       `json:"dynamic_sampling"`
 	AllGroups             *bool                                         `json:"all_groups"`
 	GroupIDs              *[]int64                                      `json:"group_ids"`
 	RecordNonHits         *bool                                         `json:"record_non_hits"`
@@ -423,26 +426,27 @@ type ContentModerationCleanupResult struct {
 }
 
 type ContentModerationRuntimeStatus struct {
-	Enabled                  bool                            `json:"enabled"`
-	CyberPreflightEnabled    bool                            `json:"cyber_preflight_enabled"`
-	RiskControlEnabled       bool                            `json:"risk_control_enabled"`
-	Mode                     string                          `json:"mode"`
-	WorkerCount              int                             `json:"worker_count"`
-	MaxWorkers               int                             `json:"max_workers"`
-	ActiveWorkers            int                             `json:"active_workers"`
-	IdleWorkers              int                             `json:"idle_workers"`
-	QueueSize                int                             `json:"queue_size"`
-	QueueLength              int                             `json:"queue_length"`
-	QueueUsagePercent        float64                         `json:"queue_usage_percent"`
-	Enqueued                 int64                           `json:"enqueued"`
-	Dropped                  int64                           `json:"dropped"`
-	Processed                int64                           `json:"processed"`
-	Errors                   int64                           `json:"errors"`
-	APIKeyStatuses           []ContentModerationAPIKeyStatus `json:"api_key_statuses"`
-	FlaggedHashCount         int64                           `json:"flagged_hash_count"`
-	LastCleanupAt            *time.Time                      `json:"last_cleanup_at,omitempty"`
-	LastCleanupDeletedHit    int64                           `json:"last_cleanup_deleted_hit"`
-	LastCleanupDeletedNonHit int64                           `json:"last_cleanup_deleted_non_hit"`
+	Enabled                  bool                                          `json:"enabled"`
+	CyberPreflightEnabled    bool                                          `json:"cyber_preflight_enabled"`
+	RiskControlEnabled       bool                                          `json:"risk_control_enabled"`
+	Mode                     string                                        `json:"mode"`
+	WorkerCount              int                                           `json:"worker_count"`
+	MaxWorkers               int                                           `json:"max_workers"`
+	ActiveWorkers            int                                           `json:"active_workers"`
+	IdleWorkers              int                                           `json:"idle_workers"`
+	QueueSize                int                                           `json:"queue_size"`
+	QueueLength              int                                           `json:"queue_length"`
+	QueueUsagePercent        float64                                       `json:"queue_usage_percent"`
+	Enqueued                 int64                                         `json:"enqueued"`
+	Dropped                  int64                                         `json:"dropped"`
+	Processed                int64                                         `json:"processed"`
+	Errors                   int64                                         `json:"errors"`
+	DynamicSampling          ContentModerationDynamicSamplingRuntimeStatus `json:"dynamic_sampling"`
+	APIKeyStatuses           []ContentModerationAPIKeyStatus               `json:"api_key_statuses"`
+	FlaggedHashCount         int64                                         `json:"flagged_hash_count"`
+	LastCleanupAt            *time.Time                                    `json:"last_cleanup_at,omitempty"`
+	LastCleanupDeletedHit    int64                                         `json:"last_cleanup_deleted_hit"`
+	LastCleanupDeletedNonHit int64                                         `json:"last_cleanup_deleted_non_hit"`
 }
 
 type ContentModerationUnbanUserResult struct {
@@ -486,32 +490,40 @@ type ContentModerationHashCache interface {
 	DeleteFlaggedInputHash(ctx context.Context, inputHash string) (bool, error)
 	ClearFlaggedInputHashes(ctx context.Context) (int64, error)
 	CountFlaggedInputHashes(ctx context.Context) (int64, error)
+	GetUserTrustState(ctx context.Context, userID int64) (*ContentModerationUserTrustState, error)
+	SetUserTrustState(ctx context.Context, userID int64, state *ContentModerationUserTrustState, ttl time.Duration) error
+	UpdateUserTrustState(ctx context.Context, userID int64, ttl time.Duration, mutate ContentModerationUserTrustStateMutator) (*ContentModerationUserTrustState, error)
 }
 
 type ContentModerationService struct {
-	settingRepo              SettingRepository
-	repo                     ContentModerationRepository
-	hashCache                ContentModerationHashCache
-	groupRepo                GroupRepository
-	accountShareModeResolver ContentModerationAccountShareModeResolver
-	userRepo                 UserRepository
-	authCacheInvalidator     APIKeyAuthCacheInvalidator
-	emailService             *EmailService
-	systemNoticeService      *SystemNoticeService
-	httpClient               *http.Client
-	asyncQueue               chan contentModerationTask
-	workerCount              int
-	apiKeyCursor             atomic.Uint64
-	asyncActive              atomic.Int64
-	asyncEnqueued            atomic.Int64
-	asyncDropped             atomic.Int64
-	asyncProcessed           atomic.Int64
-	asyncErrors              atomic.Int64
-	lastCleanupUnix          atomic.Int64
-	lastCleanupDeletedHit    atomic.Int64
-	lastCleanupDeletedNonHit atomic.Int64
-	keyHealthMu              sync.Mutex
-	keyHealth                map[string]*contentModerationKeyHealth
+	settingRepo               SettingRepository
+	repo                      ContentModerationRepository
+	hashCache                 ContentModerationHashCache
+	groupRepo                 GroupRepository
+	accountShareModeResolver  ContentModerationAccountShareModeResolver
+	userRepo                  UserRepository
+	authCacheInvalidator      APIKeyAuthCacheInvalidator
+	emailService              *EmailService
+	systemNoticeService       *SystemNoticeService
+	httpClient                *http.Client
+	asyncQueue                chan contentModerationTask
+	workerCount               int
+	apiKeyCursor              atomic.Uint64
+	asyncActive               atomic.Int64
+	asyncEnqueued             atomic.Int64
+	asyncDropped              atomic.Int64
+	asyncProcessed            atomic.Int64
+	asyncErrors               atomic.Int64
+	dynamicSamplingSkipped    atomic.Int64
+	dynamicSamplingForced     atomic.Int64
+	dynamicSamplingSampled    atomic.Int64
+	dynamicSamplingAudited    atomic.Int64
+	dynamicSamplingRiskEvents atomic.Int64
+	lastCleanupUnix           atomic.Int64
+	lastCleanupDeletedHit     atomic.Int64
+	lastCleanupDeletedNonHit  atomic.Int64
+	keyHealthMu               sync.Mutex
+	keyHealth                 map[string]*contentModerationKeyHealth
 }
 
 type contentModerationTask struct {
@@ -519,6 +531,7 @@ type contentModerationTask struct {
 	content    ContentModerationInput
 	scope      ContentModerationScopeContext
 	inputHash  string
+	sampling   *ContentModerationDynamicSamplingDecision
 	enqueuedAt time.Time
 }
 
@@ -619,6 +632,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.SampleRate != nil {
 		cfg.SampleRate = *input.SampleRate
+	}
+	if input.DynamicSampling != nil {
+		cfg.DynamicSampling = *input.DynamicSampling
 	}
 	if input.WorkerCount != nil {
 		cfg.WorkerCount = *input.WorkerCount
@@ -819,6 +835,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		"scope_type", scopeCtx.ScopeType,
 		"in_scope", inScope,
 		"sample_rate", cfg.SampleRate,
+		"dynamic_sampling_enabled", cfg.DynamicSampling.Enabled,
 		"api_key_count", len(cfg.apiKeys()),
 		"pre_hash_check_enabled", cfg.PreHashCheckEnabled,
 		"record_non_hits", cfg.RecordNonHits)
@@ -888,6 +905,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 				"endpoint", input.Endpoint,
 				"protocol", input.Protocol,
 				"input_hash", hashText)
+			s.recordDynamicSamplingRiskEvent(ctx, cfg, input, "flagged_hash")
 			message := cfg.BlockMessage
 			if message != "" {
 				message = fmt.Sprintf("%s（hash: %s）", message, hashText)
@@ -903,16 +921,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			}, nil
 		}
 	}
-	if !cfg.shouldSample(hashText) {
-		slog.Info("content_moderation.skip_sample_rate",
-			"user_id", input.UserID,
-			"api_key_id", input.APIKeyID,
-			"group_id", contentModerationLogGroupID(input.GroupID),
-			"endpoint", input.Endpoint,
-			"protocol", input.Protocol,
-			"sample_rate", cfg.SampleRate)
-		return allow, nil
-	}
+	var samplingDecision *ContentModerationDynamicSamplingDecision
 	if len(cfg.apiKeys()) == 0 {
 		slog.Warn("content_moderation.skip_no_audit_api_keys",
 			"user_id", input.UserID,
@@ -920,6 +929,47 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"group_id", contentModerationLogGroupID(input.GroupID),
 			"endpoint", input.Endpoint,
 			"protocol", input.Protocol)
+		return allow, nil
+	}
+	if cfg.DynamicSampling.Enabled && cfg.Mode != ContentModerationModeObserve {
+		samplingDecision, err = s.resolveDynamicSamplingDecision(ctx, cfg, input, content, scopeCtx, hashText)
+		if err != nil {
+			slog.Warn("content_moderation.dynamic_sampling_failed",
+				"user_id", input.UserID,
+				"api_key_id", input.APIKeyID,
+				"group_id", contentModerationLogGroupID(input.GroupID),
+				"endpoint", input.Endpoint,
+				"protocol", input.Protocol,
+				"error", err)
+			s.dynamicSamplingForced.Add(1)
+			samplingDecision = &ContentModerationDynamicSamplingDecision{
+				ShouldAudit:         true,
+				EffectiveSampleRate: 100,
+				TrustLevel:          ContentModerationTrustLevelNew,
+				Reason:              "state_error",
+				Forced:              true,
+			}
+		}
+		if samplingDecision != nil && !samplingDecision.ShouldAudit {
+			slog.Info("content_moderation.dynamic_sampling_skip",
+				"user_id", input.UserID,
+				"api_key_id", input.APIKeyID,
+				"group_id", contentModerationLogGroupID(input.GroupID),
+				"endpoint", input.Endpoint,
+				"protocol", input.Protocol,
+				"trust_level", samplingDecision.TrustLevel,
+				"sample_rate", samplingDecision.EffectiveSampleRate,
+				"reason", samplingDecision.Reason)
+			return allow, nil
+		}
+	} else if !cfg.DynamicSampling.Enabled && !cfg.shouldSample(hashText) {
+		slog.Info("content_moderation.skip_sample_rate",
+			"user_id", input.UserID,
+			"api_key_id", input.APIKeyID,
+			"group_id", contentModerationLogGroupID(input.GroupID),
+			"endpoint", input.Endpoint,
+			"protocol", input.Protocol,
+			"sample_rate", cfg.SampleRate)
 		return allow, nil
 	}
 	if cfg.Mode == ContentModerationModeObserve {
@@ -930,14 +980,14 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"endpoint", input.Endpoint,
 			"protocol", input.Protocol,
 			"queue_len", len(s.asyncQueue))
-		s.enqueueAsync(input, cfg, content, scopeCtx, hashText)
+		s.enqueueAsync(input, cfg, content, scopeCtx, hashText, nil)
 		return allow, nil
 	}
 
-	return s.checkSync(ctx, input, cfg, content, scopeCtx, hashText, nil, true), nil
+	return s.checkSync(ctx, input, cfg, content, scopeCtx, hashText, samplingDecision, nil, true), nil
 }
 
-func (s *ContentModerationService) checkSync(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, scopeCtx ContentModerationScopeContext, hashText string, queueDelay *int, allowBlock bool) *ContentModerationDecision {
+func (s *ContentModerationService) checkSync(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, scopeCtx ContentModerationScopeContext, hashText string, samplingDecision *ContentModerationDynamicSamplingDecision, queueDelay *int, allowBlock bool) *ContentModerationDecision {
 	allow := &ContentModerationDecision{Allowed: true, Action: ContentModerationActionAllow}
 	start := time.Now()
 	result, err := s.callModeration(ctx, cfg, content)
@@ -961,6 +1011,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 			log := s.buildLog(input, cfg, scopeCtx, ContentModerationActionError, false, "", 0, nil, content.ExcerptText(), &latency, queueDelay, err.Error())
 			_ = s.repo.CreateLog(ctx, log)
 		}
+		s.recordDynamicSamplingAuditError(ctx, cfg, input, samplingDecision)
 		return allow
 	}
 
@@ -997,6 +1048,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		s.applyFlaggedSideEffects(ctx, cfg, log)
 		_ = s.repo.CreateLog(ctx, log)
 	}
+	s.recordDynamicSamplingAuditResult(ctx, cfg, input, samplingDecision, flagged)
 	if blocked {
 		decision := &ContentModerationDecision{
 			Allowed:         false,
@@ -1023,7 +1075,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 	}
 }
 
-func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, scopeCtx ContentModerationScopeContext, hashText string) {
+func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, scopeCtx ContentModerationScopeContext, hashText string, samplingDecision *ContentModerationDynamicSamplingDecision) {
 	if s == nil || s.asyncQueue == nil {
 		return
 	}
@@ -1041,6 +1093,7 @@ func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInpu
 		content:    content,
 		scope:      scopeCtx,
 		inputHash:  hashText,
+		sampling:   samplingDecision,
 		enqueuedAt: time.Now(),
 	}
 	select {
@@ -1077,11 +1130,45 @@ func (s *ContentModerationService) worker(id int) {
 			if !inScope {
 				return
 			}
+			if cfg.DynamicSampling.Enabled {
+				samplingDecision, err := s.resolveDynamicSamplingDecision(ctx, cfg, task.input, task.content, scopeCtx, task.inputHash)
+				if err != nil {
+					slog.Warn("content_moderation.dynamic_sampling_failed",
+						"user_id", task.input.UserID,
+						"api_key_id", task.input.APIKeyID,
+						"group_id", contentModerationLogGroupID(task.input.GroupID),
+						"endpoint", task.input.Endpoint,
+						"protocol", task.input.Protocol,
+						"error", err)
+					s.dynamicSamplingForced.Add(1)
+					samplingDecision = &ContentModerationDynamicSamplingDecision{
+						ShouldAudit:         true,
+						EffectiveSampleRate: 100,
+						TrustLevel:          ContentModerationTrustLevelNew,
+						Reason:              "state_error",
+						Forced:              true,
+					}
+				}
+				if samplingDecision != nil && !samplingDecision.ShouldAudit {
+					slog.Info("content_moderation.dynamic_sampling_skip",
+						"user_id", task.input.UserID,
+						"api_key_id", task.input.APIKeyID,
+						"group_id", contentModerationLogGroupID(task.input.GroupID),
+						"endpoint", task.input.Endpoint,
+						"protocol", task.input.Protocol,
+						"trust_level", samplingDecision.TrustLevel,
+						"sample_rate", samplingDecision.EffectiveSampleRate,
+						"reason", samplingDecision.Reason)
+					s.asyncProcessed.Add(1)
+					return
+				}
+				task.sampling = samplingDecision
+			}
 			s.asyncActive.Add(1)
 			defer s.asyncActive.Add(-1)
 			queueDelay := int(time.Since(task.enqueuedAt).Milliseconds())
 			task.scope = scopeCtx
-			_ = s.checkSync(ctx, task.input, cfg, task.content, task.scope, task.inputHash, &queueDelay, false)
+			_ = s.checkSync(ctx, task.input, cfg, task.content, task.scope, task.inputHash, task.sampling, &queueDelay, false)
 			s.asyncProcessed.Add(1)
 		}()
 	}
@@ -1220,21 +1307,29 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		lastCleanupAt = &t
 	}
 	return &ContentModerationRuntimeStatus{
-		Enabled:                  cfg.Enabled,
-		CyberPreflightEnabled:    cfg.CyberPreflightEnabled,
-		RiskControlEnabled:       riskEnabled,
-		Mode:                     cfg.Mode,
-		WorkerCount:              cfg.WorkerCount,
-		MaxWorkers:               maxContentModerationWorkerCount,
-		ActiveWorkers:            active,
-		IdleWorkers:              cfg.WorkerCount - active,
-		QueueSize:                cfg.QueueSize,
-		QueueLength:              queueLength,
-		QueueUsagePercent:        queueUsage,
-		Enqueued:                 s.asyncEnqueued.Load(),
-		Dropped:                  s.asyncDropped.Load(),
-		Processed:                s.asyncProcessed.Load(),
-		Errors:                   s.asyncErrors.Load(),
+		Enabled:               cfg.Enabled,
+		CyberPreflightEnabled: cfg.CyberPreflightEnabled,
+		RiskControlEnabled:    riskEnabled,
+		Mode:                  cfg.Mode,
+		WorkerCount:           cfg.WorkerCount,
+		MaxWorkers:            maxContentModerationWorkerCount,
+		ActiveWorkers:         active,
+		IdleWorkers:           cfg.WorkerCount - active,
+		QueueSize:             cfg.QueueSize,
+		QueueLength:           queueLength,
+		QueueUsagePercent:     queueUsage,
+		Enqueued:              s.asyncEnqueued.Load(),
+		Dropped:               s.asyncDropped.Load(),
+		Processed:             s.asyncProcessed.Load(),
+		Errors:                s.asyncErrors.Load(),
+		DynamicSampling: ContentModerationDynamicSamplingRuntimeStatus{
+			Enabled:    cfg.DynamicSampling.Enabled,
+			Skipped:    s.dynamicSamplingSkipped.Load(),
+			Forced:     s.dynamicSamplingForced.Load(),
+			Sampled:    s.dynamicSamplingSampled.Load(),
+			Audited:    s.dynamicSamplingAudited.Load(),
+			RiskEvents: s.dynamicSamplingRiskEvents.Load(),
+		},
 		APIKeyStatuses:           s.apiKeyStatuses(cfg.apiKeys()),
 		FlaggedHashCount:         flaggedHashCount,
 		LastCleanupAt:            lastCleanupAt,
@@ -1312,6 +1407,9 @@ func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) boo
 func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *ContentModerationConfig) error {
 	if cfg == nil {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CONFIG", "内容审计配置不能为空")
+	}
+	if err := validateContentModerationDynamicSamplingConfig(cfg.DynamicSampling); err != nil {
+		return err
 	}
 	cfg.normalize()
 	switch cfg.Mode {
@@ -1684,6 +1782,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		Model:                 defaultContentModerationModel,
 		TimeoutMS:             defaultContentModerationTimeoutMS,
 		SampleRate:            100,
+		DynamicSampling:       defaultContentModerationDynamicSamplingConfig(),
 		AllGroups:             true,
 		GroupIDs:              []int64{},
 		RecordNonHits:         false,
@@ -1740,6 +1839,7 @@ func (cfg *ContentModerationConfig) normalize() {
 	if cfg.SampleRate > 100 {
 		cfg.SampleRate = 100
 	}
+	cfg.DynamicSampling.normalize()
 	if cfg.WorkerCount <= 0 {
 		cfg.WorkerCount = defaultContentModerationWorkerCount
 	}
@@ -2057,6 +2157,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		APIKeyStatuses:             s.apiKeyStatuses(keys),
 		TimeoutMS:                  cfg.TimeoutMS,
 		SampleRate:                 cfg.SampleRate,
+		DynamicSampling:            cfg.DynamicSampling,
 		AllGroups:                  cfg.AllGroups,
 		GroupIDs:                   append([]int64(nil), cfg.GroupIDs...),
 		RecordNonHits:              cfg.RecordNonHits,

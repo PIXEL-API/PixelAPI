@@ -62,7 +62,8 @@ const (
 	openAI403CooldownMinutesDefault = 10
 	openAI403DisableThreshold       = 3
 	openAI403CounterWindowMinutes   = 180
-	openAIModelCapacityCooldown     = time.Minute
+	openAIModelCapacityCooldown     = 2 * time.Minute
+	openAITransientCapacityCooldown = 2 * time.Minute
 	upstreamModelNotFoundCooldown   = 30 * time.Minute
 )
 
@@ -137,8 +138,10 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) (shouldDisable bool) {
-	if account != nil && account.Platform == PlatformOpenAI && isOpenAIModelCapacityError(statusCode, "", responseBody) {
-		return s.handleOpenAIModelCapacityError(ctx, account, statusCode, responseBody)
+	if statusCode != 529 && account != nil && account.Platform == PlatformOpenAI {
+		if matchedKeyword := classifyOpenAITransientCapacityError(statusCode, "", responseBody); matchedKeyword != "" {
+			return s.handleOpenAITransientCapacityError(ctx, account, statusCode, matchedKeyword, responseBody)
+		}
 	}
 
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
@@ -387,18 +390,22 @@ func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Acc
 	return modelKey
 }
 
-func (s *RateLimitService) handleOpenAIModelCapacityError(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {
+func (s *RateLimitService) handleOpenAITransientCapacityError(ctx context.Context, account *Account, statusCode int, matchedKeyword string, responseBody []byte) bool {
 	if s == nil || s.accountRepo == nil || account == nil || account.Platform != PlatformOpenAI {
+		return false
+	}
+	matchedKeyword = strings.TrimSpace(matchedKeyword)
+	if matchedKeyword == "" {
 		return false
 	}
 
 	now := time.Now()
-	until := now.Add(openAIModelCapacityCooldown)
+	until := now.Add(openAITransientCapacityCooldownFor(matchedKeyword))
 	state := &TempUnschedState{
 		UntilUnix:       until.Unix(),
 		TriggeredAtUnix: now.Unix(),
 		StatusCode:      statusCode,
-		MatchedKeyword:  "openai_model_capacity",
+		MatchedKeyword:  matchedKeyword,
 		RuleIndex:       -1,
 		ErrorMessage:    truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
 	}
@@ -408,21 +415,30 @@ func (s *RateLimitService) handleOpenAIModelCapacityError(ctx context.Context, a
 		reason = string(raw)
 	}
 	if reason == "" {
-		reason = "OpenAI model capacity temporarily unavailable"
+		reason = "OpenAI transient capacity temporarily unavailable"
 	}
 
 	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
-		slog.Warn("openai_model_capacity_temp_unsched_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		slog.Warn("openai_transient_capacity_temp_unsched_failed", "account_id", account.ID, "status_code", statusCode, "matched_keyword", matchedKeyword, "error", err)
 		return false
 	}
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
-			slog.Warn("openai_model_capacity_temp_unsched_cache_failed", "account_id", account.ID, "error", err)
+			slog.Warn("openai_transient_capacity_temp_unsched_cache_failed", "account_id", account.ID, "matched_keyword", matchedKeyword, "error", err)
 		}
 	}
 
-	slog.Info("openai_model_capacity_temp_unscheduled", "account_id", account.ID, "status_code", statusCode, "until", until)
+	slog.Info("openai_transient_capacity_temp_unscheduled", "account_id", account.ID, "status_code", statusCode, "matched_keyword", matchedKeyword, "until", until)
 	return true
+}
+
+func openAITransientCapacityCooldownFor(matchedKeyword string) time.Duration {
+	switch matchedKeyword {
+	case "openai_model_capacity":
+		return openAIModelCapacityCooldown
+	default:
+		return openAITransientCapacityCooldown
+	}
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.

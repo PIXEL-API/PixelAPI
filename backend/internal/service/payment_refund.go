@@ -19,6 +19,30 @@ import (
 
 // --- Refund Flow ---
 
+var ErrPaymentOrderHasActiveInvoice = infraerrors.Conflict("PAYMENT_ORDER_HAS_ACTIVE_INVOICE", "payment order has an active invoice request")
+
+func (s *PaymentService) ensureOrderRefundableByInvoice(ctx context.Context, orderID int64) error {
+	rows, err := s.entClient.QueryContext(ctx, `
+SELECT 1
+FROM invoice_request_items
+WHERE source_type = $1
+	AND source_id = $2
+	AND active = TRUE
+LIMIT 1`, InvoiceSourceTypePaymentOrder, orderID)
+	if err != nil {
+		return fmt.Errorf("check active invoice request for refund: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	if rows.Next() {
+		return ErrPaymentOrderHasActiveInvoice
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate active invoice request check: %w", err)
+	}
+	return nil
+}
+
 // getOrderProviderInstance looks up the provider instance that processed this order.
 // For legacy orders without provider_instance_id, it resolves only when the
 // historical instance is uniquely identifiable from the stored order fields.
@@ -192,6 +216,9 @@ func (s *PaymentService) validateRefundRequest(ctx context.Context, oid, uid int
 	if o.Status != OrderStatusCompleted {
 		return nil, infraerrors.BadRequest("INVALID_STATUS", "only completed orders can request refund")
 	}
+	if err := s.ensureOrderRefundableByInvoice(ctx, o.ID); err != nil {
+		return nil, err
+	}
 	// Check provider instance allows user refund
 	inst, err := s.getRefundOrderProviderInstance(ctx, o)
 	if err != nil || inst == nil {
@@ -211,6 +238,9 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}
 	if !psSliceContains(ok, o.Status) {
 		return nil, nil, infraerrors.BadRequest("INVALID_STATUS", "order status does not allow refund")
+	}
+	if err := s.ensureOrderRefundableByInvoice(ctx, o.ID); err != nil {
+		return nil, nil, err
 	}
 	// Check provider instance allows admin refund
 	inst, instErr := s.getRefundOrderProviderInstance(ctx, o)

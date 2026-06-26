@@ -36,6 +36,31 @@ func (s *ownedAccountUserSubRepoStub) GetActiveByUserIDAndGroupID(_ context.Cont
 	return &cp, nil
 }
 
+type ownedAccountProxyRepoStub struct {
+	proxies         map[int64]*Proxy
+	counts          map[int64]int64
+	getVisibleCalls int
+	countCalls      int
+}
+
+func (s *ownedAccountProxyRepoStub) GetVisibleByID(_ context.Context, userID, id int64) (*Proxy, error) {
+	s.getVisibleCalls++
+	proxy := s.proxies[id]
+	if proxy == nil {
+		return nil, ErrProxyNotFound
+	}
+	if proxy.OwnerUserID != nil && *proxy.OwnerUserID != userID {
+		return nil, ErrProxyNotFound
+	}
+	cp := *proxy
+	return &cp, nil
+}
+
+func (s *ownedAccountProxyRepoStub) CountAccountsByProxyID(_ context.Context, proxyID int64) (int64, error) {
+	s.countCalls++
+	return s.counts[proxyID], nil
+}
+
 type ownedAccountUserRepoStub struct {
 	user *User
 	err  error
@@ -141,6 +166,18 @@ type ownedAccountDuplicateRepoStub struct {
 	loadFactorCreditsBalance   int
 	loadFactorCreditsUsedTotal int
 	loadFactorCreditCharges    []int
+}
+
+type ownedAccountAtomicProxyCreateRepoStub struct {
+	ownedAccountDuplicateRepoStub
+	atomicCreateCalls int
+	atomicOwnerUserID int64
+}
+
+func (s *ownedAccountAtomicProxyCreateRepoStub) CreateOwnedWithProxyCapacity(ctx context.Context, ownerUserID int64, account *Account) error {
+	s.atomicCreateCalls++
+	s.atomicOwnerUserID = ownerUserID
+	return s.ownedAccountDuplicateRepoStub.Create(ctx, account)
 }
 
 func (s *ownedAccountDuplicateRepoStub) Create(_ context.Context, account *Account) error {
@@ -832,6 +869,113 @@ func TestAccountServiceCreateOwnedRejectsOpenAIProWithoutProxy(t *testing.T) {
 	require.Empty(t, repo.createdAccounts)
 }
 
+func TestAccountServiceCreateOwnedRejectsOpenAIProWhenProxyFull(t *testing.T) {
+	ownerID := int64(101)
+	proxyID := int64(7)
+	repo := &ownedAccountDuplicateRepoStub{}
+	proxyRepo := &ownedAccountProxyRepoStub{
+		proxies: map[int64]*Proxy{
+			proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+		},
+		counts: map[int64]int64{proxyID: 2},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+		proxyRepo: proxyRepo,
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "pro-full-proxy",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPro,
+		ProxyID:      &proxyID,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
+	})
+
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrProxyAccountLimitExceeded)
+	require.Empty(t, repo.createdAccounts)
+	require.Equal(t, 1, proxyRepo.getVisibleCalls)
+	require.Equal(t, 1, proxyRepo.countCalls)
+}
+
+func TestAccountServiceCreateOwnedAllowsOpenAIProWhenProxyHasCapacity(t *testing.T) {
+	ownerID := int64(101)
+	proxyID := int64(7)
+	repo := &ownedAccountDuplicateRepoStub{}
+	proxyRepo := &ownedAccountProxyRepoStub{
+		proxies: map[int64]*Proxy{
+			proxyID: {ID: proxyID, OwnerUserID: &ownerID, Status: StatusActive, MaxAccounts: 2},
+		},
+		counts: map[int64]int64{proxyID: 1},
+	}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+		proxyRepo: proxyRepo,
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "pro-with-capacity",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPro,
+		ProxyID:      &proxyID,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.NotNil(t, account.ProxyID)
+	require.Equal(t, proxyID, *account.ProxyID)
+	require.Len(t, repo.createdAccounts, 1)
+	require.NotNil(t, repo.createdAccounts[0].ProxyID)
+	require.Equal(t, proxyID, *repo.createdAccounts[0].ProxyID)
+	require.Equal(t, 1, proxyRepo.getVisibleCalls)
+	require.Equal(t, 1, proxyRepo.countCalls)
+}
+
+func TestAccountServiceCreateOwnedUsesAtomicProxyCapacityCreate(t *testing.T) {
+	ownerID := int64(101)
+	proxyID := int64(7)
+	repo := &ownedAccountAtomicProxyCreateRepoStub{}
+	svc := &AccountService{
+		accountRepo: repo,
+		privateGroupProvisioner: &ownedPrivateGroupProvisionerStub{
+			group: &Group{ID: 99, Platform: PlatformOpenAI, Status: StatusActive, Scope: GroupScopeUserPrivate},
+		},
+	}
+
+	account, err := svc.CreateOwned(context.Background(), ownerID, CreateAccountRequest{
+		Name:         "pro-atomic-create",
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeOAuth,
+		AccountLevel: AccountLevelPro,
+		ProxyID:      &proxyID,
+		Credentials:  map[string]any{"access_token": "token", "plan_type": "pro"},
+		Concurrency:  ownedPersonalDefaultConcurrency,
+		Priority:     1,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, 1, repo.atomicCreateCalls)
+	require.Equal(t, ownerID, repo.atomicOwnerUserID)
+	require.Len(t, repo.createdAccounts, 1)
+	require.NotNil(t, repo.createdAccounts[0].ProxyID)
+	require.Equal(t, proxyID, *repo.createdAccounts[0].ProxyID)
+}
+
 func TestAccountServiceCreateOwnedRejectsOpenAILevelMismatch(t *testing.T) {
 	ownerID := int64(101)
 	repo := &ownedAccountDuplicateRepoStub{}
@@ -921,6 +1065,15 @@ func TestValidateOwnedAccountSourceAllowsOAuthMetadataURLs(t *testing.T) {
 		"issuer":     "https://auth.openai.com",
 		"avatar_url": "https://cdn.example.com/avatar.png",
 	})
+
+	require.NoError(t, err)
+}
+
+func TestValidateOwnedAccountSourceAllowsAnthropicOAuthTokens(t *testing.T) {
+	err := validateOwnedAccountSource(AccountTypeOAuth, map[string]any{
+		"access_token":  "sk-ant-oat01-test",
+		"refresh_token": "sk-ant-ort01-test",
+	}, nil)
 
 	require.NoError(t, err)
 }

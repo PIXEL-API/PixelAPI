@@ -1412,6 +1412,72 @@ func (r *usageLogRepository) GetUserStats(ctx context.Context, userID int64, sta
 // DashboardStats 仪表盘统计
 type DashboardStats = usagestats.DashboardStats
 
+func (r *usageLogRepository) GetAccountShareRecommendationUsageProfile(ctx context.Context, userID int64, model string, startTime, endTime time.Time) (*service.AccountShareRecommendationUsageProfileStats, error) {
+	model = strings.TrimSpace(model)
+	tzName := resolveUsageStatsTimezone()
+	query := `
+		SELECT
+			COUNT(*) AS all_requests,
+			COALESCE(SUM(input_tokens), 0) AS all_input_tokens,
+			COALESCE(SUM(output_tokens), 0) AS all_output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) AS all_cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) AS all_cache_read_tokens,
+			COALESCE(SUM(image_output_tokens), 0) AS all_image_output_tokens,
+			COUNT(DISTINCT date_trunc('hour', created_at AT TIME ZONE $5)) AS all_active_hour_buckets,
+			COUNT(*) FILTER (WHERE model_match) AS model_requests,
+			COALESCE(SUM(input_tokens) FILTER (WHERE model_match), 0) AS model_input_tokens,
+			COALESCE(SUM(output_tokens) FILTER (WHERE model_match), 0) AS model_output_tokens,
+			COALESCE(SUM(cache_creation_tokens) FILTER (WHERE model_match), 0) AS model_cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens) FILTER (WHERE model_match), 0) AS model_cache_read_tokens,
+			COALESCE(SUM(image_output_tokens) FILTER (WHERE model_match), 0) AS model_image_output_tokens,
+			COUNT(DISTINCT date_trunc('hour', created_at AT TIME ZONE $5)) FILTER (WHERE model_match) AS model_active_hour_buckets
+		FROM (
+			SELECT
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				image_output_tokens,
+				created_at,
+				($4 <> '' AND (
+					requested_model = $4 OR
+					((requested_model IS NULL OR requested_model = '') AND model = $4)
+				)) AS model_match
+			FROM usage_logs
+			WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+		) scoped
+	`
+
+	var allStats, modelStats service.AccountShareRecommendationUsageProfileStats
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		query,
+		[]any{userID, startTime, endTime, model, tzName},
+		&allStats.TotalRequests,
+		&allStats.TotalInputTokens,
+		&allStats.TotalOutputTokens,
+		&allStats.TotalCacheCreationTokens,
+		&allStats.TotalCacheReadTokens,
+		&allStats.TotalImageOutputTokens,
+		&allStats.ActiveHourBuckets,
+		&modelStats.TotalRequests,
+		&modelStats.TotalInputTokens,
+		&modelStats.TotalOutputTokens,
+		&modelStats.TotalCacheCreationTokens,
+		&modelStats.TotalCacheReadTokens,
+		&modelStats.TotalImageOutputTokens,
+		&modelStats.ActiveHourBuckets,
+	); err != nil {
+		return nil, err
+	}
+	if model != "" && modelStats.TotalRequests > 0 {
+		modelStats.ModelMatched = true
+		return &modelStats, nil
+	}
+	return &allStats, nil
+}
+
 func (r *usageLogRepository) GetDashboardStats(ctx context.Context) (*DashboardStats, error) {
 	stats := &DashboardStats{}
 	now := timezone.Now()
@@ -1421,6 +1487,9 @@ func (r *usageLogRepository) GetDashboardStats(ctx context.Context) (*DashboardS
 		return nil, err
 	}
 	if err := r.fillDashboardUsageStatsAggregated(ctx, stats, todayStart, now); err != nil {
+		return nil, err
+	}
+	if err := r.attachAccountShareSeatCostsToDashboardStats(ctx, stats, nil, nil, &todayStart, &now); err != nil {
 		return nil, err
 	}
 
@@ -1449,6 +1518,9 @@ func (r *usageLogRepository) GetDashboardStatsWithRange(ctx context.Context, sta
 		return nil, err
 	}
 	if err := r.fillDashboardUsageStatsWithSnapshots(ctx, stats, startUTC, endUTC, todayStart, now); err != nil {
+		return nil, err
+	}
+	if err := r.attachAccountShareSeatCostsToDashboardStats(ctx, stats, &startUTC, &endUTC, &todayStart, &now); err != nil {
 		return nil, err
 	}
 
@@ -1852,12 +1924,26 @@ func (r *usageLogRepository) ListByUserAndTimeRange(ctx context.Context, userID 
 
 // GetUserStatsAggregated returns aggregated usage statistics for a user using database-level aggregation
 func (r *usageLogRepository) GetUserStatsAggregated(ctx context.Context, userID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
-	return r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{UserID: userID, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
+	stats, err := r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{UserID: userID, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
+	if err != nil {
+		return nil, err
+	}
+	if err := r.attachAccountShareSeatCostsToUsageStats(ctx, stats, accountShareSeatCostFilter{UserID: userID, StartTime: &startTime, EndTime: &endTime}); err != nil {
+		return nil, err
+	}
+	return stats, nil
 }
 
 // GetAPIKeyStatsAggregated returns aggregated usage statistics for an API key using database-level aggregation
 func (r *usageLogRepository) GetAPIKeyStatsAggregated(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
-	return r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{APIKeyID: apiKeyID, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
+	stats, err := r.queryUsageStatsWithSnapshots(ctx, usagestats.UsageLogFilters{APIKeyID: apiKeyID, StartTime: &startTime, EndTime: &endTime}, "actual_cost")
+	if err != nil {
+		return nil, err
+	}
+	if err := r.attachAccountShareSeatCostsToUsageStats(ctx, stats, accountShareSeatCostFilter{APIKeyID: apiKeyID, StartTime: &startTime, EndTime: &endTime}); err != nil {
+		return nil, err
+	}
+	return stats, nil
 }
 
 // GetAccountStatsAggregated 使用 SQL 聚合统计账号使用数据
@@ -2465,6 +2551,7 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 		return nil, err
 	}
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
+	stats.TotalRequestActualCost = stats.TotalActualCost
 
 	// 今日 Token 统计
 	todayStatsQuery := `
@@ -2495,6 +2582,10 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 		return nil, err
 	}
 	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
+	stats.TodayRequestActualCost = stats.TodayActualCost
+	if err := r.attachAccountShareSeatCostsToUserDashboardStats(ctx, stats, accountShareSeatCostFilter{UserID: userID}); err != nil {
+		return nil, err
+	}
 
 	// 性能指标：RPM 和 TPM（最近1分钟，仅统计该用户的请求）
 	rpm, tpm, err := r.getPerformanceStats(ctx, userID)
@@ -2566,6 +2657,7 @@ func (r *usageLogRepository) GetAPIKeyDashboardStats(ctx context.Context, apiKey
 		return nil, err
 	}
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
+	stats.TotalRequestActualCost = stats.TotalActualCost
 
 	// 今日 Token 统计
 	todayStatsQuery := `
@@ -2596,6 +2688,10 @@ func (r *usageLogRepository) GetAPIKeyDashboardStats(ctx context.Context, apiKey
 		return nil, err
 	}
 	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
+	stats.TodayRequestActualCost = stats.TodayActualCost
+	if err := r.attachAccountShareSeatCostsToUserDashboardStats(ctx, stats, accountShareSeatCostFilter{APIKeyID: apiKeyID}); err != nil {
+		return nil, err
+	}
 
 	// 性能指标：RPM 和 TPM（最近5分钟，按 API Key 过滤）
 	rpm, tpm, err := r.getPerformanceStatsByAPIKey(ctx, apiKeyID)
@@ -3068,7 +3164,9 @@ func (r *usageLogRepository) GetBatchUserUsageStats(ctx context.Context, userIDs
 			return nil, err
 		}
 		if stats, ok := result[userID]; ok {
+			stats.TotalRequestActualCost = total
 			stats.TotalActualCost = total
+			stats.TodayRequestActualCost = todayTotal
 			stats.TodayActualCost = todayTotal
 		}
 	}
@@ -3077,6 +3175,18 @@ func (r *usageLogRepository) GetBatchUserUsageStats(ctx context.Context, userIDs
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	seatCosts, err := r.sumAccountShareSeatCostsByUser(ctx, normalizedUserIDs, startTime, endTime, today)
+	if err != nil {
+		return nil, err
+	}
+	for userID, cost := range seatCosts {
+		if stats, ok := result[userID]; ok {
+			stats.TotalHourlyCost = cost.Total
+			stats.TodayHourlyCost = cost.Today
+			stats.TotalActualCost = stats.TotalRequestActualCost + stats.TotalHourlyCost
+			stats.TodayActualCost = stats.TodayRequestActualCost + stats.TodayHourlyCost
+		}
 	}
 
 	return result, nil
@@ -3130,7 +3240,9 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 			return nil, err
 		}
 		if stats, ok := result[apiKeyID]; ok {
+			stats.TotalRequestActualCost = total
 			stats.TotalActualCost = total
+			stats.TodayRequestActualCost = todayTotal
 			stats.TodayActualCost = todayTotal
 		}
 	}
@@ -3139,6 +3251,18 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	seatCosts, err := r.sumAccountShareSeatCostsByAPIKey(ctx, normalizedAPIKeyIDs, startTime, endTime, today)
+	if err != nil {
+		return nil, err
+	}
+	for apiKeyID, cost := range seatCosts {
+		if stats, ok := result[apiKeyID]; ok {
+			stats.TotalHourlyCost = cost.Total
+			stats.TodayHourlyCost = cost.Today
+			stats.TotalActualCost = stats.TotalRequestActualCost + stats.TotalHourlyCost
+			stats.TodayActualCost = stats.TodayRequestActualCost + stats.TodayHourlyCost
+		}
 	}
 
 	return result, nil
@@ -3617,6 +3741,9 @@ func (r *usageLogRepository) GetGlobalStats(ctx context.Context, startTime, endT
 func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters UsageLogFilters) (*UsageStats, error) {
 	stats, snapshotErr := r.queryUsageStatsWithSnapshots(ctx, filters, r.actualCostSnapshotMetric(filters.UserID, filters.APIKeyID, filters.AccountID))
 	if snapshotErr == nil && stats.TotalRequests > 0 {
+		if err := r.attachAccountShareSeatCostsToFilteredUsageStats(ctx, stats, filters); err != nil {
+			return nil, err
+		}
 		return r.attachEndpointStats(ctx, stats, filters)
 	}
 
@@ -3697,6 +3824,9 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 	stats.TotalAccountCost = &totalAccountCost
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
 
+	if err := r.attachAccountShareSeatCostsToFilteredUsageStats(ctx, stats, filters); err != nil {
+		return nil, err
+	}
 	return r.attachEndpointStats(ctx, stats, filters)
 }
 
@@ -3993,6 +4123,241 @@ func accountUsageStatsDateLabel(date string) string {
 		return date
 	}
 	return t.Format("01/02")
+}
+
+type accountShareSeatCostFilter struct {
+	UserID    int64
+	APIKeyID  int64
+	StartTime *time.Time
+	EndTime   *time.Time
+}
+
+type accountShareSeatCostTotals struct {
+	Total float64
+	Today float64
+}
+
+func accountShareSeatCostExpression(alias string) string {
+	if alias != "" {
+		alias += "."
+	}
+	return "CASE WHEN " + alias + "direction = 'debit' THEN " + alias + "amount ELSE -" + alias + "amount END"
+}
+
+func accountShareSeatMembershipJoin() string {
+	return `
+		JOIN account_share_memberships asm ON asm.id = COALESCE(
+			NULLIF(l.metadata->>'membership_id', '')::bigint,
+			CASE WHEN l.ref_type = 'account_share_membership' THEN l.ref_id ELSE NULL END
+		)
+	`
+}
+
+func (r *usageLogRepository) sumAccountShareSeatCost(ctx context.Context, filter accountShareSeatCostFilter) (float64, error) {
+	args := []any{
+		accountShareSeatPrepayReason,
+		accountShareSeatRefundReason,
+		accountShareSeatWaiverRefundReason,
+	}
+	joins := ""
+	if filter.APIKeyID > 0 {
+		joins = accountShareSeatMembershipJoin()
+	}
+	where := []string{"l.reason IN ($1, $2, $3)"}
+	if filter.UserID > 0 {
+		args = append(args, filter.UserID)
+		where = append(where, fmt.Sprintf("l.user_id = $%d", len(args)))
+	}
+	if filter.APIKeyID > 0 {
+		args = append(args, filter.APIKeyID)
+		where = append(where, fmt.Sprintf("asm.api_key_id = $%d", len(args)))
+	}
+	if filter.StartTime != nil {
+		args = append(args, *filter.StartTime)
+		where = append(where, fmt.Sprintf("l.created_at >= $%d", len(args)))
+	}
+	if filter.EndTime != nil {
+		args = append(args, *filter.EndTime)
+		where = append(where, fmt.Sprintf("l.created_at < $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT COALESCE(SUM(%s), 0)::double precision
+		FROM user_balance_ledger l
+		%s
+		WHERE %s
+	`, accountShareSeatCostExpression("l"), joins, strings.Join(where, " AND "))
+
+	var total float64
+	if err := scanSingleRow(ctx, r.sql, query, args, &total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func accountShareSeatCostFilterFromUsageLogFilters(filters UsageLogFilters) (accountShareSeatCostFilter, bool) {
+	filter := accountShareSeatCostFilter{
+		UserID:    filters.UserID,
+		APIKeyID:  filters.APIKeyID,
+		StartTime: filters.StartTime,
+		EndTime:   filters.EndTime,
+	}
+	if filters.AccountID > 0 ||
+		filters.GroupID > 0 ||
+		strings.TrimSpace(filters.Model) != "" ||
+		filters.RequestType != nil ||
+		filters.Stream != nil ||
+		filters.BillingType != nil ||
+		strings.TrimSpace(filters.BillingMode) != "" {
+		return filter, false
+	}
+	return filter, true
+}
+
+func (r *usageLogRepository) attachAccountShareSeatCostsToFilteredUsageStats(ctx context.Context, stats *usagestats.UsageStats, filters UsageLogFilters) error {
+	if stats == nil {
+		return nil
+	}
+	filter, supported := accountShareSeatCostFilterFromUsageLogFilters(filters)
+	if !supported {
+		stats.TotalRequestActualCost = stats.TotalActualCost
+		stats.TotalHourlyCost = 0
+		return nil
+	}
+	return r.attachAccountShareSeatCostsToUsageStats(ctx, stats, filter)
+}
+
+func (r *usageLogRepository) attachAccountShareSeatCostsToUsageStats(ctx context.Context, stats *usagestats.UsageStats, filter accountShareSeatCostFilter) error {
+	if stats == nil {
+		return nil
+	}
+	stats.TotalRequestActualCost = stats.TotalActualCost
+	hourlyCost, err := r.sumAccountShareSeatCost(ctx, filter)
+	if err != nil {
+		return err
+	}
+	stats.TotalHourlyCost = hourlyCost
+	stats.TotalActualCost = stats.TotalRequestActualCost + stats.TotalHourlyCost
+	return nil
+}
+
+func (r *usageLogRepository) attachAccountShareSeatCostsToDashboardStats(ctx context.Context, stats *DashboardStats, totalStart, totalEnd, todayStart, todayEnd *time.Time) error {
+	if stats == nil {
+		return nil
+	}
+	stats.TotalRequestActualCost = stats.TotalActualCost
+	totalHourly, err := r.sumAccountShareSeatCost(ctx, accountShareSeatCostFilter{StartTime: totalStart, EndTime: totalEnd})
+	if err != nil {
+		return err
+	}
+	stats.TotalHourlyCost = totalHourly
+	stats.TotalActualCost = stats.TotalRequestActualCost + stats.TotalHourlyCost
+
+	stats.TodayRequestActualCost = stats.TodayActualCost
+	todayHourly, err := r.sumAccountShareSeatCost(ctx, accountShareSeatCostFilter{StartTime: todayStart, EndTime: todayEnd})
+	if err != nil {
+		return err
+	}
+	stats.TodayHourlyCost = todayHourly
+	stats.TodayActualCost = stats.TodayRequestActualCost + stats.TodayHourlyCost
+	return nil
+}
+
+func (r *usageLogRepository) attachAccountShareSeatCostsToUserDashboardStats(ctx context.Context, stats *UserDashboardStats, filter accountShareSeatCostFilter) error {
+	if stats == nil {
+		return nil
+	}
+	stats.TotalRequestActualCost = stats.TotalActualCost
+	totalHourly, err := r.sumAccountShareSeatCost(ctx, filter)
+	if err != nil {
+		return err
+	}
+	stats.TotalHourlyCost = totalHourly
+	stats.TotalActualCost = stats.TotalRequestActualCost + stats.TotalHourlyCost
+
+	today := timezone.Today()
+	todayFilter := filter
+	todayFilter.StartTime = &today
+	todayFilter.EndTime = nil
+	stats.TodayRequestActualCost = stats.TodayActualCost
+	todayHourly, err := r.sumAccountShareSeatCost(ctx, todayFilter)
+	if err != nil {
+		return err
+	}
+	stats.TodayHourlyCost = todayHourly
+	stats.TodayActualCost = stats.TodayRequestActualCost + stats.TodayHourlyCost
+	return nil
+}
+
+func (r *usageLogRepository) sumAccountShareSeatCostsByUser(ctx context.Context, userIDs []int64, startTime, endTime, today time.Time) (map[int64]accountShareSeatCostTotals, error) {
+	result := make(map[int64]accountShareSeatCostTotals)
+	if len(userIDs) == 0 {
+		return result, nil
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			l.user_id,
+			COALESCE(SUM(%[1]s) FILTER (WHERE l.created_at >= $5 AND l.created_at < $6), 0)::double precision AS total_cost,
+			COALESCE(SUM(%[1]s) FILTER (WHERE l.created_at >= $7), 0)::double precision AS today_cost
+		FROM user_balance_ledger l
+		WHERE l.user_id = ANY($1)
+			AND l.reason IN ($2, $3, $4)
+			AND l.created_at >= LEAST($5, $7)
+		GROUP BY l.user_id
+	`, accountShareSeatCostExpression("l"))
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(userIDs), accountShareSeatPrepayReason, accountShareSeatRefundReason, accountShareSeatWaiverRefundReason, startTime, endTime, today)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var userID int64
+		var cost accountShareSeatCostTotals
+		if err := rows.Scan(&userID, &cost.Total, &cost.Today); err != nil {
+			return nil, err
+		}
+		result[userID] = cost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *usageLogRepository) sumAccountShareSeatCostsByAPIKey(ctx context.Context, apiKeyIDs []int64, startTime, endTime, today time.Time) (map[int64]accountShareSeatCostTotals, error) {
+	result := make(map[int64]accountShareSeatCostTotals)
+	if len(apiKeyIDs) == 0 {
+		return result, nil
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			asm.api_key_id,
+			COALESCE(SUM(%[1]s) FILTER (WHERE l.created_at >= $5 AND l.created_at < $6), 0)::double precision AS total_cost,
+			COALESCE(SUM(%[1]s) FILTER (WHERE l.created_at >= $7), 0)::double precision AS today_cost
+		FROM user_balance_ledger l
+		%[2]s
+		WHERE asm.api_key_id = ANY($1)
+			AND l.reason IN ($2, $3, $4)
+			AND l.created_at >= LEAST($5, $7)
+		GROUP BY asm.api_key_id
+	`, accountShareSeatCostExpression("l"), accountShareSeatMembershipJoin())
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(apiKeyIDs), accountShareSeatPrepayReason, accountShareSeatRefundReason, accountShareSeatWaiverRefundReason, startTime, endTime, today)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var apiKeyID int64
+		var cost accountShareSeatCostTotals
+		if err := rows.Scan(&apiKeyID, &cost.Total, &cost.Today); err != nil {
+			return nil, err
+		}
+		result[apiKeyID] = cost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *usageLogRepository) getAccountHourlyCostsByDate(ctx context.Context, startTime, endTime time.Time, accountIDs []int64) (map[string]float64, error) {

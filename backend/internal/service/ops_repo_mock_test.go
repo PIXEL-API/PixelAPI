@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"io"
+	"strings"
 	"time"
 )
 
@@ -11,6 +13,8 @@ type opsRepoMock struct {
 	BatchInsertErrorLogsFn        func(ctx context.Context, inputs []*OpsInsertErrorLogInput) (int64, error)
 	BatchInsertSystemLogsFn       func(ctx context.Context, inputs []*OpsInsertSystemLogInput) (int64, error)
 	ListSystemLogsFn              func(ctx context.Context, filter *OpsSystemLogFilter) (*OpsSystemLogList, error)
+	ExportErrorLogsFn             func(ctx context.Context, filter *OpsErrorLogCleanupFilter) (io.ReadCloser, error)
+	ExportSystemLogsFn            func(ctx context.Context, filter *OpsSystemLogCleanupFilter) (io.ReadCloser, error)
 	DeleteSystemLogsFn            func(ctx context.Context, filter *OpsSystemLogCleanupFilter) (int64, error)
 	InsertSystemLogCleanupAuditFn func(ctx context.Context, input *OpsSystemLogCleanupAudit) error
 }
@@ -33,6 +37,13 @@ func (m *opsRepoMock) ListErrorLogs(ctx context.Context, filter *OpsErrorLogFilt
 	return &OpsErrorLogList{Errors: []*OpsErrorLog{}, Page: 1, PageSize: 20}, nil
 }
 
+func (m *opsRepoMock) ExportErrorLogs(ctx context.Context, filter *OpsErrorLogCleanupFilter) (io.ReadCloser, error) {
+	if m.ExportErrorLogsFn != nil {
+		return m.ExportErrorLogsFn(ctx, filter)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
 func (m *opsRepoMock) GetErrorLogByID(ctx context.Context, id int64) (*OpsErrorLogDetail, error) {
 	return &OpsErrorLogDetail{}, nil
 }
@@ -53,6 +64,13 @@ func (m *opsRepoMock) ListSystemLogs(ctx context.Context, filter *OpsSystemLogFi
 		return m.ListSystemLogsFn(ctx, filter)
 	}
 	return &OpsSystemLogList{Logs: []*OpsSystemLog{}, Total: 0, Page: 1, PageSize: 50}, nil
+}
+
+func (m *opsRepoMock) ExportSystemLogs(ctx context.Context, filter *OpsSystemLogCleanupFilter) (io.ReadCloser, error) {
+	if m.ExportSystemLogsFn != nil {
+		return m.ExportSystemLogsFn(ctx, filter)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
 }
 
 func (m *opsRepoMock) DeleteSystemLogs(ctx context.Context, filter *OpsSystemLogCleanupFilter) (int64, error) {

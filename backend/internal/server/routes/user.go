@@ -41,6 +41,13 @@ func RegisterUserRoutes(
 		shop.GET("/orders/:id/files/download.zip", h.Shop.DownloadOrderFilesZip)
 		shop.GET("/orders/:id/files/:card_id/download", h.Shop.DownloadOrderFile)
 	}
+	activities := authenticated.Group("/activities")
+	{
+		activities.GET("", h.Activity.ListWelfareActivities)
+		activities.GET("/winners", h.Activity.ListMyWinners)
+		activities.POST("/:id/join", h.Activity.JoinDraw)
+		activities.POST("/winners/:id/claim", h.Activity.SubmitWinnerClaim)
+	}
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
@@ -54,6 +61,16 @@ func RegisterUserRoutes(
 			user.GET("/withdrawals", h.Withdrawal.ListMine)
 			user.POST("/withdrawals", h.Withdrawal.Submit)
 			user.POST("/withdrawals/:id/cancel", h.Withdrawal.Cancel)
+			user.GET("/invoices/profiles", h.Invoice.ListProfiles)
+			user.POST("/invoices/profiles", h.Invoice.CreateProfile)
+			user.PUT("/invoices/profiles/:id", h.Invoice.UpdateProfile)
+			user.DELETE("/invoices/profiles/:id", h.Invoice.DeleteProfile)
+			user.POST("/invoices/profiles/:id/default", h.Invoice.SetDefaultProfile)
+			user.GET("/invoices/eligible-sources", h.Invoice.ListEligibleSources)
+			user.GET("/invoices/requests", h.Invoice.ListRequests)
+			user.POST("/invoices/requests", h.Invoice.CreateRequest)
+			user.GET("/invoices/requests/:id", h.Invoice.GetRequest)
+			user.POST("/invoices/requests/:id/cancel", h.Invoice.CancelRequest)
 			user.GET("/aff", h.User.GetAffiliate)
 			user.POST("/aff/transfer", h.User.TransferAffiliateQuota)
 			user.POST("/account-bindings/email/send-code", h.User.SendEmailBindingCode)
@@ -99,6 +116,8 @@ func RegisterUserRoutes(
 			accounts.GET("/data", h.UserAccount.ExportData)
 			accounts.POST("/today-stats/batch", h.UserAccount.GetBatchTodayStats)
 			accounts.GET("/:id/usage", h.UserAccount.GetUsage)
+			accounts.GET("/:id/openai-quota", h.UserAccount.QueryOpenAIQuota)
+			accounts.POST("/:id/openai-quota/reset", h.UserAccount.ResetOpenAIQuota)
 			accounts.GET("/:id/stats", h.UserAccount.GetStats)
 			accounts.GET("/:id/today-stats", h.UserAccount.GetTodayStats)
 			accounts.GET("/:id", h.UserAccount.GetByID)
@@ -144,17 +163,27 @@ func RegisterUserRoutes(
 		{
 			accountShare.POST("/openai/auth-url", h.AccountShareMode.GenerateOpenAIAuthURL)
 			accountShare.POST("/openai/exchange-code", h.AccountShareMode.ExchangeOpenAICode)
+			accountShare.POST("/anthropic/auth-url", h.AccountShareMode.GenerateAnthropicAuthURL)
+			accountShare.POST("/anthropic/exchange-code", h.AccountShareMode.ExchangeAnthropicCode)
 			accountShare.GET("/proxies", h.AccountShareMode.ListAvailableProxies)
 			accountShare.POST("/proxies", h.AccountShareMode.CreateProxy)
 			accountShare.GET("/listings", h.AccountShareMode.ListListings)
+			accountShare.GET("/recommendations/usage-profile", h.AccountShareMode.GetRecommendationUsageProfile)
+			accountShare.POST("/recommendations", h.AccountShareMode.RecommendListings)
 			accountShare.GET("/listings/:id", h.AccountShareMode.GetListing)
+			accountShare.GET("/listings/:id/my-spend", h.AccountShareMode.GetMySpendSummary)
+			accountShare.GET("/listings/:id/reviews", h.AccountShareMode.ListListingReviews)
+			accountShare.GET("/owners/:owner_id/reviews", h.AccountShareMode.ListOwnerReviews)
 			accountShare.POST("/listings/:id/edit-session", h.AccountShareMode.BeginListingEdit)
 			accountShare.POST("/listings/:id/edit-session/release", h.AccountShareMode.ReleaseListingEdit)
 			accountShare.PATCH("/listings/:id", h.AccountShareMode.UpdateListing)
 			accountShare.POST("/listings/:id/join", h.AccountShareMode.JoinListing)
+			accountShare.GET("/queue/:apiKeyID", h.AccountShareMode.ListMembershipQueue)
+			accountShare.PATCH("/queue", h.AccountShareMode.ReorderMembershipQueue)
 			accountShare.PATCH("/memberships/:id/idle-timeout", h.AccountShareMode.UpdateMembershipIdleTimeout)
 			accountShare.POST("/memberships/:id/end-intent", h.AccountShareMode.CreateEndMembershipIntent)
 			accountShare.POST("/memberships/:id/end", h.AccountShareMode.EndMembership)
+			accountShare.POST("/memberships/:id/review", h.AccountShareMode.SubmitReview)
 		}
 
 		// 用户可用分组（非管理员接口）
@@ -174,6 +203,7 @@ func RegisterUserRoutes(
 		usage := authenticated.Group("/usage")
 		{
 			usage.GET("", h.Usage.List)
+			usage.GET("/balance-ledger/stats", h.Usage.BalanceLedgerStats)
 			usage.GET("/balance-ledger", h.Usage.ListBalanceLedger)
 			usage.GET("/stats", h.Usage.Stats)
 			// User dashboard endpoints

@@ -269,6 +269,9 @@
               :account="row"
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
+              :usage-loader="adminAPI.accounts.getUsage"
+              :query-openai-quota="adminAPI.accounts.queryOpenAIQuota"
+              :reset-openai-quota="adminAPI.accounts.resetOpenAIQuota"
               :manual-refresh-token="usageManualRefreshToken"
             />
           </template>

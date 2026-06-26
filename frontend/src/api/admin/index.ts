@@ -3,38 +3,39 @@
  * Centralized exports for all admin API modules
  */
 
-import dashboardAPI from './dashboard'
-import usersAPI from './users'
-import groupsAPI from './groups'
-import accountsAPI from './accounts'
-import proxiesAPI from './proxies'
-import redeemAPI from './redeem'
-import promoAPI from './promo'
-import announcementsAPI from './announcements'
-import conversationsAPI from './conversations'
-import settingsAPI from './settings'
-import systemAPI from './system'
-import subscriptionsAPI from './subscriptions'
-import usageAPI from './usage'
-import geminiAPI from './gemini'
-import antigravityAPI from './antigravity'
-import userAttributesAPI from './userAttributes'
-import opsAPI from './ops'
-import errorPassthroughAPI from './errorPassthrough'
-import dataManagementAPI from './dataManagement'
-import apiKeysAPI from './apiKeys'
-import scheduledTestsAPI from './scheduledTests'
-import backupAPI from './backup'
-import tlsFingerprintProfileAPI from './tlsFingerprintProfile'
-import channelsAPI from './channels'
-import channelMonitorAPI from './channelMonitor'
-import channelMonitorTemplateAPI from './channelMonitorTemplate'
-import adminPaymentAPI from './payment'
-import revenueAPI from './revenue'
-import affiliatesAPI from './affiliates'
-import accountSharePoliciesAPI from './accountSharePolicies'
-import accountShareModePolicyAPI from './accountShareModePolicy'
-import riskControlAPI from './riskControl'
+import dashboardAPI from "./dashboard";
+import usersAPI from "./users";
+import groupsAPI from "./groups";
+import accountsAPI from "./accounts";
+import proxiesAPI from "./proxies";
+import redeemAPI from "./redeem";
+import promoAPI from "./promo";
+import announcementsAPI from "./announcements";
+import conversationsAPI from "./conversations";
+import settingsAPI from "./settings";
+import systemAPI from "./system";
+import subscriptionsAPI from "./subscriptions";
+import usageAPI from "./usage";
+import geminiAPI from "./gemini";
+import antigravityAPI from "./antigravity";
+import userAttributesAPI from "./userAttributes";
+import opsAPI from "./ops";
+import errorPassthroughAPI from "./errorPassthrough";
+import dataManagementAPI from "./dataManagement";
+import apiKeysAPI from "./apiKeys";
+import scheduledTestsAPI from "./scheduledTests";
+import backupAPI from "./backup";
+import tlsFingerprintProfileAPI from "./tlsFingerprintProfile";
+import channelsAPI from "./channels";
+import channelMonitorAPI from "./channelMonitor";
+import channelMonitorTemplateAPI from "./channelMonitorTemplate";
+import adminPaymentAPI from "./payment";
+import revenueAPI from "./revenue";
+import adminInvoicesAPI from "./invoices";
+import affiliatesAPI from "./affiliates";
+import accountSharePoliciesAPI from "./accountSharePolicies";
+import accountShareModePolicyAPI from "./accountShareModePolicy";
+import riskControlAPI from "./riskControl";
 
 /**
  * Unified admin API object for convenient access
@@ -68,11 +69,12 @@ export const adminAPI = {
   channelMonitorTemplate: channelMonitorTemplateAPI,
   payment: adminPaymentAPI,
   revenue: revenueAPI,
+  invoices: adminInvoicesAPI,
   affiliates: affiliatesAPI,
   accountSharePolicies: accountSharePoliciesAPI,
   accountShareModePolicy: accountShareModePolicyAPI,
-  riskControl: riskControlAPI
-}
+  riskControl: riskControlAPI,
+};
 
 export {
   dashboardAPI,
@@ -103,19 +105,32 @@ export {
   channelMonitorTemplateAPI,
   adminPaymentAPI,
   revenueAPI,
+  adminInvoicesAPI,
   affiliatesAPI,
   accountSharePoliciesAPI,
   accountShareModePolicyAPI,
-  riskControlAPI
-}
+  riskControlAPI,
+};
 
-export default adminAPI
+export default adminAPI;
 
 // Re-export types used by components
-export type { BalanceHistoryItem } from './users'
-export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'
-export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'
-export type { TLSFingerprintProfile, CreateProfileRequest, UpdateProfileRequest } from './tlsFingerprintProfile'
-export type { RevenueBreakdowns, RevenueSummary, RevenueSummaryParams } from './revenue'
-export type { AccountSharePolicy } from './accountSharePolicies'
-export type { AccountShareModePolicy } from './accountShareModePolicy'
+export type { BalanceHistoryItem } from "./users";
+export type {
+  ErrorPassthroughRule,
+  CreateRuleRequest,
+  UpdateRuleRequest,
+} from "./errorPassthrough";
+export type { BackupAgentHealth, DataManagementConfig } from "./dataManagement";
+export type {
+  TLSFingerprintProfile,
+  CreateProfileRequest,
+  UpdateProfileRequest,
+} from "./tlsFingerprintProfile";
+export type {
+  RevenueBreakdowns,
+  RevenueSummary,
+  RevenueSummaryParams,
+} from "./revenue";
+export type { AccountSharePolicy } from "./accountSharePolicies";
+export type { AccountShareModePolicy } from "./accountShareModePolicy";

@@ -1291,6 +1291,8 @@ type OpsConfig struct {
 type OpsCleanupConfig struct {
 	Enabled  bool   `mapstructure:"enabled"`
 	Schedule string `mapstructure:"schedule"`
+	// ArchiveExpireDays controls backup record/object expiry for ops log archives. 0 means never expire.
+	ArchiveExpireDays int `mapstructure:"archive_expire_days"`
 
 	// Retention days (0 disables that cleanup target).
 	//
@@ -1795,6 +1797,7 @@ func setDefaults() {
 	viper.SetDefault("ops.use_preaggregated_tables", true)
 	viper.SetDefault("ops.cleanup.enabled", true)
 	viper.SetDefault("ops.cleanup.schedule", "0 2 * * *")
+	viper.SetDefault("ops.cleanup.archive_expire_days", 14)
 	// Retention days: vNext defaults to 30 days across ops datasets.
 	viper.SetDefault("ops.cleanup.error_log_retention_days", 30)
 	viper.SetDefault("ops.cleanup.minute_metrics_retention_days", 30)
@@ -2902,6 +2905,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Ops.MetricsCollectorCache.TTL < 0 {
 		return fmt.Errorf("ops.metrics_collector_cache.ttl must be non-negative")
+	}
+	if c.Ops.Cleanup.ArchiveExpireDays < 0 {
+		return fmt.Errorf("ops.cleanup.archive_expire_days must be non-negative")
 	}
 	if c.Ops.Cleanup.ErrorLogRetentionDays < 0 {
 		return fmt.Errorf("ops.cleanup.error_log_retention_days must be non-negative")

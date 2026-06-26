@@ -4,7 +4,7 @@
       <button
         type="button"
         class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
-        :disabled="loading || resetting"
+        :disabled="loading || resetting || !hasQuotaAPI"
         :title="countButtonTitle"
         @click="handleQuery"
       >
@@ -50,8 +50,8 @@
       </button>
     </div>
 
-    <div v-if="error" class="text-[10px] text-red-600 dark:text-red-400" :title="error">
-      {{ truncatedError }}
+    <div v-if="displayError" class="text-[10px] text-red-600 dark:text-red-400" :title="displayError">
+      {{ truncatedDisplayError }}
     </div>
     <div v-else-if="resetMessage" class="text-[10px] text-emerald-600 dark:text-emerald-400">
       {{ resetMessage }}
@@ -72,19 +72,29 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import type { PropType } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Account } from '@/types'
-import {
-  queryOpenAIQuota,
-  resetOpenAIQuota,
-  type OpenAIQuotaResetResult,
-  type OpenAIQuotaUsage
-} from '@/api/admin/accounts'
+import type { Account, OpenAIQuotaResetResult, OpenAIQuotaUsage } from '@/types'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
-const props = defineProps<{
-  account: Account
-}>()
+type QueryOpenAIQuota = (id: number) => Promise<OpenAIQuotaUsage>
+type ResetOpenAIQuota = (id: number) => Promise<OpenAIQuotaResetResult>
+
+const props = defineProps({
+  account: {
+    type: Object as PropType<Account>,
+    required: true,
+  },
+  queryOpenaiQuota: {
+    type: Function as PropType<QueryOpenAIQuota>,
+    required: false,
+  },
+  resetOpenaiQuota: {
+    type: Function as PropType<ResetOpenAIQuota>,
+    required: false,
+  },
+})
 
 const { t } = useI18n()
 
@@ -96,42 +106,56 @@ const data = ref<OpenAIQuotaUsage | null>(null)
 const resetMessage = ref<string | null>(null)
 const showResetConfirm = ref(false)
 
+const hasQuotaAPI = computed(() => (
+  typeof props.queryOpenaiQuota === 'function' &&
+  typeof props.resetOpenaiQuota === 'function'
+))
+const configurationError = computed(() => (
+  visible.value && !hasQuotaAPI.value
+    ? t('admin.accounts.openaiQuotaReset.apiNotConfigured')
+    : null
+))
+const displayError = computed(() => error.value || configurationError.value)
 const availableResetCount = computed(() => data.value?.rate_limit_reset_credits?.available_count ?? 0)
-const canReset = computed(() => availableResetCount.value > 0)
+const canReset = computed(() => hasQuotaAPI.value && availableResetCount.value > 0)
 
 const countButtonTitle = computed(() => (
-  data.value
-    ? t('admin.accounts.openaiQuotaReset.countTooltipRefresh')
-    : t('admin.accounts.openaiQuotaReset.countTooltipLoad')
+  !hasQuotaAPI.value
+    ? t('admin.accounts.openaiQuotaReset.apiNotConfigured')
+    : (
+        data.value
+          ? t('admin.accounts.openaiQuotaReset.countTooltipRefresh')
+          : t('admin.accounts.openaiQuotaReset.countTooltipLoad')
+      )
 ))
 
 const resetButtonTitle = computed(() => {
+  if (!hasQuotaAPI.value) return t('admin.accounts.openaiQuotaReset.apiNotConfigured')
   if (!data.value) return t('admin.accounts.openaiQuotaReset.resetTooltipNeedQuery')
   if (!canReset.value) return t('admin.accounts.openaiQuotaReset.resetTooltipNoCredits')
   return t('admin.accounts.openaiQuotaReset.resetTooltipReady')
 })
 
-const truncatedError = computed(() => {
-  if (!error.value) return ''
-  return error.value.length > 80 ? `${error.value.slice(0, 80)}...` : error.value
+const truncatedDisplayError = computed(() => {
+  if (!displayError.value) return ''
+  return displayError.value.length > 80 ? `${displayError.value.slice(0, 80)}...` : displayError.value
 })
 
 function extractErrorMessage(e: unknown): string {
-  const err = e as {
-    message?: string
-    reason?: string
-    response?: { data?: { message?: string; error?: string } }
-  }
-  return err?.message || err?.reason || err?.response?.data?.message || err?.response?.data?.error || t('common.error')
+  return extractApiErrorMessage(e, t('common.error'))
 }
 
 async function handleQuery() {
   if (loading.value) return
+  if (!props.queryOpenaiQuota) {
+    error.value = t('admin.accounts.openaiQuotaReset.apiNotConfigured')
+    return
+  }
   loading.value = true
   error.value = null
   resetMessage.value = null
   try {
-    data.value = await queryOpenAIQuota(props.account.id)
+    data.value = await props.queryOpenaiQuota(props.account.id)
   } catch (e) {
     error.value = extractErrorMessage(e)
   } finally {
@@ -141,6 +165,10 @@ async function handleQuery() {
 
 function handleResetRequest() {
   if (resetting.value) return
+  if (!props.resetOpenaiQuota) {
+    error.value = t('admin.accounts.openaiQuotaReset.apiNotConfigured')
+    return
+  }
   if (!canReset.value) {
     error.value = t('admin.accounts.openaiQuotaReset.noCreditsAvailable')
     return
@@ -151,6 +179,10 @@ function handleResetRequest() {
 async function confirmReset() {
   showResetConfirm.value = false
   if (resetting.value) return
+  if (!props.resetOpenaiQuota) {
+    error.value = t('admin.accounts.openaiQuotaReset.apiNotConfigured')
+    return
+  }
   if (!canReset.value) {
     error.value = t('admin.accounts.openaiQuotaReset.noCreditsAvailable')
     return
@@ -159,7 +191,7 @@ async function confirmReset() {
   error.value = null
   resetMessage.value = null
   try {
-    const result: OpenAIQuotaResetResult = await resetOpenAIQuota(props.account.id)
+    const result: OpenAIQuotaResetResult = await props.resetOpenaiQuota(props.account.id)
     await handleQuery()
     resetMessage.value = t('admin.accounts.openaiQuotaReset.resetSuccess', { windows: result.windows_reset })
   } catch (e) {

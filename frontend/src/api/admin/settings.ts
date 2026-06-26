@@ -557,6 +557,10 @@ export interface SystemSettings {
   available_channels_enabled: boolean;
   user_account_import_limit: number;
 
+  // Functional module switches
+  invoice_management_enabled: boolean;
+  withdrawal_management_enabled: boolean;
+
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
 
@@ -564,6 +568,10 @@ export interface SystemSettings {
   risk_control_enabled: boolean;
   cyber_session_block_enabled: boolean;
   cyber_session_block_ttl_seconds: number;
+  account_share_comment_review_enabled: boolean;
+  account_share_comment_review_url: string;
+  account_share_comment_review_api_key_configured: boolean;
+  account_share_comment_review_model: string;
 
   // OpenAI fast/flex policy
   openai_fast_policy_settings?: OpenAIFastPolicySettings;
@@ -784,6 +792,10 @@ export interface UpdateSettingsRequest {
   available_channels_enabled?: boolean;
   user_account_import_limit?: number;
 
+  // Functional module switches
+  invoice_management_enabled?: boolean;
+  withdrawal_management_enabled?: boolean;
+
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;
 
@@ -791,6 +803,10 @@ export interface UpdateSettingsRequest {
   risk_control_enabled?: boolean;
   cyber_session_block_enabled?: boolean;
   cyber_session_block_ttl_seconds?: number;
+  account_share_comment_review_enabled?: boolean;
+  account_share_comment_review_url?: string;
+  account_share_comment_review_api_key?: string;
+  account_share_comment_review_model?: string;
 
   // OpenAI fast/flex policy
   openai_fast_policy_settings?: OpenAIFastPolicySettings;

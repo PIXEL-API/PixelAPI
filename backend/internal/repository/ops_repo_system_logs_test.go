@@ -1,10 +1,13 @@
 package repository
 
 import (
+	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -78,6 +81,64 @@ func TestBuildOpsSystemLogsCleanupWhere_WithClientRequestIDAndUserID(t *testing.
 	}
 	if !contains(where, "l.user_id = $") {
 		t.Fatalf("where should include user_id condition: %s", where)
+	}
+}
+
+func TestOpsRepositoryExportErrorLogs(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &opsRepository{db: db}
+	end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT to_jsonb\\(e\\)::text").
+		WithArgs(end).
+		WillReturnRows(sqlmock.NewRows([]string{"to_jsonb"}).
+			AddRow(`{"id":1,"error_type":"timeout"}`).
+			AddRow(`{"id":2,"error_type":"upstream"}`))
+
+	reader, err := repo.ExportErrorLogs(context.Background(), &service.OpsErrorLogCleanupFilter{EndTime: &end})
+	if err != nil {
+		t.Fatalf("ExportErrorLogs() error = %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	want := "{\"id\":1,\"error_type\":\"timeout\"}\n{\"id\":2,\"error_type\":\"upstream\"}\n"
+	if string(data) != want {
+		t.Fatalf("data = %q, want %q", string(data), want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestOpsRepositoryExportSystemLogs(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &opsRepository{db: db}
+	end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT to_jsonb\\(l\\)::text").
+		WithArgs(end).
+		WillReturnRows(sqlmock.NewRows([]string{"to_jsonb"}).
+			AddRow(`{"id":1,"level":"info"}`).
+			AddRow(`{"id":2,"level":"warn"}`))
+
+	reader, err := repo.ExportSystemLogs(context.Background(), &service.OpsSystemLogCleanupFilter{EndTime: &end})
+	if err != nil {
+		t.Fatalf("ExportSystemLogs() error = %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	want := "{\"id\":1,\"level\":\"info\"}\n{\"id\":2,\"level\":\"warn\"}\n"
+	if string(data) != want {
+		t.Fatalf("data = %q, want %q", string(data), want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 

@@ -2531,9 +2531,14 @@
             </button>
           </div>
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxyOptions" :can-test="!isUserScope" />
+        <ProxySelector
+          v-model="form.proxy_id"
+          :proxies="proxyOptions"
+          :can-test="!isUserScope"
+          disable-full
+        />
         <p v-if="isUserScope" class="input-hint">
-          {{ proxyOptions.length > 0 ? t('userAccounts.importProxyHint') : t('userAccounts.importProxyEmpty') }}
+          {{ selectedProxyCapacityMessage || (proxyOptions.length > 0 ? t('userAccounts.importProxyHint') : t('userAccounts.importProxyEmpty')) }}
         </p>
         <UserProxyQuickCreatePanel
           v-if="showUserProxyCreatePanel"
@@ -3284,6 +3289,7 @@ import {
   normalizePersonalAccountConcurrency
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
+import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
@@ -3718,6 +3724,20 @@ const proxyOptions = computed(() => {
     byId.set(proxy.id, proxy)
   }
   return Array.from(byId.values())
+})
+
+const selectedProxy = computed(() => {
+  const proxyId = form.proxy_id
+  if (!proxyId) return null
+  return proxyOptions.value.find(proxy => proxy.id === proxyId) || null
+})
+
+const selectedProxyCapacityMessage = computed(() => {
+  const proxy = selectedProxy.value
+  if (!isProxyAccountFull(proxy)) return ''
+  const count = normalizeProxyAccountCount(proxy)
+  const max = normalizeProxyMaxAccounts(proxy)
+  return `${t('admin.proxies.accountUsageFullTitle', { count, max })}，请选择其它代理 IP。`
 })
 
 const showUserProxyActions = computed(() => isUserScope.value && canManageProxy.value)
@@ -4669,6 +4689,10 @@ const handleSubmit = async () => {
       appStore.showError(t('userAccounts.importProxyRequired'))
       return
     }
+    if (userOpenAIProxyLoginRequired.value && selectedProxyCapacityMessage.value) {
+      appStore.showError(selectedProxyCapacityMessage.value)
+      return
+    }
   }
 
   // For OAuth-based type, handle OAuth flow (goes to step 2)
@@ -4888,6 +4912,10 @@ const handleGenerateUrl = async () => {
     }
     if (userOpenAIProxyLoginRequired.value && !form.proxy_id) {
       appStore.showError(t('userAccounts.importProxyRequired'))
+      return
+    }
+    if (userOpenAIProxyLoginRequired.value && selectedProxyCapacityMessage.value) {
+      appStore.showError(selectedProxyCapacityMessage.value)
       return
     }
     await openaiOAuth.generateAuthUrl(form.proxy_id)

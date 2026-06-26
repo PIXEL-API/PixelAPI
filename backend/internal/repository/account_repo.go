@@ -97,11 +97,49 @@ func translateAccountPersistenceError(err error, notFound *infraerrors.Applicati
 }
 
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
+	return r.createAccount(ctx, r.client, r.sql, account)
+}
+
+func (r *accountRepository) CreateOwnedWithProxyCapacity(ctx context.Context, ownerUserID int64, account *service.Account) error {
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
+	if ownerUserID <= 0 {
+		return service.ErrUserNotFound
+	}
+	if account.ProxyID == nil || *account.ProxyID <= 0 {
+		return service.ErrProxyNotFound
+	}
 
-	builder := r.client.Account.Create().
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	exec := sqlExecutorFromEntClient(tx.Client())
+	if exec == nil {
+		return fmt.Errorf("transaction sql executor is unavailable")
+	}
+
+	if err := ensureOwnedProxyCapacityForCreateInTx(txCtx, exec, ownerUserID, *account.ProxyID); err != nil {
+		return err
+	}
+	if err := r.createAccount(txCtx, tx.Client(), exec, account); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *accountRepository) createAccount(ctx context.Context, client *dbent.Client, exec sqlExecutor, account *service.Account) error {
+	if account == nil {
+		return service.ErrAccountNilInput
+	}
+	if client == nil {
+		return fmt.Errorf("account repository client is unavailable")
+	}
+
+	builder := client.Account.Create().
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
@@ -173,8 +211,49 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 			return err
 		}
 	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account create failed: account=%d err=%v", account.ID, err)
+	}
+	return nil
+}
+
+func ensureOwnedProxyCapacityForCreateInTx(ctx context.Context, exec sqlQueryExecutor, ownerUserID, proxyID int64) error {
+	if ownerUserID <= 0 {
+		return service.ErrUserNotFound
+	}
+	if proxyID <= 0 {
+		return service.ErrProxyNotFound
+	}
+
+	var maxAccounts int
+	if err := scanSingleRow(ctx, exec, `
+		SELECT max_accounts
+		FROM proxies
+		WHERE id = $1
+			AND status = $2
+			AND deleted_at IS NULL
+			AND (owner_user_id IS NULL OR owner_user_id = $3)
+		FOR UPDATE
+	`, []any{proxyID, service.StatusActive, ownerUserID}, &maxAccounts); errors.Is(err, sql.ErrNoRows) {
+		return service.ErrProxyNotFound
+	} else if err != nil {
+		return err
+	}
+	if maxAccounts <= 0 {
+		return nil
+	}
+
+	var current int64
+	if err := scanSingleRow(ctx, exec, `
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE proxy_id = $1
+			AND deleted_at IS NULL
+	`, []any{proxyID}, &current); err != nil {
+		return err
+	}
+	if current+1 > int64(maxAccounts) {
+		return service.ProxyAccountLimitExceededError(proxyID, current, int64(maxAccounts), 1)
 	}
 	return nil
 }

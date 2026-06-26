@@ -474,6 +474,9 @@ func TestUsageLogRepositoryGetStatsWithFiltersAlwaysReturnsAccountCost(t *testin
 			"total_cache_tokens", "total_cache_creation_tokens", "total_cache_read_tokens", "total_cost", "total_actual_cost",
 			"total_account_cost", "avg_duration_ms",
 		}).AddRow(int64(50), int64(1000), int64(2000), int64(100), int64(25), int64(75), 15.0, 12.5, 11.0, 100.0))
+	mock.ExpectQuery("FROM user_balance_ledger").
+		WithArgs(accountShareSeatPrepayReason, accountShareSeatRefundReason, accountShareSeatWaiverRefundReason).
+		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(1.25))
 	mock.ExpectQuery("SELECT COALESCE\\(NULLIF\\(TRIM\\(inbound_endpoint\\)").
 		WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}))
 	mock.ExpectQuery("SELECT COALESCE\\(NULLIF\\(TRIM\\(upstream_endpoint\\)").
@@ -485,6 +488,9 @@ func TestUsageLogRepositoryGetStatsWithFiltersAlwaysReturnsAccountCost(t *testin
 	require.NoError(t, err)
 	require.NotNil(t, stats.TotalAccountCost, "TotalAccountCost must always be returned, even without AccountID filter")
 	require.Equal(t, 11.0, *stats.TotalAccountCost)
+	require.Equal(t, 12.5, stats.TotalRequestActualCost)
+	require.Equal(t, 1.25, stats.TotalHourlyCost)
+	require.Equal(t, 13.75, stats.TotalActualCost)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -516,6 +522,61 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 		TotalRequests:   30,
 		TotalTokens:     2600,
 	}, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryGetAccountShareRecommendationUsageProfilePrefersModelMatch(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	start := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	end := start.Add(72 * time.Hour)
+
+	rows := sqlmock.NewRows([]string{
+		"all_requests",
+		"all_input_tokens",
+		"all_output_tokens",
+		"all_cache_creation_tokens",
+		"all_cache_read_tokens",
+		"all_image_output_tokens",
+		"all_active_hour_buckets",
+		"model_requests",
+		"model_input_tokens",
+		"model_output_tokens",
+		"model_cache_creation_tokens",
+		"model_cache_read_tokens",
+		"model_image_output_tokens",
+		"model_active_hour_buckets",
+	}).AddRow(
+		int64(300),
+		int64(9000),
+		int64(3000),
+		int64(600),
+		int64(1200),
+		int64(0),
+		int64(9),
+		int64(30),
+		int64(1200),
+		int64(450),
+		int64(90),
+		int64(150),
+		int64(0),
+		int64(2),
+	)
+
+	mock.ExpectQuery("SELECT\\s+COUNT\\(\\*\\) AS all_requests").
+		WithArgs(int64(42), start, end, "gpt-5.5", sqlmock.AnyArg()).
+		WillReturnRows(rows)
+
+	got, err := repo.GetAccountShareRecommendationUsageProfile(context.Background(), 42, "gpt-5.5", start, end)
+	require.NoError(t, err)
+	require.True(t, got.ModelMatched)
+	require.Equal(t, int64(30), got.TotalRequests)
+	require.Equal(t, int64(1200), got.TotalInputTokens)
+	require.Equal(t, int64(450), got.TotalOutputTokens)
+	require.Equal(t, int64(90), got.TotalCacheCreationTokens)
+	require.Equal(t, int64(150), got.TotalCacheReadTokens)
+	require.Equal(t, int64(2), got.ActiveHourBuckets)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

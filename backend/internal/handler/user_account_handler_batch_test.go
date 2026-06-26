@@ -224,7 +224,7 @@ func TestUserAccountHandlerBulkPublicShareOnlyCreatesAsyncTask(t *testing.T) {
 			2: {ID: 2, OwnerUserID: &ownerID, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: map[string]any{"access_token": "token-2"}},
 		},
 	}
-	accountSvc := service.NewAccountService(repo, nil, nil, nil)
+	accountSvc := service.NewAccountService(repo, nil, nil, nil, nil)
 	batchSvc := service.NewAccountBatchTaskService(repo, nil)
 	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil, nil, batchSvc)
 	router := gin.New()
@@ -286,7 +286,7 @@ func TestUserAccountHandlerBulkPublicShareRejectsAccountShareModeAccount(t *test
 		},
 		accountShareModeListingIDs: map[int64]int64{1: listingID},
 	}
-	accountSvc := service.NewAccountService(repo, nil, nil, nil)
+	accountSvc := service.NewAccountService(repo, nil, nil, nil, nil)
 	batchSvc := service.NewAccountBatchTaskService(repo, nil)
 	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil, nil, batchSvc)
 	router := gin.New()
@@ -327,7 +327,7 @@ func TestUserAccountHandlerVerifyPlusAlreadyPlusDoesNotRequireTestService(t *tes
 			},
 		},
 	}
-	accountSvc := service.NewAccountService(repo, nil, nil, nil)
+	accountSvc := service.NewAccountService(repo, nil, nil, nil, nil)
 	handler := NewUserAccountHandler(accountSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.POST("/accounts/:id/verify-level", func(c *gin.Context) {

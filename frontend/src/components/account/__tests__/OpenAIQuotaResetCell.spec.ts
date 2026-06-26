@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import OpenAIQuotaResetCell from '../OpenAIQuotaResetCell.vue'
-import type { Account } from '@/types'
+import type { Account, OpenAIQuotaResetResult, OpenAIQuotaUsage } from '@/types'
 
 const { queryOpenAIQuota, resetOpenAIQuota } = vi.hoisted(() => ({
   queryOpenAIQuota: vi.fn(),
@@ -54,10 +54,16 @@ function makeAccount(): Account {
   }
 }
 
-function mountCell() {
+function mountCell(props: Partial<{
+  queryOpenaiQuota: (id: number) => Promise<OpenAIQuotaUsage>
+  resetOpenaiQuota: (id: number) => Promise<OpenAIQuotaResetResult>
+}> = {}) {
   return mount(OpenAIQuotaResetCell, {
     props: {
-      account: makeAccount()
+      account: makeAccount(),
+      queryOpenaiQuota: queryOpenAIQuota,
+      resetOpenaiQuota: resetOpenAIQuota,
+      ...props
     },
     global: {
       stubs: {
@@ -110,5 +116,35 @@ describe('OpenAIQuotaResetCell', () => {
     expect(resetOpenAIQuota).toHaveBeenCalledTimes(1)
     expect(resetOpenAIQuota).toHaveBeenCalledWith(10)
     expect(queryOpenAIQuota).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses injected quota APIs when provided', async () => {
+    const queryUserOpenAIQuota = vi.fn().mockResolvedValue({
+      rate_limit_reset_credits: {
+        available_count: 1
+      }
+    })
+    const resetUserOpenAIQuota = vi.fn().mockResolvedValue({
+      code: 'ok',
+      windows_reset: 2
+    })
+
+    const wrapper = mountCell({
+      queryOpenaiQuota: queryUserOpenAIQuota,
+      resetOpenaiQuota: resetUserOpenAIQuota
+    })
+
+    await wrapper.findAll('button')[0].trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button')[1].trigger('click')
+    await wrapper.find('.confirm-reset').trigger('click')
+    await flushPromises()
+
+    expect(queryUserOpenAIQuota).toHaveBeenCalledTimes(2)
+    expect(queryUserOpenAIQuota).toHaveBeenCalledWith(10)
+    expect(resetUserOpenAIQuota).toHaveBeenCalledTimes(1)
+    expect(resetUserOpenAIQuota).toHaveBeenCalledWith(10)
+    expect(queryOpenAIQuota).not.toHaveBeenCalled()
+    expect(resetOpenAIQuota).not.toHaveBeenCalled()
   })
 })

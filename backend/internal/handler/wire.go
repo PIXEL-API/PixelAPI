@@ -43,8 +43,10 @@ func ProvideAdminHandlers(
 	paymentHandler *admin.PaymentHandler,
 	revenueHandler *admin.RevenueHandler,
 	withdrawalHandler *admin.WithdrawalHandler,
+	invoiceHandler *admin.InvoiceHandler,
 	shopHandler *admin.ShopHandler,
 	affiliateHandler *admin.AffiliateHandler,
+	activityHandler *admin.ActivityHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
@@ -81,8 +83,10 @@ func ProvideAdminHandlers(
 		Payment:                paymentHandler,
 		Revenue:                revenueHandler,
 		Withdrawal:             withdrawalHandler,
+		Invoice:                invoiceHandler,
 		Shop:                   shopHandler,
 		Affiliate:              affiliateHandler,
+		Activity:               activityHandler,
 	}
 }
 
@@ -104,6 +108,7 @@ func ProvideUserAccountHandler(
 	settingService *service.SettingService,
 	oauthService *service.OAuthService,
 	openaiOAuthService *service.OpenAIOAuthService,
+	openaiQuotaService *service.OpenAIQuotaService,
 	geminiOAuthService *service.GeminiOAuthService,
 	antigravityOAuthService *service.AntigravityOAuthService,
 	concurrencyService *service.ConcurrencyService,
@@ -123,6 +128,7 @@ func ProvideUserAccountHandler(
 		antigravityOAuthService,
 		accountBatchTaskService,
 	)
+	h.SetOpenAIQuotaService(openaiQuotaService)
 	h.SetRuntimeCapacityProviders(concurrencyService, sessionLimitCache, rpmCache)
 	return h
 }
@@ -150,7 +156,9 @@ func ProvideHandlers(
 	availableChannelHandler *AvailableChannelHandler,
 	receiptCodeHandler *ReceiptCodeHandler,
 	withdrawalHandler *WithdrawalHandler,
+	invoiceHandler *InvoiceHandler,
 	shopHandler *ShopHandler,
+	activityHandler *ActivityHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -176,7 +184,9 @@ func ProvideHandlers(
 		AvailableChannel: availableChannelHandler,
 		ReceiptCode:      receiptCodeHandler,
 		Withdrawal:       withdrawalHandler,
+		Invoice:          invoiceHandler,
 		Shop:             shopHandler,
+		Activity:         activityHandler,
 	}
 }
 
@@ -203,7 +213,9 @@ var ProviderSet = wire.NewSet(
 	NewAvailableChannelHandler,
 	NewReceiptCodeHandler,
 	NewWithdrawalHandler,
+	NewInvoiceHandler,
 	NewShopHandler,
+	NewActivityHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -240,8 +252,10 @@ var ProviderSet = wire.NewSet(
 	admin.NewPaymentHandler,
 	admin.NewRevenueHandler,
 	admin.NewWithdrawalHandler,
+	admin.NewInvoiceHandler,
 	admin.NewShopHandler,
 	admin.NewAffiliateHandler,
+	admin.NewActivityHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

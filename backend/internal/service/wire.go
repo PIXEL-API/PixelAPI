@@ -157,6 +157,13 @@ func ProvideAccountBatchTaskService(repo AccountBatchTaskRepository, timingWheel
 	return NewAccountBatchTaskService(repo, timingWheel)
 }
 
+func ProvideAccountBatchTaskServices(svc *AccountBatchTaskService) []*AccountBatchTaskService {
+	if svc == nil {
+		return nil
+	}
+	return []*AccountBatchTaskService{svc}
+}
+
 // ProvideAccountExpiryService creates and starts AccountExpiryService.
 func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpiryService {
 	svc := NewAccountExpiryService(accountRepo, time.Minute)
@@ -303,8 +310,9 @@ func ProvideOpsCleanupService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	channelMonitorSvc *ChannelMonitorService,
+	backupSvc *BackupService,
 ) *OpsCleanupService {
-	svc := NewOpsCleanupService(opsRepo, db, redisClient, cfg, channelMonitorSvc)
+	svc := NewOpsCleanupService(opsRepo, db, redisClient, cfg, channelMonitorSvc, backupSvc)
 	svc.Start()
 	return svc
 }
@@ -398,6 +406,7 @@ func ProvideAPIKeyAuthCacheInvalidator(apiKeyService *APIKeyService) APIKeyAuthC
 
 func ProvideAPIKeyService(
 	apiKeyRepo APIKeyRepository,
+	accountShareBindingChecker AccountShareAPIKeyBindingChecker,
 	userRepo UserRepository,
 	groupRepo GroupRepository,
 	userSubRepo UserSubscriptionRepository,
@@ -408,6 +417,7 @@ func ProvideAPIKeyService(
 	billingCacheService *BillingCacheService,
 ) *APIKeyService {
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
+	svc.SetAccountShareAPIKeyBindingChecker(accountShareBindingChecker)
 	svc.SetSettingService(settingService)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
 	return svc
@@ -507,11 +517,12 @@ func ProvideAccountService(
 	groupRepo GroupRepository,
 	userRepo UserRepository,
 	userSubRepo UserSubscriptionRepository,
+	proxyRepo ProxyRepository,
 	accountSharePolicyRepo AccountSharePolicyRepository,
 	privateGroupProvisioner UserPrivateGroupProvisioner,
 	systemNoticeService *SystemNoticeService,
 ) *AccountService {
-	svc := NewAccountService(accountRepo, groupRepo, userRepo, userSubRepo)
+	svc := NewAccountService(accountRepo, groupRepo, userRepo, userSubRepo, proxyRepo)
 	svc.SetAccountSharePolicyRepository(accountSharePolicyRepo)
 	svc.SetUserPrivateGroupProvisioner(privateGroupProvisioner)
 	svc.SetSystemNoticeService(systemNoticeService)
@@ -523,23 +534,101 @@ func ProvideAccountShareModeService(
 	repo AccountShareModeRepository,
 	accountRepo AccountRepository,
 	apiKeyRepo APIKeyRepository,
+	usageLogRepo UsageLogRepository,
 	userRepo UserRepository,
 	proxyRepo ProxyRepository,
 	openaiOAuthService *OpenAIOAuthService,
+	oauthService *OAuthService,
 	concurrencyService *ConcurrencyService,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	accountTestService *AccountTestService,
 	rateLimitService *RateLimitService,
 	billingCacheService *BillingCacheService,
+	billingService *BillingService,
+	modelPricingResolver *ModelPricingResolver,
+	settingRepo SettingRepository,
 ) *AccountShareModeService {
-	svc := NewAccountShareModeService(repo, accountRepo, apiKeyRepo, userRepo, proxyRepo, openaiOAuthService)
+	svc := NewAccountShareModeService(repo, accountRepo, apiKeyRepo, userRepo, proxyRepo, openaiOAuthService, oauthService)
 	if cfg != nil {
 		svc.SetActionTokenSecret(cfg.JWT.Secret)
 	}
 	svc.SetRuntimeDependencies(concurrencyService, authCacheInvalidator, accountTestService, rateLimitService)
 	svc.SetBillingCacheService(billingCacheService)
+	svc.SetRecommendationPricingDependencies(billingService, modelPricingResolver)
+	svc.SetRecommendationUsageProfileRepository(usageLogRepo)
+	svc.SetReviewModerationSettingRepository(settingRepo)
 	svc.StartSeatBillingWorker()
+	svc.StartReviewModerationWorker()
 	return svc
+}
+
+func ProvideAccountShareModeServices(svc *AccountShareModeService) []*AccountShareModeService {
+	if svc == nil {
+		return nil
+	}
+	return []*AccountShareModeService{svc}
+}
+
+func ProvideGatewayService(
+	accountRepo AccountRepository,
+	accountSharePolicyRepo AccountSharePolicyRepository,
+	groupRepo GroupRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	identityService *IdentityService,
+	httpUpstream HTTPUpstream,
+	deferredService *DeferredService,
+	claudeTokenProvider *ClaudeTokenProvider,
+	sessionLimitCache SessionLimitCache,
+	rpmCache RPMCache,
+	digestStore *DigestSessionStore,
+	settingService *SettingService,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	channelService *ChannelService,
+	resolver *ModelPricingResolver,
+	balanceNotifyService *BalanceNotifyService,
+	accountShareModeService *AccountShareModeService,
+) *GatewayService {
+	return NewGatewayService(
+		accountRepo,
+		accountSharePolicyRepo,
+		groupRepo,
+		usageLogRepo,
+		usageBillingRepo,
+		userRepo,
+		userSubRepo,
+		userGroupRateRepo,
+		cache,
+		cfg,
+		schedulerSnapshot,
+		concurrencyService,
+		billingService,
+		rateLimitService,
+		billingCacheService,
+		identityService,
+		httpUpstream,
+		deferredService,
+		claudeTokenProvider,
+		sessionLimitCache,
+		rpmCache,
+		digestStore,
+		settingService,
+		tlsFPProfileService,
+		channelService,
+		resolver,
+		balanceNotifyService,
+		accountShareModeService,
+	)
 }
 
 func ProvideSubscriptionService(
@@ -623,6 +712,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountService,
 	NewAccountSharePolicyService,
 	ProvideAccountShareModeService,
+	ProvideAccountShareModeServices,
 	NewProxyService,
 	NewRedeemService,
 	NewPromoService,
@@ -635,7 +725,7 @@ var ProviderSet = wire.NewSet(
 	NewConversationService,
 	NewSystemNoticeService,
 	ProvideAdminService,
-	NewGatewayService,
+	ProvideGatewayService,
 	NewOpenAIGatewayService,
 	NewOAuthService,
 	NewOpenAIOAuthService,
@@ -686,6 +776,7 @@ var ProviderSet = wire.NewSet(
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
 	ProvideAccountBatchTaskService,
+	ProvideAccountBatchTaskServices,
 	ProvideDeferredService,
 	NewAntigravityQuotaFetcher,
 	NewUserAttributeService,
@@ -708,8 +799,12 @@ var ProviderSet = wire.NewSet(
 	NewRevenueService,
 	NewReceiptCodeService,
 	NewWithdrawalService,
+	NewInvoiceService,
 	ProvideShopService,
+	NewActivityService,
+	ProvideActivityAutoDrawService,
 	ProvidePaymentConfigService,
+	wire.Bind(new(ReceiptCodeStorageConfigProvider), new(*PaymentConfigService)),
 	ProvidePaymentService,
 	ProvidePaymentOrderExpiryService,
 	ProvideBalanceNotifyService,

@@ -606,43 +606,44 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 
 // GatewayService handles API gateway operations
 type GatewayService struct {
-	accountRepo            AccountRepository
-	accountSharePolicyRepo AccountSharePolicyRepository
-	groupRepo              GroupRepository
-	usageLogRepo           UsageLogRepository
-	usageBillingRepo       UsageBillingRepository
-	userRepo               UserRepository
-	userSubRepo            UserSubscriptionRepository
-	userGroupRateRepo      UserGroupRateRepository
-	cache                  GatewayCache
-	digestStore            *DigestSessionStore
-	cfg                    *config.Config
-	schedulerSnapshot      *SchedulerSnapshotService
-	billingService         *BillingService
-	rateLimitService       *RateLimitService
-	billingCacheService    *BillingCacheService
-	identityService        *IdentityService
-	httpUpstream           HTTPUpstream
-	deferredService        *DeferredService
-	concurrencyService     *ConcurrencyService
-	claudeTokenProvider    *ClaudeTokenProvider
-	sessionLimitCache      SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
-	rpmCache               RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
-	userGroupRateResolver  *userGroupRateResolver
-	userGroupRateCache     *gocache.Cache
-	userGroupRateSF        singleflight.Group
-	modelsListCache        *gocache.Cache
-	modelsListCacheTTL     time.Duration
-	settingService         *SettingService
-	responseHeaderFilter   *responseheaders.CompiledHeaderFilter
-	debugModelRouting      atomic.Bool
-	debugClaudeMimic       atomic.Bool
-	channelService         *ChannelService
-	resolver               *ModelPricingResolver
-	debugGatewayBodyFile   atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
-	tlsFPProfileService    *TLSFingerprintProfileService
-	balanceNotifyService   *BalanceNotifyService
-	accountRuntimeStats    *accountRuntimeStats
+	accountRepo             AccountRepository
+	accountSharePolicyRepo  AccountSharePolicyRepository
+	groupRepo               GroupRepository
+	usageLogRepo            UsageLogRepository
+	usageBillingRepo        UsageBillingRepository
+	userRepo                UserRepository
+	userSubRepo             UserSubscriptionRepository
+	userGroupRateRepo       UserGroupRateRepository
+	cache                   GatewayCache
+	digestStore             *DigestSessionStore
+	cfg                     *config.Config
+	schedulerSnapshot       *SchedulerSnapshotService
+	billingService          *BillingService
+	rateLimitService        *RateLimitService
+	billingCacheService     *BillingCacheService
+	identityService         *IdentityService
+	httpUpstream            HTTPUpstream
+	deferredService         *DeferredService
+	concurrencyService      *ConcurrencyService
+	claudeTokenProvider     *ClaudeTokenProvider
+	sessionLimitCache       SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
+	rpmCache                RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
+	userGroupRateResolver   *userGroupRateResolver
+	userGroupRateCache      *gocache.Cache
+	userGroupRateSF         singleflight.Group
+	modelsListCache         *gocache.Cache
+	modelsListCacheTTL      time.Duration
+	settingService          *SettingService
+	responseHeaderFilter    *responseheaders.CompiledHeaderFilter
+	debugModelRouting       atomic.Bool
+	debugClaudeMimic        atomic.Bool
+	channelService          *ChannelService
+	resolver                *ModelPricingResolver
+	debugGatewayBodyFile    atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
+	tlsFPProfileService     *TLSFingerprintProfileService
+	balanceNotifyService    *BalanceNotifyService
+	accountShareModeService *AccountShareModeService
+	accountRuntimeStats     *accountRuntimeStats
 }
 
 // NewGatewayService creates a new GatewayService
@@ -674,43 +675,49 @@ func NewGatewayService(
 	channelService *ChannelService,
 	resolver *ModelPricingResolver,
 	balanceNotifyService *BalanceNotifyService,
+	accountShareModeServices ...*AccountShareModeService,
 ) *GatewayService {
 	userGroupRateTTL := resolveUserGroupRateCacheTTL(cfg)
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
+	var accountShareModeService *AccountShareModeService
+	if len(accountShareModeServices) > 0 {
+		accountShareModeService = accountShareModeServices[0]
+	}
 
 	svc := &GatewayService{
-		accountRepo:            accountRepo,
-		accountSharePolicyRepo: accountSharePolicyRepo,
-		groupRepo:              groupRepo,
-		usageLogRepo:           usageLogRepo,
-		usageBillingRepo:       usageBillingRepo,
-		userRepo:               userRepo,
-		userSubRepo:            userSubRepo,
-		userGroupRateRepo:      userGroupRateRepo,
-		cache:                  cache,
-		digestStore:            digestStore,
-		cfg:                    cfg,
-		schedulerSnapshot:      schedulerSnapshot,
-		concurrencyService:     concurrencyService,
-		billingService:         billingService,
-		rateLimitService:       rateLimitService,
-		billingCacheService:    billingCacheService,
-		identityService:        identityService,
-		httpUpstream:           httpUpstream,
-		deferredService:        deferredService,
-		claudeTokenProvider:    claudeTokenProvider,
-		sessionLimitCache:      sessionLimitCache,
-		rpmCache:               rpmCache,
-		userGroupRateCache:     gocache.New(userGroupRateTTL, time.Minute),
-		settingService:         settingService,
-		modelsListCache:        gocache.New(modelsListTTL, time.Minute),
-		modelsListCacheTTL:     modelsListTTL,
-		responseHeaderFilter:   compileResponseHeaderFilter(cfg),
-		tlsFPProfileService:    tlsFPProfileService,
-		channelService:         channelService,
-		resolver:               resolver,
-		balanceNotifyService:   balanceNotifyService,
-		accountRuntimeStats:    newAccountRuntimeStats(),
+		accountRepo:             accountRepo,
+		accountSharePolicyRepo:  accountSharePolicyRepo,
+		groupRepo:               groupRepo,
+		usageLogRepo:            usageLogRepo,
+		usageBillingRepo:        usageBillingRepo,
+		userRepo:                userRepo,
+		userSubRepo:             userSubRepo,
+		userGroupRateRepo:       userGroupRateRepo,
+		cache:                   cache,
+		digestStore:             digestStore,
+		cfg:                     cfg,
+		schedulerSnapshot:       schedulerSnapshot,
+		concurrencyService:      concurrencyService,
+		billingService:          billingService,
+		rateLimitService:        rateLimitService,
+		billingCacheService:     billingCacheService,
+		identityService:         identityService,
+		httpUpstream:            httpUpstream,
+		deferredService:         deferredService,
+		claudeTokenProvider:     claudeTokenProvider,
+		sessionLimitCache:       sessionLimitCache,
+		rpmCache:                rpmCache,
+		userGroupRateCache:      gocache.New(userGroupRateTTL, time.Minute),
+		settingService:          settingService,
+		modelsListCache:         gocache.New(modelsListTTL, time.Minute),
+		modelsListCacheTTL:      modelsListTTL,
+		responseHeaderFilter:    compileResponseHeaderFilter(cfg),
+		tlsFPProfileService:     tlsFPProfileService,
+		channelService:          channelService,
+		resolver:                resolver,
+		balanceNotifyService:    balanceNotifyService,
+		accountShareModeService: accountShareModeService,
+		accountRuntimeStats:     newAccountRuntimeStats(),
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -1518,6 +1525,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 	ctx = s.withGroupContext(ctx, group)
 
+	if selection, handled, err := s.selectAccountShareModeBoundAccount(ctx, groupID, sessionHash, requestedModel, excludedIDs); handled {
+		return selection, err
+	}
+
 	// Claude Code 限制可能已将 groupID 解析为 fallback group，
 	// 渠道限制预检查必须使用解析后的分组。
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
@@ -2174,6 +2185,137 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		})
 	}
 	return nil, ErrNoAvailableAccounts
+}
+
+func (s *GatewayService) selectAccountShareModeBoundAccount(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*AccountSelectionResult, bool, error) {
+	if s == nil || s.accountShareModeService == nil || s.accountRepo == nil || groupID == nil || *groupID <= 0 {
+		return nil, false, nil
+	}
+	if !s.accountShareModeService.IsModeGroup(ctx, *groupID) {
+		return nil, false, nil
+	}
+	reqCtx, ok := AccountShareModeRequestFromContext(ctx)
+	if !ok || reqCtx.UserID <= 0 || reqCtx.APIKeyID <= 0 {
+		return nil, true, ErrAccountShareModeGroupUnbound
+	}
+	var membership *AccountShareMembership
+	var listing *AccountShareListing
+	var account *Account
+	var lastErr error
+	for attempt := 0; attempt < AccountShareModeQueueMaxItems; attempt++ {
+		var err error
+		membership, listing, err = s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
+		if err != nil {
+			return nil, true, err
+		}
+		if membership == nil || listing == nil {
+			return nil, true, ErrAccountShareModeGroupUnbound
+		}
+		accountID := membership.AccountID
+		if accountID <= 0 {
+			return nil, true, ErrNoAvailableAccounts
+		}
+		retryCurrentMembership := false
+		if excludedIDs != nil {
+			if _, excluded := excludedIDs[accountID]; excluded {
+				lastErr = ErrNoAvailableAccounts
+				retryCurrentMembership = true
+			}
+		}
+		if !retryCurrentMembership && s.userRepo != nil {
+			user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
+			if err != nil {
+				return nil, true, err
+			}
+			if user.Balance < listing.MinBalanceRequired {
+				lastErr = ErrAccountShareBalanceBelowMinimum
+				retryCurrentMembership = true
+			}
+		}
+		if !retryCurrentMembership {
+			account, err = s.accountRepo.GetByID(ctx, accountID)
+			if err != nil {
+				return nil, true, err
+			}
+			if account == nil || account.ID != accountID || account.Platform != PlatformAnthropic || account.Type != AccountTypeOAuth || !s.isAccountSchedulableForSelection(account) {
+				lastErr = ErrNoAvailableAccounts
+				retryCurrentMembership = true
+			}
+		}
+		if !retryCurrentMembership && requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
+			return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+		}
+		if !retryCurrentMembership && !s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if !retryCurrentMembership && !s.isAccountSchedulableForQuota(account) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if !retryCurrentMembership && !s.isAccountSchedulableForWindowCost(ctx, account, false) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if !retryCurrentMembership && !s.isAccountSchedulableForRPM(ctx, account, false) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if retryCurrentMembership {
+			now := time.Now().UTC()
+			if err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now); err != nil {
+				return nil, true, err
+			}
+			membership = nil
+			listing = nil
+			account = nil
+			continue
+		}
+		break
+	}
+	if membership == nil || listing == nil || account == nil {
+		if lastErr != nil {
+			return nil, true, lastErr
+		}
+		return nil, true, ErrNoAvailableAccounts
+	}
+
+	membershipSlot, err := s.accountShareModeService.AcquireMembershipSlot(ctx, membership.ID, listing.PerUserConcurrency)
+	if err != nil {
+		return nil, true, err
+	}
+	if membershipSlot == nil || !membershipSlot.Acquired {
+		return nil, true, ErrAccountSharePerUserConcurrencyExceeded
+	}
+	accountSlot, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+	if err != nil {
+		if membershipSlot.ReleaseFunc != nil {
+			membershipSlot.ReleaseFunc()
+		}
+		return nil, true, err
+	}
+	if accountSlot == nil || !accountSlot.Acquired {
+		if membershipSlot.ReleaseFunc != nil {
+			membershipSlot.ReleaseFunc()
+		}
+		return nil, true, ErrNoAvailableAccounts
+	}
+	release := func() {
+		if accountSlot.ReleaseFunc != nil {
+			accountSlot.ReleaseFunc()
+		}
+		if membershipSlot.ReleaseFunc != nil {
+			membershipSlot.ReleaseFunc()
+		}
+	}
+	if !s.checkAndRegisterSession(ctx, account, sessionHash) {
+		release()
+		return nil, true, ErrNoAvailableAccounts
+	}
+	if sessionHash != "" && s.cache != nil {
+		_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, account.ID, stickySessionTTL)
+	}
+	return newAccountShareModeSelectionResult(account, true, release, nil), true, nil
 }
 
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
@@ -9296,6 +9438,23 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		groupDefault := apiKey.Group.RateMultiplier
 		multiplier = s.getUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, groupDefault)
 	}
+	var accountShareMembership *AccountShareMembership
+	var accountShareListing *AccountShareListing
+	if s.accountShareModeService != nil && apiKey.GroupID != nil {
+		var err error
+		accountShareMembership, accountShareListing, err = s.accountShareModeService.ResolveActiveBindingForRequest(ctx, user.ID, apiKey.ID, *apiKey.GroupID)
+		if err != nil {
+			return err
+		}
+		if accountShareListing != nil && accountShareListing.AccountID != account.ID {
+			return ErrNoAvailableAccounts
+		}
+		if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
+			multiplier = AccountShareModeOwnerSelfUseMultiplier
+		} else if accountShareListing != nil {
+			multiplier = accountShareListing.RateMultiplier
+		}
+	}
 
 	// 确定计费模型
 	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
@@ -9314,6 +9473,14 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, opts)
+	var accountShareModeSettlement *AccountShareModeBillingSnapshot
+	if accountShareMembership != nil && accountShareListing != nil && cost != nil {
+		policy, err := s.accountShareModeService.ResolvePolicy(ctx, account.Platform)
+		if err != nil {
+			return err
+		}
+		accountShareModeSettlement = BuildAccountShareModeBillingSnapshot(accountShareMembership, accountShareListing, policy, cost.ActualCost, 0, int(result.Duration.Milliseconds()))
+	}
 
 	// 判断计费方式：订阅模式 vs 余额模式。订阅分组和余额相互独立，订阅缺失时必须失败，不能回退余额。
 	isSubscriptionBilling := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
@@ -9372,6 +9539,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		PrivateGroupCommissionRate: privateGroupCommissionRate,
 		AccountRateMultiplier:      accountRateMultiplier,
 		APIKeyService:              input.APIKeyService,
+		AccountShareModeSettlement: accountShareModeSettlement,
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {

@@ -271,7 +271,7 @@ func (s *AuthService) FinalizeOAuthEmailAccount(
 			}
 			logger.LegacyPrintf("service.auth", "[Auth] Skipping optional OAuth affiliate invitation code for user %d because affiliate service is unavailable", user.ID)
 		} else {
-			if err := s.affiliateService.ConsumeInvitationCode(ctx, user.ID, effectiveInvitationCode); err != nil {
+			if err := s.affiliateService.ConsumeInvitationCodeWithWeeklyLimit(ctx, user.ID, effectiveInvitationCode, invitationRequired); err != nil {
 				if invitationRequired {
 					return ErrInvitationCodeInvalid
 				}

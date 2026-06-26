@@ -229,8 +229,14 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DefaultConcurrency:                        settings.DefaultConcurrency,
 		DefaultBalance:                            settings.DefaultBalance,
 		RiskControlEnabled:                        settings.RiskControlEnabled,
+		InvoiceManagementEnabled:                  settings.InvoiceManagementEnabled,
+		WithdrawalManagementEnabled:               settings.WithdrawalManagementEnabled,
 		CyberSessionBlockEnabled:                  settings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:               settings.CyberSessionBlockTTLSeconds,
+		AccountShareCommentReviewEnabled:          settings.AccountShareCommentReviewEnabled,
+		AccountShareCommentReviewURL:              settings.AccountShareCommentReviewURL,
+		AccountShareCommentReviewAPIKeyConfigured: settings.AccountShareCommentReviewAPIKeyConfigured,
+		AccountShareCommentReviewModel:            settings.AccountShareCommentReviewModel,
 		AffiliateRebateRate:                       settings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                settings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:               settings.AffiliateRebateDurationDays,
@@ -507,6 +513,10 @@ type UpdateSettingsRequest struct {
 	RiskControlEnabled                       *bool                             `json:"risk_control_enabled"`
 	CyberSessionBlockEnabled                 *bool                             `json:"cyber_session_block_enabled"`
 	CyberSessionBlockTTLSeconds              *int                              `json:"cyber_session_block_ttl_seconds"`
+	AccountShareCommentReviewEnabled         *bool                             `json:"account_share_comment_review_enabled"`
+	AccountShareCommentReviewURL             *string                           `json:"account_share_comment_review_url"`
+	AccountShareCommentReviewAPIKey          *string                           `json:"account_share_comment_review_api_key"`
+	AccountShareCommentReviewModel           *string                           `json:"account_share_comment_review_model"`
 	AffiliateRebateRate                      *float64                          `json:"affiliate_rebate_rate"`
 	AffiliateRebateFreezeHours               *int                              `json:"affiliate_rebate_freeze_hours"`
 	AffiliateRebateDurationDays              *int                              `json:"affiliate_rebate_duration_days"`
@@ -652,6 +662,10 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Functional module switches
+	InvoiceManagementEnabled    *bool `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled *bool `json:"withdrawal_management_enabled"`
 
 	// User-owned account import limit
 	UserAccountImportLimit *int `json:"user_account_import_limit"`
@@ -1497,6 +1511,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.RiskControlEnabled
 		}(),
+		InvoiceManagementEnabled: func() bool {
+			if req.InvoiceManagementEnabled != nil {
+				return *req.InvoiceManagementEnabled
+			}
+			return previousSettings.InvoiceManagementEnabled
+		}(),
+		WithdrawalManagementEnabled: func() bool {
+			if req.WithdrawalManagementEnabled != nil {
+				return *req.WithdrawalManagementEnabled
+			}
+			return previousSettings.WithdrawalManagementEnabled
+		}(),
 		CyberSessionBlockEnabled: func() bool {
 			if req.CyberSessionBlockEnabled != nil {
 				return *req.CyberSessionBlockEnabled
@@ -1508,6 +1534,30 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.CyberSessionBlockTTLSeconds
 			}
 			return previousSettings.CyberSessionBlockTTLSeconds
+		}(),
+		AccountShareCommentReviewEnabled: func() bool {
+			if req.AccountShareCommentReviewEnabled != nil {
+				return *req.AccountShareCommentReviewEnabled
+			}
+			return previousSettings.AccountShareCommentReviewEnabled
+		}(),
+		AccountShareCommentReviewURL: func() string {
+			if req.AccountShareCommentReviewURL != nil {
+				return *req.AccountShareCommentReviewURL
+			}
+			return previousSettings.AccountShareCommentReviewURL
+		}(),
+		AccountShareCommentReviewAPIKey: func() string {
+			if req.AccountShareCommentReviewAPIKey != nil {
+				return *req.AccountShareCommentReviewAPIKey
+			}
+			return ""
+		}(),
+		AccountShareCommentReviewModel: func() string {
+			if req.AccountShareCommentReviewModel != nil {
+				return *req.AccountShareCommentReviewModel
+			}
+			return previousSettings.AccountShareCommentReviewModel
 		}(),
 		AffiliateRebateRate:             affiliateRebateRate,
 		AffiliateRebateFreezeHours:      affiliateRebateFreezeHours,
@@ -1941,8 +1991,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DefaultConcurrency:                        updatedSettings.DefaultConcurrency,
 		DefaultBalance:                            updatedSettings.DefaultBalance,
 		RiskControlEnabled:                        updatedSettings.RiskControlEnabled,
+		InvoiceManagementEnabled:                  updatedSettings.InvoiceManagementEnabled,
+		WithdrawalManagementEnabled:               updatedSettings.WithdrawalManagementEnabled,
 		CyberSessionBlockEnabled:                  updatedSettings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:               updatedSettings.CyberSessionBlockTTLSeconds,
+		AccountShareCommentReviewEnabled:          updatedSettings.AccountShareCommentReviewEnabled,
+		AccountShareCommentReviewURL:              updatedSettings.AccountShareCommentReviewURL,
+		AccountShareCommentReviewAPIKeyConfigured: updatedSettings.AccountShareCommentReviewAPIKeyConfigured,
+		AccountShareCommentReviewModel:            updatedSettings.AccountShareCommentReviewModel,
 		AffiliateRebateRate:                       updatedSettings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                updatedSettings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:               updatedSettings.AffiliateRebateDurationDays,
@@ -2339,11 +2395,26 @@ func preserveOmittedUpdateSettingsFields(req *UpdateSettingsRequest, previous *s
 	if !fieldProvided(fields, "risk_control_enabled") {
 		req.RiskControlEnabled = &previous.RiskControlEnabled
 	}
+	if !fieldProvided(fields, "invoice_management_enabled") {
+		req.InvoiceManagementEnabled = &previous.InvoiceManagementEnabled
+	}
+	if !fieldProvided(fields, "withdrawal_management_enabled") {
+		req.WithdrawalManagementEnabled = &previous.WithdrawalManagementEnabled
+	}
 	if !fieldProvided(fields, "cyber_session_block_enabled") {
 		req.CyberSessionBlockEnabled = &previous.CyberSessionBlockEnabled
 	}
 	if !fieldProvided(fields, "cyber_session_block_ttl_seconds") {
 		req.CyberSessionBlockTTLSeconds = &previous.CyberSessionBlockTTLSeconds
+	}
+	if !fieldProvided(fields, "account_share_comment_review_enabled") {
+		req.AccountShareCommentReviewEnabled = &previous.AccountShareCommentReviewEnabled
+	}
+	if !fieldProvided(fields, "account_share_comment_review_url") {
+		req.AccountShareCommentReviewURL = &previous.AccountShareCommentReviewURL
+	}
+	if !fieldProvided(fields, "account_share_comment_review_model") {
+		req.AccountShareCommentReviewModel = &previous.AccountShareCommentReviewModel
 	}
 	if !fieldProvided(fields, "user_account_import_limit") {
 		req.UserAccountImportLimit = &previous.UserAccountImportLimit
@@ -2651,6 +2722,18 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.CyberSessionBlockTTLSeconds != after.CyberSessionBlockTTLSeconds {
 		changed = append(changed, "cyber_session_block_ttl_seconds")
 	}
+	if before.AccountShareCommentReviewEnabled != after.AccountShareCommentReviewEnabled {
+		changed = append(changed, "account_share_comment_review_enabled")
+	}
+	if before.AccountShareCommentReviewURL != after.AccountShareCommentReviewURL {
+		changed = append(changed, "account_share_comment_review_url")
+	}
+	if req.AccountShareCommentReviewAPIKey != nil && strings.TrimSpace(*req.AccountShareCommentReviewAPIKey) != "" {
+		changed = append(changed, "account_share_comment_review_api_key")
+	}
+	if before.AccountShareCommentReviewModel != after.AccountShareCommentReviewModel {
+		changed = append(changed, "account_share_comment_review_model")
+	}
 	if before.DefaultUserRPMLimit != after.DefaultUserRPMLimit {
 		changed = append(changed, "default_user_rpm_limit")
 	}
@@ -2819,6 +2902,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.InvoiceManagementEnabled != after.InvoiceManagementEnabled {
+		changed = append(changed, "invoice_management_enabled")
+	}
+	if before.WithdrawalManagementEnabled != after.WithdrawalManagementEnabled {
+		changed = append(changed, "withdrawal_management_enabled")
 	}
 	if before.UserAccountImportLimit != after.UserAccountImportLimit {
 		changed = append(changed, "user_account_import_limit")

@@ -54,6 +54,8 @@ type UsageStats struct {
 	TotalTokens              int64   `json:"total_tokens"`
 	TotalCost                float64 `json:"total_cost"`
 	TotalActualCost          float64 `json:"total_actual_cost"`
+	TotalRequestActualCost   float64 `json:"total_request_actual_cost"`
+	TotalHourlyCost          float64 `json:"total_hourly_cost"`
 	AverageDurationMs        float64 `json:"average_duration_ms"`
 }
 
@@ -204,6 +206,8 @@ func (s *UsageService) GetStatsByUser(ctx context.Context, userID int64, startTi
 		TotalTokens:              stats.TotalTokens,
 		TotalCost:                stats.TotalCost,
 		TotalActualCost:          stats.TotalActualCost,
+		TotalRequestActualCost:   stats.TotalRequestActualCost,
+		TotalHourlyCost:          stats.TotalHourlyCost,
 		AverageDurationMs:        stats.AverageDurationMs,
 	}, nil
 }
@@ -225,6 +229,8 @@ func (s *UsageService) GetStatsByAPIKey(ctx context.Context, apiKeyID int64, sta
 		TotalTokens:              stats.TotalTokens,
 		TotalCost:                stats.TotalCost,
 		TotalActualCost:          stats.TotalActualCost,
+		TotalRequestActualCost:   stats.TotalRequestActualCost,
+		TotalHourlyCost:          stats.TotalHourlyCost,
 		AverageDurationMs:        stats.AverageDurationMs,
 	}, nil
 }
@@ -364,17 +370,14 @@ func (s *UsageService) ListWithFilters(ctx context.Context, params pagination.Pa
 	return logs, result, nil
 }
 
-func (s *UsageService) ListBalanceLedger(ctx context.Context, params pagination.PaginationParams, filters UserBalanceLedgerFilters) ([]UserBalanceLedgerEntry, *pagination.PaginationResult, error) {
-	if s == nil || s.entClient == nil {
-		return nil, nil, infraerrors.InternalServer("USAGE_BALANCE_LEDGER_UNAVAILABLE", "usage balance ledger is unavailable")
-	}
+func buildBalanceLedgerWhere(filters UserBalanceLedgerFilters) (string, []any, error) {
 	if filters.RequireUserID && filters.UserID <= 0 {
-		return nil, nil, infraerrors.BadRequest("USER_ID_INVALID", "user_id must be positive")
+		return "", nil, infraerrors.BadRequest("USER_ID_INVALID", "user_id must be positive")
 	}
 
 	direction := strings.ToLower(strings.TrimSpace(filters.Direction))
 	if direction != "" && direction != "debit" && direction != "credit" {
-		return nil, nil, infraerrors.BadRequest("BALANCE_LEDGER_DIRECTION_INVALID", "direction must be debit or credit")
+		return "", nil, infraerrors.BadRequest("BALANCE_LEDGER_DIRECTION_INVALID", "direction must be debit or credit")
 	}
 	reason := strings.TrimSpace(filters.Reason)
 	refType := strings.TrimSpace(filters.RefType)
@@ -409,13 +412,70 @@ func (s *UsageService) ListBalanceLedger(ctx context.Context, params pagination.
 	if len(whereParts) == 0 {
 		whereParts = append(whereParts, "TRUE")
 	}
+	return strings.Join(whereParts, " AND "), args, nil
+}
 
-	whereSQL := strings.Join(whereParts, " AND ")
+func (s *UsageService) ListBalanceLedger(ctx context.Context, params pagination.PaginationParams, filters UserBalanceLedgerFilters) ([]UserBalanceLedgerEntry, *pagination.PaginationResult, error) {
+	if s == nil || s.entClient == nil {
+		return nil, nil, infraerrors.InternalServer("USAGE_BALANCE_LEDGER_UNAVAILABLE", "usage balance ledger is unavailable")
+	}
+	whereSQL, args, err := buildBalanceLedgerWhere(filters)
+	if err != nil {
+		return nil, nil, err
+	}
 	if filters.ExactTotal {
 		return s.listBalanceLedgerWithExactTotal(ctx, params, whereSQL, args)
 	}
 
 	return s.listBalanceLedgerWithFastPagination(ctx, params, whereSQL, args)
+}
+
+func (s *UsageService) GetBalanceLedgerStats(ctx context.Context, filters UserBalanceLedgerFilters) (*UserBalanceLedgerStats, error) {
+	if s == nil || s.entClient == nil {
+		return nil, infraerrors.InternalServer("USAGE_BALANCE_LEDGER_UNAVAILABLE", "usage balance ledger is unavailable")
+	}
+	whereSQL, args, err := buildBalanceLedgerWhere(filters)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.entClient.QueryContext(ctx, `
+		SELECT
+			COUNT(*)::bigint,
+			COUNT(*) FILTER (WHERE l.direction = 'credit')::bigint,
+			COUNT(*) FILTER (WHERE l.direction = 'debit')::bigint,
+			COALESCE(SUM(CASE WHEN l.direction = 'credit' THEN l.amount ELSE 0 END), 0)::text,
+			COALESCE(SUM(CASE WHEN l.direction = 'debit' THEN l.amount ELSE 0 END), 0)::text,
+			COALESCE(SUM(CASE
+				WHEN l.direction = 'credit' THEN l.amount
+				WHEN l.direction = 'debit' THEN -l.amount
+				ELSE 0
+			END), 0)::text
+		FROM user_balance_ledger l
+		WHERE `+whereSQL, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get balance ledger stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return nil, fmt.Errorf("get balance ledger stats: no rows")
+	}
+
+	var stats UserBalanceLedgerStats
+	if err := rows.Scan(
+		&stats.TotalEntries,
+		&stats.CreditEntries,
+		&stats.DebitEntries,
+		&stats.CreditAmount,
+		&stats.DebitAmount,
+		&stats.NetAmount,
+	); err != nil {
+		return nil, fmt.Errorf("scan balance ledger stats: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get balance ledger stats: %w", err)
+	}
+	return &stats, nil
 }
 
 func (s *UsageService) listBalanceLedgerWithExactTotal(ctx context.Context, params pagination.PaginationParams, whereSQL string, args []any) ([]UserBalanceLedgerEntry, *pagination.PaginationResult, error) {

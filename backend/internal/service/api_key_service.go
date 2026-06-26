@@ -21,15 +21,19 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound          = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed         = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrAPIKeyExists            = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort          = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars      = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited       = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrInvalidIPPattern        = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
-	ErrAPIKeyGroupRequired     = infraerrors.BadRequest("API_KEY_GROUP_REQUIRED", "api key group is required when ungrouped key scheduling is disabled")
-	ErrAPIKeyGroupRouteInvalid = infraerrors.BadRequest("API_KEY_GROUP_ROUTE_INVALID", "invalid api key group route")
+	ErrAPIKeyNotFound                  = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed                 = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrAPIKeyExists                    = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort                  = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars              = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited               = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrInvalidIPPattern                = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyGroupRequired             = infraerrors.BadRequest("API_KEY_GROUP_REQUIRED", "api key group is required when ungrouped key scheduling is disabled")
+	ErrAPIKeyGroupRouteInvalid         = infraerrors.BadRequest("API_KEY_GROUP_ROUTE_INVALID", "invalid api key group route")
+	ErrAPIKeyAccountShareBindingExists = infraerrors.Conflict(
+		"API_KEY_ACCOUNT_SHARE_BINDING_EXISTS",
+		"api key is bound to active or queued account share mode usage",
+	)
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -154,6 +158,10 @@ type userVisibleGroupRepository interface {
 	ListActiveVisibleToUser(ctx context.Context, userID int64, subscribedGroupIDs []int64) ([]Group, error)
 }
 
+type AccountShareAPIKeyBindingChecker interface {
+	HasActiveOrQueuedMembershipForAPIKey(ctx context.Context, consumerUserID, apiKeyID int64) (bool, error)
+}
+
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
 	Name        string             `json:"name"`
@@ -202,20 +210,21 @@ type RateLimitCacheInvalidator interface {
 }
 
 type APIKeyService struct {
-	apiKeyRepo            APIKeyRepository
-	userRepo              UserRepository
-	groupRepo             GroupRepository
-	userSubRepo           UserSubscriptionRepository
-	userGroupRateRepo     UserGroupRateRepository
-	cache                 APIKeyCache
-	rateLimitCacheInvalid RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
-	settingService        *SettingService
-	cfg                   *config.Config
-	authCacheL1           *ristretto.Cache
-	authCfg               apiKeyAuthCacheConfig
-	authGroup             singleflight.Group
-	lastUsedTouchL1       sync.Map // keyID -> nextAllowedAt(time.Time)
-	lastUsedTouchSF       singleflight.Group
+	apiKeyRepo                 APIKeyRepository
+	userRepo                   UserRepository
+	groupRepo                  GroupRepository
+	userSubRepo                UserSubscriptionRepository
+	userGroupRateRepo          UserGroupRateRepository
+	cache                      APIKeyCache
+	accountShareBindingChecker AccountShareAPIKeyBindingChecker
+	rateLimitCacheInvalid      RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
+	settingService             *SettingService
+	cfg                        *config.Config
+	authCacheL1                *ristretto.Cache
+	authCfg                    apiKeyAuthCacheConfig
+	authGroup                  singleflight.Group
+	lastUsedTouchL1            sync.Map // keyID -> nextAllowedAt(time.Time)
+	lastUsedTouchSF            singleflight.Group
 }
 
 // NewAPIKeyService 创建API Key服务实例
@@ -250,6 +259,11 @@ func (s *APIKeyService) SetRateLimitCacheInvalidator(inv RateLimitCacheInvalidat
 // SetSettingService injects system settings used by API key write validation.
 func (s *APIKeyService) SetSettingService(settingService *SettingService) {
 	s.settingService = settingService
+}
+
+// SetAccountShareAPIKeyBindingChecker injects the account-share binding guard.
+func (s *APIKeyService) SetAccountShareAPIKeyBindingChecker(checker AccountShareAPIKeyBindingChecker) {
+	s.accountShareBindingChecker = checker
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -799,6 +813,16 @@ func (s *APIKeyService) Delete(ctx context.Context, id int64, userID int64) erro
 	// 验证当前用户是否为该 API Key 的所有者
 	if ownerID != userID {
 		return ErrInsufficientPerms
+	}
+
+	if s.accountShareBindingChecker != nil {
+		exists, err := s.accountShareBindingChecker.HasActiveOrQueuedMembershipForAPIKey(ctx, userID, id)
+		if err != nil {
+			return fmt.Errorf("check account share api key binding: %w", err)
+		}
+		if exists {
+			return ErrAPIKeyAccountShareBindingExists
+		}
 	}
 
 	// 清除Redis缓存（使用 userID 而非 apiKey.UserID）

@@ -61,10 +61,16 @@
               <p class="text-xl font-bold text-green-600 dark:text-green-400">
                 ${{ (usageStats?.total_actual_cost || 0).toFixed(4) }}
               </p>
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('usage.actualCost') }} /
-                <span class="line-through">${{ (usageStats?.total_cost || 0).toFixed(4) }}</span>
-                {{ t('usage.standardCost') }}
+              <p class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5">
+                <span class="text-green-600 dark:text-green-400">
+                  {{ t('usage.requestBilled') }} ${{ (usageStats?.total_request_actual_cost || 0).toFixed(4) }}
+                </span>
+                <span class="text-sky-600 dark:text-sky-400">
+                  {{ t('usage.hourlyBilled') }} ${{ (usageStats?.total_hourly_cost || 0).toFixed(4) }}
+                </span>
+                <span class="text-gray-400 dark:text-gray-500">
+                  {{ t('usage.standardCost') }} ${{ (usageStats?.total_cost || 0).toFixed(4) }}
+                </span>
               </p>
             </div>
           </div>
@@ -87,6 +93,30 @@
             </div>
           </div>
         </div>
+        </div>
+        <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div
+            v-for="card in ledgerSummaryCards"
+            :key="card.key"
+            class="card p-4"
+          >
+            <div class="flex items-center gap-3">
+              <div :class="['flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', card.iconClass]">
+                <Icon :name="card.icon" size="md" :stroke-width="2" />
+              </div>
+              <div class="min-w-0">
+                <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                  {{ card.label }}
+                </p>
+                <p :class="['mt-1 truncate text-xl font-bold', card.valueClass]">
+                  {{ ledgerStatsLoading ? '...' : card.value }}
+                </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('usage.inSelectedRange') }}
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </template>
 
@@ -138,6 +168,26 @@
                 @change="onDateRangeChange"
               />
             </div>
+            <div class="w-full sm:w-[220px]">
+              <label class="input-label">{{ t('usage.startTime') }}</label>
+              <input
+                v-model="startDateTime"
+                type="datetime-local"
+                step="1"
+                class="input"
+                @change="onExactTimeRangeChange"
+              />
+            </div>
+            <div class="w-full sm:w-[220px]">
+              <label class="input-label">{{ t('usage.endTime') }}</label>
+              <input
+                v-model="endDateTime"
+                type="datetime-local"
+                step="1"
+                class="input"
+                @change="onExactTimeRangeChange"
+              />
+            </div>
 
             <!-- Actions -->
             <div class="ml-auto flex items-center gap-3">
@@ -181,6 +231,26 @@
                 @change="onDateRangeChange"
               />
             </div>
+            <div class="w-full sm:w-[220px]">
+              <label class="input-label">{{ t('usage.startTime') }}</label>
+              <input
+                v-model="startDateTime"
+                type="datetime-local"
+                step="1"
+                class="input"
+                @change="onExactTimeRangeChange"
+              />
+            </div>
+            <div class="w-full sm:w-[220px]">
+              <label class="input-label">{{ t('usage.endTime') }}</label>
+              <input
+                v-model="endDateTime"
+                type="datetime-local"
+                step="1"
+                class="input"
+                @change="onExactTimeRangeChange"
+              />
+            </div>
             <div class="min-w-[160px]">
               <label class="input-label">{{ t('usage.balanceLedger.direction') }}</label>
               <Select
@@ -197,8 +267,30 @@
                 @change="applyFilters"
               />
             </div>
+            <div class="min-w-[180px]">
+              <label class="input-label">{{ t('usage.balanceLedger.labels.referenceType') }}</label>
+              <input
+                v-model.trim="ledgerFilters.ref_type"
+                type="text"
+                class="input"
+                placeholder="usage_log"
+                @keyup.enter="applyFilters"
+              />
+            </div>
+            <div class="min-w-[160px]">
+              <label class="input-label">{{ t('usage.balanceLedger.labels.reference') }}</label>
+              <input
+                v-model.number="ledgerFilters.ref_id"
+                type="number"
+                min="1"
+                step="1"
+                class="input"
+                placeholder="ID"
+                @keyup.enter="applyFilters"
+              />
+            </div>
             <div class="ml-auto flex items-center gap-3">
-              <button @click="applyFilters" :disabled="ledgerLoading" class="btn btn-secondary">
+              <button @click="applyFilters" :disabled="ledgerLoading || ledgerStatsLoading" class="btn btn-secondary">
                 {{ t('common.refresh') }}
               </button>
               <button @click="resetFilters" class="btn btn-secondary">
@@ -664,6 +756,7 @@ import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
 import { resolveUsageRequestType } from '@/utils/usageRequestType'
 import { getBillingModeLabel, getBillingModeBadgeClass } from '@/utils/billingMode'
+import type { UserBalanceLedgerStatsResponse } from '@/api/usage'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -721,9 +814,11 @@ const ledgerColumns = computed<Column[]>(() => [
 
 const usageLogs = ref<UsageLog[]>([])
 const balanceLedger = ref<UserBalanceLedgerEntry[]>([])
+const balanceLedgerStats = ref<UserBalanceLedgerStatsResponse | null>(null)
 const apiKeys = ref<ApiKey[]>([])
 const loading = ref(false)
 const ledgerLoading = ref(false)
+const ledgerStatsLoading = ref(false)
 const ledgerLoaded = ref(false)
 const exporting = ref(false)
 
@@ -833,6 +928,44 @@ const formatLocalDate = (date: Date): string => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
+const formatLocalDateTime = (date: Date): string => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`
+}
+
+const dateAtStartOfDayInput = (date: string): string => `${date}T00:00:00`
+const dateAtEndOfDayInput = (date: string): string => `${date}T23:59:59`
+
+const normalizeDateTimeInput = (value: string): string => {
+  if (!value) return ''
+  return value.length === 16 ? `${value}:00` : value
+}
+
+const dateTimeInputToDate = (value: string): Date | null => {
+  const normalized = normalizeDateTimeInput(value)
+  if (!normalized) return null
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+const dateTimeInputToISOString = (value: string): string | undefined => {
+  const date = dateTimeInputToDate(value)
+  return date ? date.toISOString() : undefined
+}
+
+const getClientTimezone = (): string | undefined => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone
+  } catch {
+    return undefined
+  }
+}
+
 // Initialize date range immediately
 const now = new Date()
 const weekAgo = new Date(now)
@@ -841,6 +974,8 @@ weekAgo.setDate(weekAgo.getDate() - 6)
 // Date range state
 const startDate = ref(formatLocalDate(weekAgo))
 const endDate = ref(formatLocalDate(now))
+const startDateTime = ref(dateAtStartOfDayInput(startDate.value))
+const endDateTime = ref(dateAtEndOfDayInput(endDate.value))
 
 const filters = ref<UsageQueryParams>({
   api_key_id: undefined,
@@ -851,14 +986,72 @@ const filters = ref<UsageQueryParams>({
 const ledgerFilters = ref<{
   direction: '' | BalanceLedgerDirection
   reason: string
+  ref_type: string
+  ref_id?: number
 }>({
   direction: '',
-  reason: ''
+  reason: '',
+  ref_type: '',
+  ref_id: undefined
 })
 
 // Initialize filters with date range
 filters.value.start_date = startDate.value
 filters.value.end_date = endDate.value
+
+const buildExactTimeParams = (): Pick<UsageQueryParams, 'start_time' | 'end_time' | 'timezone'> => ({
+  start_time: dateTimeInputToISOString(startDateTime.value),
+  end_time: dateTimeInputToISOString(endDateTime.value),
+  timezone: getClientTimezone()
+})
+
+const validateExactTimeRange = (): boolean => {
+  const start = dateTimeInputToDate(startDateTime.value)
+  const end = dateTimeInputToDate(endDateTime.value)
+  if (!start || !end) {
+    appStore.showWarning(t('usage.timeRangeRequired'))
+    return false
+  }
+  if (end.getTime() <= start.getTime()) {
+    appStore.showWarning(t('usage.invalidTimeRange'))
+    return false
+  }
+  return true
+}
+
+const syncDateFieldsFromExactTime = () => {
+  const start = dateTimeInputToDate(startDateTime.value)
+  const end = dateTimeInputToDate(endDateTime.value)
+  if (start) startDate.value = formatLocalDate(start)
+  if (end) endDate.value = formatLocalDate(end)
+  filters.value = {
+    ...filters.value,
+    start_date: startDate.value,
+    end_date: endDate.value
+  }
+}
+
+const getLast24HoursRange = (): { startDate: string; endDate: string; startTime: string; endTime: string } => {
+  const end = new Date()
+  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
+  return {
+    startDate: formatLocalDate(start),
+    endDate: formatLocalDate(end),
+    startTime: formatLocalDateTime(start),
+    endTime: formatLocalDateTime(end)
+  }
+}
+
+const syncExactTimeFromDateRange = (range: { startDate: string; endDate: string; preset: string | null }) => {
+  if (range.preset === 'last24Hours') {
+    const exactRange = getLast24HoursRange()
+    startDateTime.value = exactRange.startTime
+    endDateTime.value = exactRange.endTime
+    return
+  }
+  startDateTime.value = dateAtStartOfDayInput(range.startDate)
+  endDateTime.value = dateAtEndOfDayInput(range.endDate)
+}
 
 // Handle date range change from DateRangePicker
 const onDateRangeChange = (range: {
@@ -866,8 +1059,17 @@ const onDateRangeChange = (range: {
   endDate: string
   preset: string | null
 }) => {
+  startDate.value = range.startDate
+  endDate.value = range.endDate
+  syncExactTimeFromDateRange(range)
   filters.value.start_date = range.startDate
   filters.value.end_date = range.endDate
+  applyFilters()
+}
+
+const onExactTimeRangeChange = () => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   applyFilters()
 }
 
@@ -950,19 +1152,34 @@ const buildUsageQueryParams = (page: number, pageSize: number): UsageTableQueryP
   page,
   page_size: pageSize,
   ...filters.value,
+  ...buildExactTimeParams(),
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })
 
-const buildBalanceLedgerQueryParams = (page: number, pageSize: number): UserBalanceLedgerQueryParams => ({
-  page,
-  page_size: pageSize,
-  direction: ledgerFilters.value.direction,
-  reason: ledgerFilters.value.reason || undefined,
-  start_date: filters.value.start_date || startDate.value,
-  end_date: filters.value.end_date || endDate.value,
-  sort_order: ledgerSortState.sort_order
-})
+const buildBalanceLedgerQueryParams = (page: number, pageSize: number): UserBalanceLedgerQueryParams => {
+  const refID = Number(ledgerFilters.value.ref_id)
+  return {
+    page,
+    page_size: pageSize,
+    direction: ledgerFilters.value.direction,
+    reason: ledgerFilters.value.reason || undefined,
+    ref_type: ledgerFilters.value.ref_type.trim() || undefined,
+    ref_id: Number.isFinite(refID) && refID > 0 ? refID : undefined,
+    start_date: filters.value.start_date || startDate.value,
+    end_date: filters.value.end_date || endDate.value,
+    ...buildExactTimeParams(),
+    sort_order: ledgerSortState.sort_order
+  }
+}
+
+const buildBalanceLedgerStatsParams = (): UserBalanceLedgerQueryParams => {
+  const params = buildBalanceLedgerQueryParams(1, ledgerPagination.page_size)
+  delete params.page
+  delete params.page_size
+  delete params.sort_order
+  return params
+}
 
 const loadBalanceLedger = async () => {
   if (ledgerAbortController) {
@@ -972,15 +1189,20 @@ const loadBalanceLedger = async () => {
   ledgerAbortController = currentAbortController
   const { signal } = currentAbortController
   ledgerLoading.value = true
+  ledgerStatsLoading.value = true
   try {
-    const response = await usageAPI.queryBalanceLedger(
-      buildBalanceLedgerQueryParams(ledgerPagination.page, ledgerPagination.page_size),
-      { signal }
-    )
+    const [response, stats] = await Promise.all([
+      usageAPI.queryBalanceLedger(
+        buildBalanceLedgerQueryParams(ledgerPagination.page, ledgerPagination.page_size),
+        { signal }
+      ),
+      usageAPI.getBalanceLedgerStats(buildBalanceLedgerStatsParams(), { signal })
+    ])
     if (signal.aborted) {
       return
     }
     balanceLedger.value = response.items
+    balanceLedgerStats.value = stats
     ledgerPagination.total = response.total
     ledgerPagination.pages = response.pages
     ledgerLoaded.value = true
@@ -996,6 +1218,7 @@ const loadBalanceLedger = async () => {
   } finally {
     if (ledgerAbortController === currentAbortController) {
       ledgerLoading.value = false
+      ledgerStatsLoading.value = false
     }
   }
 }
@@ -1067,6 +1290,8 @@ const invalidateBalanceLedgerCache = () => {
   clearBalanceLedgerPrefetch()
   abortBalanceLedgerRequest()
   ledgerLoading.value = false
+  ledgerStatsLoading.value = false
+  balanceLedgerStats.value = null
 }
 
 const scheduleBalanceLedgerPrefetch = () => {
@@ -1094,7 +1319,8 @@ const loadUsageStats = async () => {
     const stats = await usageAPI.getStatsByDateRange(
       filters.value.start_date || startDate.value,
       filters.value.end_date || endDate.value,
-      apiKeyId
+      apiKeyId,
+      buildExactTimeParams()
     )
     usageStats.value = stats
   } catch (error) {
@@ -1126,11 +1352,15 @@ const resetFilters = () => {
   weekAgo.setDate(weekAgo.getDate() - 6)
   startDate.value = formatLocalDate(weekAgo)
   endDate.value = formatLocalDate(now)
+  startDateTime.value = dateAtStartOfDayInput(startDate.value)
+  endDateTime.value = dateAtEndOfDayInput(endDate.value)
   filters.value.start_date = startDate.value
   filters.value.end_date = endDate.value
   ledgerFilters.value = {
     direction: '',
-    reason: ''
+    reason: '',
+    ref_type: '',
+    ref_id: undefined
   }
   pagination.page = 1
   ledgerPagination.page = 1
@@ -1213,6 +1443,59 @@ const formatLedgerCurrency = (value?: string | number | null, digits = 10): stri
 const formatOptionalLedgerCurrency = (value?: number | null, digits = 10): string => {
   return value == null ? '' : formatLedgerCurrency(value, digits)
 }
+
+const formatLedgerCount = (value?: number | null): string => Number(value || 0).toLocaleString()
+
+const isLedgerNegative = (value?: string | number | null): boolean => normalizeLedgerDecimal(value).startsWith('-')
+
+const formatLedgerNetCurrency = (value?: string | number | null): string => {
+  const normalized = normalizeLedgerDecimal(value)
+  if (normalized === '0') return '$0'
+  return normalized.startsWith('-') ? `-$${normalized.slice(1)}` : `+$${normalized}`
+}
+
+const ledgerSummaryCards = computed(() => {
+  const stats = balanceLedgerStats.value
+  const netNegative = isLedgerNegative(stats?.net_amount)
+  return [
+    {
+      key: 'total_entries',
+      label: t('usage.balanceLedger.statsTotalEntries'),
+      value: formatLedgerCount(stats?.total_entries),
+      icon: 'document' as const,
+      iconClass: 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300',
+      valueClass: 'text-gray-900 dark:text-white'
+    },
+    {
+      key: 'credit_amount',
+      label: t('usage.balanceLedger.statsCreditAmount'),
+      value: formatLedgerCurrency(stats?.credit_amount),
+      icon: 'arrowUp' as const,
+      iconClass: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300',
+      valueClass: 'text-emerald-600 dark:text-emerald-300'
+    },
+    {
+      key: 'debit_amount',
+      label: t('usage.balanceLedger.statsDebitAmount'),
+      value: formatLedgerCurrency(stats?.debit_amount),
+      icon: 'arrowDown' as const,
+      iconClass: 'bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300',
+      valueClass: 'text-rose-600 dark:text-rose-300'
+    },
+    {
+      key: 'net_amount',
+      label: t('usage.balanceLedger.statsNetAmount'),
+      value: formatLedgerNetCurrency(stats?.net_amount),
+      icon: 'trendingUp' as const,
+      iconClass: netNegative
+        ? 'bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300'
+        : 'bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300',
+      valueClass: netNegative
+        ? 'text-rose-600 dark:text-rose-300'
+        : 'text-amber-600 dark:text-amber-300'
+    }
+  ]
+})
 
 const formatLedgerAmount = (row: UserBalanceLedgerEntry): string => {
   const sign = row.direction === 'credit' ? '+' : '-'

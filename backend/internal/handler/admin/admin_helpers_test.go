@@ -16,20 +16,31 @@ import (
 
 func TestParseTimeRange(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	req := httptest.NewRequest(http.MethodGet, "/?start_date=2024-01-01&end_date=2024-01-02&timezone=UTC", nil)
-	c.Request = req
+	newContext := func(target string) *gin.Context {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, target, nil)
+		return c
+	}
 
-	start, end := parseTimeRange(c)
+	c := newContext("/?start_date=2024-01-01&end_date=2024-01-02&timezone=UTC")
+
+	start, end, err := parseTimeRange(c)
+	require.NoError(t, err)
 	require.Equal(t, time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), start)
 	require.Equal(t, time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC), end)
 
-	req = httptest.NewRequest(http.MethodGet, "/?start_date=bad&timezone=UTC", nil)
-	c.Request = req
-	start, end = parseTimeRange(c)
+	c = newContext("/?start_date=bad&timezone=UTC")
+	start, end, err = parseTimeRange(c)
+	require.NoError(t, err)
 	require.False(t, start.IsZero())
 	require.False(t, end.IsZero())
+
+	c = newContext("/?start_time=2024-01-01T12:34:56Z&end_time=2024-01-01T13:34:56Z&timezone=UTC")
+	start, end, err = parseTimeRange(c)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2024, 1, 1, 12, 34, 56, 0, time.UTC), start)
+	require.Equal(t, time.Date(2024, 1, 1, 13, 34, 56, 0, time.UTC), end)
 }
 
 func TestParseOpsViewParam(t *testing.T) {

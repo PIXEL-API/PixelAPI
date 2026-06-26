@@ -335,11 +335,87 @@ func TestRateLimitService_HandleUpstreamError_OpenAICapacityTempUnschedsPoolMode
 	require.Contains(t, repo.lastTempReason, "openai_model_capacity")
 }
 
+func TestRateLimitService_HandleUpstreamError_OpenAITransientCapacityTempUnschedsPoolMode(t *testing.T) {
+	tests := []struct {
+		name           string
+		statusCode     int
+		body           []byte
+		matchedKeyword string
+	}{
+		{
+			name:           "overloaded",
+			statusCode:     http.StatusServiceUnavailable,
+			body:           []byte(`{"error":{"message":"Our servers are currently overloaded, please retry later.","type":"server_error"}}`),
+			matchedKeyword: "openai_upstream_overloaded",
+		},
+		{
+			name:           "too_many_pending",
+			statusCode:     http.StatusTooManyRequests,
+			body:           []byte(`{"error":{"message":"Too many pending requests, please retry later","type":"rate_limit_error","code":"too_many_pending"}}`),
+			matchedKeyword: "openai_too_many_pending",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &rateLimitAccountRepoStub{}
+			service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			account := &Account{
+				ID:       204,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Extra: map[string]any{
+					"pool_mode": true,
+				},
+			}
+
+			before := time.Now()
+			shouldDisable := service.HandleUpstreamError(context.Background(), account, tc.statusCode, http.Header{}, tc.body)
+
+			require.True(t, shouldDisable)
+			require.Equal(t, 1, repo.tempCalls)
+			require.Equal(t, 0, repo.setErrorCalls)
+			require.Contains(t, repo.lastTempReason, tc.matchedKeyword)
+			require.WithinDuration(t, before.Add(openAITransientCapacityCooldown), repo.lastTempUntil, 5*time.Second)
+		})
+	}
+}
+
+func TestShouldRetryOpenAIOnSamePoolAccount_SkipsTransientCapacityErrors(t *testing.T) {
+	account := &Account{
+		ID:       205,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"pool_mode": true,
+		},
+	}
+
+	require.False(t, shouldRetryOpenAIOnSamePoolAccount(
+		account,
+		http.StatusTooManyRequests,
+		"Too many pending requests, please retry later",
+		[]byte(`{"error":{"code":"too_many_pending","message":"Too many pending requests, please retry later"}}`),
+	))
+	require.False(t, shouldRetryOpenAIOnSamePoolAccount(
+		account,
+		http.StatusServiceUnavailable,
+		"Our servers are currently overloaded, please retry later.",
+		[]byte(`{"error":{"message":"Our servers are currently overloaded, please retry later."}}`),
+	))
+	require.True(t, shouldRetryOpenAIOnSamePoolAccount(
+		account,
+		http.StatusBadRequest,
+		"An error occurred while processing your request. You can retry your request.",
+		[]byte(`{"error":{"message":"An error occurred while processing your request. You can retry your request."}}`),
+	))
+}
+
 func TestRateLimitService_HandleUpstreamErrorForModel_OpenAI404SetsModelCooldown(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 	account := &Account{
-		ID:       204,
+		ID:       206,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 	}
@@ -370,7 +446,7 @@ func TestRateLimitService_HandleUpstreamErrorForModel_OpenAI404WithoutRequestedM
 	repo := &rateLimitAccountRepoStub{}
 	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 	account := &Account{
-		ID:       205,
+		ID:       207,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 	}
@@ -394,7 +470,7 @@ func TestRateLimitService_HandleUpstreamErrorForModel_OpenAI404NonModelBodyDoesN
 	repo := &rateLimitAccountRepoStub{}
 	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 	account := &Account{
-		ID:       206,
+		ID:       208,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 	}

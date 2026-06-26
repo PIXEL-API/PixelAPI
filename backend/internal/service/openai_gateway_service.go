@@ -1249,10 +1249,42 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 }
 
 func isOpenAIModelCapacityError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	return classifyOpenAITransientCapacityError(upstreamStatusCode, upstreamMsg, upstreamBody) == "openai_model_capacity"
+}
+
+func isOpenAITransientCapacityError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	return classifyOpenAITransientCapacityError(upstreamStatusCode, upstreamMsg, upstreamBody) != ""
+}
+
+func classifyOpenAITransientCapacityError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) string {
 	if upstreamStatusCode > 0 && upstreamStatusCode < http.StatusBadRequest {
-		return false
+		return ""
 	}
 
+	text := collectOpenAIUpstreamErrorText(upstreamMsg, upstreamBody)
+	if isOpenAIModelCapacityText(text) {
+		return "openai_model_capacity"
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(text))
+	normalized := strings.NewReplacer("_", " ", "-", " ", "\n", " ", "\r", " ", "\t", " ").Replace(lower)
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	if strings.Contains(lower, "too_many_pending") ||
+		(strings.Contains(normalized, "too many pending") && strings.Contains(normalized, "request")) {
+		return "openai_too_many_pending"
+	}
+	if strings.Contains(lower, "overloaded_error") ||
+		strings.Contains(normalized, "server overloaded") ||
+		strings.Contains(normalized, "servers are currently overloaded") ||
+		strings.Contains(normalized, "service overloaded") ||
+		(strings.Contains(normalized, "overloaded") && strings.Contains(normalized, "retry")) {
+		return "openai_upstream_overloaded"
+	}
+
+	return ""
+}
+
+func collectOpenAIUpstreamErrorText(upstreamMsg string, upstreamBody []byte) string {
 	parts := make([]string, 0, 8)
 	if upstreamMsg != "" {
 		parts = append(parts, upstreamMsg)
@@ -1275,7 +1307,7 @@ func isOpenAIModelCapacityError(upstreamStatusCode int, upstreamMsg string, upst
 		}
 		parts = append(parts, string(upstreamBody))
 	}
-	return isOpenAIModelCapacityText(strings.Join(parts, " "))
+	return strings.Join(parts, " ")
 }
 
 func isOpenAIModelCapacityText(text string) bool {
@@ -2060,6 +2092,9 @@ func (s *OpenAIGatewayService) resolveAccountShareModeBoundAccount(ctx context.C
 			return nil, true, noAvailableOpenAISelectionError(requestedModel, false)
 		}
 	}
+	if account.IsOpenAI() && account.IsSchedulable() && requestedModel != "" && !account.IsModelSupported(requestedModel) {
+		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
+	}
 	if !isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) {
 		return nil, true, noAvailableOpenAISelectionError(requestedModel, requireCompact && openAICompactSupportTier(account) == 0)
 	}
@@ -2272,10 +2307,20 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	if s.shouldFailoverUpstreamError(statusCode) {
 		return true
 	}
-	if isOpenAIModelCapacityError(statusCode, upstreamMsg, upstreamBody) {
+	if isOpenAITransientCapacityError(statusCode, upstreamMsg, upstreamBody) {
 		return true
 	}
 	return isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
+}
+
+func shouldRetryOpenAIOnSamePoolAccount(account *Account, statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if account == nil || !account.IsPoolMode() {
+		return false
+	}
+	if isOpenAITransientCapacityError(statusCode, upstreamMsg, upstreamBody) {
+		return false
+	}
+	return isPoolModeRetryableStatus(statusCode) || isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
 }
 
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account) {
@@ -3007,7 +3052,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
-					RetryableOnSameAccount: account.IsPoolMode() && (isPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+					RetryableOnSameAccount: shouldRetryOpenAIOnSamePoolAccount(account, resp.StatusCode, upstreamMsg, respBody),
 				}
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, originalModel)
@@ -3459,7 +3504,7 @@ func shouldFailoverOpenAIPassthroughResponse(statusCode int, upstreamMsg string,
 		if statusCode >= http.StatusInternalServerError {
 			return true
 		}
-		return isOpenAIModelCapacityError(statusCode, upstreamMsg, upstreamBody)
+		return isOpenAITransientCapacityError(statusCode, upstreamMsg, upstreamBody)
 	}
 }
 
@@ -3719,8 +3764,8 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 			"message": message,
 		},
 	})
-	if isOpenAIModelCapacityError(http.StatusBadGateway, message, payload) ||
-		isOpenAIModelCapacityError(http.StatusBadGateway, message, body) {
+	if isOpenAITransientCapacityError(http.StatusBadGateway, message, payload) ||
+		isOpenAITransientCapacityError(http.StatusBadGateway, message, body) {
 		ctx := context.Background()
 		if c != nil && c.Request != nil {
 			ctx = c.Request.Context()
@@ -3729,7 +3774,7 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 		if len(cooldownBody) == 0 {
 			cooldownBody = body
 		}
-		s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusBadGateway, http.Header{}, cooldownBody, message)
+		s.handleOpenAITransientCapacitySignal(ctx, account, http.StatusBadGateway, http.Header{}, cooldownBody, message)
 	}
 	return &UpstreamFailoverError{
 		StatusCode:   http.StatusBadGateway,
@@ -3738,6 +3783,10 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 }
 
 func (s *OpenAIGatewayService) handleOpenAIModelCapacitySignal(ctx context.Context, account *Account, statusCode int, headers http.Header, payload []byte, message string) bool {
+	return s.handleOpenAITransientCapacitySignal(ctx, account, statusCode, headers, payload, message)
+}
+
+func (s *OpenAIGatewayService) handleOpenAITransientCapacitySignal(ctx context.Context, account *Account, statusCode int, headers http.Header, payload []byte, message string) bool {
 	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
 		return false
 	}
@@ -3747,7 +3796,7 @@ func (s *OpenAIGatewayService) handleOpenAIModelCapacitySignal(ctx context.Conte
 	if statusCode <= 0 {
 		statusCode = http.StatusServiceUnavailable
 	}
-	if !isOpenAIModelCapacityError(statusCode, message, payload) {
+	if !isOpenAITransientCapacityError(statusCode, message, payload) {
 		return false
 	}
 	cooldownBody := payload
@@ -4040,7 +4089,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(ctx context.Context, r
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}
-			if isOpenAIModelCapacityError(http.StatusBadGateway, msg, terminalPayload) {
+			if isOpenAITransientCapacityError(http.StatusBadGateway, msg, terminalPayload) {
 				return nil, s.newOpenAIStreamFailoverError(c, account, true, strings.TrimSpace(resp.Header.Get("x-request-id")), terminalPayload, msg)
 			}
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
@@ -4333,7 +4382,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: shouldRetryOpenAIOnSamePoolAccount(account, resp.StatusCode, upstreamMsg, body),
 		}
 	}
 
@@ -4483,7 +4532,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: shouldRetryOpenAIOnSamePoolAccount(account, resp.StatusCode, upstreamMsg, body),
 		}
 	}
 
@@ -5180,7 +5229,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}
-			if isOpenAIModelCapacityError(http.StatusBadGateway, msg, terminalPayload) {
+			if isOpenAITransientCapacityError(http.StatusBadGateway, msg, terminalPayload) {
 				return nil, s.newOpenAIStreamFailoverError(c, account, false, strings.TrimSpace(resp.Header.Get("x-request-id")), terminalPayload, msg)
 			}
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
@@ -5693,7 +5742,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		if accountShareListing != nil && accountShareListing.AccountID != account.ID {
 			return ErrNoAvailableAccounts
 		}
-		if accountShareListing != nil {
+		if IsAccountShareModeOwnerSelfUse(accountShareMembership, accountShareListing) {
+			multiplier = AccountShareModeOwnerSelfUseMultiplier
+		} else if accountShareListing != nil {
 			multiplier = accountShareListing.RateMultiplier
 		}
 	}

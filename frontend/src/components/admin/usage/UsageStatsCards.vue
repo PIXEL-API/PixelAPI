@@ -34,10 +34,11 @@
         <p class="text-xl font-bold text-green-600">
           ${{ (stats?.total_actual_cost || 0).toFixed(4) }}
         </p>
-        <p class="text-xs text-gray-400">
+        <p class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5">
+          <span class="text-green-600 dark:text-green-400">{{ t('usage.requestBilled') }} ${{ (stats?.total_request_actual_cost || 0).toFixed(4) }}</span>
+          <span class="text-sky-600 dark:text-sky-400">{{ t('usage.hourlyBilled') }} ${{ (stats?.total_hourly_cost || 0).toFixed(4) }}</span>
           <span class="text-orange-500">{{ t('usage.accountCost') }} ${{ (stats?.total_account_cost || 0).toFixed(4) }}</span>
-          <span> · </span>
-          <span>{{ t('usage.standardCost') }} ${{ (stats?.total_cost || 0).toFixed(4) }}</span>
+          <span class="text-gray-400 dark:text-gray-500">{{ t('usage.standardCost') }} ${{ (stats?.total_cost || 0).toFixed(4) }}</span>
         </p>
       </div>
     </div>

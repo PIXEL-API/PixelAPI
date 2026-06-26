@@ -40,6 +40,28 @@
                 @change="onDateRangeChange"
               />
             </div>
+            <div class="flex flex-wrap items-end gap-2">
+              <div class="w-full sm:w-[220px]">
+                <label class="input-label">{{ t('usage.startTime') }}</label>
+                <input
+                  v-model="startDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
+                />
+              </div>
+              <div class="w-full sm:w-[220px]">
+                <label class="input-label">{{ t('usage.endTime') }}</label>
+                <input
+                  v-model="endDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
+                />
+              </div>
+            </div>
             <div class="ml-auto flex items-center gap-2">
               <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.dashboard.granularity') }}:</span>
               <div class="w-28">
@@ -140,6 +162,27 @@
       </template>
 
       <template v-else>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div
+            v-for="card in ledgerSummaryCards"
+            :key="card.key"
+            class="card p-5"
+          >
+            <div class="flex items-center gap-4">
+              <div :class="['flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', card.iconClass]">
+                <Icon :name="card.icon" size="md" :stroke-width="2" />
+              </div>
+              <div class="min-w-0">
+                <div class="text-sm text-gray-500 dark:text-gray-400">{{ card.label }}</div>
+                <div :class="['mt-1 truncate text-2xl font-bold', card.valueClass]">
+                  {{ ledgerStatsLoading ? '...' : card.value }}
+                </div>
+                <div class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t('usage.inSelectedRange') }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="card p-6">
           <div class="flex flex-wrap items-end justify-between gap-4">
             <div class="flex flex-1 flex-wrap items-end gap-4">
@@ -191,6 +234,28 @@
                   v-model:start-date="startDate"
                   v-model:end-date="endDate"
                   @change="onDateRangeChange"
+                />
+              </div>
+
+              <div class="w-full sm:w-[220px]">
+                <label class="input-label">{{ t('usage.startTime') }}</label>
+                <input
+                  v-model="startDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
+                />
+              </div>
+
+              <div class="w-full sm:w-[220px]">
+                <label class="input-label">{{ t('usage.endTime') }}</label>
+                <input
+                  v-model="endDateTime"
+                  type="datetime-local"
+                  step="1"
+                  class="input"
+                  @change="onExactTimeRangeChange"
                 />
               </div>
 
@@ -349,7 +414,7 @@ import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryM
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'; import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'; import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
 import Icon from '@/components/icons/Icon.vue'
-import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, EndpointStat, AdminUser, UserBalanceLedgerEntry } from '@/types'; import type { AdminUsageStatsResponse, AdminUsageQueryParams, AdminBalanceLedgerQueryParams, SimpleUser } from '@/api/admin/usage'
+import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, EndpointStat, AdminUser, UserBalanceLedgerEntry } from '@/types'; import type { AdminUsageStatsResponse, AdminUsageQueryParams, AdminBalanceLedgerQueryParams, AdminBalanceLedgerStatsResponse, SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
 
 const { t } = useI18n()
@@ -368,7 +433,9 @@ const route = useRoute()
 const usageStats = ref<AdminUsageStatsResponse | null>(null); const usageLogs = ref<AdminUsageLog[]>([]); const loading = ref(false); const exporting = ref(false)
 const activeAdminUsageTab = ref<AdminUsageTab>('requests')
 const balanceLedger = ref<UserBalanceLedgerEntry[]>([])
+const balanceLedgerStats = ref<AdminBalanceLedgerStatsResponse | null>(null)
 const ledgerLoading = ref(false)
+const ledgerStatsLoading = ref(false)
 const ledgerLoaded = ref(false)
 const trendData = ref<TrendDataPoint[]>([]); const requestedModelStats = ref<ModelStat[]>([]); const upstreamModelStats = ref<ModelStat[]>([]); const mappingModelStats = ref<ModelStat[]>([]); const groupStats = ref<GroupStat[]>([]); const chartsLoading = ref(false); const modelStatsLoading = ref(false); const granularity = ref<'day' | 'hour'>('hour')
 const modelDistributionMetric = ref<DistributionMetric>('tokens')
@@ -397,6 +464,7 @@ const balanceHistoryUser = ref<AdminUser | null>(null)
 
 const breakdownFilters = computed(() => {
   const f: Record<string, any> = {}
+  Object.assign(f, buildExactTimeParams())
   if (filters.value.user_id) f.user_id = filters.value.user_id
   if (filters.value.api_key_id) f.api_key_id = filters.value.api_key_id
   if (filters.value.account_id) f.account_id = filters.value.account_id
@@ -463,12 +531,25 @@ const formatLD = (d: Date) => {
   const day = String(d.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
-const getLast24HoursRangeDates = (): { start: string; end: string } => {
+const formatLocalDateTime = (d: Date): string => {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  const seconds = String(d.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`
+}
+const dateAtStartOfDayInput = (date: string): string => `${date}T00:00:00`
+const dateAtEndOfDayInput = (date: string): string => `${date}T23:59:59`
+const getLast24HoursRange = (): { start: string; end: string; startTime: string; endTime: string } => {
   const end = new Date()
   const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
   return {
     start: formatLD(start),
-    end: formatLD(end)
+    end: formatLD(end),
+    startTime: formatLocalDateTime(start),
+    endTime: formatLocalDateTime(end)
   }
 }
 const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
@@ -477,8 +558,11 @@ const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
   const daysDiff = Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24))
   return daysDiff <= 1 ? 'hour' : 'day'
 }
-const defaultRange = getLast24HoursRangeDates()
+const defaultExactRange = getLast24HoursRange()
+const defaultRange = { start: defaultExactRange.start, end: defaultExactRange.end }
 const startDate = ref(defaultRange.start); const endDate = ref(defaultRange.end)
+const startDateTime = ref(defaultExactRange.startTime)
+const endDateTime = ref(defaultExactRange.endTime)
 const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, billing_type: null, start_date: startDate.value, end_date: endDate.value })
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0 })
 const ledgerFilters = reactive<AdminBalanceLedgerQueryParams>({
@@ -518,9 +602,91 @@ const getNumericQueryValue = (value: string | null | Array<string | null> | unde
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+const normalizeDateTimeInput = (value: string): string => {
+  if (!value) return ''
+  return value.length === 16 ? `${value}:00` : value
+}
+
+const dateTimeInputToDate = (value: string): Date | null => {
+  const normalized = normalizeDateTimeInput(value)
+  if (!normalized) return null
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+const dateTimeInputToISOString = (value: string): string | undefined => {
+  const date = dateTimeInputToDate(value)
+  return date ? date.toISOString() : undefined
+}
+
+const queryTimeToDateTimeInput = (value?: string): string | undefined => {
+  if (!value) return undefined
+  const parsed = new Date(value)
+  if (!Number.isNaN(parsed.getTime())) return formatLocalDateTime(parsed)
+  return normalizeDateTimeInput(value)
+}
+
+const buildExactTimeParams = (): Pick<AdminUsageQueryParams, 'start_time' | 'end_time' | 'timezone'> => ({
+  start_time: dateTimeInputToISOString(startDateTime.value),
+  end_time: dateTimeInputToISOString(endDateTime.value),
+  timezone: getClientTimezone()
+})
+
+const validateExactTimeRange = (): boolean => {
+  const start = dateTimeInputToDate(startDateTime.value)
+  const end = dateTimeInputToDate(endDateTime.value)
+  if (!start || !end) {
+    appStore.showWarning(t('usage.timeRangeRequired'))
+    return false
+  }
+  if (end.getTime() <= start.getTime()) {
+    appStore.showWarning(t('usage.invalidTimeRange'))
+    return false
+  }
+  return true
+}
+
+const syncDateFieldsFromExactTime = () => {
+  const start = dateTimeInputToDate(startDateTime.value)
+  const end = dateTimeInputToDate(endDateTime.value)
+  if (start) startDate.value = formatLD(start)
+  if (end) endDate.value = formatLD(end)
+  filters.value = {
+    ...filters.value,
+    start_date: startDate.value,
+    end_date: endDate.value
+  }
+  ledgerFilters.start_date = startDate.value
+  ledgerFilters.end_date = endDate.value
+  granularity.value = getGranularityForRange(startDate.value, endDate.value)
+}
+
+const syncExactTimeFromDateRange = (range: { startDate: string; endDate: string; preset: string | null }) => {
+  if (range.preset === 'last24Hours') {
+    const exactRange = getLast24HoursRange()
+    startDateTime.value = exactRange.startTime
+    endDateTime.value = exactRange.endTime
+    return
+  }
+  startDateTime.value = dateAtStartOfDayInput(range.startDate)
+  endDateTime.value = dateAtEndOfDayInput(range.endDate)
+}
+
+const onExactTimeRangeChange = () => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
+  if (activeAdminUsageTab.value === 'balanceLedger') {
+    applyLedgerFilters()
+  } else {
+    applyFilters()
+  }
+}
+
 const applyRouteQueryFilters = () => {
   const queryStartDate = getSingleQueryValue(route.query.start_date)
   const queryEndDate = getSingleQueryValue(route.query.end_date)
+  const queryStartTime = queryTimeToDateTimeInput(getSingleQueryValue(route.query.start_time))
+  const queryEndTime = queryTimeToDateTimeInput(getSingleQueryValue(route.query.end_time))
   const queryUserId = getNumericQueryValue(route.query.user_id)
 
   if (queryStartDate) {
@@ -529,9 +695,19 @@ const applyRouteQueryFilters = () => {
   if (queryEndDate) {
     endDate.value = queryEndDate
   }
+  if (queryStartTime) {
+    startDateTime.value = queryStartTime
+  }
+  if (queryEndTime) {
+    endDateTime.value = queryEndTime
+  }
+  if (queryStartTime || queryEndTime) {
+    syncDateFieldsFromExactTime()
+  }
 
   filters.value = {
     ...filters.value,
+    ...buildExactTimeParams(),
     user_id: queryUserId,
     start_date: startDate.value,
     end_date: endDate.value
@@ -546,8 +722,10 @@ const applyRouteQueryFilters = () => {
 const onDateRangeChange = (range: { startDate: string; endDate: string; preset: string | null }) => {
   startDate.value = range.startDate
   endDate.value = range.endDate
+  syncExactTimeFromDateRange(range)
   filters.value = {
     ...filters.value,
+    ...buildExactTimeParams(),
     start_date: range.startDate,
     end_date: range.endDate
   }
@@ -573,6 +751,7 @@ const buildUsageListParams = (
     page_size: pageSize,
     exact_total: exactTotal,
     ...filters.value,
+    ...buildExactTimeParams(),
     stream: legacyStream === null ? undefined : legacyStream,
     sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
@@ -611,9 +790,19 @@ const buildLedgerParams = (): AdminBalanceLedgerQueryParams => {
     ref_id: Number.isFinite(refID) && refID > 0 ? refID : undefined,
     start_date: ledgerFilters.start_date || startDate.value,
     end_date: ledgerFilters.end_date || endDate.value,
+    ...buildExactTimeParams(),
     sort_order: ledgerSortState.sort_order,
     timezone: getClientTimezone()
   }
+}
+
+const buildLedgerStatsParams = (): AdminBalanceLedgerQueryParams => {
+  const params = { ...buildLedgerParams() }
+  delete params.page
+  delete params.page_size
+  delete params.exact_total
+  delete params.sort_order
+  return params
 }
 
 const loadBalanceLedger = async () => {
@@ -621,10 +810,15 @@ const loadBalanceLedger = async () => {
   const c = new AbortController()
   ledgerAbortController = c
   ledgerLoading.value = true
+  ledgerStatsLoading.value = true
   try {
-    const res = await adminUsageAPI.listBalanceLedger(buildLedgerParams(), { signal: c.signal })
+    const [res, stats] = await Promise.all([
+      adminUsageAPI.listBalanceLedger(buildLedgerParams(), { signal: c.signal }),
+      adminUsageAPI.getBalanceLedgerStats(buildLedgerStatsParams(), { signal: c.signal })
+    ])
     if (!c.signal.aborted) {
       balanceLedger.value = res.items
+      balanceLedgerStats.value = stats
       ledgerPagination.total = res.total
       ledgerLoaded.value = true
     }
@@ -636,6 +830,7 @@ const loadBalanceLedger = async () => {
   } finally {
     if (ledgerAbortController === c) {
       ledgerLoading.value = false
+      ledgerStatsLoading.value = false
     }
   }
 }
@@ -646,7 +841,11 @@ const loadStats = async () => {
   try {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
-    const s = await adminAPI.usage.getStats({ ...filters.value, stream: legacyStream === null ? undefined : legacyStream })
+    const s = await adminAPI.usage.getStats({
+      ...filters.value,
+      ...buildExactTimeParams(),
+      stream: legacyStream === null ? undefined : legacyStream
+    })
     if (seq !== statsReqSeq) return
     usageStats.value = s
     inboundEndpointStats.value = s.endpoints || []
@@ -685,6 +884,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
     const baseParams = {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
+      ...buildExactTimeParams(),
       user_id: filters.value.user_id,
       model: filters.value.model,
       api_key_id: filters.value.api_key_id,
@@ -733,6 +933,7 @@ const loadChartData = async () => {
     const snapshot = await adminAPI.dashboard.getSnapshotV2({
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
+      ...buildExactTimeParams(),
       granularity: granularity.value,
       user_id: filters.value.user_id,
       model: filters.value.model,
@@ -754,6 +955,8 @@ const loadChartData = async () => {
   } catch (error) { console.error('Failed to load chart data:', error) } finally { if (seq === chartReqSeq) chartsLoading.value = false }
 }
 const applyFilters = () => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   pagination.page = 1
   resetModelStatsCache()
   loadLogs()
@@ -762,10 +965,14 @@ const applyFilters = () => {
   loadChartData()
 }
 const applyLedgerFilters = () => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   ledgerPagination.page = 1
   loadBalanceLedger()
 }
 const refreshData = () => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   resetModelStatsCache()
   loadLogs()
   loadStats()
@@ -773,22 +980,28 @@ const refreshData = () => {
   loadChartData()
 }
 const refreshLedgerData = () => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   loadBalanceLedger()
 }
 const resetFilters = () => {
-  const range = getLast24HoursRangeDates()
+  const range = getLast24HoursRange()
   startDate.value = range.start
   endDate.value = range.end
-  filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null, billing_mode: undefined }
+  startDateTime.value = range.startTime
+  endDateTime.value = range.endTime
+  filters.value = { ...buildExactTimeParams(), start_date: startDate.value, end_date: endDate.value, request_type: undefined, billing_type: null, billing_mode: undefined }
   ledgerFilters.start_date = startDate.value
   ledgerFilters.end_date = endDate.value
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
   applyFilters()
 }
 const resetLedgerFilters = () => {
-  const range = getLast24HoursRangeDates()
+  const range = getLast24HoursRange()
   startDate.value = range.start
   endDate.value = range.end
+  startDateTime.value = range.startTime
+  endDateTime.value = range.endTime
   ledgerFilters.user_id = undefined
   ledgerFilters.direction = ''
   ledgerFilters.reason = ''
@@ -802,17 +1015,43 @@ const resetLedgerFilters = () => {
   showLedgerUserDropdown.value = false
   applyLedgerFilters()
 }
-const handlePageChange = (p: number) => { pagination.page = p; loadLogs() }
-const handlePageSizeChange = (s: number) => { pagination.page_size = s; pagination.page = 1; loadLogs() }
+const handlePageChange = (p: number) => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
+  pagination.page = p
+  loadLogs()
+}
+const handlePageSizeChange = (s: number) => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
+  pagination.page_size = s
+  pagination.page = 1
+  loadLogs()
+}
 const handleSort = (key: string, order: 'asc' | 'desc') => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   sortState.sort_by = key
   sortState.sort_order = order
   pagination.page = 1
   loadLogs()
 }
-const handleLedgerPageChange = (p: number) => { ledgerPagination.page = p; loadBalanceLedger() }
-const handleLedgerPageSizeChange = (s: number) => { ledgerPagination.page_size = s; ledgerPagination.page = 1; loadBalanceLedger() }
+const handleLedgerPageChange = (p: number) => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
+  ledgerPagination.page = p
+  loadBalanceLedger()
+}
+const handleLedgerPageSizeChange = (s: number) => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
+  ledgerPagination.page_size = s
+  ledgerPagination.page = 1
+  loadBalanceLedger()
+}
 const handleLedgerSort = (_key: string, order: 'asc' | 'desc') => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   ledgerSortState.sort_order = order
   ledgerPagination.page = 1
   loadBalanceLedger()
@@ -820,6 +1059,8 @@ const handleLedgerSort = (_key: string, order: 'asc' | 'desc') => {
 const switchAdminUsageTab = (tab: AdminUsageTab) => {
   activeAdminUsageTab.value = tab
   if (tab === 'balanceLedger' && !ledgerLoaded.value) {
+    if (!validateExactTimeRange()) return
+    syncDateFieldsFromExactTime()
     loadBalanceLedger()
   }
 }
@@ -906,6 +1147,59 @@ const formatLedgerCurrency = (value?: string | number | null, digits = 10): stri
 const formatOptionalLedgerCurrency = (value?: number | null, digits = 10): string => {
   return value == null ? '' : formatLedgerCurrency(value, digits)
 }
+
+const formatLedgerCount = (value?: number | null): string => Number(value || 0).toLocaleString()
+
+const isLedgerNegative = (value?: string | number | null): boolean => normalizeLedgerDecimal(value).startsWith('-')
+
+const formatLedgerNetCurrency = (value?: string | number | null): string => {
+  const normalized = normalizeLedgerDecimal(value)
+  if (normalized === '0') return '$0'
+  return normalized.startsWith('-') ? `-$${normalized.slice(1)}` : `+$${normalized}`
+}
+
+const ledgerSummaryCards = computed(() => {
+  const stats = balanceLedgerStats.value
+  const netNegative = isLedgerNegative(stats?.net_amount)
+  return [
+    {
+      key: 'total_entries',
+      label: t('usage.balanceLedger.statsTotalEntries'),
+      value: formatLedgerCount(stats?.total_entries),
+      icon: 'document' as const,
+      iconClass: 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300',
+      valueClass: 'text-gray-900 dark:text-white'
+    },
+    {
+      key: 'credit_amount',
+      label: t('usage.balanceLedger.statsCreditAmount'),
+      value: formatLedgerCurrency(stats?.credit_amount),
+      icon: 'arrowUp' as const,
+      iconClass: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300',
+      valueClass: 'text-emerald-600 dark:text-emerald-300'
+    },
+    {
+      key: 'debit_amount',
+      label: t('usage.balanceLedger.statsDebitAmount'),
+      value: formatLedgerCurrency(stats?.debit_amount),
+      icon: 'arrowDown' as const,
+      iconClass: 'bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300',
+      valueClass: 'text-rose-600 dark:text-rose-300'
+    },
+    {
+      key: 'net_amount',
+      label: t('usage.balanceLedger.statsNetAmount'),
+      value: formatLedgerNetCurrency(stats?.net_amount),
+      icon: 'trendingUp' as const,
+      iconClass: netNegative
+        ? 'bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300'
+        : 'bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300',
+      valueClass: netNegative
+        ? 'text-rose-600 dark:text-rose-300'
+        : 'text-amber-600 dark:text-amber-300'
+    }
+  ]
+})
 
 const formatLedgerAmount = (row: UserBalanceLedgerEntry): string => {
   const sign = row.direction === 'credit' ? '+' : '-'
@@ -1077,6 +1371,8 @@ const escapeCsvCell = (value: CsvCell): string => {
 const toCsvRow = (row: CsvCell[]): string => row.map(escapeCsvCell).join(',')
 
 const exportToExcel = async () => {
+  if (!validateExactTimeRange()) return
+  syncDateFieldsFromExactTime()
   if (exporting.value) return; exporting.value = true; exportProgress.show = true
   const c = new AbortController(); exportAbortController = c
   try {

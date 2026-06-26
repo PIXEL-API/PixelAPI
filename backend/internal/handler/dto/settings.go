@@ -129,23 +129,27 @@ type SystemSettings struct {
 	CustomMenuItems             []CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             []CustomEndpoint `json:"custom_endpoints"`
 
-	DefaultConcurrency              int                          `json:"default_concurrency"`
-	DefaultBalance                  float64                      `json:"default_balance"`
-	RiskControlEnabled              bool                         `json:"risk_control_enabled"`
-	CyberSessionBlockEnabled        bool                         `json:"cyber_session_block_enabled"`
-	CyberSessionBlockTTLSeconds     int                          `json:"cyber_session_block_ttl_seconds"`
-	AffiliateRebateRate             float64                      `json:"affiliate_rebate_rate"`
-	AffiliateRebateFreezeHours      int                          `json:"affiliate_rebate_freeze_hours"`
-	AffiliateRebateDurationDays     int                          `json:"affiliate_rebate_duration_days"`
-	AffiliateRebatePerInviteeCap    float64                      `json:"affiliate_rebate_per_invitee_cap"`
-	DefaultUserRPMLimit             int                          `json:"default_user_rpm_limit"`
-	UserPrivateGroupDailyLimitUSD   *float64                     `json:"user_private_group_daily_limit_usd"`
-	UserPrivateGroupWeeklyLimitUSD  *float64                     `json:"user_private_group_weekly_limit_usd"`
-	UserPrivateGroupMonthlyLimitUSD *float64                     `json:"user_private_group_monthly_limit_usd"`
-	UserPrivateGroupRateMultiplier  float64                      `json:"user_private_group_rate_multiplier"`
-	UserPrivateGroupRPMLimit        int                          `json:"user_private_group_rpm_limit"`
-	UserPrivateGroupCommissionRate  float64                      `json:"user_private_group_commission_rate"`
-	DefaultSubscriptions            []DefaultSubscriptionSetting `json:"default_subscriptions"`
+	DefaultConcurrency                        int                          `json:"default_concurrency"`
+	DefaultBalance                            float64                      `json:"default_balance"`
+	RiskControlEnabled                        bool                         `json:"risk_control_enabled"`
+	CyberSessionBlockEnabled                  bool                         `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds               int                          `json:"cyber_session_block_ttl_seconds"`
+	AccountShareCommentReviewEnabled          bool                         `json:"account_share_comment_review_enabled"`
+	AccountShareCommentReviewURL              string                       `json:"account_share_comment_review_url"`
+	AccountShareCommentReviewAPIKeyConfigured bool                         `json:"account_share_comment_review_api_key_configured"`
+	AccountShareCommentReviewModel            string                       `json:"account_share_comment_review_model"`
+	AffiliateRebateRate                       float64                      `json:"affiliate_rebate_rate"`
+	AffiliateRebateFreezeHours                int                          `json:"affiliate_rebate_freeze_hours"`
+	AffiliateRebateDurationDays               int                          `json:"affiliate_rebate_duration_days"`
+	AffiliateRebatePerInviteeCap              float64                      `json:"affiliate_rebate_per_invitee_cap"`
+	DefaultUserRPMLimit                       int                          `json:"default_user_rpm_limit"`
+	UserPrivateGroupDailyLimitUSD             *float64                     `json:"user_private_group_daily_limit_usd"`
+	UserPrivateGroupWeeklyLimitUSD            *float64                     `json:"user_private_group_weekly_limit_usd"`
+	UserPrivateGroupMonthlyLimitUSD           *float64                     `json:"user_private_group_monthly_limit_usd"`
+	UserPrivateGroupRateMultiplier            float64                      `json:"user_private_group_rate_multiplier"`
+	UserPrivateGroupRPMLimit                  int                          `json:"user_private_group_rpm_limit"`
+	UserPrivateGroupCommissionRate            float64                      `json:"user_private_group_commission_rate"`
+	DefaultSubscriptions                      []DefaultSubscriptionSetting `json:"default_subscriptions"`
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
@@ -252,6 +256,10 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// Functional module switches
+	InvoiceManagementEnabled    bool `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled bool `json:"withdrawal_management_enabled"`
+
 	// User-owned account import limit
 	UserAccountImportLimit int `json:"user_account_import_limit"`
 
@@ -322,8 +330,10 @@ type PublicSettings struct {
 
 	UserAccountImportLimit int `json:"user_account_import_limit"`
 
-	AffiliateEnabled   bool `json:"affiliate_enabled"`
-	RiskControlEnabled bool `json:"risk_control_enabled"`
+	AffiliateEnabled            bool `json:"affiliate_enabled"`
+	InvoiceManagementEnabled    bool `json:"invoice_management_enabled"`
+	WithdrawalManagementEnabled bool `json:"withdrawal_management_enabled"`
+	RiskControlEnabled          bool `json:"risk_control_enabled"`
 }
 
 type LoginAgreementDocument struct {

@@ -257,7 +257,7 @@ func (s *AuthService) resolveRegistrationInvitationCode(ctx context.Context, inv
 		}
 		return code, false, nil
 	}
-	if err := s.affiliateService.ValidateInvitationCode(ctx, code); err != nil {
+	if err := s.affiliateService.ValidateInvitationCodeWithWeeklyLimit(ctx, code, required); err != nil {
 		if required {
 			logger.LegacyPrintf("service.auth", "[Auth] Invalid affiliate invitation code: %s, error: %v", code, err)
 			return "", true, ErrInvitationCodeInvalid
@@ -307,7 +307,7 @@ func (s *AuthService) createUserWithInvitation(ctx context.Context, user *User, 
 			return ErrServiceUnavailable
 		}
 		if s.affiliateService != nil {
-			if err := s.affiliateService.ConsumeInvitationCode(ctx, user.ID, invitationCode); err != nil {
+			if err := s.affiliateService.ConsumeInvitationCodeWithWeeklyLimit(ctx, user.ID, invitationCode, required); err != nil {
 				logger.LegacyPrintf("service.auth", "[Auth] Failed to consume optional affiliate invitation code for user %d: %v", user.ID, err)
 			}
 		}
@@ -330,7 +330,7 @@ func (s *AuthService) createUserWithInvitation(ctx context.Context, user *User, 
 		return ErrServiceUnavailable
 	}
 	if s.affiliateService != nil {
-		if err := s.affiliateService.ConsumeInvitationCode(txCtx, user.ID, invitationCode); err != nil {
+		if err := s.affiliateService.ConsumeInvitationCodeWithWeeklyLimit(txCtx, user.ID, invitationCode, required); err != nil {
 			if required {
 				return ErrInvitationCodeInvalid
 			}

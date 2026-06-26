@@ -6,6 +6,7 @@ package timezone
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -133,6 +134,51 @@ func ParseInUserLocation(layout, value, userTZ string) (time.Time, error) {
 		}
 	}
 	return time.ParseInLocation(layout, value, loc)
+}
+
+// ParseUserTimestamp parses an exact timestamp from query input.
+// RFC3339 values keep their explicit offset; local datetime values use userTZ.
+func ParseUserTimestamp(raw, userTZ, field string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("%s is required", field)
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04"} {
+		if t, err := ParseInUserLocation(layout, raw, userTZ); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("Invalid %s format, use RFC3339 or YYYY-MM-DDTHH:mm:ss", field)
+}
+
+// ParseExactTimeRange parses optional start_time/end_time query values.
+func ParseExactTimeRange(startRaw, endRaw, userTZ string) (*time.Time, *time.Time, bool, error) {
+	startRaw = strings.TrimSpace(startRaw)
+	endRaw = strings.TrimSpace(endRaw)
+	if startRaw == "" && endRaw == "" {
+		return nil, nil, false, nil
+	}
+	if startRaw == "" || endRaw == "" {
+		return nil, nil, true, fmt.Errorf("start_time and end_time must be provided together")
+	}
+	startTime, err := ParseUserTimestamp(startRaw, userTZ, "start_time")
+	if err != nil {
+		return nil, nil, true, err
+	}
+	endTime, err := ParseUserTimestamp(endRaw, userTZ, "end_time")
+	if err != nil {
+		return nil, nil, true, err
+	}
+	if !endTime.After(startTime) {
+		return nil, nil, true, fmt.Errorf("end_time must be after start_time")
+	}
+	return &startTime, &endTime, true, nil
 }
 
 // NowInUserLocation returns the current time in the user's timezone.

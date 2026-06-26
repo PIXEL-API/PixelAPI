@@ -819,6 +819,10 @@ ops:
   # Other detailed settings (cleanup, aggregation, etc.) are configured in ops settings dialog
   # 其他详细设置（数据清理、预聚合等）在运维监控设置对话框中配置
   enabled: true
+  cleanup:
+    # Expiration days for archived ops_error_logs / ops_system_logs objects. 0 means never expire.
+    # ops_error_logs / ops_system_logs 归档对象过期天数，0 表示永不过期。
+    archive_expire_days: 14
 
 # =============================================================================
 # JWT Configuration

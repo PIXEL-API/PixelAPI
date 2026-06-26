@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -371,6 +372,23 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		Page:     page,
 		PageSize: pageSize,
 	}, nil
+}
+
+func (r *opsRepository) ExportErrorLogs(ctx context.Context, filter *service.OpsErrorLogCleanupFilter) (io.ReadCloser, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("nil ops repository")
+	}
+	where, args := buildOpsErrorLogsCleanupWhere(filter)
+	query := `
+SELECT to_jsonb(e)::text
+FROM ops_error_logs e
+` + where + `
+ORDER BY e.created_at ASC, e.id ASC`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &archiveRowsReader{rows: rows}, nil
 }
 
 func (r *opsRepository) GetErrorLogByID(ctx context.Context, id int64) (*service.OpsErrorLogDetail, error) {
@@ -1222,6 +1240,23 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 	}, nil
 }
 
+func (r *opsRepository) ExportSystemLogs(ctx context.Context, filter *service.OpsSystemLogCleanupFilter) (io.ReadCloser, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("nil ops repository")
+	}
+	where, args, _ := buildOpsSystemLogsCleanupWhere(filter)
+	query := `
+SELECT to_jsonb(l)::text
+FROM ops_system_logs l
+` + where + `
+ORDER BY l.created_at ASC, l.id ASC`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &archiveRowsReader{rows: rows}, nil
+}
+
 func (r *opsRepository) DeleteSystemLogs(ctx context.Context, filter *service.OpsSystemLogCleanupFilter) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, fmt.Errorf("nil ops repository")
@@ -1263,6 +1298,20 @@ INSERT INTO ops_system_log_cleanup_audits (
 ) VALUES ($1,$2,$3,$4)
 `, createdAt.UTC(), input.OperatorID, input.Conditions, input.DeletedRows)
 	return err
+}
+
+func buildOpsErrorLogsCleanupWhere(filter *service.OpsErrorLogCleanupFilter) (string, []any) {
+	clauses := []string{"1=1"}
+	args := make([]any, 0, 2)
+	if filter != nil && filter.StartTime != nil && !filter.StartTime.IsZero() {
+		args = append(args, filter.StartTime.UTC())
+		clauses = append(clauses, "e.created_at >= $"+itoa(len(args)))
+	}
+	if filter != nil && filter.EndTime != nil && !filter.EndTime.IsZero() {
+		args = append(args, filter.EndTime.UTC())
+		clauses = append(clauses, "e.created_at < $"+itoa(len(args)))
+	}
+	return "WHERE " + strings.Join(clauses, " AND "), args
 }
 
 func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {

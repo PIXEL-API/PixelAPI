@@ -87,18 +87,23 @@ const (
 )
 
 const (
-	OAuthAccountDefaultConcurrency = 3
-	OpenAIPlusDefaultConcurrency   = 3
-	OwnedPersonalDefaultLoadFactor = 10
-	AccountMaxLoadFactor           = 10000
-	CodexQuotaDefaultLimitPercent  = 100.0
-	CodexQuotaMinLimitPercent      = 1.0
-	CodexQuotaMaxLimitPercent      = 100.0
+	OAuthAccountDefaultConcurrency    = 3
+	OpenAIPlusDefaultConcurrency      = 3
+	OwnedPersonalDefaultLoadFactor    = 10
+	AccountMaxLoadFactor              = 10000
+	CodexQuotaDefaultLimitPercent     = 100.0
+	CodexQuotaMinLimitPercent         = 1.0
+	CodexQuotaMaxLimitPercent         = 100.0
+	AnthropicQuotaDefaultLimitPercent = CodexQuotaDefaultLimitPercent
+	AnthropicQuotaMinLimitPercent     = CodexQuotaMinLimitPercent
+	AnthropicQuotaMaxLimitPercent     = CodexQuotaMaxLimitPercent
 )
 
 const (
-	CodexQuotaWindow5h = "5h"
-	CodexQuotaWindow7d = "7d"
+	CodexQuotaWindow5h     = "5h"
+	CodexQuotaWindow7d     = "7d"
+	AnthropicQuotaWindow5h = CodexQuotaWindow5h
+	AnthropicQuotaWindow7d = CodexQuotaWindow7d
 )
 
 const (
@@ -418,7 +423,7 @@ func (a *Account) isSchedulableAt(now time.Time, includeCodexQuotaProtection boo
 	if a.RateLimitResetAt != nil && now.Before(*a.RateLimitResetAt) {
 		return false
 	}
-	if includeCodexQuotaProtection && a.IsCodexQuotaProtectionActiveAt(now) {
+	if includeCodexQuotaProtection && (a.IsCodexQuotaProtectionActiveAt(now) || a.IsAnthropicQuotaProtectionActiveAt(now)) {
 		return false
 	}
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
@@ -1306,6 +1311,14 @@ func (a *Account) GetCodex7dLimitPercent() float64 {
 	return a.getCodexQuotaLimitPercent("codex_7d_limit_percent")
 }
 
+func (a *Account) GetAnthropic5hLimitPercent() float64 {
+	return a.getAnthropicQuotaLimitPercent("anthropic_5h_limit_percent")
+}
+
+func (a *Account) GetAnthropic7dLimitPercent() float64 {
+	return a.getAnthropicQuotaLimitPercent("anthropic_7d_limit_percent")
+}
+
 func (a *Account) getCodexQuotaLimitPercent(key string) float64 {
 	if a == nil || a.Extra == nil {
 		return CodexQuotaDefaultLimitPercent
@@ -1321,8 +1334,27 @@ func (a *Account) getCodexQuotaLimitPercent(key string) float64 {
 	return limit
 }
 
+func (a *Account) getAnthropicQuotaLimitPercent(key string) float64 {
+	if a == nil || a.Extra == nil {
+		return AnthropicQuotaDefaultLimitPercent
+	}
+	raw, ok := a.Extra[key]
+	if !ok || raw == nil {
+		return AnthropicQuotaDefaultLimitPercent
+	}
+	limit := parseExtraFloat64(raw)
+	if limit < AnthropicQuotaMinLimitPercent || limit > AnthropicQuotaMaxLimitPercent {
+		return AnthropicQuotaDefaultLimitPercent
+	}
+	return limit
+}
+
 func (a *Account) IsCodexQuotaProtectionActiveAt(now time.Time) bool {
 	return a.CodexQuotaProtectionReasonAt(now) != ""
+}
+
+func (a *Account) IsAnthropicQuotaProtectionActiveAt(now time.Time) bool {
+	return a.AnthropicQuotaProtectionReasonAt(now) != ""
 }
 
 func (a *Account) CodexQuotaProtectionReasonAt(now time.Time) string {
@@ -1330,8 +1362,18 @@ func (a *Account) CodexQuotaProtectionReasonAt(now time.Time) string {
 	return reason
 }
 
+func (a *Account) AnthropicQuotaProtectionReasonAt(now time.Time) string {
+	reason, _ := a.anthropicQuotaProtectionWindowAt(now)
+	return reason
+}
+
 func (a *Account) CodexQuotaProtectionResetAt(now time.Time) *time.Time {
 	_, resetAt := a.codexQuotaProtectionWindowAt(now)
+	return resetAt
+}
+
+func (a *Account) AnthropicQuotaProtectionResetAt(now time.Time) *time.Time {
+	_, resetAt := a.anthropicQuotaProtectionWindowAt(now)
 	return resetAt
 }
 
@@ -1342,11 +1384,41 @@ func (a *Account) CodexUsageProgress(window string, now time.Time) *UsageProgres
 	return buildCodexUsageProgressFromExtra(a.Extra, window, now)
 }
 
+func (a *Account) AnthropicUsageProgress(window string, now time.Time) *UsageProgress {
+	if a == nil || !a.IsAnthropicOAuthOrSetupToken() {
+		return nil
+	}
+	switch window {
+	case AnthropicQuotaWindow5h:
+		resetAt, _ := a.anthropic5hResetAt()
+		return buildAnthropicUsageProgressFromExtra(a.Extra, "session_window_utilization", resetAt, now)
+	case AnthropicQuotaWindow7d:
+		resetAt, _ := anthropicQuotaResetAtFromExtra(a.Extra, "anthropic_7d_reset_at", "passive_usage_7d_reset")
+		return buildAnthropicUsageProgressFromExtra(a.Extra, "passive_usage_7d_utilization", resetAt, now)
+	default:
+		return nil
+	}
+}
+
 func (a *Account) CodexUsageUpdatedAt() *time.Time {
 	if a == nil {
 		return nil
 	}
 	updatedAt := a.getExtraTime("codex_usage_updated_at")
+	if updatedAt.IsZero() {
+		return nil
+	}
+	return &updatedAt
+}
+
+func (a *Account) AnthropicUsageUpdatedAt() *time.Time {
+	if a == nil {
+		return nil
+	}
+	updatedAt := a.getExtraTime("anthropic_usage_updated_at")
+	if updatedAt.IsZero() {
+		updatedAt = a.getExtraTime("passive_usage_sampled_at")
+	}
 	if updatedAt.IsZero() {
 		return nil
 	}
@@ -1372,6 +1444,70 @@ func (a *Account) codexQuotaProtectionWindowAt(now time.Time) (string, *time.Tim
 		return "", nil
 	}
 	return reason, &resetAt
+}
+
+func (a *Account) anthropicQuotaProtectionWindowAt(now time.Time) (string, *time.Time) {
+	if a == nil || !a.IsAnthropicOAuthOrSetupToken() || a.Extra == nil {
+		return "", nil
+	}
+	reason, resetAt := "", time.Time{}
+	if windowResetAt, ok := a.anthropicQuotaProtectedWindowResetAt("session_window_utilization", "anthropic_5h_reset_at", a.GetAnthropic5hLimitPercent(), now); ok {
+		reason = AnthropicQuotaWindow5h
+		resetAt = windowResetAt
+	}
+	if windowResetAt, ok := a.anthropicQuotaProtectedWindowResetAt("passive_usage_7d_utilization", "anthropic_7d_reset_at", a.GetAnthropic7dLimitPercent(), now, "passive_usage_7d_reset"); ok {
+		if reason == "" || windowResetAt.After(resetAt) {
+			reason = AnthropicQuotaWindow7d
+			resetAt = windowResetAt
+		}
+	}
+	if reason == "" {
+		return "", nil
+	}
+	return reason, &resetAt
+}
+
+func (a *Account) anthropicQuotaProtectedWindowResetAt(utilizationKey, resetKey string, limitPercent float64, now time.Time, resetFallbackKeys ...string) (time.Time, bool) {
+	if limitPercent < AnthropicQuotaMinLimitPercent || limitPercent > AnthropicQuotaMaxLimitPercent {
+		limitPercent = AnthropicQuotaDefaultLimitPercent
+	}
+	usedPercent, ok := anthropicUtilizationPercentFromExtra(a.Extra, utilizationKey)
+	if !ok && utilizationKey == "session_window_utilization" {
+		switch a.SessionWindowStatus {
+		case "rejected":
+			usedPercent = 100
+			ok = true
+		case "allowed_warning":
+			usedPercent = 80
+			ok = true
+		}
+	}
+	if !ok || usedPercent < limitPercent {
+		return time.Time{}, false
+	}
+	var resetAt time.Time
+	var hasReset bool
+	if utilizationKey == "session_window_utilization" {
+		resetAt, hasReset = a.anthropic5hResetAt()
+	}
+	if !hasReset {
+		keys := append([]string{resetKey}, resetFallbackKeys...)
+		resetAt, hasReset = anthropicQuotaResetAtFromExtra(a.Extra, keys...)
+	}
+	if !hasReset || !now.Before(resetAt) {
+		return time.Time{}, false
+	}
+	return resetAt, true
+}
+
+func (a *Account) anthropic5hResetAt() (time.Time, bool) {
+	if a != nil && a.SessionWindowEnd != nil && !a.SessionWindowEnd.IsZero() {
+		return *a.SessionWindowEnd, true
+	}
+	if a == nil {
+		return time.Time{}, false
+	}
+	return anthropicQuotaResetAtFromExtra(a.Extra, "anthropic_5h_reset_at", "session_window_reset_at")
 }
 
 func isCodexQuotaWindowProtected(extra map[string]any, usedPercentKey, resetAtKey string, limitPercent float64, now time.Time) bool {
@@ -1414,6 +1550,66 @@ func codexQuotaResetAtFromExtra(extra map[string]any, key string) (time.Time, bo
 	}
 	if t, err := time.Parse(time.RFC3339, value); err == nil {
 		return t, true
+	}
+	return time.Time{}, false
+}
+
+func buildAnthropicUsageProgressFromExtra(extra map[string]any, utilizationKey string, resetAt time.Time, now time.Time) *UsageProgress {
+	utilization, hasUtilization := anthropicUtilizationPercentFromExtra(extra, utilizationKey)
+	if !hasUtilization && resetAt.IsZero() {
+		return nil
+	}
+	progress := &UsageProgress{Utilization: utilization}
+	if !resetAt.IsZero() {
+		progress.ResetsAt = &resetAt
+		progress.RemainingSeconds = int(time.Until(resetAt).Seconds())
+		if progress.RemainingSeconds < 0 {
+			progress.RemainingSeconds = 0
+		}
+		if !now.Before(resetAt) {
+			progress.Utilization = 0
+		}
+	}
+	return progress
+}
+
+func anthropicUtilizationPercentFromExtra(extra map[string]any, key string) (float64, bool) {
+	if extra == nil {
+		return 0, false
+	}
+	raw, ok := extra[key]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	value := parseExtraFloat64(raw)
+	if value < 0 {
+		value = 0
+	}
+	if value <= 1.5 {
+		value *= 100
+	}
+	return value, true
+}
+
+func anthropicQuotaResetAtFromExtra(extra map[string]any, keys ...string) (time.Time, bool) {
+	if extra == nil {
+		return time.Time{}, false
+	}
+	for _, key := range keys {
+		raw, ok := extra[key]
+		if !ok || raw == nil {
+			continue
+		}
+		if unix := int64(parseExtraFloat64(raw)); unix > 0 {
+			return time.Unix(unix, 0), true
+		}
+		value := strings.TrimSpace(fmt.Sprint(raw))
+		if value == "" {
+			continue
+		}
+		if t, err := parseTime(value); err == nil {
+			return t, true
+		}
 	}
 	return time.Time{}, false
 }

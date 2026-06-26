@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +17,8 @@ import (
 )
 
 const (
-	opsCleanupJobName = "ops_cleanup"
+	opsCleanupJobName            = "ops_cleanup"
+	opsCleanupArchiveTriggeredBy = "ops_cleanup_auto"
 
 	opsCleanupLeaderLockKeyDefault = "ops:cleanup:leader"
 	opsCleanupLeaderLockTTLDefault = 30 * time.Minute
@@ -45,6 +47,7 @@ type OpsCleanupService struct {
 	redisClient       *redis.Client
 	cfg               *config.Config
 	channelMonitorSvc *ChannelMonitorService
+	archiveCreator    opsCleanupArchiveCreator
 
 	instanceID string
 
@@ -56,12 +59,17 @@ type OpsCleanupService struct {
 	warnNoRedisOnce sync.Once
 }
 
+type opsCleanupArchiveCreator interface {
+	CreateDataArchive(ctx context.Context, input DataArchiveInput) (*BackupRecord, error)
+}
+
 func NewOpsCleanupService(
 	opsRepo OpsRepository,
 	db *sql.DB,
 	redisClient *redis.Client,
 	cfg *config.Config,
 	channelMonitorSvc *ChannelMonitorService,
+	archiveCreator opsCleanupArchiveCreator,
 ) *OpsCleanupService {
 	return &OpsCleanupService{
 		opsRepo:           opsRepo,
@@ -69,6 +77,7 @@ func NewOpsCleanupService(
 		redisClient:       redisClient,
 		cfg:               cfg,
 		channelMonitorSvc: channelMonitorSvc,
+		archiveCreator:    archiveCreator,
 		instanceID:        uuid.NewString(),
 	}
 }
@@ -224,6 +233,9 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 
 	// Error-like tables: error logs / retry attempts / alert events / system logs / cleanup audits.
 	if cutoff, truncate, ok := opsCleanupPlan(now, s.cfg.Ops.Cleanup.ErrorLogRetentionDays); ok {
+		if err := s.archiveOpsErrorLogsForCleanup(ctx, cutoff, truncate); err != nil {
+			return out, err
+		}
 		n, err := runOne(truncate, cutoff, "ops_error_logs", "created_at", false)
 		if err != nil {
 			return out, err
@@ -242,6 +254,9 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		}
 		out.alertEvents = n
 
+		if err := s.archiveOpsSystemLogsForCleanup(ctx, cutoff, truncate); err != nil {
+			return out, err
+		}
 		n, err = runOne(truncate, cutoff, "ops_system_logs", "created_at", false)
 		if err != nil {
 			return out, err
@@ -289,6 +304,135 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 	}
 
 	return out, nil
+}
+
+func (s *OpsCleanupService) archiveOpsErrorLogsForCleanup(ctx context.Context, cutoff time.Time, truncate bool) error {
+	if s == nil || s.db == nil || s.opsRepo == nil {
+		return nil
+	}
+	hasRows, err := hasRowsForOpsCleanup(ctx, s.db, "ops_error_logs", "created_at", cutoff, false, truncate)
+	if err != nil {
+		return err
+	}
+	if !hasRows {
+		return nil
+	}
+	if s.archiveCreator == nil {
+		return fmt.Errorf("ops cleanup archive creator is not configured")
+	}
+
+	filter := &OpsErrorLogCleanupFilter{}
+	if !truncate {
+		end := cutoff.UTC()
+		filter.EndTime = &end
+	}
+	stream, err := s.opsRepo.ExportErrorLogs(ctx, filter)
+	if err != nil {
+		if isMissingRelationError(err) {
+			return nil
+		}
+		return err
+	}
+	return s.createOpsCleanupArchive(ctx, "ops_error_logs", cutoff, truncate, stream)
+}
+
+func (s *OpsCleanupService) archiveOpsSystemLogsForCleanup(ctx context.Context, cutoff time.Time, truncate bool) error {
+	if s == nil || s.db == nil || s.opsRepo == nil {
+		return nil
+	}
+	hasRows, err := hasRowsForOpsCleanup(ctx, s.db, "ops_system_logs", "created_at", cutoff, false, truncate)
+	if err != nil {
+		return err
+	}
+	if !hasRows {
+		return nil
+	}
+	if s.archiveCreator == nil {
+		return fmt.Errorf("ops cleanup archive creator is not configured")
+	}
+
+	filter := &OpsSystemLogCleanupFilter{}
+	if !truncate {
+		end := cutoff.UTC()
+		filter.EndTime = &end
+	}
+	stream, err := s.opsRepo.ExportSystemLogs(ctx, filter)
+	if err != nil {
+		if isMissingRelationError(err) {
+			return nil
+		}
+		return err
+	}
+	return s.createOpsCleanupArchive(ctx, "ops_system_logs", cutoff, truncate, stream)
+}
+
+func (s *OpsCleanupService) createOpsCleanupArchive(ctx context.Context, table string, cutoff time.Time, truncate bool, stream io.ReadCloser) error {
+	if stream == nil {
+		return fmt.Errorf("%s archive stream is nil", table)
+	}
+	record, err := s.archiveCreator.CreateDataArchive(ctx, DataArchiveInput{
+		Stream:      stream,
+		FileName:    opsCleanupArchiveFileName(table, cutoff, truncate),
+		BackupType:  table + "_archive",
+		TriggeredBy: opsCleanupArchiveTriggeredBy,
+		ExpireDays:  s.opsArchiveExpireDays(),
+	})
+	if err != nil {
+		return fmt.Errorf("archive %s before cleanup: %w", table, err)
+	}
+	if record == nil || record.Status != "completed" {
+		return fmt.Errorf("archive %s before cleanup incomplete", table)
+	}
+	logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] archived %s before cleanup: backup=%s file=%s", table, record.ID, record.FileName)
+	return nil
+}
+
+func (s *OpsCleanupService) opsArchiveExpireDays() int {
+	if s == nil || s.cfg == nil {
+		return 0
+	}
+	return s.cfg.Ops.Cleanup.ArchiveExpireDays
+}
+
+func opsCleanupArchiveFileName(table string, cutoff time.Time, truncate bool) string {
+	if truncate || cutoff.IsZero() {
+		return fmt.Sprintf("%s_full_%s.ndjson.gz", table, time.Now().UTC().Format("20060102_150405"))
+	}
+	return fmt.Sprintf("%s_before_%s.ndjson.gz", table, cutoff.UTC().Format("20060102_150405"))
+}
+
+func hasRowsForOpsCleanup(
+	ctx context.Context,
+	db *sql.DB,
+	table string,
+	timeColumn string,
+	cutoff time.Time,
+	castCutoffToDate bool,
+	truncate bool,
+) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	var query string
+	var args []any
+	if truncate {
+		query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s LIMIT 1)", table)
+	} else {
+		where := fmt.Sprintf("%s < $1", timeColumn)
+		if castCutoffToDate {
+			where = fmt.Sprintf("%s < $1::date", timeColumn)
+		}
+		query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE %s LIMIT 1)", table, where)
+		args = []any{cutoff}
+	}
+	var exists bool
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&exists); err != nil {
+		if isMissingRelationError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return exists, nil
 }
 
 func deleteOldRowsByID(

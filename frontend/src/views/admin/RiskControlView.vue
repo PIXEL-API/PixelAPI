@@ -594,6 +594,94 @@
             </div>
           </div>
 
+          <div v-else-if="activeSettingsTab === 'sampling'" class="space-y-5">
+            <div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
+              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.dynamicSamplingStatus') }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ configForm.dynamic_sampling.enabled ? t('common.enabled') : t('common.disabled') }}</p>
+              </div>
+              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.dynamicSamplingSkipped') }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.dynamic_sampling?.skipped ?? 0) }}</p>
+              </div>
+              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.dynamicSamplingForced') }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.dynamic_sampling?.forced ?? 0) }}</p>
+              </div>
+              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.dynamicSamplingSampled') }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.dynamic_sampling?.sampled ?? 0) }}</p>
+              </div>
+              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.dynamicSamplingAudited') }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.dynamic_sampling?.audited ?? 0) }}</p>
+              </div>
+              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.dynamicSamplingRiskEvents') }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{ formatNumber(status?.dynamic_sampling?.risk_events ?? 0) }}</p>
+              </div>
+            </div>
+            <div class="flex items-center justify-between rounded-lg border border-gray-100 p-4 dark:border-dark-700">
+              <div>
+                <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.dynamicSampling') }}</p>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.dynamicSamplingHint') }}</p>
+              </div>
+              <Toggle v-model="configForm.dynamic_sampling.enabled" />
+            </div>
+            <div class="grid grid-cols-1 gap-5 lg:grid-cols-3" :class="!configForm.dynamic_sampling.enabled ? 'opacity-60' : ''">
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.newUserFullAuditCount') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.new_user_full_audit_count" type="number" min="1" max="10000" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.trustedSampleRate') }}</label>
+                <div class="relative">
+                  <input v-model.number="configForm.dynamic_sampling.trusted_sample_rate" type="number" min="1" max="100" step="1" class="input pr-8" />
+                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
+                </div>
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.highTrustedSampleRate') }}</label>
+                <div class="relative">
+                  <input v-model.number="configForm.dynamic_sampling.high_trusted_sample_rate" type="number" min="1" max="100" step="1" class="input pr-8" />
+                  <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
+                </div>
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.trustedTTLHours') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.trusted_ttl_hours" type="number" min="1" max="8760" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.riskFullAuditTTLHours') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.risk_full_audit_ttl_hours" type="number" min="1" max="8760" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.largeTextRunes') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.large_text_runes" type="number" min="1" max="12000" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.minAuditEveryRequests') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.min_audit_every_requests" type="number" min="1" max="10000" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.minAuditEveryMinutes') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.min_audit_every_minutes" type="number" min="1" max="1440" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.highTrustedMinHours') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.high_trusted_min_hours" type="number" min="1" max="8760" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.highTrustedMinRequests') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.high_trusted_min_requests" type="number" min="1" max="1000000" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.highTrustedMinAudits') }}</label>
+                <input v-model.number="configForm.dynamic_sampling.high_trusted_min_audits" type="number" min="1" max="100000" class="input" />
+              </div>
+            </div>
+          </div>
+
           <div v-else-if="activeSettingsTab === 'scope'" class="space-y-5">
             <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -969,6 +1057,7 @@ import type {
   ContentModerationAPIKeyStatus,
   ContentModerationConfig,
   ContentModerationCyberPreflightRules,
+  ContentModerationDynamicSamplingConfig,
   ContentModerationLog,
   ContentModerationProvider,
   ContentModerationRuntimeStatus,
@@ -982,7 +1071,7 @@ import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
 
-type SettingsTab = 'basic' | 'scope' | 'cyberRules' | 'runtime' | 'response' | 'retention'
+type SettingsTab = 'basic' | 'sampling' | 'scope' | 'cyberRules' | 'runtime' | 'response' | 'retention'
 type CyberRuleKey = keyof ContentModerationCyberPreflightRules
 type WorkerSlotState = 'active' | 'idle' | 'disabled'
 type APIKeysWriteMode = 'append' | 'replace'
@@ -1057,6 +1146,7 @@ const configForm = reactive({
   timeout_ms: 3000,
   retry_count: 2,
   sample_rate: 100,
+  dynamic_sampling: createDefaultDynamicSamplingConfig(),
   all_groups: true,
   group_ids: [] as number[],
   record_non_hits: false,
@@ -1097,6 +1187,7 @@ const filters = reactive({
 
 const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
   { id: 'basic', label: t('admin.riskControl.tabs.basic') },
+  { id: 'sampling', label: t('admin.riskControl.tabs.sampling') },
   { id: 'scope', label: t('admin.riskControl.tabs.scope') },
   { id: 'cyberRules', label: t('admin.riskControl.tabs.cyberRules') },
   { id: 'runtime', label: t('admin.riskControl.tabs.runtime') },
@@ -1382,6 +1473,41 @@ function createEmptyCyberPreflightRules(): ContentModerationCyberPreflightRules 
   }
 }
 
+function createDefaultDynamicSamplingConfig(): ContentModerationDynamicSamplingConfig {
+  return {
+    enabled: false,
+    new_user_full_audit_count: 100,
+    trusted_sample_rate: 5,
+    trusted_ttl_hours: 4,
+    high_trusted_sample_rate: 2,
+    high_trusted_min_hours: 24,
+    high_trusted_min_requests: 500,
+    high_trusted_min_audits: 10,
+    risk_full_audit_ttl_hours: 48,
+    min_audit_every_requests: 200,
+    min_audit_every_minutes: 30,
+    large_text_runes: 3000,
+  }
+}
+
+function normalizeDynamicSamplingConfig(config?: Partial<ContentModerationDynamicSamplingConfig>): ContentModerationDynamicSamplingConfig {
+  const defaults = createDefaultDynamicSamplingConfig()
+  return {
+    enabled: config?.enabled ?? defaults.enabled,
+    new_user_full_audit_count: Math.min(Math.max(Number(config?.new_user_full_audit_count) || defaults.new_user_full_audit_count, 1), 10000),
+    trusted_sample_rate: Math.min(Math.max(Number(config?.trusted_sample_rate) || defaults.trusted_sample_rate, 1), 100),
+    trusted_ttl_hours: Math.min(Math.max(Number(config?.trusted_ttl_hours) || defaults.trusted_ttl_hours, 1), 8760),
+    high_trusted_sample_rate: Math.min(Math.max(Number(config?.high_trusted_sample_rate) || defaults.high_trusted_sample_rate, 1), 100),
+    high_trusted_min_hours: Math.min(Math.max(Number(config?.high_trusted_min_hours) || defaults.high_trusted_min_hours, 1), 8760),
+    high_trusted_min_requests: Math.min(Math.max(Number(config?.high_trusted_min_requests) || defaults.high_trusted_min_requests, 1), 1000000),
+    high_trusted_min_audits: Math.min(Math.max(Number(config?.high_trusted_min_audits) || defaults.high_trusted_min_audits, 1), 100000),
+    risk_full_audit_ttl_hours: Math.min(Math.max(Number(config?.risk_full_audit_ttl_hours) || defaults.risk_full_audit_ttl_hours, 1), 8760),
+    min_audit_every_requests: Math.min(Math.max(Number(config?.min_audit_every_requests) || defaults.min_audit_every_requests, 1), 10000),
+    min_audit_every_minutes: Math.min(Math.max(Number(config?.min_audit_every_minutes) || defaults.min_audit_every_minutes, 1), 1440),
+    large_text_runes: Math.min(Math.max(Number(config?.large_text_runes) || defaults.large_text_runes, 1), 12000),
+  }
+}
+
 function normalizeCyberPreflightRules(rules?: Partial<ContentModerationCyberPreflightRules>): ContentModerationCyberPreflightRules {
   const empty = createEmptyCyberPreflightRules()
   return {
@@ -1459,6 +1585,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.timeout_ms = config.timeout_ms || 3000
   configForm.retry_count = config.retry_count ?? 2
   configForm.sample_rate = config.sample_rate ?? 100
+  configForm.dynamic_sampling = normalizeDynamicSamplingConfig(config.dynamic_sampling)
   configForm.all_groups = config.all_groups
   configForm.group_ids = Array.isArray(config.group_ids) ? [...config.group_ids] : []
   configForm.record_non_hits = config.record_non_hits
@@ -1545,6 +1672,7 @@ async function saveConfig() {
       timeout_ms: Number(configForm.timeout_ms) || 3000,
       retry_count: Number(configForm.retry_count) || 0,
       sample_rate: Number(configForm.sample_rate) || 0,
+      dynamic_sampling: normalizeDynamicSamplingConfig(configForm.dynamic_sampling),
       all_groups: configForm.all_groups,
       group_ids: configForm.all_groups ? [] : [...configForm.group_ids],
       record_non_hits: configForm.record_non_hits,

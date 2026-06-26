@@ -23,7 +23,7 @@ type usageCleanupRepository struct {
 	sql    sqlExecutor
 }
 
-type usageLogsArchiveReader struct {
+type archiveRowsReader struct {
 	rows *sql.Rows
 	buf  []byte
 	line []byte
@@ -236,7 +236,7 @@ func (r *usageCleanupRepository) ExportUsageLogs(ctx context.Context, filters se
 	if err != nil {
 		return nil, err
 	}
-	return &usageLogsArchiveReader{rows: rows}, nil
+	return &archiveRowsReader{rows: rows}, nil
 }
 
 func (r *usageCleanupRepository) SnapshotUsageLogs(ctx context.Context, filters service.UsageCleanupFilters) error {
@@ -476,7 +476,7 @@ func (r *usageCleanupRepository) GetTaskStatus(ctx context.Context, taskID int64
 	return status, nil
 }
 
-func (r *usageLogsArchiveReader) Read(p []byte) (int, error) {
+func (r *archiveRowsReader) Read(p []byte) (int, error) {
 	if r == nil || r.rows == nil {
 		return 0, io.EOF
 	}
@@ -504,7 +504,7 @@ func (r *usageLogsArchiveReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (r *usageLogsArchiveReader) Close() error {
+func (r *archiveRowsReader) Close() error {
 	if r == nil || r.rows == nil {
 		return nil
 	}

@@ -4,9 +4,20 @@ import { nextTick } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { query, queryBalanceLedger, getStatsByDateRange, list, showError, showWarning, showSuccess, showInfo } = vi.hoisted(() => ({
+const {
+  query,
+  queryBalanceLedger,
+  getBalanceLedgerStats,
+  getStatsByDateRange,
+  list,
+  showError,
+  showWarning,
+  showSuccess,
+  showInfo,
+} = vi.hoisted(() => ({
   query: vi.fn(),
   queryBalanceLedger: vi.fn(),
+  getBalanceLedgerStats: vi.fn(),
   getStatsByDateRange: vi.fn(),
   list: vi.fn(),
   showError: vi.fn(),
@@ -61,6 +72,7 @@ vi.mock('@/api', () => ({
   usageAPI: {
     query,
     queryBalanceLedger,
+    getBalanceLedgerStats,
     getStatsByDateRange,
   },
   keysAPI: {
@@ -91,6 +103,7 @@ describe('user UsageView tooltip', () => {
   beforeEach(() => {
     query.mockReset()
     queryBalanceLedger.mockReset()
+    getBalanceLedgerStats.mockReset()
     getStatsByDateRange.mockReset()
     list.mockReset()
     showError.mockReset()
@@ -150,6 +163,14 @@ describe('user UsageView tooltip', () => {
       total_tokens: 100,
       total_cost: 0.1,
       avg_duration_ms: 1,
+    })
+    getBalanceLedgerStats.mockResolvedValue({
+      total_entries: 0,
+      credit_entries: 0,
+      debit_entries: 0,
+      credit_amount: '0',
+      debit_amount: '0',
+      net_amount: '0',
     })
     list.mockResolvedValue({ items: [] })
 
@@ -239,6 +260,14 @@ describe('user UsageView tooltip', () => {
       total_cost: 0.1,
       avg_duration_ms: 1,
     })
+    getBalanceLedgerStats.mockResolvedValue({
+      total_entries: 0,
+      credit_entries: 0,
+      debit_entries: 0,
+      credit_amount: '0',
+      debit_amount: '0',
+      net_amount: '0',
+    })
     list.mockResolvedValue({ items: [] })
 
     let exportedBlob: Blob | null = null
@@ -311,6 +340,14 @@ describe('user UsageView tooltip', () => {
       total_cost: 0,
       avg_duration_ms: 0,
     })
+    getBalanceLedgerStats.mockResolvedValue({
+      total_entries: 1,
+      credit_entries: 1,
+      debit_entries: 0,
+      credit_amount: '0.1234567891',
+      debit_amount: '0',
+      net_amount: '0.1234567891',
+    })
     list.mockResolvedValue({ items: [] })
 
     const wrapper = mount(UsageView, {
@@ -370,5 +407,93 @@ describe('user UsageView tooltip', () => {
     }
     expect(setupState.getLedgerReasonLabel('admin_adjustment')).toBe('Admin balance adjustment')
     expect(setupState.getLedgerRemark(adminRow)).toBe('Notes: manual top-up · Operation: add · Code: ADJUST-88 · Reference ID: 88')
+  })
+
+  it('loads user balance ledger stats with exact time and reference filters', async () => {
+    query.mockResolvedValue({
+      items: [],
+      total: 0,
+      pages: 0,
+    })
+    queryBalanceLedger.mockResolvedValue({
+      items: [],
+      total: 0,
+      pages: 0,
+    })
+    getBalanceLedgerStats.mockResolvedValue({
+      total_entries: 2,
+      credit_entries: 1,
+      debit_entries: 1,
+      credit_amount: '0.25',
+      debit_amount: '0.10',
+      net_amount: '0.15',
+    })
+    getStatsByDateRange.mockResolvedValue({
+      total_requests: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      avg_duration_ms: 0,
+    })
+    list.mockResolvedValue({ items: [] })
+
+    const wrapper = mount(UsageView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          TablePageLayout: TablePageLayoutStub,
+          Pagination: true,
+          EmptyState: true,
+          Select: true,
+          DateRangePicker: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.startDateTime = '2026-06-25T00:00:00'
+    setupState.endDateTime = '2026-06-25T01:00:00'
+    setupState.ledgerFilters = {
+      direction: 'credit',
+      reason: 'account_share_income',
+      ref_type: 'usage_log',
+      ref_id: 123,
+    }
+    await setupState.switchUsageTab('balanceLedger')
+    await flushPromises()
+
+    expect(queryBalanceLedger).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: 'credit',
+        reason: 'account_share_income',
+        ref_type: 'usage_log',
+        ref_id: 123,
+        start_time: expect.any(String),
+        end_time: expect.any(String),
+        timezone: expect.any(String),
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(getBalanceLedgerStats).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: 'credit',
+        reason: 'account_share_income',
+        ref_type: 'usage_log',
+        ref_id: 123,
+        start_time: expect.any(String),
+        end_time: expect.any(String),
+        timezone: expect.any(String),
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    const statsParams = getBalanceLedgerStats.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(statsParams.page).toBeUndefined()
+    expect(statsParams.page_size).toBeUndefined()
+    expect(statsParams.sort_order).toBeUndefined()
+    expect(setupState.ledgerSummaryCards[0].value).toBe('2')
+    expect(setupState.ledgerSummaryCards[3].value).toBe('+$0.15')
   })
 })

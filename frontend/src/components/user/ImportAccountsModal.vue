@@ -101,6 +101,7 @@
           :proxies="proxies"
           :allow-empty="false"
           :can-test="false"
+          disable-full
           hide-endpoint
         />
         <p class="input-hint">
@@ -173,6 +174,7 @@ import {
 import { useAppStore } from '@/stores/app'
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
 import type { ImportCredentialContentsRequest, ImportCredentialContentsResponse } from '@/api/accounts'
 import type { AccountLevel, AccountPlatform, Proxy } from '@/types'
 
@@ -268,9 +270,24 @@ const selectedPlatformHint = computed(() => {
   }
 })
 
+const selectedProxy = computed(() => {
+  const proxyId = selectedProxyId.value
+  if (!proxyId) return null
+  return proxies.value.find(proxy => proxy.id === proxyId) || null
+})
+
+const selectedProxyCapacityMessage = computed(() => {
+  const proxy = selectedProxy.value
+  if (!isProxyAccountFull(proxy)) return ''
+  const count = normalizeProxyAccountCount(proxy)
+  const max = normalizeProxyMaxAccounts(proxy)
+  return `${t('admin.proxies.accountUsageFullTitle', { count, max })}，请选择其它代理 IP。`
+})
+
 const proxyHelperText = computed(() => {
   if (proxyLoading.value) return t('userAccounts.importProxyLoading')
   if (proxyLoadMessage.value) return proxyLoadMessage.value
+  if (selectedProxyCapacityMessage.value) return selectedProxyCapacityMessage.value
   if (proxies.value.length > 0) return t('userAccounts.importProxyHint')
   return t('userAccounts.importProxyEmpty')
 })
@@ -282,6 +299,7 @@ const canSubmitOAuthImport = computed(() => {
     selectedPlatform.value === 'openai' &&
     selectedAccountLevel.value &&
     selectedProxyId.value &&
+    !selectedProxyCapacityMessage.value &&
     openaiOAuth.sessionId.value &&
     String(authCode).trim() &&
     String(oauthState).trim()
@@ -551,6 +569,10 @@ async function generateOAuthUrl(): Promise<void> {
     appStore.showError(t('userAccounts.importProxyRequired'))
     return
   }
+  if (selectedProxyCapacityMessage.value) {
+    appStore.showError(selectedProxyCapacityMessage.value)
+    return
+  }
   await openaiOAuth.generateAuthUrl(selectedProxyId.value)
 }
 
@@ -570,6 +592,10 @@ async function submitOAuthImport(): Promise<void> {
   }
   if (!selectedProxyId.value) {
     appStore.showError(t('userAccounts.importProxyRequired'))
+    return
+  }
+  if (selectedProxyCapacityMessage.value) {
+    appStore.showError(selectedProxyCapacityMessage.value)
     return
   }
   const authCode = String(oauthFlowRef.value?.authCode || '').trim()

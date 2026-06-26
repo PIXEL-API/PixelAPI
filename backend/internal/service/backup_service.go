@@ -120,6 +120,14 @@ type UsageLogsArchiveInput struct {
 	ExpireDays int
 }
 
+type DataArchiveInput struct {
+	Stream      io.ReadCloser
+	FileName    string
+	BackupType  string
+	TriggeredBy string
+	ExpireDays  int
+}
+
 // BackupService 数据库备份恢复服务
 type BackupService struct {
 	settingRepo  SettingRepository
@@ -657,9 +665,19 @@ func (s *BackupService) CreateUsageLogsArchive(ctx context.Context, input UsageL
 	if input.Stream == nil {
 		return nil, infraerrors.BadRequest("USAGE_LOG_ARCHIVE_EMPTY_STREAM", "usage log archive stream is required")
 	}
-	defer func() { _ = input.Stream.Close() }()
 	if !input.EndTime.After(input.StartTime) {
+		_ = input.Stream.Close()
 		return nil, infraerrors.BadRequest("USAGE_LOG_ARCHIVE_INVALID_RANGE", "usage log archive range is invalid")
+	}
+	{
+		fileName := fmt.Sprintf("usage_logs_%s_%s.ndjson.gz", input.StartTime.UTC().Format("20060102_150405"), input.EndTime.UTC().Format("20060102_150405"))
+		return s.CreateDataArchive(ctx, DataArchiveInput{
+			Stream:      input.Stream,
+			FileName:    fileName,
+			BackupType:  "usage_logs_archive",
+			TriggeredBy: "usage_cleanup_auto",
+			ExpireDays:  input.ExpireDays,
+		})
 	}
 	if s.shuttingDown.Load() {
 		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")
@@ -759,6 +777,121 @@ func (s *BackupService) CreateUsageLogsArchive(ctx context.Context, input UsageL
 }
 
 // StartBackup 异步创建备份，立即返回 running 状态的记录
+
+// CreateDataArchive gzip-compresses a newline-delimited export stream and uploads it as a backup record.
+func (s *BackupService) CreateDataArchive(ctx context.Context, input DataArchiveInput) (*BackupRecord, error) {
+	if input.Stream == nil {
+		return nil, infraerrors.BadRequest("DATA_ARCHIVE_EMPTY_STREAM", "data archive stream is required")
+	}
+	defer func() { _ = input.Stream.Close() }()
+	input.FileName = strings.TrimSpace(input.FileName)
+	input.BackupType = strings.TrimSpace(input.BackupType)
+	input.TriggeredBy = strings.TrimSpace(input.TriggeredBy)
+	if input.FileName == "" {
+		return nil, infraerrors.BadRequest("DATA_ARCHIVE_EMPTY_FILE_NAME", "data archive file name is required")
+	}
+	if input.BackupType == "" {
+		return nil, infraerrors.BadRequest("DATA_ARCHIVE_EMPTY_TYPE", "data archive backup type is required")
+	}
+	if input.TriggeredBy == "" {
+		input.TriggeredBy = "system"
+	}
+	if s.shuttingDown.Load() {
+		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")
+	}
+
+	s.opMu.Lock()
+	if s.backingUp {
+		s.opMu.Unlock()
+		return nil, ErrBackupInProgress
+	}
+	s.backingUp = true
+	s.opMu.Unlock()
+	defer func() {
+		s.opMu.Lock()
+		s.backingUp = false
+		s.opMu.Unlock()
+	}()
+
+	s3Cfg, err := s.loadS3Config(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s3Cfg == nil || !s3Cfg.IsConfigured() {
+		return nil, ErrBackupS3NotConfigured
+	}
+	objectStore, err := s.getOrCreateStore(ctx, s3Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init object store: %w", err)
+	}
+
+	now := time.Now()
+	record := &BackupRecord{
+		ID:          uuid.New().String()[:8],
+		Status:      "running",
+		BackupType:  input.BackupType,
+		FileName:    input.FileName,
+		S3Key:       s.buildS3Key(s3Cfg, input.FileName),
+		TriggeredBy: input.TriggeredBy,
+		StartedAt:   now.Format(time.RFC3339),
+	}
+	if input.ExpireDays > 0 {
+		record.ExpiresAt = now.AddDate(0, 0, input.ExpireDays).Format(time.RFC3339)
+	}
+
+	pr, pw := io.Pipe()
+	gzipDone := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err := fmt.Errorf("%s archive gzip panic: %v", input.BackupType, r)
+				_ = pw.CloseWithError(err)
+				gzipDone <- err
+			}
+		}()
+		gzWriter := gzip.NewWriter(pw)
+		var gzErr error
+		_, gzErr = io.Copy(gzWriter, input.Stream)
+		if closeErr := gzWriter.Close(); closeErr != nil && gzErr == nil {
+			gzErr = closeErr
+		}
+		if gzErr != nil {
+			_ = pw.CloseWithError(gzErr)
+		} else {
+			_ = pw.Close()
+		}
+		gzipDone <- gzErr
+	}()
+
+	sizeBytes, err := objectStore.Upload(ctx, record.S3Key, pr, "application/gzip")
+	if err != nil {
+		_ = pr.CloseWithError(err)
+		gzErr := <-gzipDone
+		record.Status = "failed"
+		record.ErrorMsg = fmt.Sprintf("S3 upload failed: %v", err)
+		if gzErr != nil {
+			record.ErrorMsg = fmt.Sprintf("gzip/archive failed: %v", gzErr)
+		}
+		record.FinishedAt = time.Now().Format(time.RFC3339)
+		_ = s.saveRecord(ctx, record)
+		return record, fmt.Errorf("%s archive upload: %w", input.BackupType, err)
+	}
+	if gzErr := <-gzipDone; gzErr != nil {
+		record.Status = "failed"
+		record.ErrorMsg = fmt.Sprintf("gzip/archive failed: %v", gzErr)
+		record.FinishedAt = time.Now().Format(time.RFC3339)
+		_ = s.saveRecord(ctx, record)
+		return record, gzErr
+	}
+	record.SizeBytes = sizeBytes
+	record.Status = "completed"
+	record.FinishedAt = time.Now().Format(time.RFC3339)
+	if err := s.saveRecord(ctx, record); err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] failed to save %s archive record: %v", input.BackupType, err)
+	}
+	return record, nil
+}
+
 func (s *BackupService) StartBackup(ctx context.Context, triggeredBy string, expireDays int) (*BackupRecord, error) {
 	if s.shuttingDown.Load() {
 		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")

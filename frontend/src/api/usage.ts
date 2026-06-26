@@ -26,6 +26,8 @@ export interface UserDashboardStats {
   total_cache_creation_tokens: number
   total_cache_read_tokens: number
   total_tokens: number
+  total_request_actual_cost: number
+  total_hourly_cost: number
   total_cost: number // 标准计费
   total_actual_cost: number // 实际扣除
   today_requests: number
@@ -34,6 +36,8 @@ export interface UserDashboardStats {
   today_cache_creation_tokens: number
   today_cache_read_tokens: number
   today_tokens: number
+  today_request_actual_cost: number
+  today_hourly_cost: number
   today_cost: number // 今日标准计费
   today_actual_cost: number // 今日实际扣除
   average_duration_ms: number
@@ -64,6 +68,15 @@ export interface ModelStatsResponse {
   models: ModelStat[]
   start_date: string
   end_date: string
+}
+
+export interface UserBalanceLedgerStatsResponse {
+  total_entries: number
+  credit_entries: number
+  debit_entries: number
+  credit_amount: string
+  debit_amount: string
+  net_amount: string
 }
 
 export interface AccountSharingSummary {
@@ -178,6 +191,17 @@ export async function queryBalanceLedger(
   return data
 }
 
+export async function getBalanceLedgerStats(
+  params: UserBalanceLedgerQueryParams,
+  config: { signal?: AbortSignal } = {}
+): Promise<UserBalanceLedgerStatsResponse> {
+  const { data } = await apiClient.get<UserBalanceLedgerStatsResponse>('/usage/balance-ledger/stats', {
+    ...config,
+    params
+  })
+  return data
+}
+
 /**
  * Get usage statistics for a specific period
  * @param period - Time period ('today', 'week', 'month', 'year')
@@ -210,11 +234,13 @@ export async function getStats(
 export async function getStatsByDateRange(
   startDate: string,
   endDate: string,
-  apiKeyId?: number
+  apiKeyId?: number,
+  options: Pick<UsageQueryParams, 'start_time' | 'end_time' | 'timezone'> = {}
 ): Promise<UsageStatsResponse> {
   const params: Record<string, unknown> = {
     start_date: startDate,
-    end_date: endDate
+    end_date: endDate,
+    ...options
   }
 
   if (apiKeyId !== undefined) {
@@ -316,7 +342,11 @@ export async function getDashboardAccountSharing(params?: TrendParams): Promise<
 export interface BatchApiKeyUsageStats {
   api_key_id: number
   today_actual_cost: number
+  today_request_actual_cost: number
+  today_hourly_cost: number
   total_actual_cost: number
+  total_request_actual_cost: number
+  total_hourly_cost: number
 }
 
 export interface BatchApiKeysUsageResponse {
@@ -352,6 +382,7 @@ export const usageAPI = {
   query,
   getStats,
   queryBalanceLedger,
+  getBalanceLedgerStats,
   getStatsByDateRange,
   getByDateRange,
   getById,

@@ -27,11 +27,22 @@ export interface AdminUsageStatsResponse {
   total_tokens: number
   total_cost: number
   total_actual_cost: number
+  total_request_actual_cost: number
+  total_hourly_cost: number
   total_account_cost: number
   average_duration_ms: number
   endpoints?: EndpointStat[]
   upstream_endpoints?: EndpointStat[]
   endpoint_paths?: EndpointStat[]
+}
+
+export interface AdminBalanceLedgerStatsResponse {
+  total_entries: number
+  credit_entries: number
+  debit_entries: number
+  credit_amount: string
+  debit_amount: string
+  net_amount: string
 }
 
 export interface SimpleUser {
@@ -93,6 +104,7 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
   billing_mode?: string
   sort_by?: string
   sort_order?: 'asc' | 'desc'
+  timezone?: string
 }
 
 export interface AdminBalanceLedgerQueryParams extends UserBalanceLedgerQueryParams {
@@ -133,6 +145,17 @@ export async function listBalanceLedger(
   return data
 }
 
+export async function getBalanceLedgerStats(
+  params: AdminBalanceLedgerQueryParams,
+  options?: { signal?: AbortSignal }
+): Promise<AdminBalanceLedgerStatsResponse> {
+  const { data } = await apiClient.get<AdminBalanceLedgerStatsResponse>('/admin/usage/balance-ledger/stats', {
+    params,
+    signal: options?.signal
+  })
+  return data
+}
+
 /**
  * Get usage statistics with optional filters (admin only)
  * @param params - Query parameters for filtering
@@ -149,6 +172,8 @@ export async function getStats(params: {
   period?: string
   start_date?: string
   end_date?: string
+  start_time?: string
+  end_time?: string
   timezone?: string
 }): Promise<AdminUsageStatsResponse> {
   const { data } = await apiClient.get<AdminUsageStatsResponse>('/admin/usage/stats', {
@@ -229,6 +254,7 @@ export async function cancelCleanupTask(taskId: number): Promise<{ id: number; s
 export const adminUsageAPI = {
   list,
   listBalanceLedger,
+  getBalanceLedgerStats,
   getStats,
   searchUsers,
   searchApiKeys,

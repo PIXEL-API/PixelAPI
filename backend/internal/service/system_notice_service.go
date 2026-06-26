@@ -18,6 +18,7 @@ import (
 const (
 	SystemNoticeSourcePaymentOrder = "payment_order"
 	SystemNoticeSourceSubscription = "subscription"
+	SystemNoticeSourceWithdrawal   = "withdrawal"
 	SystemNoticeSourceAccount      = "account"
 	SystemNoticeSourceGroup        = "group"
 	SystemNoticeSourceRiskControl  = "risk_control"
@@ -124,6 +125,45 @@ func (s *SystemNoticeService) NotifyPaymentOrder(ctx context.Context, event stri
 		Type:     ConversationTypeBilling,
 		Source:   SystemNoticeSourcePaymentOrder,
 		SourceID: sourceID,
+	})
+}
+
+func (s *SystemNoticeService) NotifyWithdrawal(ctx context.Context, event string, req *WithdrawalRequest) {
+	if req == nil || req.UserID <= 0 {
+		return
+	}
+	event = normalizeNoticeSource(event)
+	if event == "" {
+		event = "updated"
+	}
+	amount := formatNoticeAmount(req.Amount, "CNY")
+	totalDeducted := formatNoticeAmount(req.TotalDeducted, "CNY")
+	subject := "提现状态更新"
+	content := fmt.Sprintf("你的提现申请 #%d 状态已更新。提现金额：%s。", req.ID, amount)
+	switch event {
+	case "settled":
+		subject = "提现已打款"
+		content = fmt.Sprintf("你的提现申请 #%d 已完成打款。提现金额：%s。", req.ID, amount)
+	case "rejected":
+		subject = "提现已拒绝"
+		content = fmt.Sprintf("你的提现申请 #%d 已被拒绝，已退回扣减金额：%s。提现金额：%s。", req.ID, totalDeducted, amount)
+	}
+	if note := withdrawalNoticeAdminNote(req); note != "" {
+		noteLabel := "处理备注"
+		if event == "settled" {
+			noteLabel = "打款备注"
+		} else if event == "rejected" {
+			noteLabel = "拒绝备注"
+		}
+		content += fmt.Sprintf("%s：%s。", noteLabel, note)
+	}
+	s.SendBestEffort(ctx, SystemNoticeInput{
+		UserID:   req.UserID,
+		Subject:  subject,
+		Content:  content,
+		Type:     ConversationTypeBilling,
+		Source:   SystemNoticeSourceWithdrawal,
+		SourceID: noticeSourceID(req.ID, event),
 	})
 }
 
@@ -620,6 +660,13 @@ func safeGroupDisplayName(group *Group) string {
 		return "分组"
 	}
 	return name
+}
+
+func withdrawalNoticeAdminNote(req *WithdrawalRequest) string {
+	if req == nil || req.AdminNote == nil {
+		return ""
+	}
+	return normalizeNoticeText(*req.AdminNote, 1000)
 }
 
 func noticeOptionalRatesChanged(before, after *float64) bool {

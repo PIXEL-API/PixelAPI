@@ -190,6 +190,15 @@ type UserBalanceLedgerFilters struct {
 	ExactTotal    bool
 }
 
+type UserBalanceLedgerStats struct {
+	TotalEntries  int64  `json:"total_entries"`
+	CreditEntries int64  `json:"credit_entries"`
+	DebitEntries  int64  `json:"debit_entries"`
+	CreditAmount  string `json:"credit_amount"`
+	DebitAmount   string `json:"debit_amount"`
+	NetAmount     string `json:"net_amount"`
+}
+
 type UserBalanceLedgerEntry struct {
 	ID           int64
 	UserID       int64

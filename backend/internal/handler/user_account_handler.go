@@ -33,6 +33,7 @@ type UserAccountHandler struct {
 	concurrencyService      *service.ConcurrencyService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
+	openaiQuotaService      *service.OpenAIQuotaService
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
 	sessionLimitCache       service.SessionLimitCache
@@ -86,6 +87,10 @@ func (h *UserAccountHandler) SetRuntimeCapacityProviders(
 	h.concurrencyService = concurrencyService
 	h.sessionLimitCache = sessionLimitCache
 	h.rpmCache = rpmCache
+}
+
+func (h *UserAccountHandler) SetOpenAIQuotaService(openaiQuotaService *service.OpenAIQuotaService) {
+	h.openaiQuotaService = openaiQuotaService
 }
 
 type createUserAccountRequest struct {
@@ -923,6 +928,58 @@ func (h *UserAccountHandler) GetUsage(c *gin.Context) {
 		return
 	}
 	response.Success(c, usage)
+}
+
+func (h *UserAccountHandler) QueryOpenAIQuota(c *gin.Context) {
+	accountID, ok := h.resolveOwnedAccountID(c)
+	if !ok {
+		return
+	}
+	if h.openaiQuotaService == nil {
+		response.BadRequest(c, "openai quota service is not enabled")
+		return
+	}
+	usage, err := h.openaiQuotaService.QueryUsage(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, usage)
+}
+
+func (h *UserAccountHandler) ResetOpenAIQuota(c *gin.Context) {
+	accountID, ok := h.resolveOwnedAccountID(c)
+	if !ok {
+		return
+	}
+	if h.openaiQuotaService == nil {
+		response.BadRequest(c, "openai quota service is not enabled")
+		return
+	}
+	result, err := h.openaiQuotaService.ResetCredit(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *UserAccountHandler) resolveOwnedAccountID(c *gin.Context) (int64, bool) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return 0, false
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return 0, false
+	}
+	if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+		response.ErrorFrom(c, err)
+		return 0, false
+	}
+	return accountID, true
 }
 
 func (h *UserAccountHandler) GetStats(c *gin.Context) {
@@ -2120,17 +2177,21 @@ func (h *UserAccountHandler) GenerateOpenAIOAuthURL(c *gin.Context) {
 	if !bindOptionalJSON(c, &req) {
 		return
 	}
+	if h.openaiOAuthService == nil {
+		response.ErrorFrom(c, service.ErrServiceUnavailable)
+		return
+	}
 	if req.ProxyID != nil {
 		subject, ok := middleware2.GetAuthSubjectFromContext(c)
 		if !ok {
 			response.Unauthorized(c, "User not authenticated")
 			return
 		}
-		if h.openaiOAuthService == nil {
+		if h.accountService == nil {
 			response.ErrorFrom(c, service.ErrServiceUnavailable)
 			return
 		}
-		if err := h.openaiOAuthService.EnsureProxyVisibleToUser(c.Request.Context(), subject.UserID, req.ProxyID); err != nil {
+		if err := h.accountService.EnsureOwnedProxyAvailableForNewAccount(c.Request.Context(), subject.UserID, *req.ProxyID); err != nil {
 			response.ErrorFrom(c, err)
 			return
 		}

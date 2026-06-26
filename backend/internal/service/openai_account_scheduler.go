@@ -1329,55 +1329,94 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 	if !ok {
 		return nil, decision, true, ErrAccountShareModeGroupUnbound
 	}
-	membership, listing, err := s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
-	if err != nil {
-		return nil, decision, true, err
-	}
-	if membership == nil || listing == nil {
-		return nil, decision, true, ErrAccountShareModeGroupUnbound
-	}
-	accountID := membership.AccountID
-	if accountID <= 0 {
-		return nil, decision, true, ErrNoAvailableAccounts
-	}
-	decision.CandidateCount = 1
-	decision.SelectedAccountID = accountID
-
-	if excludedIDs != nil {
-		if _, excluded := excludedIDs[accountID]; excluded {
-			return nil, decision, true, ErrNoAvailableAccounts
-		}
-	}
-	if s.userRepo != nil {
-		user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
+	var membership *AccountShareMembership
+	var listing *AccountShareListing
+	var account *Account
+	var lastErr error
+	for attempt := 0; attempt < AccountShareModeQueueMaxItems; attempt++ {
+		var err error
+		membership, listing, err = s.accountShareModeService.ResolveActiveBindingForRequest(ctx, reqCtx.UserID, reqCtx.APIKeyID, *groupID)
 		if err != nil {
 			return nil, decision, true, err
 		}
-		if user.Balance < listing.MinBalanceRequired {
-			return nil, decision, true, ErrAccountShareBalanceBelowMinimum
+		if membership == nil || listing == nil {
+			return nil, decision, true, ErrAccountShareModeGroupUnbound
 		}
+		accountID := membership.AccountID
+		if accountID <= 0 {
+			return nil, decision, true, ErrNoAvailableAccounts
+		}
+		decision.CandidateCount = 1
+		decision.SelectedAccountID = accountID
+		retryCurrentMembership := false
+		if excludedIDs != nil {
+			if _, excluded := excludedIDs[accountID]; excluded {
+				lastErr = ErrNoAvailableAccounts
+				retryCurrentMembership = true
+			}
+		}
+		if !retryCurrentMembership && s.userRepo != nil {
+			user, err := s.userRepo.GetByID(ctx, reqCtx.UserID)
+			if err != nil {
+				return nil, decision, true, err
+			}
+			if user.Balance < listing.MinBalanceRequired {
+				lastErr = ErrAccountShareBalanceBelowMinimum
+				retryCurrentMembership = true
+			}
+		}
+		if !retryCurrentMembership {
+			account, err = s.accountRepo.GetByID(ctx, accountID)
+			if err != nil {
+				return nil, decision, true, err
+			}
+			if account == nil {
+				lastErr = ErrNoAvailableAccounts
+				retryCurrentMembership = true
+			}
+		}
+		if !retryCurrentMembership {
+			decision.SelectedAccountType = account.Type
+			if account.ID != accountID || !account.IsOpenAI() || !account.IsSchedulable() {
+				lastErr = ErrNoAvailableAccounts
+				retryCurrentMembership = true
+			}
+		}
+		if !retryCurrentMembership && requestedModel != "" && !account.IsModelSupported(requestedModel) {
+			return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
+		}
+		if !retryCurrentMembership && !isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if !retryCurrentMembership && !account.SupportsOpenAIImageCapability(requiredImageCapability) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if !retryCurrentMembership && !s.isOpenAIAccountTransportCompatible(account, requiredTransport) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if !retryCurrentMembership && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
+			lastErr = ErrNoAvailableAccounts
+			retryCurrentMembership = true
+		}
+		if retryCurrentMembership {
+			now := time.Now().UTC()
+			if err := s.accountShareModeService.deferMembershipForDispatchRetry(ctx, reqCtx, membership, now); err != nil {
+				return nil, decision, true, err
+			}
+			membership = nil
+			listing = nil
+			account = nil
+			continue
+		}
+		break
 	}
-	account, err := s.accountRepo.GetByID(ctx, accountID)
-	if err != nil {
-		return nil, decision, true, err
-	}
-	if account == nil {
-		return nil, decision, true, ErrNoAvailableAccounts
-	}
-	decision.SelectedAccountType = account.Type
-	if account.ID != accountID || !account.IsOpenAI() || !account.IsSchedulable() {
-		return nil, decision, true, ErrNoAvailableAccounts
-	}
-	if !isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) {
-		return nil, decision, true, ErrNoAvailableAccounts
-	}
-	if !account.SupportsOpenAIImageCapability(requiredImageCapability) {
-		return nil, decision, true, ErrNoAvailableAccounts
-	}
-	if !s.isOpenAIAccountTransportCompatible(account, requiredTransport) {
-		return nil, decision, true, ErrNoAvailableAccounts
-	}
-	if s.needsUpstreamChannelRestrictionCheck(ctx, groupID) && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
+	if membership == nil || listing == nil || account == nil {
+		if lastErr != nil {
+			return nil, decision, true, lastErr
+		}
 		return nil, decision, true, ErrNoAvailableAccounts
 	}
 

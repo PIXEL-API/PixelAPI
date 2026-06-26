@@ -436,6 +436,54 @@ func TestOpenAIGatewayServiceRecordUsage_FallsBackToGroupDefaultRateWhenResolver
 	require.Equal(t, groupRate, usageRepo.lastLog.RateMultiplier)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_AccountShareOwnerSelfUseUsesServiceRate(t *testing.T) {
+	groupID := int64(14)
+	userID := int64(2004)
+	apiKeyID := int64(1004)
+	accountID := int64(3004)
+	listingRate := 2.0
+	usage := OpenAIUsage{InputTokens: 20, OutputTokens: 10}
+
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo, nil)
+	svc.accountShareModeService = &AccountShareModeService{repo: &accountShareModeRepoStub{
+		membership: &AccountShareMembership{ID: 44, AccountID: accountID, ConsumerUserID: userID, APIKeyID: apiKeyID},
+		listing:    &AccountShareListing{ID: 55, AccountID: accountID, OwnerUserID: userID, RateMultiplier: listingRate},
+	}}
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_account_share_owner_self_use",
+			Usage:     usage,
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      apiKeyID,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:             groupID,
+				RateMultiplier: 1,
+			},
+		},
+		User:    &User{ID: userID},
+		Account: &Account{ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, AccountShareModeOwnerSelfUseMultiplier, usageRepo.lastLog.RateMultiplier)
+	require.NotNil(t, billingRepo.lastCmd)
+	require.Nil(t, billingRepo.lastCmd.AccountShareModeSettlement)
+
+	expected := expectedOpenAICost(t, svc, "gpt-5.1", usage, AccountShareModeOwnerSelfUseMultiplier)
+	require.InDelta(t, expected.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, expected.ActualCost, billingRepo.lastCmd.BalanceCost, 1e-12)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_DuplicateUsageLogSkipsBilling(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: false}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: false}}

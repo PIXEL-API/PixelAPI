@@ -131,6 +131,82 @@ func TestAccountSchedulableWithoutCodexQuotaProtection(t *testing.T) {
 	}
 }
 
+func TestAccountAnthropicQuotaProtectionUsesConfigured5hLimit(t *testing.T) {
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(2 * time.Hour)
+	account := &Account{
+		Platform:         PlatformAnthropic,
+		Type:             AccountTypeOAuth,
+		Status:           StatusActive,
+		Schedulable:      true,
+		SessionWindowEnd: &resetAt,
+		Extra: map[string]any{
+			"anthropic_5h_limit_percent": 80.0,
+			"session_window_utilization": 0.8,
+		},
+	}
+
+	if !account.IsAnthropicQuotaProtectionActiveAt(now) {
+		t.Fatal("expected anthropic quota protection to be active")
+	}
+	if got := account.AnthropicQuotaProtectionReasonAt(now); got != AnthropicQuotaWindow5h {
+		t.Fatalf("reason = %q, want %q", got, AnthropicQuotaWindow5h)
+	}
+	if account.IsSchedulableAt(now) {
+		t.Fatal("expected account to be unschedulable while anthropic quota protection is active")
+	}
+	if got := account.AnthropicQuotaProtectionResetAt(now); got == nil || !got.Equal(resetAt) {
+		t.Fatalf("reset_at = %v, want %v", got, resetAt)
+	}
+}
+
+func TestAccountAnthropicQuotaProtectionUsesConfigured7dLimit(t *testing.T) {
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(48 * time.Hour)
+	account := &Account{
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra: map[string]any{
+			"anthropic_7d_limit_percent":   75.0,
+			"passive_usage_7d_utilization": 0.76,
+			"passive_usage_7d_reset":       resetAt.Unix(),
+		},
+	}
+
+	if !account.IsAnthropicQuotaProtectionActiveAt(now) {
+		t.Fatal("expected anthropic 7d quota protection to be active")
+	}
+	if got := account.AnthropicQuotaProtectionReasonAt(now); got != AnthropicQuotaWindow7d {
+		t.Fatalf("reason = %q, want %q", got, AnthropicQuotaWindow7d)
+	}
+	if account.IsSchedulableAt(now) {
+		t.Fatal("expected account to be unschedulable while anthropic 7d quota protection is active")
+	}
+}
+
+func TestAccountAnthropicQuotaProtectionRequiresFutureReset(t *testing.T) {
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	account := &Account{
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra: map[string]any{
+			"anthropic_7d_limit_percent":   75.0,
+			"passive_usage_7d_utilization": 0.9,
+		},
+	}
+
+	if account.IsAnthropicQuotaProtectionActiveAt(now) {
+		t.Fatal("did not expect protection without a reset time")
+	}
+	if !account.IsSchedulableAt(now) {
+		t.Fatal("expected account to remain schedulable without a reset time")
+	}
+}
+
 func TestNormalizeCodexQuotaLimitExtra(t *testing.T) {
 	extra, err := NormalizeCodexQuotaLimitExtra(PlatformOpenAI, AccountTypeOAuth, map[string]any{
 		"codex_5h_limit_percent": "80",

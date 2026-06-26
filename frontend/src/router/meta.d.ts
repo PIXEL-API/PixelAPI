@@ -3,60 +3,78 @@
  * Extends the RouteMeta interface with custom properties
  */
 
-import 'vue-router'
+import "vue-router";
 
-declare module 'vue-router' {
+declare module "vue-router" {
   interface RouteMeta {
     /**
      * Whether this route requires authentication
      * @default true
      */
-    requiresAuth?: boolean
+    requiresAuth?: boolean;
 
     /**
      * Whether this route requires admin role
      * @default false
      */
-    requiresAdmin?: boolean
+    requiresAdmin?: boolean;
 
     /**
      * Page title for this route
      */
-    title?: string
+    title?: string;
 
     /**
      * Optional breadcrumb items for navigation
      */
     breadcrumbs?: Array<{
-      label: string
-      to?: string
-    }>
+      label: string;
+      to?: string;
+    }>;
 
     /**
      * Icon name for this route (for sidebar navigation)
      */
-    icon?: string
+    icon?: string;
 
     /**
      * Whether to hide this route from navigation menu
      * @default false
      */
-    hideInMenu?: boolean
+    hideInMenu?: boolean;
 
     /**
      * Whether this route requires internal payment system to be enabled
      * @default false
      */
-    requiresPayment?: boolean
+    requiresPayment?: boolean;
+
+    /**
+     * Whether this route requires invoice management to be enabled
+     * @default false
+     */
+    requiresInvoiceManagement?: boolean;
+
+    /**
+     * Whether this route requires withdrawal management to be enabled
+     * @default false
+     */
+    requiresWithdrawalManagement?: boolean;
+
+    /**
+     * Whether this route requires risk-control module to be enabled
+     * @default false
+     */
+    requiresRiskControl?: boolean;
 
     /**
      * i18n key for the page title
      */
-    titleKey?: string
+    titleKey?: string;
 
     /**
      * i18n key for the page description
      */
-    descriptionKey?: string
+    descriptionKey?: string;
   }
 }

@@ -82,6 +82,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageBillingRepository,
 	NewAccountSharePolicyRepository,
 	NewAccountShareModeRepository,
+	NewAccountShareModeAPIKeyBindingChecker,
 	NewAccountBatchTaskRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,
@@ -102,6 +103,7 @@ var ProviderSet = wire.NewSet(
 	NewAffiliateRepository,
 	NewReceiptCodeRepository,
 	NewWithdrawalRepository,
+	NewInvoiceRepository,
 
 	// Cache implementations
 	NewGatewayCache,

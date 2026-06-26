@@ -95,9 +95,11 @@ func provideCleanup(
 	openaiOAuth *service.OpenAIOAuthService,
 	geminiOAuth *service.GeminiOAuthService,
 	antigravityOAuth *service.AntigravityOAuthService,
+	accountShareMode *service.AccountShareModeService,
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	backupSvc *service.BackupService,
+	activityAutoDraw *service.ActivityAutoDrawService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 ) func() {
@@ -230,6 +232,13 @@ func provideCleanup(
 				antigravityOAuth.Stop()
 				return nil
 			}},
+			{"AccountShareModeService", func() error {
+				if accountShareMode != nil {
+					accountShareMode.StopReviewModerationWorker()
+					accountShareMode.StopSeatBillingWorker()
+				}
+				return nil
+			}},
 			{"OpenAIWSPool", func() error {
 				if openAIGateway != nil {
 					openAIGateway.CloseOpenAIWSPool()
@@ -245,6 +254,12 @@ func provideCleanup(
 			{"BackupService", func() error {
 				if backupSvc != nil {
 					backupSvc.Stop()
+				}
+				return nil
+			}},
+			{"ActivityAutoDrawService", func() error {
+				if activityAutoDraw != nil {
+					activityAutoDraw.Stop()
 				}
 				return nil
 			}},

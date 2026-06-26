@@ -128,7 +128,11 @@
           :limit-percent="openAICodex7dLimitPercent"
           color="emerald"
         />
-        <OpenAIQuotaResetCell :account="account" />
+        <OpenAIQuotaResetCell
+          :account="account"
+          :query-openai-quota="queryOpenaiQuota"
+          :reset-openai-quota="resetOpenaiQuota"
+        />
       </div>
       <div v-else-if="loading" class="space-y-1.5">
         <div class="flex items-center gap-1">
@@ -144,7 +148,13 @@
       </div>
       <div v-else>
         <div class="text-xs text-gray-400">-</div>
-        <OpenAIQuotaResetCell :account="account" class="mt-1" />
+        <div class="mt-1">
+          <OpenAIQuotaResetCell
+            :account="account"
+            :query-openai-quota="queryOpenaiQuota"
+            :reset-openai-quota="resetOpenaiQuota"
+          />
+        </div>
       </div>
     </template>
 
@@ -479,7 +489,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, GeminiCredentials, OpenAIQuotaResetResult, OpenAIQuotaUsage, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
@@ -500,6 +510,8 @@ const props = withDefaults(
     todayStatsLoading?: boolean
     manualRefreshToken?: number
     usageLoader?: UsageLoader
+    queryOpenaiQuota?: (id: number) => Promise<OpenAIQuotaUsage>
+    resetOpenaiQuota?: (id: number) => Promise<OpenAIQuotaResetResult>
     usageCacheScope?: string
   }>(),
   {

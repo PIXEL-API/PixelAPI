@@ -412,6 +412,23 @@ func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
 	`); err != nil {
 		t.Fatalf("create points ledger test index: %v", err)
 	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS invoice_request_items (
+			id integer PRIMARY KEY AUTOINCREMENT,
+			invoice_request_id integer NOT NULL DEFAULT 0,
+			source_type varchar(30) NOT NULL,
+			source_id integer NOT NULL,
+			active boolean NOT NULL DEFAULT TRUE
+		)
+	`); err != nil {
+		t.Fatalf("create invoice request items test table: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_invoice_request_items_ref_active
+		ON invoice_request_items (source_type, source_id, active)
+	`); err != nil {
+		t.Fatalf("create invoice request items test index: %v", err)
+	}
 
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))

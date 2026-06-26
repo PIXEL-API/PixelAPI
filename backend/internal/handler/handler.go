@@ -40,8 +40,10 @@ type AdminHandlers struct {
 	Payment                *admin.PaymentHandler
 	Revenue                *admin.RevenueHandler
 	Withdrawal             *admin.WithdrawalHandler
+	Invoice                *admin.InvoiceHandler
 	Shop                   *admin.ShopHandler
 	Affiliate              *admin.AffiliateHandler
+	Activity               *admin.ActivityHandler
 }
 
 // Handlers contains all HTTP handlers
@@ -67,7 +69,9 @@ type Handlers struct {
 	AvailableChannel *AvailableChannelHandler
 	ReceiptCode      *ReceiptCodeHandler
 	Withdrawal       *WithdrawalHandler
+	Invoice          *InvoiceHandler
 	Shop             *ShopHandler
+	Activity         *ActivityHandler
 }
 
 // BuildInfo contains build-time information

@@ -207,6 +207,22 @@ func (s *apiKeyCacheStub) SubscribeAuthCacheInvalidation(ctx context.Context, ha
 	return nil
 }
 
+type accountShareAPIKeyBindingCheckerStub struct {
+	exists    bool
+	err       error
+	userIDs   []int64
+	apiKeyIDs []int64
+}
+
+func (s *accountShareAPIKeyBindingCheckerStub) HasActiveOrQueuedMembershipForAPIKey(ctx context.Context, consumerUserID, apiKeyID int64) (bool, error) {
+	s.userIDs = append(s.userIDs, consumerUserID)
+	s.apiKeyIDs = append(s.apiKeyIDs, apiKeyID)
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.exists, nil
+}
+
 // TestApiKeyService_Delete_OwnerMismatch 测试非所有者尝试删除时返回权限错误。
 // 预期行为：
 //   - GetKeyAndOwnerID 返回所有者 ID 为 1
@@ -225,6 +241,40 @@ func TestApiKeyService_Delete_OwnerMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrInsufficientPerms)
 	require.Empty(t, repo.deletedIDs)   // 验证删除操作未被调用
 	require.Empty(t, cache.invalidated) // 验证缓存未被清除
+	require.Empty(t, cache.deleteAuthKeys)
+}
+
+func TestApiKeyService_Delete_BlocksAccountShareBinding(t *testing.T) {
+	repo := &apiKeyRepoStub{
+		apiKey: &APIKey{ID: 42, UserID: 7, Key: "k"},
+	}
+	cache := &apiKeyCacheStub{}
+	checker := &accountShareAPIKeyBindingCheckerStub{exists: true}
+	svc := &APIKeyService{apiKeyRepo: repo, cache: cache, accountShareBindingChecker: checker}
+
+	err := svc.Delete(context.Background(), 42, 7)
+	require.ErrorIs(t, err, ErrAPIKeyAccountShareBindingExists)
+	require.Equal(t, []int64{7}, checker.userIDs)
+	require.Equal(t, []int64{42}, checker.apiKeyIDs)
+	require.Empty(t, repo.deletedIDs)
+	require.Empty(t, cache.invalidated)
+	require.Empty(t, cache.deleteAuthKeys)
+}
+
+func TestApiKeyService_Delete_AccountShareBindingCheckFails(t *testing.T) {
+	repo := &apiKeyRepoStub{
+		apiKey: &APIKey{ID: 42, UserID: 7, Key: "k"},
+	}
+	cache := &apiKeyCacheStub{}
+	checker := &accountShareAPIKeyBindingCheckerStub{err: errors.New("database unavailable")}
+	svc := &APIKeyService{apiKeyRepo: repo, cache: cache, accountShareBindingChecker: checker}
+
+	err := svc.Delete(context.Background(), 42, 7)
+	require.ErrorContains(t, err, "check account share api key binding")
+	require.Equal(t, []int64{7}, checker.userIDs)
+	require.Equal(t, []int64{42}, checker.apiKeyIDs)
+	require.Empty(t, repo.deletedIDs)
+	require.Empty(t, cache.invalidated)
 	require.Empty(t, cache.deleteAuthKeys)
 }
 

@@ -135,3 +135,59 @@ func TestDSTAwareness(t *testing.T) {
 	_ = Now()
 	_ = StartOfDay(Now())
 }
+
+func TestParseExactTimeRange(t *testing.T) {
+	if err := Init("UTC"); err != nil {
+		t.Fatalf("Init failed with UTC: %v", err)
+	}
+
+	start, end, hasExactTime, err := ParseExactTimeRange(
+		"2024-01-01T12:34:56Z",
+		"2024-01-01T13:34:56Z",
+		"UTC",
+	)
+	if err != nil {
+		t.Fatalf("ParseExactTimeRange failed: %v", err)
+	}
+	if !hasExactTime {
+		t.Fatal("expected exact time range")
+	}
+	if !start.Equal(time.Date(2024, 1, 1, 12, 34, 56, 0, time.UTC)) {
+		t.Fatalf("unexpected start: %v", start)
+	}
+	if !end.Equal(time.Date(2024, 1, 1, 13, 34, 56, 0, time.UTC)) {
+		t.Fatalf("unexpected end: %v", end)
+	}
+
+	localStart, localEnd, hasExactTime, err := ParseExactTimeRange(
+		"2024-01-01T20:00",
+		"2024-01-01T21:00:01",
+		"Asia/Shanghai",
+	)
+	if err != nil {
+		t.Fatalf("ParseExactTimeRange local failed: %v", err)
+	}
+	if !hasExactTime {
+		t.Fatal("expected local exact time range")
+	}
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("load Shanghai timezone: %v", err)
+	}
+	if !localStart.Equal(time.Date(2024, 1, 1, 20, 0, 0, 0, shanghai)) {
+		t.Fatalf("unexpected local start: %v", localStart)
+	}
+	if !localEnd.Equal(time.Date(2024, 1, 1, 21, 0, 1, 0, shanghai)) {
+		t.Fatalf("unexpected local end: %v", localEnd)
+	}
+
+	_, _, hasExactTime, err = ParseExactTimeRange("", "", "UTC")
+	if err != nil || hasExactTime {
+		t.Fatalf("empty exact range should be ignored, has=%v err=%v", hasExactTime, err)
+	}
+
+	_, _, hasExactTime, err = ParseExactTimeRange("2024-01-01T12:00:00Z", "", "UTC")
+	if err == nil || !hasExactTime {
+		t.Fatalf("partial exact range should fail, has=%v err=%v", hasExactTime, err)
+	}
+}

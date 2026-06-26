@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -423,18 +424,28 @@ func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBi
 }
 
 type userBalanceLedgerInput struct {
-	UserID       int64
-	Direction    string
-	Amount       decimal.Decimal
-	Reason       string
-	RefType      string
-	RefID        any
-	BalanceAfter decimal.Decimal
-	Metadata     map[string]any
+	UserID          int64
+	Direction       string
+	Amount          decimal.Decimal
+	Reason          string
+	RefType         string
+	RefID           any
+	BalanceAfter    decimal.Decimal
+	Metadata        map[string]any
+	RequireInserted bool
 }
 
 func insertUserBalanceLedger(ctx context.Context, tx *sql.Tx, in userBalanceLedgerInput) error {
-	if in.UserID <= 0 || in.Amount.IsNegative() {
+	if in.UserID <= 0 {
+		if in.RequireInserted {
+			return fmt.Errorf("user balance ledger insert skipped: invalid user_id=%d reason=%s", in.UserID, in.Reason)
+		}
+		return nil
+	}
+	if in.Amount.IsNegative() {
+		if in.RequireInserted {
+			return fmt.Errorf("user balance ledger insert skipped: negative amount=%s reason=%s", in.Amount.String(), in.Reason)
+		}
 		return nil
 	}
 	metadata := in.Metadata
@@ -445,7 +456,7 @@ func insertUserBalanceLedger(ctx context.Context, tx *sql.Tx, in userBalanceLedg
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO user_balance_ledger (
 			user_id, direction, amount, reason, ref_type, ref_id, balance_after, metadata
 		) VALUES (
@@ -453,7 +464,20 @@ func insertUserBalanceLedger(ctx context.Context, tx *sql.Tx, in userBalanceLedg
 		)
 		ON CONFLICT DO NOTHING
 	`, in.UserID, in.Direction, in.Amount.StringFixed(10), in.Reason, in.RefType, in.RefID, in.BalanceAfter.StringFixed(10), string(rawMetadata))
-	return err
+	if err != nil {
+		return err
+	}
+	if !in.RequireInserted {
+		return nil
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check user balance ledger insert result: %w", err)
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("user balance ledger insert skipped: user_id=%d direction=%s reason=%s ref_type=%s ref_id=%v", in.UserID, in.Direction, in.Reason, in.RefType, in.RefID)
+	}
+	return nil
 }
 
 type pointsLedgerInput struct {
@@ -655,7 +679,7 @@ func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *servi
 	ownerRatio, platformRatio := accountShareModeSettlementRatios(snapshot.OwnerShareRatio, snapshot.PlatformShareRatio)
 	ownerCredit := totalCharge.Mul(ownerRatio).Round(10)
 	platformCredit := totalCharge.Mul(platformRatio).Round(10)
-	inserted, err := insertAccountShareModeSettlement(ctx, tx, snapshot, usageLogID, ownerCredit, platformCredit)
+	inserted, err := insertAccountShareModeSettlement(ctx, tx, cmd, usageLogID, ownerCredit, platformCredit)
 	if err != nil || !inserted {
 		return err
 	}
@@ -692,10 +716,15 @@ func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *servi
 	return nil
 }
 
-func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, snapshot *service.AccountShareModeBillingSnapshot, usageLogID int64, ownerCredit, platformCredit decimal.Decimal) (bool, error) {
+func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, usageLogID int64, ownerCredit, platformCredit decimal.Decimal) (bool, error) {
+	var snapshot *service.AccountShareModeBillingSnapshot
+	if cmd != nil {
+		snapshot = cmd.AccountShareModeSettlement
+	}
 	if snapshot == nil {
 		return false, nil
 	}
+	periodStartedAt, periodEndedAt := accountShareModeUsageRequestPeriod(cmd, snapshot)
 	var id int64
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO account_share_mode_settlement_entries (
@@ -716,12 +745,14 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, snapshot 
 			owner_share_ratio_snapshot,
 			platform_share_ratio_snapshot,
 			duration_ms,
+			period_started_at,
+			period_ended_at,
 			created_at
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17,
+			$13, $14, $15, $16, $17, $18, $19,
 			NOW()
 		)
 		ON CONFLICT (usage_log_id) DO NOTHING
@@ -744,6 +775,8 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, snapshot 
 		accountShareModeOwnerRatioString(snapshot),
 		accountShareModePlatformRatioString(snapshot),
 		snapshot.DurationMs,
+		periodStartedAt,
+		periodEndedAt,
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -752,6 +785,21 @@ func insertAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, snapshot 
 		return false, err
 	}
 	return id > 0, nil
+}
+
+func accountShareModeUsageRequestPeriod(cmd *service.UsageBillingCommand, snapshot *service.AccountShareModeBillingSnapshot) (time.Time, time.Time) {
+	endedAt := time.Now().UTC()
+	if cmd != nil && cmd.UsageLog != nil && !cmd.UsageLog.CreatedAt.IsZero() {
+		endedAt = cmd.UsageLog.CreatedAt.UTC()
+	}
+	startedAt := endedAt
+	if snapshot != nil && snapshot.DurationMs > 0 {
+		startedAt = endedAt.Add(-time.Duration(snapshot.DurationMs) * time.Millisecond)
+	}
+	if startedAt.After(endedAt) {
+		startedAt = endedAt
+	}
+	return startedAt, endedAt
 }
 
 func normalizeAccountShareModeRatio(value float64, fallback float64) decimal.Decimal {

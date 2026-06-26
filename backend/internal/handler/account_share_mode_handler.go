@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"math"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -51,6 +51,29 @@ type accountShareOpenAIExchangeCodeRequest struct {
 	AutoPauseOnExpired     *bool    `json:"auto_pause_on_expired"`
 }
 
+type accountShareAnthropicAuthURLRequest struct {
+	ProxyID *int64 `json:"proxy_id"`
+}
+
+type accountShareAnthropicExchangeCodeRequest struct {
+	SessionID               string   `json:"session_id" binding:"required"`
+	Code                    string   `json:"code" binding:"required"`
+	ProxyID                 *int64   `json:"proxy_id"`
+	Name                    string   `json:"name"`
+	Notes                   *string  `json:"notes"`
+	Concurrency             int      `json:"concurrency"`
+	SeatLimit               int      `json:"seat_limit"`
+	RateMultiplier          float64  `json:"rate_multiplier"`
+	AllowedModels           []string `json:"allowed_models"`
+	PerUserConcurrency      int      `json:"per_user_concurrency"`
+	HourlyRate              float64  `json:"hourly_rate"`
+	HourlyFeeWaiverMinimum  float64  `json:"hourly_fee_waiver_minimum"`
+	MinBalanceRequired      *float64 `json:"min_balance_required"`
+	Anthropic5hLimitPercent float64  `json:"anthropic_5h_limit_percent"`
+	Anthropic7dLimitPercent float64  `json:"anthropic_7d_limit_percent"`
+	AutoPauseOnExpired      *bool    `json:"auto_pause_on_expired"`
+}
+
 type accountShareProxyCreateRequest struct {
 	Name     string `json:"name"`
 	Protocol string `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
@@ -61,22 +84,24 @@ type accountShareProxyCreateRequest struct {
 }
 
 type accountShareListingUpdateRequest struct {
-	Name                   *string   `json:"name"`
-	ProxyID                *int64    `json:"proxy_id"`
-	Status                 *string   `json:"status"`
-	SeatLimit              *int      `json:"seat_limit"`
-	RateMultiplier         *float64  `json:"rate_multiplier"`
-	AllowedModels          *[]string `json:"allowed_models"`
-	PerUserConcurrency     *int      `json:"per_user_concurrency"`
-	HourlyRate             *float64  `json:"hourly_rate"`
-	HourlyFeeWaiverMinimum *float64  `json:"hourly_fee_waiver_minimum"`
-	MinBalanceRequired     *float64  `json:"min_balance_required"`
-	CodexCLIOnly           *bool     `json:"codex_cli_only"`
-	Codex5hLimitPercent    *float64  `json:"codex_5h_limit_percent"`
-	Codex7dLimitPercent    *float64  `json:"codex_7d_limit_percent"`
-	Concurrency            *int      `json:"concurrency"`
-	EditSessionID          string    `json:"edit_session_id"`
-	ForceActiveEdit        bool      `json:"force_active_edit"`
+	Name                    *string   `json:"name"`
+	ProxyID                 *int64    `json:"proxy_id"`
+	Status                  *string   `json:"status"`
+	SeatLimit               *int      `json:"seat_limit"`
+	RateMultiplier          *float64  `json:"rate_multiplier"`
+	AllowedModels           *[]string `json:"allowed_models"`
+	PerUserConcurrency      *int      `json:"per_user_concurrency"`
+	HourlyRate              *float64  `json:"hourly_rate"`
+	HourlyFeeWaiverMinimum  *float64  `json:"hourly_fee_waiver_minimum"`
+	MinBalanceRequired      *float64  `json:"min_balance_required"`
+	CodexCLIOnly            *bool     `json:"codex_cli_only"`
+	Codex5hLimitPercent     *float64  `json:"codex_5h_limit_percent"`
+	Codex7dLimitPercent     *float64  `json:"codex_7d_limit_percent"`
+	Anthropic5hLimitPercent *float64  `json:"anthropic_5h_limit_percent"`
+	Anthropic7dLimitPercent *float64  `json:"anthropic_7d_limit_percent"`
+	Concurrency             *int      `json:"concurrency"`
+	EditSessionID           string    `json:"edit_session_id"`
+	ForceActiveEdit         bool      `json:"force_active_edit"`
 }
 
 type accountShareListingEditSessionRequest struct {
@@ -93,8 +118,18 @@ type accountShareEndRequest struct {
 	Token string `json:"token" binding:"required"`
 }
 
+type accountShareReviewSubmitRequest struct {
+	Score   *int   `json:"score" binding:"required"`
+	Comment string `json:"comment"`
+}
+
 type accountShareIdleTimeoutUpdateRequest struct {
 	IdleTimeoutMinutes int `json:"idle_timeout_minutes"`
+}
+
+type accountShareQueueReorderRequest struct {
+	APIKeyID      int64   `json:"api_key_id" binding:"required"`
+	MembershipIDs []int64 `json:"membership_ids" binding:"required"`
 }
 
 func (h *AccountShareModeHandler) GenerateOpenAIAuthURL(c *gin.Context) {
@@ -166,6 +201,72 @@ func (h *AccountShareModeHandler) ExchangeOpenAICode(c *gin.Context) {
 	response.Created(c, listing)
 }
 
+func (h *AccountShareModeHandler) GenerateAnthropicAuthURL(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req accountShareAnthropicAuthURLRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.service.GenerateAnthropicAuthURL(c.Request.Context(), subject.UserID, req.ProxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *AccountShareModeHandler) ExchangeAnthropicCode(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req accountShareAnthropicExchangeCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	proxyID := int64(0)
+	if req.ProxyID != nil {
+		proxyID = *req.ProxyID
+	}
+	listing, err := h.service.ExchangeAnthropicCodeAndCreateListing(
+		c.Request.Context(),
+		subject.UserID,
+		&service.ExchangeCodeInput{
+			SessionID: req.SessionID,
+			Code:      req.Code,
+			ProxyID:   req.ProxyID,
+		},
+		service.CreateAccountShareListingInput{
+			Name:                    strings.TrimSpace(req.Name),
+			Notes:                   req.Notes,
+			ProxyID:                 proxyID,
+			Concurrency:             req.Concurrency,
+			SeatLimit:               req.SeatLimit,
+			RateMultiplier:          req.RateMultiplier,
+			AllowedModels:           req.AllowedModels,
+			PerUserConcurrency:      req.PerUserConcurrency,
+			HourlyRate:              req.HourlyRate,
+			HourlyFeeWaiverMinimum:  req.HourlyFeeWaiverMinimum,
+			MinBalanceRequired:      req.MinBalanceRequired,
+			Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
+			Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
+			AutoPauseOnExpired:      req.AutoPauseOnExpired,
+		},
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, listing)
+}
+
 func (h *AccountShareModeHandler) ListListings(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -180,89 +281,101 @@ func (h *AccountShareModeHandler) ListListings(c *gin.Context) {
 			seatLimit = parsed
 		}
 	}
-	perUserConcurrencyMin, err := parseOptionalIntQuery(c, "per_user_concurrency_min")
-	if err != nil {
-		response.BadRequest(c, "Invalid per_user_concurrency_min")
-		return
-	}
-	perUserConcurrencyMax, err := parseOptionalIntQuery(c, "per_user_concurrency_max")
-	if err != nil {
-		response.BadRequest(c, "Invalid per_user_concurrency_max")
-		return
-	}
-	if invalidIntRange(perUserConcurrencyMin, perUserConcurrencyMax) {
-		response.BadRequest(c, "Invalid per_user_concurrency range")
-		return
-	}
-	minBalanceRequiredMin, err := parseOptionalFloatQuery(c, "min_balance_required_min")
-	if err != nil {
-		response.BadRequest(c, "Invalid min_balance_required_min")
-		return
-	}
-	minBalanceRequiredMax, err := parseOptionalFloatQuery(c, "min_balance_required_max")
-	if err != nil {
-		response.BadRequest(c, "Invalid min_balance_required_max")
-		return
-	}
-	if invalidFloatRange(minBalanceRequiredMin, minBalanceRequiredMax) {
-		response.BadRequest(c, "Invalid min_balance_required range")
-		return
-	}
-	hourlyRateMin, err := parseOptionalFloatQuery(c, "hourly_rate_min")
-	if err != nil {
-		response.BadRequest(c, "Invalid hourly_rate_min")
-		return
-	}
-	hourlyRateMax, err := parseOptionalFloatQuery(c, "hourly_rate_max")
-	if err != nil {
-		response.BadRequest(c, "Invalid hourly_rate_max")
-		return
-	}
-	if invalidFloatRange(hourlyRateMin, hourlyRateMax) {
-		response.BadRequest(c, "Invalid hourly_rate range")
-		return
-	}
-	hourlyFeeWaiverMin, err := parseOptionalFloatQuery(c, "hourly_fee_waiver_min")
-	if err != nil {
-		response.BadRequest(c, "Invalid hourly_fee_waiver_min")
-		return
-	}
-	hourlyFeeWaiverMax, err := parseOptionalFloatQuery(c, "hourly_fee_waiver_max")
-	if err != nil {
-		response.BadRequest(c, "Invalid hourly_fee_waiver_max")
-		return
-	}
-	if invalidFloatRange(hourlyFeeWaiverMin, hourlyFeeWaiverMax) {
-		response.BadRequest(c, "Invalid hourly_fee_waiver range")
-		return
-	}
 	availableOnly, err := parseOptionalBoolQuery(c, "available_only")
 	if err != nil {
 		response.BadRequest(c, "Invalid available_only")
 		return
 	}
+	seatLimits, err := parseAccountShareSeatLimitsQuery(c)
+	if err != nil {
+		response.BadRequest(c, "Invalid seat_limits")
+		return
+	}
+	ownerUserID := int64(0)
+	if raw := strings.TrimSpace(c.Query("owner_user_id")); raw != "" {
+		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || parsed <= 0 {
+			response.BadRequest(c, "Invalid owner_user_id")
+			return
+		}
+		ownerUserID = parsed
+	}
+	featureTags, err := parseAccountShareFeatureTagsQuery(c)
+	if err != nil {
+		response.BadRequest(c, "Invalid feature_tags")
+		return
+	}
+	sorts, err := parseAccountShareSortsQuery(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	listings, result, err := h.service.ListListings(c.Request.Context(), subject.UserID, role == service.RoleAdmin, service.AccountShareListingFilters{
-		Tab:                   c.DefaultQuery("tab", service.AccountShareModeListingTabAll),
-		SeatLimit:             seatLimit,
-		Search:                c.Query("search"),
-		Status:                c.Query("status"),
-		AvailableOnly:         availableOnly,
-		PerUserConcurrencyMin: perUserConcurrencyMin,
-		PerUserConcurrencyMax: perUserConcurrencyMax,
-		MinBalanceRequiredMin: minBalanceRequiredMin,
-		MinBalanceRequiredMax: minBalanceRequiredMax,
-		HourlyRateMin:         hourlyRateMin,
-		HourlyRateMax:         hourlyRateMax,
-		HourlyFeeWaiverMin:    hourlyFeeWaiverMin,
-		HourlyFeeWaiverMax:    hourlyFeeWaiverMax,
-		Models:                parseCSVQuery(c, "models"),
-		AccountLevel:          c.Query("account_level"),
+		Tab:           c.DefaultQuery("tab", service.AccountShareModeListingTabAll),
+		Platform:      c.Query("platform"),
+		SeatLimit:     seatLimit,
+		SeatLimits:    seatLimits,
+		Search:        c.Query("search"),
+		Status:        c.Query("status"),
+		AvailableOnly: availableOnly,
+		Models:        parseCSVQuery(c, "models"),
+		AccountLevel:  c.Query("account_level"),
+		OwnerUserID:   ownerUserID,
+		FeatureTags:   featureTags,
+		Sorts:         sorts,
 	}, pagination.PaginationParams{Page: page, PageSize: pageSize})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Paginated(c, listings, result.Total, result.Page, result.PageSize)
+}
+
+func (h *AccountShareModeHandler) RecommendListings(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req service.AccountShareRecommendationInput
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid recommendation request")
+		return
+	}
+	role, _ := middleware2.GetUserRoleFromContext(c)
+	result, err := h.service.RecommendListings(c.Request.Context(), subject.UserID, role == service.RoleAdmin, req)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *AccountShareModeHandler) GetRecommendationUsageProfile(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	days := service.AccountShareRecommendationUsageProfileDays
+	if rawDays := strings.TrimSpace(c.Query("days")); rawDays != "" {
+		parsed, err := strconv.Atoi(rawDays)
+		if err != nil {
+			response.BadRequest(c, "Invalid days")
+			return
+		}
+		days = parsed
+	}
+	profile, err := h.service.GetRecommendationUsageProfile(c.Request.Context(), subject.UserID, service.AccountShareRecommendationUsageProfileInput{
+		Platform: c.DefaultQuery("platform", service.PlatformOpenAI),
+		Model:    c.Query("model"),
+		Days:     days,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, profile)
 }
 
 func (h *AccountShareModeHandler) ListAvailableProxies(c *gin.Context) {
@@ -328,6 +441,39 @@ func (h *AccountShareModeHandler) GetListing(c *gin.Context) {
 	response.Success(c, listing)
 }
 
+func (h *AccountShareModeHandler) GetMySpendSummary(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	listingID, err := parseInt64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "Invalid listing ID")
+		return
+	}
+	var membershipID *int64
+	if raw := strings.TrimSpace(c.Query("membership_id")); raw != "" {
+		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || parsed <= 0 {
+			response.BadRequest(c, "Invalid membership_id")
+			return
+		}
+		membershipID = &parsed
+	}
+	summary, err := h.service.GetMySpendSummary(c.Request.Context(), subject.UserID, service.AccountShareMySpendInput{
+		ListingID:    listingID,
+		MembershipID: membershipID,
+		Range:        c.DefaultQuery("range", service.AccountShareSpendRangeCurrentMembership),
+		Timezone:     c.Query("timezone"),
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, summary)
+}
+
 func (h *AccountShareModeHandler) UpdateListing(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -346,22 +492,24 @@ func (h *AccountShareModeHandler) UpdateListing(c *gin.Context) {
 		return
 	}
 	listing, err := h.service.UpdateListing(c.Request.Context(), subject.UserID, role == service.RoleAdmin, listingID, service.UpdateAccountShareListingInput{
-		Name:                   req.Name,
-		ProxyID:                req.ProxyID,
-		Status:                 req.Status,
-		SeatLimit:              req.SeatLimit,
-		RateMultiplier:         req.RateMultiplier,
-		AllowedModels:          req.AllowedModels,
-		PerUserConcurrency:     req.PerUserConcurrency,
-		HourlyRate:             req.HourlyRate,
-		HourlyFeeWaiverMinimum: req.HourlyFeeWaiverMinimum,
-		MinBalanceRequired:     req.MinBalanceRequired,
-		CodexCLIOnly:           req.CodexCLIOnly,
-		Codex5hLimitPercent:    req.Codex5hLimitPercent,
-		Codex7dLimitPercent:    req.Codex7dLimitPercent,
-		Concurrency:            req.Concurrency,
-		EditSessionID:          req.EditSessionID,
-		ForceActiveEdit:        req.ForceActiveEdit,
+		Name:                    req.Name,
+		ProxyID:                 req.ProxyID,
+		Status:                  req.Status,
+		SeatLimit:               req.SeatLimit,
+		RateMultiplier:          req.RateMultiplier,
+		AllowedModels:           req.AllowedModels,
+		PerUserConcurrency:      req.PerUserConcurrency,
+		HourlyRate:              req.HourlyRate,
+		HourlyFeeWaiverMinimum:  req.HourlyFeeWaiverMinimum,
+		MinBalanceRequired:      req.MinBalanceRequired,
+		CodexCLIOnly:            req.CodexCLIOnly,
+		Codex5hLimitPercent:     req.Codex5hLimitPercent,
+		Codex7dLimitPercent:     req.Codex7dLimitPercent,
+		Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
+		Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
+		Concurrency:             req.Concurrency,
+		EditSessionID:           req.EditSessionID,
+		ForceActiveEdit:         req.ForceActiveEdit,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -477,6 +625,44 @@ func (h *AccountShareModeHandler) UpdateMembershipIdleTimeout(c *gin.Context) {
 	response.Success(c, membership)
 }
 
+func (h *AccountShareModeHandler) ListMembershipQueue(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	apiKeyID, err := parseInt64Param(c, "apiKeyID")
+	if err != nil {
+		response.BadRequest(c, "Invalid API key ID")
+		return
+	}
+	memberships, err := h.service.ListMembershipQueue(c.Request.Context(), subject.UserID, apiKeyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, memberships)
+}
+
+func (h *AccountShareModeHandler) ReorderMembershipQueue(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req accountShareQueueReorderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	memberships, err := h.service.ReorderMembershipQueue(c.Request.Context(), subject.UserID, req.APIKeyID, req.MembershipIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, memberships)
+}
+
 func (h *AccountShareModeHandler) CreateEndMembershipIntent(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -537,6 +723,77 @@ func (h *AccountShareModeHandler) EndMembership(c *gin.Context) {
 	response.Success(c, membership)
 }
 
+func (h *AccountShareModeHandler) SubmitReview(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	membershipID, err := parseInt64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "Invalid membership ID")
+		return
+	}
+	var req accountShareReviewSubmitRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.Score == nil {
+		response.BadRequest(c, "score is required")
+		return
+	}
+	review, err := h.service.SubmitReview(c.Request.Context(), subject.UserID, membershipID, service.SubmitAccountShareReviewInput{
+		Score:   *req.Score,
+		Comment: strings.TrimSpace(req.Comment),
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, review)
+}
+
+func (h *AccountShareModeHandler) ListListingReviews(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	listingID, err := parseInt64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "Invalid listing ID")
+		return
+	}
+	page, pageSize := response.ParsePagination(c)
+	reviews, result, err := h.service.ListListingReviews(c.Request.Context(), subject.UserID, listingID, pagination.PaginationParams{Page: page, PageSize: pageSize})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, reviews, result.Total, result.Page, result.PageSize)
+}
+
+func (h *AccountShareModeHandler) ListOwnerReviews(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	ownerUserID, err := parseInt64Param(c, "owner_id")
+	if err != nil {
+		response.BadRequest(c, "Invalid owner ID")
+		return
+	}
+	page, pageSize := response.ParsePagination(c)
+	reviews, result, err := h.service.ListOwnerReviews(c.Request.Context(), subject.UserID, ownerUserID, pagination.PaginationParams{Page: page, PageSize: pageSize})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, reviews, result.Total, result.Page, result.PageSize)
+}
+
 func requireAccountShareAuth(c *gin.Context) bool {
 	if _, ok := middleware2.GetAuthSubjectFromContext(c); !ok {
 		response.Unauthorized(c, "User not authenticated")
@@ -549,36 +806,6 @@ func parseInt64Param(c *gin.Context, name string) (int64, error) {
 	return strconv.ParseInt(c.Param(name), 10, 64)
 }
 
-func parseOptionalIntQuery(c *gin.Context, name string) (*int, error) {
-	raw := strings.TrimSpace(c.Query(name))
-	if raw == "" {
-		return nil, nil
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed < 0 {
-		if err == nil {
-			err = strconv.ErrSyntax
-		}
-		return nil, err
-	}
-	return &parsed, nil
-}
-
-func parseOptionalFloatQuery(c *gin.Context, name string) (*float64, error) {
-	raw := strings.TrimSpace(c.Query(name))
-	if raw == "" {
-		return nil, nil
-	}
-	parsed, err := strconv.ParseFloat(raw, 64)
-	if err != nil || parsed < 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
-		if err == nil {
-			err = strconv.ErrSyntax
-		}
-		return nil, err
-	}
-	return &parsed, nil
-}
-
 func parseOptionalBoolQuery(c *gin.Context, name string) (bool, error) {
 	raw := strings.TrimSpace(c.Query(name))
 	if raw == "" {
@@ -587,12 +814,96 @@ func parseOptionalBoolQuery(c *gin.Context, name string) (bool, error) {
 	return strconv.ParseBool(raw)
 }
 
-func invalidIntRange(minValue, maxValue *int) bool {
-	return minValue != nil && maxValue != nil && *minValue > *maxValue
+func parseAccountShareSeatLimitsQuery(c *gin.Context) ([]int, error) {
+	values := parseCSVQuery(c, "seat_limits")
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]int, 0, len(values))
+	seen := make(map[int]struct{}, len(values))
+	for _, raw := range values {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < service.AccountShareModeMinSeats || parsed > service.AccountShareModeMaxSeats {
+			if err == nil {
+				err = strconv.ErrSyntax
+			}
+			return nil, err
+		}
+		if _, ok := seen[parsed]; ok {
+			continue
+		}
+		seen[parsed] = struct{}{}
+		out = append(out, parsed)
+	}
+	return out, nil
 }
 
-func invalidFloatRange(minValue, maxValue *float64) bool {
-	return minValue != nil && maxValue != nil && *minValue > *maxValue
+func parseAccountShareFeatureTagsQuery(c *gin.Context) ([]string, error) {
+	values := parseCSVQuery(c, "feature_tags")
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		normalized := service.NormalizeAccountShareListingFeatureTag(value)
+		if normalized == "" {
+			return nil, strconv.ErrSyntax
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
+func parseAccountShareSortsQuery(c *gin.Context) ([]service.AccountShareListingSortCriterion, error) {
+	values := parseCSVQuery(c, "sorts")
+	if len(values) == 0 {
+		sortBy, sortOrder, err := parseAccountShareSortQuery(c)
+		if err != nil || sortBy == "" {
+			return nil, err
+		}
+		return []service.AccountShareListingSortCriterion{{SortBy: sortBy, SortOrder: sortOrder}}, nil
+	}
+	out := make([]service.AccountShareListingSortCriterion, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		parts := strings.Split(value, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("Invalid sorts")
+		}
+		sortBy := service.NormalizeAccountShareListingSortBy(parts[0])
+		sortOrder := service.NormalizeAccountShareListingSortOrder(parts[1])
+		if sortBy == "" || sortOrder == "" {
+			return nil, fmt.Errorf("Invalid sorts")
+		}
+		if _, ok := seen[sortBy]; ok {
+			return nil, fmt.Errorf("Invalid sorts")
+		}
+		seen[sortBy] = struct{}{}
+		out = append(out, service.AccountShareListingSortCriterion{SortBy: sortBy, SortOrder: sortOrder})
+	}
+	return out, nil
+}
+
+func parseAccountShareSortQuery(c *gin.Context) (string, string, error) {
+	rawSortBy := strings.TrimSpace(c.Query("sort_by"))
+	rawSortOrder := strings.TrimSpace(c.Query("sort_order"))
+	if rawSortBy == "" && rawSortOrder == "" {
+		return "", "", nil
+	}
+	sortBy := service.NormalizeAccountShareListingSortBy(rawSortBy)
+	if sortBy == "" {
+		return "", "", fmt.Errorf("Invalid sort_by")
+	}
+	sortOrder := service.NormalizeAccountShareListingSortOrder(rawSortOrder)
+	if sortOrder == "" {
+		return "", "", fmt.Errorf("Invalid sort_order")
+	}
+	return sortBy, sortOrder, nil
 }
 
 func parseCSVQuery(c *gin.Context, name string) []string {

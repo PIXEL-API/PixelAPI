@@ -40,6 +40,7 @@ var (
 	ErrOwnedAccountPublicValidationFailed        = infraerrors.BadRequest("OWNED_ACCOUNT_PUBLIC_VALIDATION_FAILED", "public account validation failed")
 	ErrOwnedAccountShareModeOnly                 = infraerrors.BadRequest("OWNED_ACCOUNT_SHARE_MODE_ONLY", "account share mode accounts cannot be moved to the public shared account pool")
 	ErrOwnedAccountShareModeBoundaryUnavailable  = infraerrors.InternalServer("OWNED_ACCOUNT_SHARE_MODE_BOUNDARY_UNAVAILABLE", "account share mode boundary check is unavailable")
+	ErrOwnedAccountProxyValidationUnavailable    = infraerrors.InternalServer("OWNED_ACCOUNT_PROXY_VALIDATION_UNAVAILABLE", "owned account proxy validation is unavailable")
 )
 
 const AccountListGroupUngrouped int64 = -1
@@ -188,6 +189,7 @@ type AccountService struct {
 	accountSharePolicyRepo  AccountSharePolicyRepository
 	privateGroupProvisioner UserPrivateGroupProvisioner
 	systemNoticeService     *SystemNoticeService
+	proxyRepo               ownedAccountProxyRepository
 	quotaPoolDashboardCache accountQuotaPoolDashboardCache
 }
 
@@ -208,6 +210,15 @@ type accountUserRepository interface {
 
 type accountSubscriptionLookupRepository interface {
 	GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*UserSubscription, error)
+}
+
+type ownedAccountProxyRepository interface {
+	GetVisibleByID(ctx context.Context, userID, id int64) (*Proxy, error)
+	CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error)
+}
+
+type ownedAccountProxyCapacityCreateRepository interface {
+	CreateOwnedWithProxyCapacity(ctx context.Context, ownerUserID int64, account *Account) error
 }
 
 type ownedAccountFilterRepository interface {
@@ -261,12 +272,14 @@ func NewAccountService(
 	groupRepo GroupRepository,
 	userRepo UserRepository,
 	userSubRepo UserSubscriptionRepository,
+	proxyRepo ownedAccountProxyRepository,
 ) *AccountService {
 	return &AccountService{
 		accountRepo: accountRepo,
 		groupRepo:   groupRepo,
 		userRepo:    userRepo,
 		userSubRepo: userSubRepo,
+		proxyRepo:   proxyRepo,
 	}
 }
 
@@ -429,6 +442,10 @@ func (s *AccountService) ImportOwned(ctx context.Context, ownerUserID int64, req
 	return s.createOwned(ctx, ownerUserID, req)
 }
 
+func (s *AccountService) EnsureOwnedProxyAvailableForNewAccount(ctx context.Context, ownerUserID, proxyID int64) error {
+	return s.ensureOwnedProxyAvailableForNewAccount(ctx, ownerUserID, proxyID)
+}
+
 func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req CreateAccountRequest) (*Account, error) {
 	if ownerUserID <= 0 {
 		return nil, ErrUserNotFound
@@ -512,8 +529,17 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 	if err := s.ensureOwnedAccountNotDuplicate(ctx, ownerUserID, account, 0); err != nil {
 		return nil, err
 	}
-
-	if err := s.accountRepo.Create(ctx, account); err != nil {
+	if preserveProxy && account.ProxyID != nil {
+		if creator, ok := s.accountRepo.(ownedAccountProxyCapacityCreateRepository); ok {
+			if err := creator.CreateOwnedWithProxyCapacity(ctx, ownerUserID, account); err != nil {
+				return nil, err
+			}
+		} else if err := s.ensureOwnedProxyAvailableForNewAccount(ctx, ownerUserID, *account.ProxyID); err != nil {
+			return nil, err
+		} else if err := s.accountRepo.Create(ctx, account); err != nil {
+			return nil, fmt.Errorf("create account: %w", err)
+		}
+	} else if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, fmt.Errorf("create account: %w", err)
 	}
 	if len(groupIDs) > 0 {
@@ -692,6 +718,34 @@ func validateOwnedPersonalAccountConcurrency(concurrency int) error {
 func validateOwnedPersonalAccountLoadFactor(loadFactor int) error {
 	if loadFactor <= 0 || loadFactor > AccountMaxLoadFactor {
 		return ErrOwnedAccountLoadFactorOutOfRange
+	}
+	return nil
+}
+
+func (s *AccountService) ensureOwnedProxyAvailableForNewAccount(ctx context.Context, ownerUserID, proxyID int64) error {
+	if proxyID <= 0 {
+		return nil
+	}
+	if s == nil || s.proxyRepo == nil {
+		return ErrOwnedAccountProxyValidationUnavailable
+	}
+	proxy, err := s.proxyRepo.GetVisibleByID(ctx, ownerUserID, proxyID)
+	if err != nil {
+		return err
+	}
+	if proxy == nil || !proxy.IsActive() {
+		return ErrProxyNotFound
+	}
+	if proxy.MaxAccounts <= 0 {
+		return nil
+	}
+	current, err := s.proxyRepo.CountAccountsByProxyID(ctx, proxyID)
+	if err != nil {
+		return fmt.Errorf("count proxy accounts: %w", err)
+	}
+	limit := int64(proxy.MaxAccounts)
+	if current+1 > limit {
+		return ProxyAccountLimitExceededError(proxyID, current, limit, 1)
 	}
 	return nil
 }

@@ -97,6 +97,7 @@ func (s *ContentModerationService) CheckCyberPreflight(ctx context.Context, inpu
 			slog.Warn("content_moderation.cyber_preflight_record_hash_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
 		}
 	}
+	s.recordDynamicSamplingRiskEvent(ctx, cfg, input, "cyber_preflight")
 	s.applyFlaggedSideEffects(ctx, cfg, log)
 	if s.repo != nil {
 		if err := s.repo.CreateLog(ctx, log); err != nil {

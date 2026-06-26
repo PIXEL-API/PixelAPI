@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -9,10 +10,12 @@ type OpsRepository interface {
 	InsertErrorLog(ctx context.Context, input *OpsInsertErrorLogInput) (int64, error)
 	BatchInsertErrorLogs(ctx context.Context, inputs []*OpsInsertErrorLogInput) (int64, error)
 	ListErrorLogs(ctx context.Context, filter *OpsErrorLogFilter) (*OpsErrorLogList, error)
+	ExportErrorLogs(ctx context.Context, filter *OpsErrorLogCleanupFilter) (io.ReadCloser, error)
 	GetErrorLogByID(ctx context.Context, id int64) (*OpsErrorLogDetail, error)
 	ListRequestDetails(ctx context.Context, filter *OpsRequestDetailFilter) ([]*OpsRequestDetail, int64, error)
 	BatchInsertSystemLogs(ctx context.Context, inputs []*OpsInsertSystemLogInput) (int64, error)
 	ListSystemLogs(ctx context.Context, filter *OpsSystemLogFilter) (*OpsSystemLogList, error)
+	ExportSystemLogs(ctx context.Context, filter *OpsSystemLogCleanupFilter) (io.ReadCloser, error)
 	DeleteSystemLogs(ctx context.Context, filter *OpsSystemLogCleanupFilter) (int64, error)
 	InsertSystemLogCleanupAudit(ctx context.Context, input *OpsSystemLogCleanupAudit) error
 
@@ -141,6 +144,11 @@ type OpsInsertRetryAttemptInput struct {
 	// running|queued etc.
 	Status    string
 	StartedAt time.Time
+}
+
+type OpsErrorLogCleanupFilter struct {
+	StartTime *time.Time
+	EndTime   *time.Time
 }
 
 type OpsUpdateRetryAttemptInput struct {

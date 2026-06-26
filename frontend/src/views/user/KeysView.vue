@@ -1218,6 +1218,11 @@ import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
 import { buildImagePlaygroundImportUrl } from '@/utils/imagePlaygroundImport'
+import { extractApiErrorMessage } from '@/utils/apiError'
+
+const apiKeyDeleteErrorMessages: Record<string, string> = {
+  API_KEY_ACCOUNT_SHARE_BINDING_EXISTS: '该 API Key 仍绑定账号广场的使用或预约记录，请先在账号广场结束使用或取消预约后再删除'
+}
 
 // Helper to format date for datetime-local input
 const formatDateTimeLocal = (isoDate: string): string => {
@@ -1872,8 +1877,7 @@ const handleDelete = async () => {
     showDeleteDialog.value = false
     loadApiKeys()
   } catch (error: any) {
-    // 优先使用后端返回的错误消息，提供更具体的错误信息给用户
-    const errorMsg = error?.message || t('keys.failedToDelete')
+    const errorMsg = extractApiErrorMessage(error, t('keys.failedToDelete'), apiKeyDeleteErrorMessages)
     appStore.showError(errorMsg)
   }
 }

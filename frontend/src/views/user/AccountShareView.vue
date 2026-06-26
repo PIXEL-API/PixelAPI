@@ -3,7 +3,7 @@
     <div class="mx-auto flex w-full max-w-[1680px] flex-col gap-5">
       <div class="lg:hidden">
         <h1 class="text-2xl font-semibold text-gray-950 dark:text-white">账号广场</h1>
-        <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">选择共享账号后，账号模式分组下的 API Key 将只调度当前绑定账号。</p>
+        <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">选择共享账号后会进入预约队列，当前账号不可用时按顺序自动接续。</p>
       </div>
 
       <section class="account-share-hero">
@@ -13,12 +13,16 @@
               <Icon name="users" size="lg" />
             </div>
             <div class="min-w-0">
-              <h2 class="text-base font-semibold text-gray-950 dark:text-white">共享账号池</h2>
+              <h2 class="text-base font-semibold text-gray-950 dark:text-white">账号模式共享席位</h2>
               <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-500 dark:text-dark-300">
-                OpenAI OAuth 账号会按账号模式上架，消费者加入后只绑定到自己的账号模式 API Key。
+                OpenAI 与 Anthropic OAuth 账号会按账号模式上架，消费者最多可为一个账号模式 Key 预约 5 个账号并按顺序接续调度。
               </p>
             </div>
           </div>
+          <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
+            <Icon name="book" size="sm" class="mr-2" />
+            使用说明
+          </button>
           <div class="hero-actions">
             <button class="btn-secondary h-10" type="button" :disabled="loading" @click="loadListings">
               <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': loading }" />
@@ -26,9 +30,29 @@
             </button>
             <button class="btn-primary h-10" type="button" @click="toggleCreatePanel">
               <Icon :name="showCreate ? 'chevronUp' : 'plus'" size="sm" class="mr-2" />
-              {{ showCreate ? '收起新增' : '新增共享账号' }}
+              {{ showCreate ? '收起新增' : '新增账号' }}
+            </button>
+            <button class="btn-secondary h-10" type="button" @click="openRecommendationDialog">
+              <Icon name="sparkles" size="sm" class="mr-2" />
+              选号助手
             </button>
           </div>
+        </div>
+
+        <div class="account-share-platform-tabs" role="tablist" aria-label="账号模式平台">
+          <button
+            v-for="option in ACCOUNT_SHARE_PLATFORM_OPTIONS"
+            :key="option.value"
+            type="button"
+            role="tab"
+            class="account-share-platform-tab"
+            :class="activeListingPlatform === option.value ? 'account-share-platform-tab-active' : 'account-share-platform-tab-idle'"
+            :aria-selected="activeListingPlatform === option.value"
+            @click="setListingPlatform(option.value)"
+          >
+            <span>{{ option.label }}</span>
+            <small>{{ accountModeGroupName(option.value) }}</small>
+          </button>
         </div>
 
         <div class="account-share-summary-grid">
@@ -49,8 +73,8 @@
           <div class="summary-cell">
             <span class="summary-icon summary-icon-amber"><Icon name="bolt" size="sm" /></span>
             <div>
-              <span>本页正在使用</span>
-              <strong>{{ activeMembershipCount }}</strong>
+              <span>本页已用席位</span>
+              <strong>{{ activeSeatCount }}</strong>
             </div>
           </div>
           <div class="summary-cell">
@@ -63,11 +87,332 @@
         </div>
       </section>
 
+      <BaseDialog
+        :show="showUsageGuideDialog"
+        title="账号模式使用说明"
+        width="wide"
+        :z-index="55"
+        @close="closeUsageGuideDialog"
+      >
+        <section class="account-share-guide">
+          <div class="account-share-guide-summary">
+            <span>核心逻辑</span>
+            <strong>激活后按分钟预扣小时费，最长 1 小时窗口做最终核销。</strong>
+            <p>
+              账号模式 Key 会固定调度当前激活账号；预约中的账号不收小时费。系统先按实际激活分钟预扣占位费用，窗口结束或达到 1 小时时再判断请求消费是否满足低消，达标后退回该窗口已预扣的小时费。
+            </p>
+          </div>
+
+          <div class="account-share-guide-flow" aria-label="账号模式计费流程">
+            <div class="account-share-guide-step">
+              <span>1</span>
+              <strong>加入或预约</strong>
+              <p>选择账号并绑定账号模式 Key。当前账号满员时进入预约队列，等待期间不产生小时费。</p>
+            </div>
+            <div class="account-share-guide-step">
+              <span>2</span>
+              <strong>激活使用</strong>
+              <p>轮到该账号后开始占用席位，请求费用按模型实际用量和账号倍率实时结算。</p>
+            </div>
+            <div class="account-share-guide-step">
+              <span>3</span>
+              <strong>窗口核销</strong>
+              <p>按激活时长核算低消，单个核销窗口最长 1 小时；达标则退回该窗口小时费。</p>
+            </div>
+          </div>
+
+          <div class="account-share-guide-section">
+            <h4>费用组成</h4>
+            <div class="account-share-guide-rule-list">
+              <div>
+                <Icon name="calculator" size="sm" />
+                <p><strong>请求费用</strong>按模型实际用量乘以账号倍率。例如原始费用 0.10、倍率 1.5x，实际扣费为 0.15。</p>
+              </div>
+              <div>
+                <Icon name="clock" size="sm" />
+                <p><strong>小时费</strong>不会一次性扣满 1 小时，而是激活期间按分钟预扣。例如 0.60/小时，即每分钟预扣 0.01。</p>
+              </div>
+              <div>
+                <Icon name="shield" size="sm" />
+                <p><strong>免小时费低消</strong>按激活时长折算，最长 1 小时一结。达标后退回该窗口预扣小时费；未达标则不退。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="account-share-guide-section">
+            <h4>退款示例</h4>
+            <div class="account-share-guide-example">
+              <p>账号小时费 0.60/小时，免小时费低消 0.30/小时。用户在 10:00 到 10:05 激活使用 5 分钟，系统先预扣小时费 0.05。</p>
+              <p class="account-share-guide-formula">低消要求 = 0.30 × 5 / 60 = 0.025</p>
+              <p>如果这 5 分钟内请求消费达到 0.03，则满足低消，退回 0.05 小时费；如果请求消费只有 0.01，则未满足低消，0.05 小时费不退。</p>
+            </div>
+            <div class="account-share-guide-example">
+              <p>如果一次请求从 10:00:20 执行到 10:01:40，系统按这 80 秒的实际执行区间计入核销窗口，不会只算到完成时所在的某一分钟。</p>
+            </div>
+          </div>
+
+          <div class="account-share-guide-section">
+            <h4>参数说明</h4>
+            <dl class="account-share-guide-param-grid">
+              <div>
+                <dt>倍率</dt>
+                <dd>请求费用倍率，倍率越低，请求本身越便宜。</dd>
+              </div>
+              <div>
+                <dt>最低余额</dt>
+                <dd>加入前需要满足的余额门槛，避免激活后余额不足。</dd>
+              </div>
+              <div>
+                <dt>账号并发</dt>
+                <dd>共享账号整体最多同时处理的请求数量。</dd>
+              </div>
+              <div>
+                <dt>单用户并发</dt>
+                <dd>同一个用户在该账号上最多同时占用的请求数量。</dd>
+              </div>
+              <div>
+                <dt>小时费</dt>
+                <dd>激活占位期间按分钟预扣的费用。</dd>
+              </div>
+              <div>
+                <dt>免小时费低消</dt>
+                <dd>窗口内请求消费达到该标准后，退回对应窗口小时费。</dd>
+              </div>
+              <div>
+                <dt>空闲退出</dt>
+                <dd>连续空闲达到设定时间后自动释放席位并停止预扣。</dd>
+              </div>
+              <div>
+                <dt>可用模型</dt>
+                <dd>该账号允许调度的模型，请求其他模型不会进入该账号。</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="account-share-guide-section account-share-guide-assistant">
+            <div class="account-share-guide-assistant-head">
+              <span><Icon name="sparkles" size="sm" /></span>
+              <div>
+                <h4>优先使用选号助手</h4>
+                <p>如果不确定哪个账号更划算，建议先用选号助手按你的实际请求量测算，再决定加入哪个账号。</p>
+              </div>
+            </div>
+            <div class="account-share-guide-assistant-grid">
+              <div>
+                <strong>1. 选择 Key 和模型</strong>
+                <p>选择准备用的账号模式 Key 和模型，系统只会推荐支持该模型、且符合当前平台的账号。</p>
+              </div>
+              <div>
+                <strong>2. 填写预计用量</strong>
+                <p>填写预计请求次数、使用时长、单次输入/输出 Token；也可以使用近 3 天均值快速带入。</p>
+              </div>
+              <div>
+                <strong>3. 查看推荐结果</strong>
+                <p>结果会综合倍率、小时费、低消、席位、并发和可用量，给出预计每小时成本与推荐原因。</p>
+              </div>
+              <div>
+                <strong>4. 再加入使用</strong>
+                <p>优先选择成本清晰、席位充足、可用量健康的账号，避免只看单个倍率或小时费。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="account-share-guide-note">
+            <Icon name="infoCircle" size="sm" />
+            <p>自用自己的上架账号不收小时费，也不产生号主收益；共享使用时才会进入上述预扣和核销流程。</p>
+          </div>
+        </section>
+
+        <template #footer>
+          <button type="button" class="btn-secondary" @click="closeUsageGuideDialog">我知道了</button>
+          <button type="button" class="btn-primary" @click="openRecommendationFromUsageGuide">
+            <Icon name="sparkles" size="sm" class="mr-2" />
+            打开选号助手
+          </button>
+        </template>
+      </BaseDialog>
+
+      <BaseDialog
+        :show="showRecommendationDialog"
+        title="账号模式选号助手"
+        width="full"
+        :z-index="55"
+        @close="closeRecommendationDialog"
+      >
+        <section class="recommendation-panel recommendation-dialog-panel">
+        <div class="recommendation-head">
+          <div class="min-w-0">
+            <h2>测算参数</h2>
+            <p>{{ platformLabel(activeListingPlatform) }} · {{ accountModeGroupName(activeListingPlatform) }}</p>
+          </div>
+          <div class="recommendation-preset-row">
+            <button
+              v-for="preset in recommendationPresets"
+              :key="preset.key"
+              type="button"
+              class="recommendation-preset"
+              :class="{ 'recommendation-preset-active': selectedRecommendationPreset === preset.key }"
+              @click="applyRecommendationPreset(preset.key)"
+            >
+              {{ preset.label }}
+            </button>
+            <button
+              type="button"
+              class="recommendation-profile-button"
+              :disabled="recommendationUsageProfileLoading || recommendationLoading"
+              @click="applyRecentUsageProfile"
+            >
+              <Icon name="clock" size="sm" class="mr-1.5" :class="{ 'animate-spin': recommendationUsageProfileLoading }" />
+              {{ recommendationUsageProfileLoading ? '读取中' : '近3天均值' }}
+            </button>
+          </div>
+          <p class="recommendation-profile-help">
+            近3天均值会读取你近 3 天历史请求中的单次输入 Token、单次输出 Token、单次 Cache 写入和单次 Cache 读取均值，再按每小时请求量测算预计使用额度。
+          </p>
+        </div>
+
+        <div class="recommendation-layout">
+          <div class="recommendation-form-grid">
+            <label class="field">
+              <span>账号模式 Key</span>
+              <select v-model.number="recommendationForm.api_key_id" class="input h-10" :disabled="modeKeysLoading">
+                <option :value="0">{{ modeKeysLoading ? '加载中' : `选择${accountModeGroupName(activeListingPlatform)} Key` }}</option>
+                <option v-for="key in recommendationKeyOptions" :key="key.id" :value="key.id">
+                  {{ modeKeyLabel(key) }}
+                </option>
+              </select>
+            </label>
+            <label class="field">
+              <span>模型</span>
+              <select v-model="recommendationForm.model" class="input h-10">
+                <option v-for="model in recommendationModelOptions" :key="model" :value="model">
+                  {{ model }}
+                </option>
+              </select>
+            </label>
+            <label class="field">
+              <span>请求次数</span>
+              <input v-model.number="recommendationForm.request_count" class="input h-10" type="number" min="1" step="1" />
+            </label>
+            <label class="field">
+              <span>使用时长（小时）</span>
+              <input v-model.number="recommendationForm.active_hours" class="input h-10" type="number" min="0.1" step="0.1" />
+            </label>
+            <label class="field">
+              <span>单次输入 Token</span>
+              <input v-model.number="recommendationForm.input_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
+            </label>
+            <label class="field">
+              <span>单次输出 Token</span>
+              <input v-model.number="recommendationForm.output_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
+            </label>
+            <label class="field">
+              <span>单次 Cache 写入</span>
+              <input v-model.number="recommendationForm.cache_creation_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
+            </label>
+            <label class="field">
+              <span>单次 Cache 读取</span>
+              <input v-model.number="recommendationForm.cache_read_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
+            </label>
+          </div>
+
+          <div class="recommendation-action-box">
+            <button class="btn-primary h-11 w-full" type="button" :disabled="recommendationLoading" @click="runRecommendation">
+              <Icon name="sparkles" size="sm" class="mr-2" :class="{ 'animate-spin': recommendationLoading }" />
+              {{ recommendationLoading ? '测算中' : '测算并推荐' }}
+            </button>
+            <p v-if="recommendationUsageProfileMessage" class="recommendation-profile-message">{{ recommendationUsageProfileMessage }}</p>
+            <p v-if="recommendationError" class="recommendation-error">{{ recommendationError }}</p>
+            <div v-if="recommendationResult" class="recommendation-summary">
+              <small>预计每小时使用额度</small>
+              <span>{{ recommendationInputSummary }}</span>
+              <strong>{{ recommendationBest ? formatRecommendationCost(recommendationEstimatedHourlyCost(recommendationBest)) : '无可用推荐' }}</strong>
+              <small>候选 {{ recommendationResult.candidate_count }} 个</small>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="recommendationResult" class="recommendation-results">
+          <div v-if="recommendationCandidates.length === 0" class="recommendation-empty">
+            当前平台没有匹配模型、席位和可用状态的账号。
+          </div>
+          <template v-else>
+            <article
+              v-for="candidate in recommendationCandidates"
+              :key="candidate.listing.id"
+              class="recommendation-card"
+            >
+              <div class="recommendation-card-head">
+                <div class="recommendation-title">
+                  <span class="recommendation-rank">#{{ candidate.rank }}</span>
+                  <div class="min-w-0">
+                    <strong>{{ listingDisplayName(candidate.listing) }}</strong>
+                    <small>{{ ownerDisplayName(candidate.listing) }} · {{ accountLevelBadgeLabel(candidate.listing) }} · {{ listingRatingLabel(candidate.listing) }}</small>
+                  </div>
+                </div>
+                <div class="recommendation-total">
+                  <span>预计每小时额度</span>
+                  <strong>{{ formatRecommendationCost(recommendationEstimatedHourlyCost(candidate)) }}</strong>
+                </div>
+              </div>
+
+              <div class="recommendation-tag-row">
+                <span v-for="tag in candidate.tags" :key="tag">{{ tag }}</span>
+              </div>
+
+              <div class="recommendation-metrics">
+                <div>
+                  <span>{{ recommendationRequestCostLabel(candidate) }}</span>
+                  <strong>{{ formatRecommendationCost(candidate.estimate.request_cost) }}</strong>
+                </div>
+                <div>
+                  <span>{{ candidate.estimate.owner_self_use ? '自用单次均摊' : '单次均摊' }}</span>
+                  <strong>{{ formatRecommendationCost(candidate.estimate.per_request_cost) }}</strong>
+                </div>
+                <div>
+                  <span>{{ candidate.estimate.owner_self_use ? '自用小时费' : '小时费合计' }}</span>
+                  <strong>{{ recommendationHourlyCostText(candidate) }}</strong>
+                </div>
+                <div>
+                  <span>{{ candidate.estimate.owner_self_use ? '自用准入' : '准入预估' }}</span>
+                  <strong>{{ recommendationUpfrontCostText(candidate) }}</strong>
+                </div>
+                <div>
+                  <span>{{ candidate.estimate.owner_self_use ? '自用倍率' : '倍率' }}</span>
+                  <strong>{{ formatNumber(candidate.estimate.effective_rate_multiplier) }}x</strong>
+                </div>
+              </div>
+
+              <div v-if="candidate.estimate.owner_self_use" class="recommendation-self-use-note">
+                <Icon name="infoCircle" size="sm" />
+                <span>{{ recommendationOwnerSelfUseSummary(candidate) }}</span>
+              </div>
+
+              <div class="recommendation-reasons">
+                <span v-for="reason in candidate.reasons.slice(0, 3)" :key="reason">{{ reason }}</span>
+              </div>
+              <div v-if="candidate.warnings?.length" class="recommendation-warnings">
+                <span v-for="warning in candidate.warnings" :key="warning">{{ warning }}</span>
+              </div>
+
+              <div class="recommendation-card-actions">
+                <span>席位 {{ candidate.listing.active_seats }}/{{ candidate.listing.seat_limit }} · 并发 {{ candidate.listing.current_concurrency }}/{{ candidate.listing.account_concurrency }}</span>
+                <button class="btn-primary h-10" type="button" :disabled="joiningId === candidate.listing.id" @click="useRecommendedListing(candidate)">
+                  <Icon name="login" size="sm" class="mr-2" />
+                  加入使用
+                </button>
+              </div>
+            </article>
+          </template>
+        </div>
+        </section>
+      </BaseDialog>
+
       <section v-if="showCreate" class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-900">
         <div class="flex flex-col gap-3 border-b border-gray-100 p-4 dark:border-dark-800 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 class="text-base font-semibold text-gray-950 dark:text-white">新增共享账号</h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">复用 OpenAI OAuth 授权流程，提交后自动创建账号并发布到账号广场。</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">选择平台和代理后走 OAuth 授权，提交后自动创建账号并发布到账号广场。</p>
           </div>
           <button class="btn-secondary h-9 w-fit" type="button" @click="resetCreateForm">
             <Icon name="refresh" size="sm" class="mr-2" />
@@ -83,9 +428,31 @@
                 <small>账号广场需要代理和席位配置，授权前请先确认。</small>
               </div>
               <div class="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+                <div class="field">
+                  <span>账号平台</span>
+                  <div class="grid grid-cols-2 gap-2">
+                    <button
+                      v-for="option in ACCOUNT_SHARE_PLATFORM_OPTIONS"
+                      :key="option.value"
+                      type="button"
+                      :class="[
+                        'h-10 rounded-md border px-3 text-sm font-semibold transition',
+                        createPlatform === option.value
+                          ? 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-500/10 dark:text-primary-200'
+                          : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 dark:border-dark-700 dark:bg-dark-900 dark:text-dark-200 dark:hover:border-dark-600'
+                      ]"
+                      :disabled="creating || generatingOAuthURL"
+                      @click="selectCreatePlatform(option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                  <small>所有账号模式仅支持 OAuth，授权前必须先选择代理。</small>
+                </div>
+
                 <label class="field">
                   <span>账号名称</span>
-                  <input v-model="createForm.name" class="input" placeholder="OpenAI共享账号" />
+                  <input v-model="createForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[createPlatform]" />
                   <small :class="accountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
                     {{ accountNameValidationMessage || '名称必须唯一，且不能包含空格、换行或制表符。' }}
                   </small>
@@ -188,18 +555,18 @@
             <div class="form-section">
               <div class="section-heading">
                 <span>模型与保护</span>
-                <small>后端会强制账号模式、ctx_pool 和 Compact 配置，前端只提交可变策略。</small>
+                <small>{{ createPlatform === 'openai' ? '后端会强制账号模式、ctx_pool 和 Compact 配置，前端只提交可变策略。' : 'Anthropic 账号模式提交 OAuth 凭证、代理、模型白名单和 Claude 额度保护。' }}</small>
               </div>
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <div class="field">
                   <span>模型白名单</span>
                   <div class="model-selector-shell">
-                    <ModelWhitelistSelector v-model="allowedModels" platform="openai" />
+                    <ModelWhitelistSelector v-model="allowedModels" :platform="createPlatform" />
                   </div>
                   <small>复用“我的账号”新增账号的模型选择器，可搜索、多选并添加自定义模型。</small>
                 </div>
 
-                <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                <div v-if="createPlatform === 'openai'" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
                   <label class="field">
                     <span>Codex 5h 保护 %</span>
                     <input v-model.number="createForm.codex_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
@@ -209,6 +576,16 @@
                     <input v-model.number="createForm.codex_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                 </div>
+                <div v-else class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                  <label class="field">
+                    <span>Claude 5h 保护 %</span>
+                    <input v-model.number="createForm.anthropic_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                  <label class="field">
+                    <span>Claude 7d 保护 %</span>
+                    <input v-model.number="createForm.anthropic_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                </div>
               </div>
 
               <div v-if="concurrencyNotice" class="notice-row mt-3">
@@ -216,7 +593,7 @@
                 <span>{{ concurrencyNotice }}</span>
               </div>
 
-              <label class="toggle-row mt-3">
+              <label v-if="createPlatform === 'openai'" class="toggle-row mt-3">
                 <input v-model="createForm.codex_cli_only" type="checkbox" />
                 <span>
                   <strong>仅允许 Codex 官方客户端</strong>
@@ -282,7 +659,7 @@
                 :show-mobile-refresh-token-option="false"
                 :show-session-token-option="false"
                 :show-access-token-option="false"
-                platform="openai"
+                :platform="createPlatform"
                 :show-project-id="false"
                 @generate-url="startOAuth"
               />
@@ -293,7 +670,7 @@
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
                 <Icon v-else name="checkCircle" size="sm" class="mr-2" />
-                {{ creating ? '创建中...' : '完成 OAuth 并上架' }}
+                {{ creating ? '创建中...' : `完成 ${platformLabel(createPlatform)} OAuth 并上架` }}
               </button>
             </div>
           </aside>
@@ -402,7 +779,7 @@
         </template>
       </BaseDialog>
 
-      <section class="filter-panel">
+      <section ref="filterPanelRef" class="filter-panel" @keydown.esc="closeFilterPopover">
         <div class="filter-toolbar">
           <div class="filter-primary-row">
             <label class="filter-search">
@@ -439,119 +816,230 @@
               <div class="filter-body-title">
                 <span class="filter-body-icon"><Icon name="filter" size="sm" /></span>
                 <div>
-                  <strong>筛选条件</strong>
+                  <strong>排序与筛选</strong>
                   <small>{{ activeResultFilterCount > 0 ? `已启用 ${activeResultFilterCount} 项` : '默认展示全部可见账号' }}</small>
                 </div>
+              </div>
+              <div class="filter-button-row">
+                <button class="filter-reset-button" type="button" :disabled="loading || !hasResultFilters" @click="resetListingFilters">
+                  <Icon name="x" size="sm" />
+                  <span>重置</span>
+                </button>
+                <button class="filter-apply-button" type="button" :disabled="loading" @click="applyListingFilters">
+                  <Icon name="filter" size="sm" />
+                  <span>应用</span>
+                </button>
               </div>
             </div>
 
             <div class="advanced-filter-grid" aria-label="账号广场高级筛选">
-              <label class="filter-field">
-                <span>状态</span>
-                <select v-model="listingFilters.status" class="input h-11">
-                  <option v-for="option in listingStatusFilterOptions" :key="option.value" :value="option.value">
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-
-              <label class="filter-field">
-                <span>账号等级</span>
-                <select v-model="listingFilters.accountLevel" class="input h-11">
-                  <option v-for="option in accountLevelFilterOptions" :key="option.value" :value="option.value">
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-
-              <label class="filter-field filter-range-field">
-                <span>单用户并发数</span>
-                <div class="range-inputs">
-                  <input v-model.trim="listingFilters.perUserConcurrency.min" class="input h-11" type="number" min="0" step="1" placeholder="最低" />
-                  <span>至</span>
-                  <input v-model.trim="listingFilters.perUserConcurrency.max" class="input h-11" type="number" min="0" step="1" placeholder="最高" />
+              <div class="filter-popover-wrap">
+                <span class="filter-section-label">状态</span>
+                <button
+                  type="button"
+                  class="filter-trigger-button"
+                  :class="[listingFilters.status !== '' && 'filter-trigger-selected', openFilterPopover === 'status' && 'filter-trigger-active']"
+                  :aria-expanded="openFilterPopover === 'status'"
+                  aria-haspopup="menu"
+                  @click="toggleFilterPopover('status')"
+                >
+                  <Icon name="filter" size="sm" />
+                  <span>{{ statusFilterSummary }}</span>
+                  <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
+                </button>
+                <div v-if="openFilterPopover === 'status'" class="filter-popover status-popover" role="menu">
+                  <button
+                    v-for="option in listingStatusFilterOptions"
+                    :key="option.value"
+                    type="button"
+                    class="filter-menu-option"
+                    :class="listingFilters.status === option.value && 'filter-menu-option-active'"
+                    @click="setListingStatusFilter(option.value)"
+                  >
+                    <span>{{ option.label }}</span>
+                    <Icon v-if="listingFilters.status === option.value" name="check" size="sm" />
+                  </button>
                 </div>
-              </label>
+              </div>
 
-              <label class="filter-field filter-range-field">
-                <span>最低余额</span>
-                <div class="range-inputs">
-                  <input v-model.trim="listingFilters.minBalance.min" class="input h-11" type="number" min="0" step="0.01" placeholder="最低" />
-                  <span>至</span>
-                  <input v-model.trim="listingFilters.minBalance.max" class="input h-11" type="number" min="0" step="0.01" placeholder="最高" />
+              <div v-if="isOpenAIListingPlatform" class="filter-popover-wrap">
+                <span class="filter-section-label">账号等级</span>
+                <button
+                  type="button"
+                  class="filter-trigger-button"
+                  :class="[listingFilters.accountLevel !== 'all' && 'filter-trigger-selected', openFilterPopover === 'level' && 'filter-trigger-active']"
+                  :aria-expanded="openFilterPopover === 'level'"
+                  aria-haspopup="menu"
+                  @click="toggleFilterPopover('level')"
+                >
+                  <Icon name="badge" size="sm" />
+                  <span>{{ accountLevelFilterSummary }}</span>
+                  <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
+                </button>
+                <div v-if="openFilterPopover === 'level'" class="filter-popover level-popover" role="menu">
+                  <button
+                    v-for="option in accountLevelFilterOptions"
+                    :key="option.value"
+                    type="button"
+                    class="filter-menu-option"
+                    :class="listingFilters.accountLevel === option.value && 'filter-menu-option-active'"
+                    @click="setAccountLevelFilter(option.value)"
+                  >
+                    <span>{{ option.label }}</span>
+                    <Icon v-if="listingFilters.accountLevel === option.value" name="check" size="sm" />
+                  </button>
                 </div>
-              </label>
+              </div>
 
-              <label class="filter-field filter-range-field">
-                <span>小时费</span>
-                <div class="range-inputs">
-                  <input v-model.trim="listingFilters.hourlyRate.min" class="input h-11" type="number" min="0" step="0.0001" placeholder="最低" />
-                  <span>至</span>
-                  <input v-model.trim="listingFilters.hourlyRate.max" class="input h-11" type="number" min="0" step="0.0001" placeholder="最高" />
-                </div>
-              </label>
-
-              <label class="filter-field filter-range-field">
-                <span>免小时费低消</span>
-                <div class="range-inputs">
-                  <input v-model.trim="listingFilters.hourlyFeeWaiver.min" class="input h-11" type="number" min="0" step="0.0001" placeholder="最低" />
-                  <span>至</span>
-                  <input v-model.trim="listingFilters.hourlyFeeWaiver.max" class="input h-11" type="number" min="0" step="0.0001" placeholder="最高" />
-                </div>
-              </label>
-
-              <div class="filter-field model-filter-field">
-                <span>可用模型</span>
-                <details class="model-filter-menu">
-                  <summary>
-                    <Icon name="filter" size="sm" />
-                    <span>{{ modelFilterSummary }}</span>
-                  </summary>
-                  <div class="model-filter-panel">
-                    <div class="model-filter-options">
-                      <label v-for="model in modelFilterOptions" :key="model" class="model-filter-option">
-                        <input
-                          type="checkbox"
-                          :checked="listingFilters.models.includes(model)"
-                          @change="toggleModelFilter(model)"
-                        />
-                        <span>{{ model }}</span>
-                      </label>
-                    </div>
-                    <div class="model-filter-input-row">
-                      <input
-                        v-model.trim="modelFilterInput"
-                        class="input h-10"
-                        placeholder="输入模型名回车添加"
-                        @keydown.enter.prevent="addModelFilterFromInput"
-                      />
-                      <button type="button" class="btn-secondary h-10" @click="addModelFilterFromInput">添加</button>
-                    </div>
-                    <div v-if="listingFilters.models.length > 0" class="selected-model-filters">
-                      <button
-                        v-for="model in listingFilters.models"
-                        :key="model"
-                        type="button"
-                        class="selected-model-filter"
-                        @click="removeModelFilter(model)"
-                      >
-                        <span>{{ model }}</span>
-                        <Icon name="x" size="xs" />
-                      </button>
-                    </div>
+              <div class="filter-popover-wrap">
+                <span class="filter-section-label">账号席位</span>
+                <button
+                  type="button"
+                  class="filter-trigger-button"
+                  :class="listingFilters.seatLimits.length > 0 && 'filter-trigger-selected'"
+                  :aria-expanded="openFilterPopover === 'seat'"
+                  aria-haspopup="menu"
+                  @click="toggleFilterPopover('seat')"
+                >
+                  <Icon name="users" size="sm" />
+                  <span>{{ seatFilterSummary }}</span>
+                  <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
+                </button>
+                <div v-if="openFilterPopover === 'seat'" class="filter-popover seat-popover" role="menu">
+                  <div class="seat-chip-grid">
+                    <button
+                      v-for="seat in seatOptions"
+                      :key="seat"
+                      type="button"
+                      class="choice-chip"
+                      :class="listingFilters.seatLimits.includes(seat) && 'choice-chip-active'"
+                      @click="toggleSeatFilter(seat)"
+                    >
+                      {{ seat }}人
+                    </button>
                   </div>
-                </details>
+                </div>
+              </div>
+
+              <div class="filter-popover-wrap">
+                <span class="filter-section-label">标签</span>
+                <button
+                  type="button"
+                  class="filter-trigger-button"
+                  :class="listingFilters.featureTags.length > 0 && 'filter-trigger-selected'"
+                  :aria-expanded="openFilterPopover === 'feature'"
+                  aria-haspopup="menu"
+                  @click="toggleFilterPopover('feature')"
+                >
+                  <Icon name="filter" size="sm" />
+                  <span>{{ featureTagFilterSummary }}</span>
+                  <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
+                </button>
+                <div v-if="openFilterPopover === 'feature'" class="filter-popover tag-popover" role="menu">
+                  <button
+                    v-for="option in visibleListingFeatureTagOptions"
+                    :key="option.value"
+                    type="button"
+                    class="filter-menu-option"
+                    :class="listingFilters.featureTags.includes(option.value) && 'filter-menu-option-active'"
+                    @click="toggleFeatureTagFilter(option.value)"
+                  >
+                    <span>{{ option.label }}</span>
+                    <Icon v-if="listingFilters.featureTags.includes(option.value)" name="check" size="sm" />
+                  </button>
+                </div>
+              </div>
+
+              <div class="filter-popover-wrap model-filter-wrap">
+                <span class="filter-section-label">可用模型</span>
+                <button
+                  type="button"
+                  class="filter-trigger-button"
+                  :class="listingFilters.models.length > 0 && 'filter-trigger-selected'"
+                  :aria-expanded="openFilterPopover === 'model'"
+                  aria-haspopup="menu"
+                  @click="toggleFilterPopover('model')"
+                >
+                  <Icon name="filter" size="sm" />
+                  <span>{{ modelFilterSummary }}</span>
+                  <Icon name="chevronDown" size="xs" class="filter-trigger-chevron" />
+                </button>
+                <div v-if="openFilterPopover === 'model'" class="filter-popover model-popover" role="menu">
+                  <div class="model-filter-options">
+                    <button
+                      v-for="model in modelFilterOptions"
+                      :key="model"
+                      type="button"
+                      class="filter-menu-option"
+                      :class="listingFilters.models.includes(model) && 'filter-menu-option-active'"
+                      @click="toggleModelFilter(model)"
+                    >
+                      <span>{{ model }}</span>
+                      <Icon v-if="listingFilters.models.includes(model)" name="check" size="sm" />
+                    </button>
+                  </div>
+                  <div class="model-filter-input-row">
+                    <input
+                      v-model.trim="modelFilterInput"
+                      class="input h-10"
+                      placeholder="输入模型名回车添加"
+                      @keydown.enter.prevent="addModelFilterFromInput"
+                    />
+                    <button type="button" class="btn-secondary h-10" @click="addModelFilterFromInput">添加</button>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div class="filter-button-row">
-              <button class="filter-apply-button" type="button" :disabled="loading" @click="applyListingFilters">
-                <Icon name="filter" size="sm" class="mr-2" />
-                <span>应用筛选</span>
-              </button>
-              <button class="filter-reset-button" type="button" :disabled="loading || !hasResultFilters" @click="resetListingFilters">
-                <Icon name="x" size="sm" class="mr-2" />
-                <span>重置</span>
+            <div class="sort-section" aria-label="账号广场排序">
+              <div class="sort-section-head">
+                <span class="filter-section-label">排序</span>
+              </div>
+              <div class="sort-button-grid">
+                <button
+                  type="button"
+                  class="sort-option-button sort-default-button"
+                  :class="listingFilters.sortKeys.length === 0 && 'sort-option-active'"
+                  :aria-pressed="listingFilters.sortKeys.length === 0"
+                  title="清空所有排序条件，恢复账号广场默认排序"
+                  @click="clearListingSorts"
+                >
+                  <Icon name="sort" size="sm" />
+                  <span>默认</span>
+                  <Icon v-if="listingFilters.sortKeys.length === 0" name="check" size="xs" class="sort-option-check" />
+                </button>
+                <button
+                  v-for="option in listingSortFieldOptions"
+                  :key="option.sortBy"
+                  type="button"
+                  class="sort-option-button sort-field-button"
+                  :class="isSortFieldActive(option.sortBy) && 'sort-option-active'"
+                  :aria-pressed="isSortFieldActive(option.sortBy)"
+                  :title="sortFieldButtonTitle(option)"
+                  @click="toggleListingSortField(option.sortBy)"
+                >
+                  <Icon :name="sortDirectionIcon(option.sortBy)" size="sm" />
+                  <span>{{ option.label }}</span>
+                  <small v-if="sortPriorityLabel(option.sortBy)" class="sort-priority-badge">
+                    {{ sortPriorityLabel(option.sortBy) }}
+                  </small>
+                  <small v-if="activeSortDirectionLabel(option)" class="sort-direction-pill">
+                    {{ activeSortDirectionLabel(option) }}
+                  </small>
+                </button>
+              </div>
+            </div>
+
+            <div v-if="activeFilterChips.length > 0" class="active-filter-row" aria-label="已选筛选">
+              <button
+                v-for="chip in activeFilterChips"
+                :key="chip.key"
+                type="button"
+                class="active-filter-chip"
+                @click="chip.remove"
+              >
+                <span>{{ chip.label }}</span>
+                <Icon name="x" size="xs" />
               </button>
             </div>
           </div>
@@ -566,19 +1054,21 @@
         正在加载账号广场...
       </div>
 
-      <section v-else-if="displayedListings.length > 0" class="grid gap-4 xl:grid-cols-2">
+      <section v-else-if="displayedListings.length > 0" class="listing-grid">
         <article
           v-for="listing in displayedListings"
           :key="listing.id"
           class="listing-card"
         >
-          <div class="flex items-start justify-between gap-3">
-            <div class="min-w-0">
-              <div class="mb-2 flex flex-wrap items-center gap-1.5">
-                <span :class="accountLevelBadgeClass(listing)">
+          <div class="listing-card-head">
+            <div class="listing-card-identity">
+              <div class="listing-badge-row">
+                <span class="feature-badge">{{ platformLabel(listingPlatform(listing)) }}</span>
+                <span v-if="isOpenAIListing(listing)" :class="accountLevelBadgeClass(listing)">
                   {{ accountLevelBadgeLabel(listing) }}
                 </span>
-                <span v-if="supportsImageGeneration(listing)" class="feature-badge feature-badge-image">支持生图</span>
+                <span v-if="isOpenAIListing(listing) && supportsImageGeneration(listing)" class="feature-badge feature-badge-image">支持生图</span>
+                <span v-if="isOpenAIListing(listing) && listing.codex_cli_only" class="feature-badge feature-badge-client-only">仅客户端</span>
                 <span
                   v-if="listing.hourly_fee_waiver_minimum > 0"
                   class="feature-badge feature-badge-waiver"
@@ -587,85 +1077,155 @@
                   满低消免小时费
                 </span>
               </div>
-              <h2 class="listing-title">{{ listing.account_name || `共享账号 #${listing.id}` }}</h2>
-              <p class="listing-owner">号主：{{ listing.owner_username || `用户 ${listing.owner_user_id}` }}</p>
+              <div class="listing-title-row">
+                <h2 class="listing-title">{{ listing.account_name || `共享账号 #${listing.id}` }}</h2>
+                <span class="listing-owner">
+                  号主：{{ listing.owner_username || `用户 ${listing.owner_user_id}` }}
+                  <button
+                    type="button"
+                    class="owner-inline-button"
+                    :title="ownerDialogButtonTitle(listing)"
+                    @click="openOwnerDialog(listing)"
+                  >
+                    <Icon name="eye" size="xs" />
+                    <span>其他账号</span>
+                  </button>
+                </span>
+              </div>
             </div>
-            <div class="flex flex-shrink-0 flex-col items-end gap-1">
+            <div class="listing-card-state">
+              <span class="listing-rating-pill">
+                <Icon name="sparkles" size="xs" />
+                <span>评分</span>
+                <strong>{{ listingRatingLabel(listing) }}</strong>
+              </span>
               <span :class="statusBadgeClass(listing.status)">
                 {{ statusLabel(listing.status) }}
               </span>
-              <span class="rounded-full bg-primary-50 px-2.5 py-1 text-xs font-semibold text-primary-700 dark:bg-primary-500/10 dark:text-primary-200">
+              <span class="listing-seat-pill">
                 {{ listing.active_seats }}/{{ listing.seat_limit }}
               </span>
             </div>
           </div>
 
           <div class="listing-health-panel">
-            <div class="listing-status-grid">
-              <div class="listing-runtime-row">
-                <div class="min-w-0">
-                  <span class="listing-runtime-label">账号状态</span>
-                  <strong>{{ runtimeInsight(listing).label }}</strong>
-                  <p v-if="runtimeInsight(listing).detail">{{ runtimeInsight(listing).detail }}</p>
+            <div class="listing-health-grid">
+              <div class="listing-status-stack">
+                <div class="listing-runtime-tile">
+                  <Icon name="users" size="sm" />
+                  <div>
+                    <span class="listing-runtime-label">账号状态</span>
+                    <div class="listing-runtime-value-row">
+                      <strong>{{ runtimeInsight(listing).label }}</strong>
+                      <span :class="runtimeInsightClass(runtimeInsight(listing).tone)">
+                        {{ runtimeInsight(listing).badge }}
+                      </span>
+                    </div>
+                    <p v-if="runtimeInsight(listing).detail">{{ runtimeInsight(listing).detail }}</p>
+                  </div>
                 </div>
-                <span :class="runtimeInsightClass(runtimeInsight(listing).tone)">
-                  {{ runtimeInsight(listing).badge }}
-                </span>
+
+                <div class="capacity-panel">
+                  <div class="flex items-center justify-between gap-3">
+                    <span><Icon name="chart" size="sm" />实时容量</span>
+                    <strong>{{ currentConcurrencyLabel(listing) }}</strong>
+                  </div>
+                  <div class="capacity-track" aria-hidden="true">
+                    <div
+                      class="capacity-fill"
+                      :class="capacityFillClass(listing)"
+                      :style="{ width: capacityWidth(listing) }"
+                    ></div>
+                  </div>
+                </div>
               </div>
 
-              <div class="capacity-panel">
-                <div class="flex items-center justify-between gap-3">
-                  <span>实时容量</span>
-                  <strong>{{ currentConcurrencyLabel(listing) }}</strong>
+              <div v-if="showOpenAIUsageWindows(listing)" class="listing-usage-grid">
+                <div class="usage-window-row">
+                  <div class="usage-window-title">
+                    <Icon name="clock" size="sm" />
+                    <span>5小时可用量</span>
+                    <strong>{{ usageAvailableLabel(listing.codex_5h_usage) }}</strong>
+                  </div>
+                  <UsageProgressBar
+                    v-if="listing.codex_5h_usage"
+                    label="5h"
+                    :utilization="listing.codex_5h_usage.utilization"
+                    :resets-at="listing.codex_5h_usage.resets_at"
+                    :window-stats="listing.codex_5h_usage.window_stats"
+                    :limit-percent="listing.codex_5h_limit_percent"
+                    color="indigo"
+                    show-now-when-idle
+                  />
+                  <span v-else class="usage-empty">暂无快照</span>
                 </div>
-                <div class="capacity-track" aria-hidden="true">
-                  <div
-                    class="capacity-fill"
-                    :class="capacityFillClass(listing)"
-                    :style="{ width: capacityWidth(listing) }"
-                  ></div>
+
+                <div class="usage-window-row">
+                  <div class="usage-window-title">
+                    <Icon name="calendar" size="sm" />
+                    <span>7天可用量</span>
+                    <strong>{{ usageAvailableLabel(listing.codex_7d_usage) }}</strong>
+                  </div>
+                  <UsageProgressBar
+                    v-if="listing.codex_7d_usage"
+                    label="7d"
+                    :utilization="listing.codex_7d_usage.utilization"
+                    :resets-at="listing.codex_7d_usage.resets_at"
+                    :window-stats="listing.codex_7d_usage.window_stats"
+                    :limit-percent="listing.codex_7d_limit_percent"
+                    color="emerald"
+                    show-now-when-idle
+                  />
+                  <span v-else class="usage-empty">暂无快照</span>
+                </div>
+              </div>
+              <div v-else-if="showAnthropicUsageWindows(listing)" class="listing-usage-grid">
+                <div class="usage-window-row">
+                  <div class="usage-window-title">
+                    <Icon name="clock" size="sm" />
+                    <span>5小时 Claude 额度</span>
+                    <strong>{{ usageAvailableLabel(listing.anthropic_5h_usage) }}</strong>
+                  </div>
+                  <UsageProgressBar
+                    v-if="listing.anthropic_5h_usage"
+                    label="5h"
+                    :utilization="listing.anthropic_5h_usage.utilization"
+                    :resets-at="listing.anthropic_5h_usage.resets_at"
+                    :window-stats="listing.anthropic_5h_usage.window_stats"
+                    :limit-percent="anthropic5hLimitPercent(listing)"
+                    color="indigo"
+                    show-now-when-idle
+                  />
+                  <span v-else class="usage-empty">暂无快照</span>
+                </div>
+
+                <div class="usage-window-row">
+                  <div class="usage-window-title">
+                    <Icon name="calendar" size="sm" />
+                    <span>7天 Claude 额度</span>
+                    <strong>{{ usageAvailableLabel(listing.anthropic_7d_usage) }}</strong>
+                  </div>
+                  <UsageProgressBar
+                    v-if="listing.anthropic_7d_usage"
+                    label="7d"
+                    :utilization="listing.anthropic_7d_usage.utilization"
+                    :resets-at="listing.anthropic_7d_usage.resets_at"
+                    :window-stats="listing.anthropic_7d_usage.window_stats"
+                    :limit-percent="anthropic7dLimitPercent(listing)"
+                    color="emerald"
+                    show-now-when-idle
+                  />
+                  <span v-else class="usage-empty">暂无快照</span>
                 </div>
               </div>
             </div>
 
-            <div class="usage-window-list">
-              <div class="usage-window-row">
-                <div class="usage-window-title">
-                  <Icon name="clock" size="sm" />
-                  <span>5小时可用量</span>
-                  <strong>{{ usageAvailableLabel(listing.codex_5h_usage) }}</strong>
-                </div>
-                <UsageProgressBar
-                  v-if="listing.codex_5h_usage"
-                  label="5h"
-                  :utilization="listing.codex_5h_usage.utilization"
-                  :resets-at="listing.codex_5h_usage.resets_at"
-                  :window-stats="listing.codex_5h_usage.window_stats"
-                  :limit-percent="listing.codex_5h_limit_percent"
-                  color="indigo"
-                  show-now-when-idle
-                />
-                <span v-else class="usage-empty">暂无快照</span>
-              </div>
-
-              <div class="usage-window-row">
-                <div class="usage-window-title">
-                  <Icon name="calendar" size="sm" />
-                  <span>7天可用量</span>
-                  <strong>{{ usageAvailableLabel(listing.codex_7d_usage) }}</strong>
-                </div>
-                <UsageProgressBar
-                  v-if="listing.codex_7d_usage"
-                  label="7d"
-                  :utilization="listing.codex_7d_usage.utilization"
-                  :resets-at="listing.codex_7d_usage.resets_at"
-                  :window-stats="listing.codex_7d_usage.window_stats"
-                  :limit-percent="listing.codex_7d_limit_percent"
-                  color="emerald"
-                  show-now-when-idle
-                />
-                <span v-else class="usage-empty">暂无快照</span>
-              </div>
+            <div class="listing-health-foot" :class="{ 'listing-health-foot-empty': !listingHealthFootVisible(listing) }">
+              <span v-if="showOpenAIUsageWindows(listing) && listing.codex_usage_updated_at">用量更新：{{ formatDate(listing.codex_usage_updated_at) }}</span>
+              <span v-if="showOpenAIUsageWindows(listing) && listing.codex_quota_protection_reset_at">保护解除：{{ formatRelativeUntil(listing.codex_quota_protection_reset_at) }}</span>
+              <span v-if="showAnthropicUsageWindows(listing) && listing.anthropic_usage_updated_at">用量更新：{{ formatDate(listing.anthropic_usage_updated_at) }}</span>
+              <span v-if="showAnthropicUsageWindows(listing) && listing.anthropic_quota_protection_reset_at">保护解除：{{ formatRelativeUntil(listing.anthropic_quota_protection_reset_at) }}</span>
+              <span v-if="listing.rate_limit_reset_at">限流解除：{{ formatRelativeUntil(listing.rate_limit_reset_at) }}</span>
             </div>
 
             <div v-if="validityInfo(listing)" class="validity-strip">
@@ -675,183 +1235,266 @@
               </div>
               <strong>{{ validityInfo(listing)?.expiresAtLabel }}</strong>
             </div>
-
-            <div class="listing-health-foot">
-              <span v-if="listing.codex_usage_updated_at">用量更新：{{ formatDate(listing.codex_usage_updated_at) }}</span>
-              <span v-if="listing.codex_quota_protection_reset_at">保护解除：{{ formatRelativeUntil(listing.codex_quota_protection_reset_at) }}</span>
-              <span v-if="listing.rate_limit_reset_at">限流解除：{{ formatRelativeUntil(listing.rate_limit_reset_at) }}</span>
-            </div>
           </div>
 
           <div class="listing-metric-grid">
-            <div class="metric metric-billing" :class="{ 'metric-price-danger': isRateMultiplierExpensive(listing) }"><span>倍率</span><strong>{{ formatNumber(listing.rate_multiplier) }}x</strong></div>
-            <div class="metric metric-billing"><span>最低余额</span><strong>{{ formatNumber(listing.min_balance_required) }}</strong></div>
-            <div class="metric"><span>账号并发</span><strong>{{ listing.account_concurrency }}</strong></div>
-            <div class="metric"><span>单用户并发</span><strong>{{ listing.per_user_concurrency }}</strong></div>
-            <div class="metric metric-billing" :class="{ 'metric-price-danger': isHourlyRateExpensive(listing) }"><span>小时费</span><strong>{{ formatNumber(listing.hourly_rate) }}</strong></div>
-            <div class="metric metric-billing"><span>免小时费低消</span><strong>{{ hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum) }}</strong></div>
-            <div class="metric"><span>Codex保护</span><strong>{{ listing.codex_5h_limit_percent }}% / {{ listing.codex_7d_limit_percent }}%</strong></div>
+            <div class="metric metric-billing" :class="{ 'metric-price-danger': isRateMultiplierExpensive(listing) }">
+              <span class="metric-label"><Icon name="bolt" size="xs" />倍率</span>
+              <strong>{{ formatNumber(listing.rate_multiplier) }}x</strong>
+            </div>
+            <div class="metric metric-billing">
+              <span class="metric-label"><Icon name="creditCard" size="xs" />最低余额</span>
+              <strong>{{ formatNumber(listing.min_balance_required) }}</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label"><Icon name="users" size="xs" />账号并发</span>
+              <strong>{{ listing.account_concurrency }}</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label"><Icon name="user" size="xs" />单用户并发</span>
+              <strong>{{ listing.per_user_concurrency }}</strong>
+            </div>
+            <div class="metric metric-billing" :class="{ 'metric-price-danger': isHourlyRateExpensive(listing) }">
+              <span class="metric-label"><Icon name="clock" size="xs" />小时费</span>
+              <strong>{{ formatNumber(listing.hourly_rate) }}</strong>
+            </div>
+            <div class="metric metric-billing">
+              <span class="metric-label"><Icon name="shield" size="xs" />免小时费低消</span>
+              <strong>{{ hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum) }}</strong>
+            </div>
+            <div v-if="showOpenAIUsageWindows(listing)" class="metric">
+              <span class="metric-label"><Icon name="lock" size="xs" />Codex保护</span>
+              <strong>{{ listing.codex_5h_limit_percent }}% / {{ listing.codex_7d_limit_percent }}%</strong>
+            </div>
+            <div v-else-if="showAnthropicUsageWindows(listing)" class="metric">
+              <span class="metric-label"><Icon name="lock" size="xs" />Claude保护</span>
+              <strong>{{ anthropic5hLimitPercent(listing) }}% / {{ anthropic7dLimitPercent(listing) }}%</strong>
+            </div>
           </div>
 
-          <div class="listing-model-row">
-            <button
-              v-for="model in visibleModels(listing)"
-              :key="model"
-              type="button"
-              class="model-copy-chip"
-              :title="`复制 ${model}`"
-              @click="copyModelName(model)"
-            >
-              {{ model }}
-            </button>
-            <span v-if="hiddenModels(listing).length > 0" class="model-overflow-wrapper">
-              <button type="button" class="model-overflow-chip" :aria-label="`还有 ${hiddenModels(listing).length} 个模型`">
-                +{{ hiddenModels(listing).length }}
+          <div class="listing-bottom-bar">
+            <div class="listing-model-row">
+              <button
+                v-for="model in visibleModels(listing)"
+                :key="model"
+                type="button"
+                class="model-copy-chip"
+                :title="`复制 ${model}`"
+                @click="copyModelName(model)"
+              >
+                {{ model }}
               </button>
-              <span class="model-overflow-popover" role="tooltip">
-                <button
-                  v-for="model in hiddenModels(listing)"
-                  :key="model"
-                  type="button"
-                  class="model-overflow-model"
-                  :title="`复制 ${model}`"
-                  @click="copyModelName(model)"
-                >
-                  {{ model }}
+              <span v-if="hiddenModels(listing).length > 0" class="model-overflow-wrapper">
+                <button type="button" class="model-overflow-chip" :aria-label="`还有 ${hiddenModels(listing).length} 个模型`">
+                  +{{ hiddenModels(listing).length }}
                 </button>
+                <span class="model-overflow-popover" role="tooltip">
+                  <button
+                    v-for="model in hiddenModels(listing)"
+                    :key="model"
+                    type="button"
+                    class="model-overflow-model"
+                    :title="`复制 ${model}`"
+                    @click="copyModelName(model)"
+                  >
+                    {{ model }}
+                  </button>
+                </span>
               </span>
-            </span>
+            </div>
+
+            <div v-if="canShowListingJoinSection(listing)" class="listing-join-section">
+              <div v-if="listingEditLocked(listing)" class="edit-lock-strip">
+                <Icon name="exclamationCircle" size="sm" />
+                <span>账号配置正在编辑中，暂时不能加入使用，避免使用修改前的旧配置。</span>
+              </div>
+              <div class="listing-action-row">
+                <div v-if="singleModeApiKeyForListing(listing)" class="mode-key-readonly">
+                  <Icon name="key" size="sm" />
+                  <span>{{ singleModeApiKeyLabelForListing(listing) }}</span>
+                </div>
+                <select v-else v-model.number="selectedKeyByListing[listing.id]" class="input h-9" :disabled="modeKeysLoading || !modeKeysLoaded">
+                  <option :value="0">{{ modeApiKeyPlaceholderForListing(listing) }}</option>
+                  <option v-for="key in modeApiKeysForListing(listing)" :key="key.id" :value="key.id">{{ key.name || `Key #${key.id}` }}</option>
+                </select>
+                <div class="listing-timeout-row">
+                  <label class="idle-timeout-join idle-timeout-join-inline">
+                    <span>空闲退出</span>
+                    <div class="idle-timeout-input-row">
+                      <input
+                        v-model.number="idleTimeoutByListing[listing.id]"
+                        class="input h-9"
+                        type="number"
+                        min="1"
+                        :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
+                        step="1"
+                      />
+                      <span class="idle-timeout-join-unit">分钟</span>
+                    </div>
+                  </label>
+                  <div class="idle-timeout-inline-note">
+                    <Icon name="infoCircle" size="xs" />
+                    <span>{{ isOwnListing(listing) ? '默认 10 分钟。连续空闲到设定时间后会自动解除绑定，不能填 0。' : '默认 10 分钟。连续空闲到设定时间后会自动退出并停止占位，不能填 0。' }}</span>
+                  </div>
+                </div>
+                <button class="btn-primary h-9" type="button" :disabled="listingEditLocked(listing) || modeKeysLoading || joiningId === listing.id" @click="joinUse(listing)">
+                  {{ joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? '使用自己的账号' : '加入使用')) }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="canOpenMySpend(listing)" class="listing-spend-action-row">
+              <button
+                type="button"
+                class="btn-secondary h-9"
+                :title="mySpendButtonTitle(listing)"
+                @click="openMySpendDialog(listing)"
+              >
+                <Icon name="dollar" size="xs" class="mr-2" />
+                我的消费
+              </button>
+            </div>
           </div>
 
-          <div v-if="isManagementView" class="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm dark:border-dark-700 dark:bg-dark-800/60">
-            <div class="flex flex-col gap-1 text-gray-600 dark:text-dark-200">
-              <span>账号 ID：#{{ listing.account_id }}</span>
-              <span>更新：{{ formatDate(listing.updated_at) }}</span>
+          <template v-if="isManagementView">
+            <div class="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm dark:border-dark-700 dark:bg-dark-800/60">
+              <div class="flex flex-col gap-1 text-gray-600 dark:text-dark-200">
+                <span>账号 ID：#{{ listing.account_id }}</span>
+                <span>更新：{{ formatDate(listing.updated_at) }}</span>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="btn-secondary h-9"
+                  :disabled="managedActionId === listing.id"
+                  :title="listingEditLockedByOther(listing) ? listingEditLockLabel(listing) : ''"
+                  @click="requestOpenConfigEdit(listing)"
+                >
+                  <Icon name="edit" size="xs" class="mr-2" />
+                  编辑配置
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary h-9"
+                  :disabled="savingModelsId === listing.id"
+                  @click="openModelEditDialog(listing)"
+                >
+                  <Icon name="edit" size="xs" class="mr-2" />
+                  编辑模型
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary h-9"
+                  :disabled="managedActionId === listing.id"
+                  @click="openManagedAccountModal(listing, 'test')"
+                >
+                  <Icon name="play" size="xs" class="mr-2" />
+                  测试连接
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary h-9"
+                  :disabled="managedActionId === listing.id"
+                  @click="openManagedAccountModal(listing, 'stats')"
+                >
+                  <Icon name="chart" size="xs" class="mr-2" />
+                  统计
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary h-9"
+                  :disabled="managedActionId === listing.id"
+                  @click="openManagedAccountModal(listing, 'reauth')"
+                >
+                  <Icon name="link" size="xs" class="mr-2" />
+                  重新授权
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary h-9"
+                  :disabled="managedActionId === listing.id"
+                  @click="refreshManagedAccountToken(listing)"
+                >
+                  <Icon name="refresh" size="xs" class="mr-2" :class="{ 'animate-spin': managedActionId === listing.id }" />
+                  刷新 Token
+                </button>
+                <button
+                  v-if="hasRecoverableListingState(listing)"
+                  type="button"
+                  class="btn-secondary h-9 text-emerald-700 dark:text-emerald-200"
+                  :disabled="managedActionId === listing.id"
+                  @click="recoverManagedAccountState(listing)"
+                >
+                  <Icon name="sync" size="xs" class="mr-2" />
+                  恢复状态
+                </button>
+                <button
+                  v-if="canOwnerRelistListing(listing)"
+                  type="button"
+                  class="btn-primary h-9"
+                  :disabled="managingId === listing.id"
+                  title="重新上架前会自动测试账号可用性"
+                  @click="updateManagedListingStatus(listing, 'active')"
+                >
+                  <Icon name="play" size="xs" class="mr-2" />
+                  {{ managingId === listing.id ? '测试中...' : '重新上架' }}
+                </button>
+                <button
+                  v-if="authStore.isAdmin && listing.status !== 'active'"
+                  type="button"
+                  class="btn-primary h-9"
+                  :disabled="managingId === listing.id"
+                  @click="updateManagedListingStatus(listing, 'active')"
+                >
+                  <Icon name="play" size="xs" class="mr-2" />
+                  重新上架
+                </button>
+                <button
+                  v-if="authStore.isAdmin && listing.status === 'active'"
+                  type="button"
+                  class="btn-secondary h-9"
+                  :disabled="managingId === listing.id"
+                  @click="updateManagedListingStatus(listing, 'paused')"
+                >
+                  <Icon name="ban" size="xs" class="mr-2" />
+                  暂停
+                </button>
+                <button
+                  v-if="authStore.isAdmin && listing.status !== 'disabled'"
+                  type="button"
+                  class="btn-danger-soft h-9"
+                  :disabled="managingId === listing.id"
+                  @click="updateManagedListingStatus(listing, 'disabled')"
+                >
+                  <Icon name="xCircle" size="xs" class="mr-2" />
+                  下架
+                </button>
+              </div>
+              <div v-if="listingEditLocked(listing)" class="edit-lock-strip mt-3">
+                <Icon name="exclamationCircle" size="sm" />
+                <span>{{ listingEditLockLabel(listing) }}</span>
+              </div>
             </div>
-            <div class="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                class="btn-secondary h-9"
-                :disabled="managedActionId === listing.id"
-                :title="listingEditLockedByOther(listing) ? listingEditLockLabel(listing) : ''"
-                @click="requestOpenConfigEdit(listing)"
-              >
-                <Icon name="edit" size="xs" class="mr-2" />
-                编辑配置
-              </button>
-              <button
-                type="button"
-                class="btn-secondary h-9"
-                :disabled="savingModelsId === listing.id"
-                @click="openModelEditDialog(listing)"
-              >
-                <Icon name="edit" size="xs" class="mr-2" />
-                编辑模型
-              </button>
-              <button
-                type="button"
-                class="btn-secondary h-9"
-                :disabled="managedActionId === listing.id"
-                @click="openManagedAccountModal(listing, 'test')"
-              >
-                <Icon name="play" size="xs" class="mr-2" />
-                测试连接
-              </button>
-              <button
-                type="button"
-                class="btn-secondary h-9"
-                :disabled="managedActionId === listing.id"
-                @click="openManagedAccountModal(listing, 'stats')"
-              >
-                <Icon name="chart" size="xs" class="mr-2" />
-                统计
-              </button>
-              <button
-                type="button"
-                class="btn-secondary h-9"
-                :disabled="managedActionId === listing.id"
-                @click="openManagedAccountModal(listing, 'reauth')"
-              >
-                <Icon name="link" size="xs" class="mr-2" />
-                重新授权
-              </button>
-              <button
-                type="button"
-                class="btn-secondary h-9"
-                :disabled="managedActionId === listing.id"
-                @click="refreshManagedAccountToken(listing)"
-              >
-                <Icon name="refresh" size="xs" class="mr-2" :class="{ 'animate-spin': managedActionId === listing.id }" />
-                刷新 Token
-              </button>
-              <button
-                v-if="hasRecoverableListingState(listing)"
-                type="button"
-                class="btn-secondary h-9 text-emerald-700 dark:text-emerald-200"
-                :disabled="managedActionId === listing.id"
-                @click="recoverManagedAccountState(listing)"
-              >
-                <Icon name="sync" size="xs" class="mr-2" />
-                恢复状态
-              </button>
-              <button
-                v-if="canOwnerRelistListing(listing)"
-                type="button"
-                class="btn-primary h-9"
-                :disabled="managingId === listing.id"
-                title="重新上架前会自动测试账号可用性"
-                @click="updateManagedListingStatus(listing, 'active')"
-              >
-                <Icon name="play" size="xs" class="mr-2" />
-                {{ managingId === listing.id ? '测试中...' : '重新上架' }}
-              </button>
-              <button
-                v-if="authStore.isAdmin && listing.status !== 'active'"
-                type="button"
-                class="btn-primary h-9"
-                :disabled="managingId === listing.id"
-                @click="updateManagedListingStatus(listing, 'active')"
-              >
-                <Icon name="play" size="xs" class="mr-2" />
-                重新上架
-              </button>
-              <button
-                v-if="authStore.isAdmin && listing.status === 'active'"
-                type="button"
-                class="btn-secondary h-9"
-                :disabled="managingId === listing.id"
-                @click="updateManagedListingStatus(listing, 'paused')"
-              >
-                <Icon name="ban" size="xs" class="mr-2" />
-                暂停
-              </button>
-              <button
-                v-if="authStore.isAdmin && listing.status !== 'disabled'"
-                type="button"
-                class="btn-danger-soft h-9"
-                :disabled="managingId === listing.id"
-                @click="updateManagedListingStatus(listing, 'disabled')"
-              >
-                <Icon name="xCircle" size="xs" class="mr-2" />
-                下架
-              </button>
-            </div>
-            <div v-if="listingEditLocked(listing)" class="edit-lock-strip mt-3">
-              <Icon name="exclamationCircle" size="sm" />
-              <span>{{ listingEditLockLabel(listing) }}</span>
-            </div>
-          </div>
-          <div v-else-if="listing.current_membership_id" class="account-share-membership-panel">
+          </template>
+          <div v-if="listing.queue_membership_id" class="account-share-membership-panel">
             <div class="membership-status-head">
               <div>
-                <div class="font-medium">正在使用，绑定 Key #{{ listing.current_api_key_id }}</div>
-                <div class="mt-1 text-xs opacity-80">{{ idleTimeoutSummary(listing) }}</div>
+                <div class="font-medium">
+                  {{ listing.current_membership_id ? '正在使用' : '预约队列' }}，绑定 Key #{{ listing.queue_api_key_id || listing.current_api_key_id }}
+                </div>
+                <div class="mt-1 text-xs opacity-80">
+                  {{ listing.current_membership_id ? idleTimeoutSummary(listing) : queueIdleTimeoutSummary(listing) }}
+                </div>
               </div>
-              <span class="membership-status-pill">已加入</span>
+              <span :class="queueStatusPillClass(listing)">{{ queueStatusLabel(listing) }}</span>
             </div>
             <div class="membership-detail-grid">
+              <div v-if="listing.queue_rank">
+                <span>预约顺序</span>
+                <strong>第 {{ listing.queue_rank }} 位</strong>
+              </div>
               <div v-if="listing.current_joined_at">
-                <span>加入时间</span>
+                <span>激活时间</span>
                 <strong>{{ formatDate(listing.current_joined_at) }}</strong>
               </div>
               <div v-if="listing.current_last_request_at">
@@ -866,16 +1509,24 @@
                 <span>已结算到</span>
                 <strong>{{ formatDate(listing.current_billed_until) }}</strong>
               </div>
+              <div v-if="listing.current_membership_id && listing.hourly_fee_waiver_minimum > 0">
+                <span>低消核销</span>
+                <strong>最长 1 小时</strong>
+              </div>
+              <div v-if="listing.queue_dispatch_cooldown_until">
+                <span>失败冷却</span>
+                <strong>{{ formatRelativeUntil(listing.queue_dispatch_cooldown_until) }}</strong>
+              </div>
             </div>
             <div class="idle-timeout-control">
-              <label :for="`idle-timeout-current-${listing.id}`">空闲自动退出</label>
+              <label :for="`idle-timeout-current-${listing.id}`">激活后空闲退出</label>
               <div class="idle-timeout-row">
                 <input
                   :id="`idle-timeout-current-${listing.id}`"
                   v-model.number="idleTimeoutByListing[listing.id]"
                   class="input h-10"
                   type="number"
-                  min="0"
+                  min="1"
                   :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
                   step="1"
                 />
@@ -883,44 +1534,35 @@
                 <button
                   class="btn-secondary h-10"
                   type="button"
-                  :disabled="savingIdleTimeoutId === listing.current_membership_id"
+                  :disabled="savingIdleTimeoutId === listing.queue_membership_id"
                   @click="saveIdleTimeout(listing)"
                 >
                   保存
                 </button>
               </div>
+              <div class="idle-timeout-hint">{{ listing.current_membership_id ? (isOwnListing(listing) ? '连续空闲达到设定分钟数后会自动解除绑定，不能填 0。' : '连续空闲达到设定分钟数后会自动退出并停止占位，不能填 0。') : '该设置会在预约项被激活后生效，不能填 0。' }}</div>
             </div>
-            <button class="mt-3 h-9 rounded-lg bg-emerald-700 px-3 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60" type="button" :disabled="endingId === listing.current_membership_id" @click="openEndUseConfirm(listing)">
-              结束使用
-            </button>
-          </div>
-          <div v-else class="listing-join-section">
-            <div v-if="listingEditLocked(listing)" class="edit-lock-strip">
-              <Icon name="exclamationCircle" size="sm" />
-              <span>账号配置正在编辑中，暂时不能加入使用，避免使用修改前的旧配置。</span>
-            </div>
-            <div class="listing-action-row">
-              <div v-if="singleModeApiKey" class="mode-key-readonly">
-                <Icon name="key" size="sm" />
-                <span>{{ modeKeyLabel(singleModeApiKey) }}</span>
-              </div>
-              <select v-else v-model.number="selectedKeyByListing[listing.id]" class="input h-10" :disabled="modeKeysLoading || !modeKeysLoaded">
-                <option :value="0">{{ modeApiKeyPlaceholder }}</option>
-                <option v-for="key in modeApiKeys" :key="key.id" :value="key.id">{{ key.name || `Key #${key.id}` }}</option>
-              </select>
-              <label class="idle-timeout-join">
-                <span>空闲退出</span>
-                <input
-                  v-model.number="idleTimeoutByListing[listing.id]"
-                  class="input h-10"
-                  type="number"
-                  min="0"
-                  :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
-                  step="1"
-                />
-              </label>
-              <button class="btn-primary h-10" type="button" :disabled="listingEditLocked(listing) || modeKeysLoading || joiningId === listing.id" @click="joinUse(listing)">
-                {{ joiningId === listing.id ? '加入中' : (modeKeysLoading ? '加载 Key 中' : '加入使用') }}
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button
+                class="btn-secondary h-9"
+                type="button"
+                :disabled="!canMoveQueueItem(listing, -1)"
+                @click="moveQueueItem(listing, -1)"
+              >
+                <Icon name="chevronUp" size="xs" class="mr-2" />
+                上移
+              </button>
+              <button
+                class="btn-secondary h-9"
+                type="button"
+                :disabled="!canMoveQueueItem(listing, 1)"
+                @click="moveQueueItem(listing, 1)"
+              >
+                <Icon name="chevronDown" size="xs" class="mr-2" />
+                下移
+              </button>
+              <button class="h-9 rounded-lg bg-emerald-700 px-3 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60" type="button" :disabled="endingId === listing.queue_membership_id" @click="openEndUseConfirm(listing)">
+                {{ listing.current_membership_id ? '结束使用' : '移出预约' }}
               </button>
             </div>
           </div>
@@ -949,7 +1591,7 @@
       width="wide"
       @close="closeModelEditDialog"
     >
-      <ModelWhitelistSelector v-model="editingAllowedModels" platform="openai" />
+      <ModelWhitelistSelector v-model="editingAllowedModels" :platform="listingPlatform(editingModelListing)" />
 
       <template #footer>
         <button type="button" class="btn-secondary" :disabled="savingModelsId !== null" @click="closeModelEditDialog">取消</button>
@@ -971,7 +1613,7 @@
 
     <BaseDialog
       :show="pendingJoinConfirmation !== null"
-      title="确认加入共享账号"
+      :title="pendingJoinIsOwnerSelfUse ? '确认使用自己的账号' : '确认加入共享账号'"
       width="wide"
       :z-index="60"
       @close="closeJoinConfirmation"
@@ -983,7 +1625,7 @@
           </span>
           <div class="min-w-0">
             <strong>{{ listingDisplayName(pendingJoinListing) }}</strong>
-            <span>加入后该 API Key 会绑定到这个账号，请确认价格、并发和模型限制后再继续。</span>
+            <span>{{ pendingJoinIsOwnerSelfUse ? '这是你自己上架的账号，绑定后只按 0.005x 计算请求费用，不收小时费，也不占用共享席位。' : '加入后该 API Key 会绑定到这个账号，请确认价格、并发和模型限制后再继续。' }}</span>
           </div>
         </div>
 
@@ -995,25 +1637,25 @@
         </div>
 
         <div class="join-confirmation-grid">
-          <div class="join-confirmation-field">
+          <div v-if="isOpenAIListing(pendingJoinListing)" class="join-confirmation-field">
             <span>账号等级</span>
             <strong>{{ accountLevelBadgeLabel(pendingJoinListing) }}</strong>
           </div>
           <div class="join-confirmation-field" :class="{ 'join-price-danger': isRateMultiplierExpensive(pendingJoinListing) }">
             <span>倍率</span>
-            <strong>{{ formatNumber(pendingJoinListing.rate_multiplier) }}x</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? `${formatNumber(OWNER_SELF_USE_RATE_MULTIPLIER)}x` : `${formatNumber(pendingJoinListing.rate_multiplier)}x` }}</strong>
           </div>
           <div class="join-confirmation-field" :class="{ 'join-price-danger': isHourlyRateExpensive(pendingJoinListing) }">
             <span>小时费</span>
-            <strong>{{ formatNumber(pendingJoinListing.hourly_rate) }}</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? '不收取' : formatNumber(pendingJoinListing.hourly_rate) }}</strong>
           </div>
           <div class="join-confirmation-field">
             <span>免小时费低消</span>
-            <strong>{{ hourlyFeeWaiverLabel(pendingJoinListing.hourly_fee_waiver_minimum) }}</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? '不适用' : hourlyFeeWaiverLabel(pendingJoinListing.hourly_fee_waiver_minimum) }}</strong>
           </div>
           <div class="join-confirmation-field">
             <span>最低余额</span>
-            <strong>{{ formatNumber(pendingJoinListing.min_balance_required) }}</strong>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? '不校验' : formatNumber(pendingJoinListing.min_balance_required) }}</strong>
           </div>
           <div class="join-confirmation-field">
             <span>账号并发</span>
@@ -1031,10 +1673,19 @@
             <span>空闲退出</span>
             <strong>{{ pendingJoinIdleTimeoutLabel }}</strong>
           </div>
-          <div class="join-confirmation-field">
+          <div v-if="isOpenAIListing(pendingJoinListing)" class="join-confirmation-field">
             <span>Codex保护</span>
             <strong>{{ pendingJoinListing.codex_5h_limit_percent }}% / {{ pendingJoinListing.codex_7d_limit_percent }}%</strong>
           </div>
+          <div v-else-if="showAnthropicUsageWindows(pendingJoinListing)" class="join-confirmation-field">
+            <span>Claude保护</span>
+            <strong>{{ anthropic5hLimitPercent(pendingJoinListing) }}% / {{ anthropic7dLimitPercent(pendingJoinListing) }}%</strong>
+          </div>
+        </div>
+
+        <div class="join-usage-reminder">
+          <Icon name="infoCircle" size="sm" />
+          <span>{{ pendingJoinIsOwnerSelfUse ? `确认使用后，连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动解除绑定；自用期间不产生小时费和号主收益。` : `确认加入后，小时费按分钟预扣；低消按激活窗口核销，最长 1 小时，达标后退回该窗口预扣小时费。连续空闲达到 ${pendingJoinIdleTimeoutLabel} 会自动退出并停止占位。` }}</span>
         </div>
 
         <div class="join-model-confirmation">
@@ -1063,7 +1714,7 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          确认加入
+          {{ pendingJoinIsOwnerSelfUse ? '确认使用' : '确认加入' }}
         </button>
       </template>
     </BaseDialog>
@@ -1095,6 +1746,169 @@
           <Icon name="key" size="sm" class="mr-2" />
           去创建 API Key
         </button>
+      </template>
+    </BaseDialog>
+
+    <BaseDialog
+      :show="showMySpendDialog"
+      title="我的消费"
+      width="wide"
+      :z-index="65"
+      @close="closeMySpendDialog"
+    >
+      <div class="my-spend-panel">
+        <div v-if="mySpendListing" class="my-spend-context">
+          <span class="my-spend-context-icon">
+            <Icon name="dollar" size="md" />
+          </span>
+          <div class="min-w-0">
+            <span class="my-spend-eyebrow">{{ platformLabel(listingPlatform(mySpendListing)) }} · 共享账号 #{{ mySpendListing.id }}</span>
+            <strong>{{ mySpendListing.account_name || `共享账号 #${mySpendListing.id}` }}</strong>
+            <small>
+              号主：{{ mySpendListing.owner_username || `用户 ${mySpendListing.owner_user_id}` }}
+              <template v-if="mySpendMembershipID(mySpendListing) > 0">
+                · 使用记录 #{{ mySpendMembershipID(mySpendListing) }}
+              </template>
+            </small>
+          </div>
+        </div>
+
+        <div class="my-spend-toolbar">
+          <div class="my-spend-range-tabs" role="tablist" aria-label="消费统计范围">
+            <button
+              v-for="option in MY_SPEND_RANGE_OPTIONS"
+              :key="option.value"
+              type="button"
+              :class="{ active: mySpendRange === option.value }"
+              :aria-selected="mySpendRange === option.value"
+              role="tab"
+              @click="setMySpendRange(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <button type="button" class="btn-secondary h-9" :disabled="mySpendLoading || !mySpendListing" @click="loadMySpendSummary">
+            <Icon name="refresh" size="xs" class="mr-2" />
+            刷新
+          </button>
+        </div>
+
+        <div v-if="mySpendError" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
+          <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <span>{{ mySpendError }}</span>
+        </div>
+
+        <div v-if="mySpendLoading && !mySpendSummary" class="my-spend-loading">
+          正在加载消费统计...
+        </div>
+
+        <template v-else-if="mySpendSummary">
+          <div class="my-spend-window">
+            <div>
+              <span>{{ mySpendRangeLabel(mySpendSummary.range) }}</span>
+              <strong>{{ mySpendWindowLabel(mySpendSummary) }}</strong>
+            </div>
+            <div>
+              <span>最近入账</span>
+              <strong>{{ mySpendLastActivityLabel(mySpendSummary) }}</strong>
+            </div>
+          </div>
+
+          <div class="my-spend-metric-grid">
+            <div v-for="metric in mySpendMetrics" :key="metric.key" class="my-spend-metric" :class="`my-spend-metric-${metric.tone}`">
+              <span>
+                <Icon :name="metric.icon" size="xs" />
+                {{ metric.label }}
+              </span>
+              <strong>{{ metric.value }}</strong>
+              <small>{{ metric.note }}</small>
+            </div>
+          </div>
+
+          <div class="my-spend-detail-grid">
+            <div>
+              <span>统计账号</span>
+              <strong>{{ mySpendAccountName(mySpendSummary) }}</strong>
+            </div>
+            <div>
+              <span>绑定 Key</span>
+              <strong>{{ mySpendSummary.membership ? `Key #${mySpendSummary.membership.api_key_id}` : '-' }}</strong>
+            </div>
+            <div>
+              <span>使用状态</span>
+              <strong>{{ mySpendStatusLabel(mySpendSummary.membership?.status) }}</strong>
+            </div>
+            <div>
+              <span>加入时间</span>
+              <strong>{{ formatDate(mySpendSummary.membership?.joined_at) }}</strong>
+            </div>
+            <div>
+              <span>请求均价</span>
+              <strong>{{ mySpendAverageRequestCost(mySpendSummary) }}</strong>
+            </div>
+            <div>
+              <span>低消门槛</span>
+              <strong>{{ mySpendSummary.membership ? hourlyFeeWaiverLabel(mySpendSummary.membership.waiver_minimum) : '-' }}</strong>
+            </div>
+          </div>
+
+          <div class="my-spend-hourly-panel">
+            <div>
+              <span>小时费预扣</span>
+              <strong>{{ formatSpendCost(mySpendSummary.hourly_charge) }}</strong>
+            </div>
+            <div>
+              <span>普通退回</span>
+              <strong>{{ formatSpendCost(mySpendSummary.hourly_refund) }}</strong>
+            </div>
+            <div>
+              <span>低消退回</span>
+              <strong>{{ formatSpendCost(mySpendSummary.hourly_waiver_refund) }}</strong>
+            </div>
+            <div>
+              <span>小时费净扣</span>
+              <strong>{{ formatSpendCost(mySpendSummary.hourly_net_cost) }}</strong>
+            </div>
+          </div>
+
+          <div class="my-spend-breakdown">
+            <div class="my-spend-section-head">
+              <div>
+                <strong>按模型请求费用</strong>
+                <small>仅统计账号模式请求消费，小时费在上方单独列出。</small>
+              </div>
+            </div>
+            <div v-if="mySpendSummary.model_breakdown.length === 0" class="my-spend-empty">
+              当前范围内暂无请求消费记录。
+            </div>
+            <div v-else class="my-spend-table-wrap">
+              <table class="my-spend-table">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>请求数</th>
+                    <th>Token</th>
+                    <th>请求费用</th>
+                    <th>均价</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in mySpendSummary.model_breakdown" :key="item.model">
+                    <td>{{ item.model }}</td>
+                    <td>{{ formatWholeNumber(item.request_count) }}</td>
+                    <td>{{ formatWholeNumber(item.total_tokens) }}</td>
+                    <td>{{ formatSpendCost(item.request_cost) }}</td>
+                    <td>{{ formatSpendCost(item.average_request_cost) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <template #footer>
+        <button type="button" class="btn-secondary" @click="closeMySpendDialog">关闭</button>
       </template>
     </BaseDialog>
 
@@ -1158,7 +1972,7 @@
               <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <label class="field">
                   <span>账号名称</span>
-                  <input v-model="editForm.name" class="input" placeholder="OpenAI共享账号" />
+                  <input v-model="editForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(editingConfigListing)]" />
                   <small :class="editAccountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
                     {{ editAccountNameValidationMessage || '名称必须唯一，且不能包含空格、换行或制表符。' }}
                   </small>
@@ -1265,11 +2079,11 @@
                 <div class="field">
                   <span>模型白名单</span>
                   <div class="model-selector-shell">
-                    <ModelWhitelistSelector v-model="editAllowedModels" platform="openai" />
+                    <ModelWhitelistSelector v-model="editAllowedModels" :platform="listingPlatform(editingConfigListing)" />
                   </div>
                 </div>
 
-                <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <div v-if="listingPlatform(editingConfigListing) === 'openai'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <label class="field">
                     <span>Codex 5h 保护 %</span>
                     <input v-model.number="editForm.codex_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
@@ -1279,6 +2093,16 @@
                     <input v-model.number="editForm.codex_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                 </div>
+                <div v-else-if="listingPlatform(editingConfigListing) === 'anthropic'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <label class="field">
+                    <span>Claude 5h 保护 %</span>
+                    <input v-model.number="editForm.anthropic_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                  <label class="field">
+                    <span>Claude 7d 保护 %</span>
+                    <input v-model.number="editForm.anthropic_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                </div>
               </div>
 
               <div v-if="editConcurrencyNotice" class="notice-row mt-3">
@@ -1286,7 +2110,7 @@
                 <span>{{ editConcurrencyNotice }}</span>
               </div>
 
-              <label class="toggle-row mt-3">
+              <label v-if="listingPlatform(editingConfigListing) === 'openai'" class="toggle-row mt-3">
                 <input v-model="editForm.codex_cli_only" type="checkbox" />
                 <span>
                   <strong>仅允许 Codex 官方客户端</strong>
@@ -1365,6 +2189,167 @@
       @cancel="cancelEndUse"
     />
 
+    <BaseDialog
+      :show="pendingReview !== null"
+      title="为本次使用评分"
+      width="wide"
+      :z-index="70"
+      @close="closeReviewDialog"
+    >
+      <div v-if="pendingReview" class="space-y-5">
+        <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/60">
+          <div class="flex flex-col gap-1">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-300">{{ platformLabel(listingPlatform(pendingReview.listing)) }}</span>
+            <strong class="text-base text-gray-900 dark:text-dark-50">{{ listingDisplayName(pendingReview.listing) }}</strong>
+            <span class="text-sm text-gray-500 dark:text-dark-300">号主：{{ ownerDisplayName(pendingReview.listing) }}</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-dark-100">评分</label>
+          <div class="grid grid-cols-6 gap-2 sm:grid-cols-11">
+            <button
+              v-for="score in reviewScoreOptions"
+              :key="score"
+              type="button"
+              class="rounded-lg border px-0 py-2 text-sm font-semibold transition-colors"
+              :class="pendingReview.score === score ? 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-500/10 dark:text-primary-200' : 'border-gray-200 bg-white text-gray-700 hover:border-primary-300 dark:border-dark-700 dark:bg-dark-900 dark:text-dark-100'"
+              @click="pendingReview.score = score"
+            >
+              {{ score }}
+            </button>
+          </div>
+        </div>
+
+        <label class="field">
+          <span>留言</span>
+          <textarea
+            v-model="pendingReview.comment"
+            class="input min-h-[120px] resize-y"
+            maxlength="1000"
+            placeholder="可以留空；填写后会先进入平台审核"
+          ></textarea>
+          <small>{{ pendingReview.comment.length }}/1000</small>
+        </label>
+
+        <div v-if="pendingReview.error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+          {{ pendingReview.error }}
+        </div>
+      </div>
+
+      <template #footer>
+        <button type="button" class="btn-secondary" :disabled="pendingReview?.submitting" @click="closeReviewDialog">暂不评分</button>
+        <button type="button" class="btn-primary" :disabled="pendingReview?.submitting || pendingReview?.score === null" @click="submitReview">
+          <Icon v-if="!pendingReview?.submitting" name="checkCircle" size="sm" class="mr-2" />
+          <svg v-else class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          提交评分
+        </button>
+      </template>
+    </BaseDialog>
+
+    <BaseDialog
+      :show="ownerDialog.show"
+      :title="ownerDialog.ownerUsername ? `${ownerDialog.ownerUsername} 的账号` : '号主账号'"
+      width="extra-wide"
+      :z-index="70"
+      @close="closeOwnerDialog"
+    >
+      <div class="space-y-4">
+        <div v-if="ownerDialog.error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+          {{ ownerDialog.error }}
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="btn-secondary h-9"
+            :class="ownerDialog.tab === 'listings' && 'border-primary-300 bg-primary-50 text-primary-700 dark:border-primary-500/40 dark:bg-primary-500/10 dark:text-primary-200'"
+            @click="ownerDialog.tab = 'listings'"
+          >
+            <Icon name="grid" size="xs" class="mr-2" />
+            账号
+          </button>
+          <button
+            type="button"
+            class="btn-secondary h-9"
+            :class="ownerDialog.tab === 'reviews' && 'border-primary-300 bg-primary-50 text-primary-700 dark:border-primary-500/40 dark:bg-primary-500/10 dark:text-primary-200'"
+            @click="ownerDialog.tab = 'reviews'"
+          >
+            <Icon name="chat" size="xs" class="mr-2" />
+            评论
+          </button>
+        </div>
+
+        <div v-if="ownerDialog.tab === 'listings'" class="space-y-3">
+          <div v-if="ownerDialog.loadingListings" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
+            正在加载账号...
+          </div>
+          <div v-else-if="ownerDialog.listings.length === 0" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
+            暂无可展示账号
+          </div>
+          <div v-else class="grid gap-3 md:grid-cols-2">
+            <button
+              v-for="item in ownerDialog.listings"
+              :key="item.id"
+              type="button"
+              class="rounded-lg border border-gray-200 bg-white p-4 text-left transition-colors hover:border-primary-300 dark:border-dark-700 dark:bg-dark-900"
+              @click="searchOwnerFromDialog"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <strong class="block truncate text-sm text-gray-900 dark:text-dark-50">{{ listingDisplayName(item) }}</strong>
+                  <span class="mt-1 block text-xs text-gray-500 dark:text-dark-300">{{ platformLabel(listingPlatform(item)) }} · {{ listingRatingLabel(item) }}</span>
+                </div>
+                <span :class="statusBadgeClass(item.status)">{{ statusLabel(item.status) }}</span>
+              </div>
+              <div class="mt-3 grid grid-cols-3 gap-2 text-xs text-gray-600 dark:text-dark-300">
+                <span>席位 {{ item.active_seats }}/{{ item.seat_limit }}</span>
+                <span>倍率 {{ formatNumber(item.rate_multiplier) }}x</span>
+                <span>小时费 {{ formatNumber(item.hourly_rate) }}</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div v-else class="space-y-3">
+          <div v-if="ownerDialog.loadingReviews" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
+            正在加载评论...
+          </div>
+          <div v-else-if="ownerDialog.reviews.length === 0" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
+            暂无已审核评论
+          </div>
+          <div v-else class="space-y-3">
+            <article
+              v-for="review in ownerDialog.reviews"
+              :key="review.id"
+              class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <strong class="text-sm text-gray-900 dark:text-dark-50">{{ formatRating(review.score) }}/10</strong>
+                <span class="text-xs text-gray-500 dark:text-dark-300">{{ formatDate(review.created_at) }}</span>
+              </div>
+              <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-dark-100">{{ review.comment }}</p>
+              <div class="mt-3 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-dark-300">
+                <span>{{ review.account_name || '共享账号' }}</span>
+                <span v-if="review.consumer_username">来自 {{ review.consumer_username }}</span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <button type="button" class="btn-primary" @click="searchOwnerFromDialog">
+          <Icon name="search" size="sm" class="mr-2" />
+          在广场搜索该号主
+        </button>
+        <button type="button" class="btn-secondary" @click="closeOwnerDialog">关闭</button>
+      </template>
+    </BaseDialog>
+
     <ConfirmDialog
       :show="pendingForceEditListing !== null"
       title="强制编辑使用中账号"
@@ -1381,13 +2366,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { accountShareAPI, type AccountShareListing, type AccountShareListingFilters, type AccountShareListingStatus, type AccountShareListingTab } from '@/api/accountShare'
+import { accountShareAPI, type AccountShareListing, type AccountShareListingFeatureTag, type AccountShareListingFilters, type AccountShareListingSortBy, type AccountShareListingSortKey, type AccountShareListingSortOrder, type AccountShareListingStatus, type AccountShareListingTab, type AccountShareMembership, type AccountShareMySpendRange, type AccountShareMySpendSummary, type AccountShareRecommendationCandidate, type AccountShareRecommendationResult, type AccountShareRecommendationUsageProfile, type AccountShareReview, type UpdateAccountShareListingRequest } from '@/api/accountShare'
 import { accountsAPI, adminAPI, keysAPI, userGroupsAPI } from '@/api'
 import type { Account, AccountLevel, AccountUsageStatsResponse, ApiKey, Group, Proxy, ProxyProtocol, UsageProgress } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
-import { extractApiErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -1405,25 +2390,47 @@ interface FilterOption {
   key: string
   label: string
   tab: AccountShareListingTab
-  seatLimit?: number
 }
 
 type ListingStatusFilterValue = AccountShareListingStatus | 'available' | 'all' | ''
 type AccountLevelFilterValue = AccountLevel | 'all' | ''
+type ListingSortKey = AccountShareListingSortKey
 
-interface TextRangeFilter {
-  min: string | number
-  max: string | number
+interface ListingSortOption {
+  key: ListingSortKey
+  label: string
+  shortLabel?: string
+  sortBy?: AccountShareListingSortBy
+  sortOrder?: AccountShareListingSortOrder
+}
+
+interface ListingSortFieldOption {
+  sortBy: AccountShareListingSortBy
+  label: string
+  ascLabel: string
+  descLabel: string
+}
+
+interface ListingFeatureTagOption {
+  value: AccountShareListingFeatureTag
+  label: string
 }
 
 interface ListingFilterState {
   status: ListingStatusFilterValue
   accountLevel: AccountLevelFilterValue
-  perUserConcurrency: TextRangeFilter
-  minBalance: TextRangeFilter
-  hourlyRate: TextRangeFilter
-  hourlyFeeWaiver: TextRangeFilter
+  sortKeys: ListingSortKey[]
+  seatLimits: number[]
+  featureTags: AccountShareListingFeatureTag[]
   models: string[]
+}
+
+type ListingFilterPopover = 'status' | 'level' | 'seat' | 'feature' | 'model'
+
+interface ActiveFilterChip {
+  key: string
+  label: string
+  remove: () => void
 }
 
 interface CreateFormState {
@@ -1439,6 +2446,8 @@ interface CreateFormState {
   codex_cli_only: boolean
   codex_5h_limit_percent: number
   codex_7d_limit_percent: number
+  anthropic_5h_limit_percent: number
+  anthropic_7d_limit_percent: number
 }
 
 interface OAuthFlowInstance {
@@ -1460,6 +2469,32 @@ interface UserProxyFormState {
 type ManagedAccountModalAction = 'test' | 'stats' | 'reauth'
 type ProxyTargetForm = 'create' | 'edit'
 type AccountShareActionErrorAction = 'create-mode-key' | null
+type AccountSharePlatform = 'openai' | 'anthropic'
+type RecommendationPresetKey = 'light' | 'balanced' | 'heavy' | 'history'
+type MySpendMetricTone = 'total' | 'request' | 'hourly' | 'usage'
+type MySpendMetricIcon = 'dollar' | 'creditCard' | 'clock' | 'chart'
+
+interface RecommendationPreset {
+  key: RecommendationPresetKey
+  label: string
+  request_count: number
+  active_hours: number
+  input_tokens_per_request: number
+  output_tokens_per_request: number
+  cache_creation_tokens_per_request: number
+  cache_read_tokens_per_request: number
+}
+
+interface RecommendationFormState {
+  api_key_id: number
+  model: string
+  request_count: number
+  active_hours: number
+  input_tokens_per_request: number
+  output_tokens_per_request: number
+  cache_creation_tokens_per_request: number
+  cache_read_tokens_per_request: number
+}
 
 interface PendingJoinConfirmation {
   listing: AccountShareListing
@@ -1467,34 +2502,156 @@ interface PendingJoinConfirmation {
   idleTimeoutMinutes: number
 }
 
+interface PendingEndUseState {
+  membershipID: number
+  apiKeyID?: number
+  status?: string
+  listing: AccountShareListing
+}
+
+interface ReviewDialogState {
+  membershipID: number
+  listing: AccountShareListing
+  score: number | null
+  comment: string
+  submitting: boolean
+  error: string
+}
+
+interface MySpendRangeOption {
+  value: AccountShareMySpendRange
+  label: string
+}
+
+interface MySpendMetric {
+  key: string
+  label: string
+  value: string
+  note: string
+  icon: MySpendMetricIcon
+  tone: MySpendMetricTone
+}
+
+type OwnerDialogTab = 'listings' | 'reviews'
+
 const DEFAULT_ACCOUNT_CONCURRENCY = 20
 const DEFAULT_PER_USER_CONCURRENCY = 5
 const DEFAULT_HOURLY_RATE = 0.2
+const DEFAULT_ACCOUNT_SHARE_IDLE_TIMEOUT_MINUTES = 10
 const PLUS_EXPENSIVE_RATE_MULTIPLIER = 0.15
 const PRO_EXPENSIVE_RATE_MULTIPLIER = 0.25
 const EXPENSIVE_HOURLY_RATE = 2
+const OWNER_SELF_USE_RATE_MULTIPLIER = 0.005
 const MAX_ACCOUNT_CONCURRENCY = 50
 const ACCOUNT_SHARE_MIN_SEATS = 2
 const ACCOUNT_SHARE_MAX_SEATS = 12
-const ACCOUNT_NAME_BASE = 'OpenAI共享账号'
 const PROXY_PURCHASE_URL = 'https://www.seekproxy.com/user/reg?invite_id=105978'
-const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex-auto-review']
+const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label: string }> = [
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' }
+]
+const ACCOUNT_NAME_BASE_BY_PLATFORM: Record<AccountSharePlatform, string> = {
+  openai: 'OpenAI共享账号',
+  anthropic: 'Anthropic共享账号'
+}
+const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> = {
+  openai: 'OpenAI账号模式',
+  anthropic: 'Anthropic账号模式'
+}
+const DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM: Record<AccountSharePlatform, string[]> = {
+  openai: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex-auto-review'],
+  anthropic: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-fable-5', 'claude-opus-4-6', 'claude-haiku-4-5']
+}
+const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 5
+const recommendationPresets: RecommendationPreset[] = [
+  {
+    key: 'light',
+    label: '轻量',
+    request_count: 100,
+    active_hours: 1,
+    input_tokens_per_request: 1000,
+    output_tokens_per_request: 400,
+    cache_creation_tokens_per_request: 0,
+    cache_read_tokens_per_request: 0
+  },
+  {
+    key: 'balanced',
+    label: '均衡',
+    request_count: 500,
+    active_hours: 2,
+    input_tokens_per_request: 3000,
+    output_tokens_per_request: 1000,
+    cache_creation_tokens_per_request: 0,
+    cache_read_tokens_per_request: 500
+  },
+  {
+    key: 'heavy',
+    label: '重度',
+    request_count: 3000,
+    active_hours: 8,
+    input_tokens_per_request: 8000,
+    output_tokens_per_request: 2500,
+    cache_creation_tokens_per_request: 500,
+    cache_read_tokens_per_request: 3000
+  }
+]
 const ACCOUNT_SHARE_PAGE_SIZE = 10
 const MODEL_PREVIEW_LIMIT = 5
 const ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES = 10080
+const MY_SPEND_RANGE_OPTIONS: MySpendRangeOption[] = [
+  { value: 'current_membership', label: '本次使用' },
+  { value: 'today', label: '今天' },
+  { value: '7d', label: '近7天' }
+]
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const router = useRouter()
 const { copyToClipboard } = useClipboard()
 const seatOptions = Array.from({ length: ACCOUNT_SHARE_MAX_SEATS - ACCOUNT_SHARE_MIN_SEATS + 1 }, (_, index) => index + ACCOUNT_SHARE_MIN_SEATS)
+const reviewScoreOptions = Array.from({ length: 11 }, (_, score) => score)
 const filters: FilterOption[] = [
-  { key: 'using', label: '正在使用', tab: 'using' },
+  { key: 'using', label: '使用/预约', tab: 'using' },
   { key: 'history', label: '历史使用', tab: 'history' },
-  { key: 'all', label: '全部', tab: 'all' },
-  ...seatOptions.map((seat): FilterOption => ({ key: `seat-${seat}`, label: `${seat}人`, tab: 'all', seatLimit: seat }))
+  { key: 'all', label: '全部', tab: 'all' }
 ]
 const ownerFilter: FilterOption = { key: 'mine', label: '我的账号', tab: 'mine' }
+const listingSortFieldOptions: ListingSortFieldOption[] = [
+  { sortBy: 'account_concurrency', label: '账号并发', ascLabel: '从小到大', descLabel: '从大到小' },
+  { sortBy: 'per_user_concurrency', label: '单人并发', ascLabel: '从小到大', descLabel: '从大到小' },
+  { sortBy: 'min_balance_required', label: '最低余额', ascLabel: '从小到大', descLabel: '从大到小' },
+  { sortBy: 'hourly_rate', label: '小时费', ascLabel: '从小到大', descLabel: '从大到小' },
+  { sortBy: 'hourly_fee_waiver', label: '免小时低消', ascLabel: '从小到大', descLabel: '从大到小' },
+  { sortBy: 'rate_multiplier', label: '倍率', ascLabel: '从小到大', descLabel: '从大到小' },
+  { sortBy: 'remaining_seats', label: '剩余席位', ascLabel: '从少到多', descLabel: '从多到少' },
+  { sortBy: 'rating', label: '评分', ascLabel: '从低到高', descLabel: '从高到低' },
+  { sortBy: 'updated_at', label: '更新时间', ascLabel: '最早优先', descLabel: '最近优先' }
+]
+const listingSortOptions: ListingSortOption[] = [
+  ...listingSortFieldOptions.flatMap(field => [
+    {
+      key: buildListingSortKey(field.sortBy, 'asc'),
+      label: `${field.label}${field.ascLabel}`,
+      shortLabel: `${field.label} ↑`,
+      sortBy: field.sortBy,
+      sortOrder: 'asc' as const
+    },
+    {
+      key: buildListingSortKey(field.sortBy, 'desc'),
+      label: `${field.label}${field.descLabel}`,
+      shortLabel: `${field.label} ↓`,
+      sortBy: field.sortBy,
+      sortOrder: 'desc' as const
+    }
+  ])
+]
+const listingFeatureTagOptions: ListingFeatureTagOption[] = [
+  { value: 'hourly_fee_waiver', label: '满低消免小时费' },
+  { value: 'image_generation', label: '支持生图' },
+  { value: 'codex_cli_only', label: '仅客户端' },
+  { value: 'non_codex_cli_only', label: '非仅客户端' },
+  { value: 'no_hourly_fee', label: '无小时费' }
+]
 const listingStatusFilterOptions: Array<{ value: ListingStatusFilterValue; label: string }> = [
   { value: '', label: '默认状态' },
   { value: 'available', label: '可用账号' },
@@ -1515,14 +2672,16 @@ const accountShareJoinErrorMessages: Record<string, string> = {
   ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: '该共享账号当前不可加入，请换一个账号或稍后再试',
   ACCOUNT_SHARE_ALREADY_USING: '你当前已有正在使用的共享账号，请先结束后再加入新的账号',
   ACCOUNT_SHARE_API_KEY_ALREADY_BOUND: '当前账号模式 Key 已绑定其他共享账号，请先结束原使用记录',
-  ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: '请选择绑定「OpenAI账号模式」分组的 API Key',
+  ACCOUNT_SHARE_QUEUE_FULL: '当前账号模式 Key 的预约列表已满，最多只能保留 5 个账号',
+  ACCOUNT_SHARE_QUEUE_INVALID: '预约列表顺序无效，请刷新后重试',
+  ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: '请选择绑定对应平台账号模式分组的 API Key',
   ACCOUNT_SHARE_LISTING_NOT_FOUND: '该共享账号不存在或已下架，请刷新账号广场后再试',
   ACCOUNT_SHARE_LISTING_NOT_ACTIVE: '该共享账号当前未上架，暂时不能加入',
   ACCOUNT_SHARE_LISTING_FULL: '该共享账号席位已满，请换一个账号',
   ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM: '余额低于该账号最低要求，暂时不能加入',
   ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE: '账号模式分组尚未配置，请联系管理员处理',
   ACCOUNT_SHARE_MODE_GROUP_UNBOUND: '当前账号模式分组未绑定共享账号，请先在账号广场加入一个账号',
-  ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT: '空闲自动退出时间必须在 0-10080 分钟之间',
+  ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT: '空闲自动退出时间必须在 1-10080 分钟之间',
   ACCOUNT_SHARE_MODE_PREPAY_INSUFFICIENT: '余额不足以预付本次使用，请充值后再试',
   ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED: '该共享账号当前单用户并发已达到上限，请稍后再试',
   ACCOUNT_SHARE_OWNER_CANNOT_JOIN: '不能加入自己上架的共享账号',
@@ -1532,9 +2691,41 @@ const accountShareJoinErrorMessages: Record<string, string> = {
   SERVICE_UNAVAILABLE: '账号广场服务暂时不可用，请稍后再试',
   USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
 }
+const accountShareRecommendationErrorMessages: Record<string, string> = {
+  ACCOUNT_SHARE_RECOMMENDATION_INVALID: '测算参数无效，请检查模型、请求次数、使用时长和 token 输入',
+  ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: '请选择绑定对应平台账号模式分组的 API Key',
+  API_KEY_NOT_FOUND: '该 API Key 不存在或已被删除，请重新选择',
+  SERVICE_UNAVAILABLE: '账号推荐服务暂时不可用，请稍后再试',
+  USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+}
+
+function buildDefaultRecommendationForm(): RecommendationFormState {
+  const preset = recommendationPresets[1]
+  return {
+    api_key_id: 0,
+    model: DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM.openai[0],
+    request_count: preset.request_count,
+    active_hours: preset.active_hours,
+    input_tokens_per_request: preset.input_tokens_per_request,
+    output_tokens_per_request: preset.output_tokens_per_request,
+    cache_creation_tokens_per_request: preset.cache_creation_tokens_per_request,
+    cache_read_tokens_per_request: preset.cache_read_tokens_per_request
+  }
+}
 
 const activeFilter = ref<FilterOption>(filters[2])
+const activeListingPlatform = ref<AccountSharePlatform>('openai')
 const listings = ref<AccountShareListing[]>([])
+const selectedRecommendationPreset = ref<RecommendationPresetKey>('balanced')
+const recommendationForm = reactive<RecommendationFormState>(buildDefaultRecommendationForm())
+const recommendationLoading = ref(false)
+const recommendationUsageProfileLoading = ref(false)
+const recommendationUsageProfileMessage = ref('')
+const recommendationError = ref('')
+const recommendationResult = ref<AccountShareRecommendationResult | null>(null)
+const showUsageGuideDialog = ref(false)
+const showRecommendationDialog = ref(false)
+const queueMembershipsByApiKey = ref<Record<number, AccountShareMembership[]>>({})
 const pagination = reactive({
   page: 1,
   page_size: ACCOUNT_SHARE_PAGE_SIZE,
@@ -1556,6 +2747,7 @@ const actionErrorDialog = reactive<{
 })
 const createErrorMessage = ref('')
 const showCreate = ref(false)
+const createPlatform = ref<AccountSharePlatform>('openai')
 const authURL = ref('')
 const authSessionID = ref('')
 const creating = ref(false)
@@ -1563,7 +2755,27 @@ const generatingOAuthURL = ref(false)
 const joiningId = ref<number | null>(null)
 const pendingJoinConfirmation = ref<PendingJoinConfirmation | null>(null)
 const endingId = ref<number | null>(null)
-const pendingEndUse = ref<{ membershipID: number; apiKeyID?: number } | null>(null)
+const pendingEndUse = ref<PendingEndUseState | null>(null)
+const pendingReview = ref<ReviewDialogState | null>(null)
+const ownerDialog = reactive({
+  show: false,
+  ownerUserID: 0,
+  ownerUsername: '',
+  sourceListing: null as AccountShareListing | null,
+  tab: 'listings' as OwnerDialogTab,
+  loadingListings: false,
+  loadingReviews: false,
+  listings: [] as AccountShareListing[],
+  reviews: [] as AccountShareReview[],
+  error: ''
+})
+const showMySpendDialog = ref(false)
+const mySpendListing = ref<AccountShareListing | null>(null)
+const mySpendRange = ref<AccountShareMySpendRange>('current_membership')
+const mySpendSummary = ref<AccountShareMySpendSummary | null>(null)
+const mySpendLoading = ref(false)
+const mySpendError = ref('')
+const reorderingQueueId = ref<number | null>(null)
 const pendingForceEditListing = ref<AccountShareListing | null>(null)
 const managingId = ref<number | null>(null)
 const managedActionId = ref<number | null>(null)
@@ -1589,7 +2801,10 @@ const selectedKeyByListing = reactive<Record<number, number>>({})
 const idleTimeoutByListing = reactive<Record<number, number>>({})
 const savingIdleTimeoutId = ref<number | null>(null)
 const availableGroups = ref<Group[]>([])
-const modeApiKeys = ref<ApiKey[]>([])
+const modeApiKeysByPlatform = reactive<Record<AccountSharePlatform, ApiKey[]>>({
+  openai: [],
+  anthropic: []
+})
 const modeKeysLoading = ref(false)
 const modeKeysLoaded = ref(false)
 const proxies = ref<Proxy[]>([])
@@ -1598,6 +2813,8 @@ const proxyLoading = ref(false)
 const proxyLoadMessage = ref('')
 const searchQuery = ref('')
 const modelFilterInput = ref('')
+const filterPanelRef = ref<HTMLElement | null>(null)
+const openFilterPopover = ref<ListingFilterPopover | null>(null)
 const oauthFlowRef = ref<OAuthFlowInstance | null>(null)
 const showProxyDialog = ref(false)
 const savingProxy = ref(false)
@@ -1611,14 +2828,15 @@ let editSessionRenewTimer: number | null = null
 let suppressNextSearchRefresh = false
 let listingsRequestController: AbortController | null = null
 let listingsRequestSeq = 0
+let mySpendRequestController: AbortController | null = null
+let mySpendRequestSeq = 0
 
 const listingFilters = reactive<ListingFilterState>({
   status: '',
   accountLevel: 'all',
-  perUserConcurrency: { min: '', max: '' },
-  minBalance: { min: '', max: '' },
-  hourlyRate: { min: '', max: '' },
-  hourlyFeeWaiver: { min: '', max: '' },
+  sortKeys: [],
+  seatLimits: [],
+  featureTags: [],
   models: []
 })
 
@@ -1634,7 +2852,7 @@ const proxyForm = reactive<UserProxyFormState>({
 
 function buildDefaultCreateForm(): CreateFormState {
   return {
-    name: suggestedAccountName(),
+    name: suggestedAccountName(createPlatform.value),
     proxy_id: null,
     concurrency: DEFAULT_ACCOUNT_CONCURRENCY,
     seat_limit: 2,
@@ -1645,39 +2863,130 @@ function buildDefaultCreateForm(): CreateFormState {
     min_balance_required: 1,
     codex_cli_only: true,
     codex_5h_limit_percent: 100,
-    codex_7d_limit_percent: 100
+    codex_7d_limit_percent: 100,
+    anthropic_5h_limit_percent: 100,
+    anthropic_7d_limit_percent: 100
   }
 }
 
 const createForm = reactive<CreateFormState>(buildDefaultCreateForm())
 const editForm = reactive<CreateFormState>(buildDefaultCreateForm())
-const allowedModels = ref<string[]>([...DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS])
+const allowedModels = ref<string[]>(defaultAllowedModelsForPlatform(createPlatform.value))
 
-function isOpenAIAccountModeGroup(group: Group): boolean {
-  return group.platform === 'openai' && (group.name === 'OpenAI账号模式' || group.name.includes('账号模式'))
+const isOpenAIListingPlatform = computed(() => activeListingPlatform.value === 'openai')
+const visibleListingFeatureTagOptions = computed(() =>
+  listingFeatureTagOptions.filter(option =>
+    isOpenAIListingPlatform.value || (
+      option.value !== 'image_generation' &&
+      option.value !== 'codex_cli_only' &&
+      option.value !== 'non_codex_cli_only'
+    )
+  )
+)
+
+function defaultAllowedModelsForPlatform(platform: AccountSharePlatform): string[] {
+  return [...DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[platform]]
 }
 
-const modeGroup = computed(() => availableGroups.value.find(isOpenAIAccountModeGroup))
-const singleModeApiKey = computed(() => modeApiKeys.value.length === 1 ? modeApiKeys.value[0] : null)
-const modeApiKeyPlaceholder = computed(() => {
+function listingPlatform(listing: AccountShareListing | null | undefined): AccountSharePlatform {
+  return listing?.platform === 'anthropic' ? 'anthropic' : 'openai'
+}
+
+function isOpenAIListing(listing: AccountShareListing | null | undefined): boolean {
+  return listingPlatform(listing) === 'openai'
+}
+
+function isAnthropicListing(listing: AccountShareListing | null | undefined): boolean {
+  return listingPlatform(listing) === 'anthropic'
+}
+
+function showOpenAIUsageWindows(listing: AccountShareListing | null | undefined): boolean {
+  return isOpenAIListing(listing)
+}
+
+function showAnthropicUsageWindows(listing: AccountShareListing | null | undefined): boolean {
+  return isAnthropicListing(listing)
+}
+
+function anthropic5hLimitPercent(listing: AccountShareListing | null | undefined): number {
+  return normalizeUsageLimitPercent(listing?.anthropic_5h_limit_percent ?? listing?.codex_5h_limit_percent)
+}
+
+function anthropic7dLimitPercent(listing: AccountShareListing | null | undefined): number {
+  return normalizeUsageLimitPercent(listing?.anthropic_7d_limit_percent ?? listing?.codex_7d_limit_percent)
+}
+
+function normalizeUsageLimitPercent(value: unknown): number {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric >= 1 && numeric <= 100 ? numeric : 100
+}
+
+function listingHealthFootVisible(listing: AccountShareListing): boolean {
+  return Boolean(
+    listing.rate_limit_reset_at ||
+    (showOpenAIUsageWindows(listing) && (listing.codex_usage_updated_at || listing.codex_quota_protection_reset_at)) ||
+    (showAnthropicUsageWindows(listing) && (listing.anthropic_usage_updated_at || listing.anthropic_quota_protection_reset_at))
+  )
+}
+
+function platformLabel(platform: AccountSharePlatform): string {
+  return ACCOUNT_SHARE_PLATFORM_OPTIONS.find(item => item.value === platform)?.label || platform
+}
+
+function accountModeGroupName(platform: AccountSharePlatform): string {
+  return ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM[platform]
+}
+
+function isAccountModeGroupForPlatform(group: Group, platform: AccountSharePlatform): boolean {
+  return group.platform === platform && (group.name === accountModeGroupName(platform) || group.name.includes('账号模式'))
+}
+
+function modeApiKeysForPlatform(platform: AccountSharePlatform): ApiKey[] {
+  return modeApiKeysByPlatform[platform] || []
+}
+
+function modeApiKeysForListing(listing: AccountShareListing): ApiKey[] {
+  return modeApiKeysForPlatform(listingPlatform(listing))
+}
+
+function singleModeApiKeyForListing(listing: AccountShareListing): ApiKey | null {
+  const keys = modeApiKeysForListing(listing)
+  return keys.length === 1 ? keys[0] : null
+}
+
+function singleModeApiKeyLabelForListing(listing: AccountShareListing): string {
+  const key = singleModeApiKeyForListing(listing)
+  return key ? modeKeyLabel(key) : ''
+}
+
+const modeApiKeys = computed(() => modeApiKeysForPlatform(activeListingPlatform.value))
+
+function modeApiKeyPlaceholderForListing(listing: AccountShareListing): string {
   if (modeKeysLoading.value) return '正在加载账号模式 API Key'
   if (!modeKeysLoaded.value) return '账号模式 API Key 未加载'
-  return '选择账号模式 API Key'
-})
+  return `选择${accountModeGroupName(listingPlatform(listing))} Key`
+}
 const pendingJoinListing = computed(() => pendingJoinConfirmation.value?.listing ?? null)
+const pendingJoinIsOwnerSelfUse = computed(() => {
+  const listing = pendingJoinListing.value
+  return listing ? isOwnListing(listing) : false
+})
 const pendingJoinApiKeyLabel = computed(() => {
   const apiKeyID = pendingJoinConfirmation.value?.apiKeyID
   if (!apiKeyID) return '-'
-  const key = modeApiKeys.value.find(item => item.id === apiKeyID)
+  const listing = pendingJoinConfirmation.value?.listing
+  const key = listing ? modeApiKeysForListing(listing).find(item => item.id === apiKeyID) : undefined
   return key ? modeKeyLabel(key) : `Key #${apiKeyID}`
 })
 const pendingJoinIdleTimeoutLabel = computed(() => formatIdleTimeoutSetting(pendingJoinConfirmation.value?.idleTimeoutMinutes ?? 0))
 const pendingJoinPriceWarnings = computed(() => {
   const listing = pendingJoinListing.value
   if (!listing) return []
+  if (pendingJoinIsOwnerSelfUse.value) return []
   const warnings: string[] = []
   if (isRateMultiplierExpensive(listing)) {
-    warnings.push(`${accountLevelBadgeLabel(listing)} 账号倍率 ${formatNumber(listing.rate_multiplier)}x 偏高，后续请求消耗会明显增加。`)
+    const accountLabel = isOpenAIListing(listing) ? accountLevelBadgeLabel(listing) : platformLabel(listingPlatform(listing))
+    warnings.push(`${accountLabel} 账号倍率 ${formatNumber(listing.rate_multiplier)}x 偏高，后续请求消耗会明显增加。`)
   }
   if (isHourlyRateExpensive(listing)) {
     warnings.push(`小时费 ${formatNumber(listing.hourly_rate)} 偏高，空闲或长时间使用时费用压力较大。`)
@@ -1686,6 +2995,9 @@ const pendingJoinPriceWarnings = computed(() => {
 })
 const endUseConfirmMessage = computed(() => {
   const apiKeyLabel = pendingEndUse.value?.apiKeyID ? ` Key #${pendingEndUse.value.apiKeyID}` : '当前 Key'
+  if (pendingEndUse.value?.status === 'queued') {
+    return `确认将该账号从${apiKeyLabel}的预约列表中移出？`
+  }
   return `结束后${apiKeyLabel}会立即失去账号模式绑定，后续请求会显示“分组未绑定账号”。确认结束使用？`
 })
 
@@ -1746,16 +3058,15 @@ const editProxyCapacityValidationMessage = computed(() => {
 
 const parsedAllowedModelCount = computed(() => allowedModels.value.length)
 const availableSeatCount = computed(() => listings.value.reduce((total, listing) => total + Math.max(0, listing.seat_limit - listing.active_seats), 0))
-const activeMembershipCount = computed(() => listings.value.filter(listing => listing.current_membership_id).length)
+const activeSeatCount = computed(() => listings.value.reduce((total, listing) => total + Math.max(0, Number(listing.active_seats || 0)), 0))
 const isManagementView = computed(() => activeFilter.value.key === ownerFilter.key)
 const activeAdvancedFilterCount = computed(() => {
   let count = 0
   if (listingFilters.status !== '') count += 1
-  if (listingFilters.accountLevel !== 'all') count += 1
-  if (listingFilters.perUserConcurrency.min !== '' || listingFilters.perUserConcurrency.max !== '') count += 1
-  if (listingFilters.minBalance.min !== '' || listingFilters.minBalance.max !== '') count += 1
-  if (listingFilters.hourlyRate.min !== '' || listingFilters.hourlyRate.max !== '') count += 1
-  if (listingFilters.hourlyFeeWaiver.min !== '' || listingFilters.hourlyFeeWaiver.max !== '') count += 1
+  if (isOpenAIListingPlatform.value && listingFilters.accountLevel !== 'all') count += 1
+  count += listingFilters.sortKeys.length
+  if (listingFilters.seatLimits.length > 0) count += 1
+  if (listingFilters.featureTags.length > 0) count += 1
   if (listingFilters.models.length > 0) count += 1
   return count
 })
@@ -1835,15 +3146,58 @@ const forceEditConfirmMessage = computed(() => {
 })
 
 const displayedListings = computed(() => listings.value)
+const mySpendMetrics = computed<MySpendMetric[]>(() => {
+  const summary = mySpendSummary.value
+  if (!summary) return []
+  return [
+    {
+      key: 'total',
+      label: '合计扣费',
+      value: formatSpendCost(summary.total_cost),
+      note: mySpendRangeLabel(summary.range),
+      icon: 'dollar',
+      tone: 'total'
+    },
+    {
+      key: 'request',
+      label: '请求费用',
+      value: formatSpendCost(summary.request_cost),
+      note: `${formatWholeNumber(summary.request_count)} 次请求`,
+      icon: 'creditCard',
+      tone: 'request'
+    },
+    {
+      key: 'hourly',
+      label: '小时费净扣',
+      value: formatSpendCost(summary.hourly_net_cost),
+      note: `预扣 ${formatSpendCost(summary.hourly_charge)} · 退回 ${formatSpendCost(summary.hourly_refund + summary.hourly_waiver_refund)}`,
+      icon: 'clock',
+      tone: 'hourly'
+    },
+    {
+      key: 'tokens',
+      label: 'Token 总量',
+      value: formatWholeNumber(summary.total_tokens),
+      note: `输入 ${formatWholeNumber(summary.input_tokens)} · 输出 ${formatWholeNumber(summary.output_tokens)}`,
+      icon: 'chart',
+      tone: 'usage'
+    }
+  ]
+})
 const modelFilterOptions = computed(() => {
-  const models = new Set<string>([...DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS, ...listingFilters.models])
+  const models = new Set<string>([
+    ...DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[activeListingPlatform.value],
+    ...listingFilters.models
+  ])
   for (const listing of knownListings.value) {
+    if (listingPlatform(listing) !== activeListingPlatform.value) continue
     for (const model of listing.allowed_models) {
       const value = model.trim()
       if (value) models.add(value)
     }
   }
   for (const listing of listings.value) {
+    if (listingPlatform(listing) !== activeListingPlatform.value) continue
     for (const model of listing.allowed_models) {
       const value = model.trim()
       if (value) models.add(value)
@@ -1851,10 +3205,104 @@ const modelFilterOptions = computed(() => {
   }
   return Array.from(models).sort((a, b) => a.localeCompare(b))
 })
+const recommendationModelOptions = computed(() => {
+  const models = new Set<string>(modelFilterOptions.value)
+  const current = recommendationForm.model.trim()
+  if (current) models.add(current)
+  return Array.from(models).sort((a, b) => a.localeCompare(b))
+})
+const recommendationKeyOptions = computed(() => modeApiKeys.value)
+const recommendationCandidates = computed<AccountShareRecommendationCandidate[]>(() => recommendationResult.value?.items || [])
+const recommendationBest = computed<AccountShareRecommendationCandidate | null>(() => recommendationResult.value?.recommended || recommendationCandidates.value[0] || null)
+const recommendationInputSummary = computed(() => {
+  const input = recommendationResult.value?.input
+  if (!input) return ''
+  const activeHours = normalizeRecommendationActiveHours(input.active_hours)
+  const requestsPerHour = activeHours > 0 ? input.request_count / activeHours : input.request_count
+  return `${input.request_count} 次请求 / ${formatNumber(activeHours)} 小时 / ${input.model} · ${formatNumber(requestsPerHour)} 次/小时`
+})
 const modelFilterSummary = computed(() => {
   if (listingFilters.models.length === 0) return '全部模型'
   if (listingFilters.models.length === 1) return listingFilters.models[0]
   return `已选 ${listingFilters.models.length} 个模型`
+})
+const seatFilterSummary = computed(() => {
+  if (listingFilters.seatLimits.length === 0) return '全部席位'
+  if (listingFilters.seatLimits.length === 1) return `${listingFilters.seatLimits[0]}人`
+  return `已选 ${listingFilters.seatLimits.length} 个席位`
+})
+const featureTagFilterSummary = computed(() => {
+  if (listingFilters.featureTags.length === 0) return '全部标签'
+  if (listingFilters.featureTags.length === 1) {
+    return visibleListingFeatureTagOptions.value.find(option => option.value === listingFilters.featureTags[0])?.label || '已选标签'
+  }
+  return `已选 ${listingFilters.featureTags.length} 个标签`
+})
+const statusFilterSummary = computed(() => (
+  listingStatusFilterOptions.find(option => option.value === listingFilters.status)?.label || '默认状态'
+))
+const accountLevelFilterSummary = computed(() => (
+  accountLevelFilterOptions.find(option => option.value === listingFilters.accountLevel)?.label || '全部等级'
+))
+const selectedSortOptions = computed(() =>
+  listingFilters.sortKeys
+    .map(key => listingSortOptions.find(option => option.key === key))
+    .filter((option): option is ListingSortOption => Boolean(option))
+)
+const activeFilterChips = computed<ActiveFilterChip[]>(() => {
+  const chips: ActiveFilterChip[] = []
+  const statusOption = listingStatusFilterOptions.find(option => option.value === listingFilters.status)
+  if (listingFilters.status !== '' && statusOption) {
+    chips.push({
+      key: `status:${listingFilters.status}`,
+      label: `状态：${statusOption.label}`,
+      remove: () => { listingFilters.status = '' }
+    })
+  }
+
+  const levelOption = accountLevelFilterOptions.find(option => option.value === listingFilters.accountLevel)
+  if (isOpenAIListingPlatform.value && listingFilters.accountLevel !== 'all' && levelOption) {
+    chips.push({
+      key: `level:${listingFilters.accountLevel}`,
+      label: `等级：${levelOption.label}`,
+      remove: () => { listingFilters.accountLevel = 'all' }
+    })
+  }
+
+  for (const [index, option] of selectedSortOptions.value.entries()) {
+    chips.push({
+      key: `sort:${option.key}`,
+      label: `排序${index + 1}：${option.label}`,
+      remove: () => removeListingSort(option.key)
+    })
+  }
+
+  for (const seat of listingFilters.seatLimits) {
+    chips.push({
+      key: `seat:${seat}`,
+      label: `${seat}人席位`,
+      remove: () => removeSeatFilter(seat)
+    })
+  }
+
+  for (const tag of listingFilters.featureTags) {
+    const option = visibleListingFeatureTagOptions.value.find(item => item.value === tag)
+    chips.push({
+      key: `tag:${tag}`,
+      label: option?.label || tag,
+      remove: () => removeFeatureTagFilter(tag)
+    })
+  }
+
+  for (const model of listingFilters.models) {
+    chips.push({
+      key: `model:${model}`,
+      label: model,
+      remove: () => removeModelFilter(model)
+    })
+  }
+
+  return chips
 })
 
 function normalizeAccountName(name: string): string {
@@ -1870,12 +3318,13 @@ function hasKnownAccountName(name: string, excludeAccountID?: number): boolean {
   })
 }
 
-function suggestedAccountName(): string {
+function suggestedAccountName(platform: AccountSharePlatform = createPlatform.value): string {
+  const baseName = ACCOUNT_NAME_BASE_BY_PLATFORM[platform]
   for (let index = 1; index <= 999; index += 1) {
-    const candidate = index === 1 ? ACCOUNT_NAME_BASE : `${ACCOUNT_NAME_BASE}${index}`
+    const candidate = index === 1 ? baseName : `${baseName}${index}`
     if (!hasKnownAccountName(candidate)) return candidate
   }
-  return `${ACCOUNT_NAME_BASE}${Date.now()}`
+  return `${baseName}${Date.now()}`
 }
 
 function validateAccountName(name: string, excludeAccountID?: number): string {
@@ -1963,56 +3412,147 @@ function removeModelFilter(model: string): void {
   if (index >= 0) listingFilters.models.splice(index, 1)
 }
 
+function buildListingSortKey(sortBy: AccountShareListingSortBy, sortOrder: AccountShareListingSortOrder): ListingSortKey {
+  return `${sortBy}:${sortOrder}` as ListingSortKey
+}
+
+function clearListingSorts(): void {
+  listingFilters.sortKeys = []
+  closeFilterPopover()
+}
+
+function findSortOption(key: ListingSortKey): ListingSortOption | undefined {
+  return listingSortOptions.find(option => option.key === key)
+}
+
+function sortFieldIndex(sortBy: AccountShareListingSortBy): number {
+  return listingFilters.sortKeys.findIndex(key => findSortOption(key)?.sortBy === sortBy)
+}
+
+function isSortFieldActive(sortBy: AccountShareListingSortBy): boolean {
+  return sortFieldIndex(sortBy) >= 0
+}
+
+function activeSortOrder(sortBy: AccountShareListingSortBy): AccountShareListingSortOrder | null {
+  const key = listingFilters.sortKeys[sortFieldIndex(sortBy)]
+  if (!key) return null
+  return findSortOption(key)?.sortOrder || null
+}
+
+function activeSortDirectionLabel(option: ListingSortFieldOption): string {
+  const sortOrder = activeSortOrder(option.sortBy)
+  if (!sortOrder) return ''
+  return sortOrder === 'asc' ? option.ascLabel : option.descLabel
+}
+
+function sortPriorityLabel(sortBy: AccountShareListingSortBy): string {
+  const index = sortFieldIndex(sortBy)
+  return index >= 0 ? `#${index + 1}` : ''
+}
+
+function sortDirectionIcon(sortBy: AccountShareListingSortBy): 'sort' | 'arrowUp' | 'arrowDown' {
+  const sortOrder = activeSortOrder(sortBy)
+  if (sortOrder === 'asc') return 'arrowUp'
+  if (sortOrder === 'desc') return 'arrowDown'
+  return 'sort'
+}
+
+function toggleListingSortField(sortBy: AccountShareListingSortBy): void {
+  const activeIndex = sortFieldIndex(sortBy)
+  const nextSortOrder: AccountShareListingSortOrder = activeSortOrder(sortBy) === 'asc' ? 'desc' : 'asc'
+  const nextSortKey = buildListingSortKey(sortBy, nextSortOrder)
+  if (activeIndex >= 0) {
+    listingFilters.sortKeys.splice(activeIndex, 1, nextSortKey)
+  } else {
+    listingFilters.sortKeys.push(nextSortKey)
+  }
+  closeFilterPopover()
+}
+
+function removeListingSort(key: ListingSortKey): void {
+  const index = listingFilters.sortKeys.indexOf(key)
+  if (index >= 0) listingFilters.sortKeys.splice(index, 1)
+}
+
+function sortFieldButtonTitle(option: ListingSortFieldOption): string {
+  const sortOrder = activeSortOrder(option.sortBy)
+  const priority = sortPriorityLabel(option.sortBy)
+  if (!sortOrder) return `添加${option.label}${option.ascLabel}为第 ${listingFilters.sortKeys.length + 1} 排序`
+  const currentLabel = sortOrder === 'asc' ? option.ascLabel : option.descLabel
+  const nextLabel = sortOrder === 'asc' ? option.descLabel : option.ascLabel
+  return `${priority} 当前${option.label}${currentLabel}，再次点击切换为${nextLabel}`
+}
+
+function toggleFilterPopover(popover: ListingFilterPopover): void {
+  openFilterPopover.value = openFilterPopover.value === popover ? null : popover
+}
+
+function closeFilterPopover(): void {
+  openFilterPopover.value = null
+}
+
+function handleFilterPanelDocumentClick(event: MouseEvent): void {
+  const target = event.target
+  if (!(target instanceof Node)) return
+  if (filterPanelRef.value?.contains(target)) return
+  closeFilterPopover()
+}
+
+function setListingStatusFilter(status: ListingStatusFilterValue): void {
+  listingFilters.status = status
+  closeFilterPopover()
+}
+
+function setAccountLevelFilter(level: AccountLevelFilterValue): void {
+  listingFilters.accountLevel = level
+  closeFilterPopover()
+}
+
+function toggleSeatFilter(seat: number): void {
+  const index = listingFilters.seatLimits.indexOf(seat)
+  if (index >= 0) {
+    listingFilters.seatLimits.splice(index, 1)
+    return
+  }
+  listingFilters.seatLimits.push(seat)
+  listingFilters.seatLimits.sort((a, b) => a - b)
+}
+
+function removeSeatFilter(seat: number): void {
+  const index = listingFilters.seatLimits.indexOf(seat)
+  if (index >= 0) listingFilters.seatLimits.splice(index, 1)
+}
+
+function toggleFeatureTagFilter(tag: AccountShareListingFeatureTag): void {
+  if (!visibleListingFeatureTagOptions.value.some(option => option.value === tag)) return
+  const index = listingFilters.featureTags.indexOf(tag)
+  if (index >= 0) {
+    listingFilters.featureTags.splice(index, 1)
+    return
+  }
+  if (tag === 'codex_cli_only') {
+    removeFeatureTagFilter('non_codex_cli_only')
+  } else if (tag === 'non_codex_cli_only') {
+    removeFeatureTagFilter('codex_cli_only')
+  }
+  listingFilters.featureTags.push(tag)
+}
+
+function removeFeatureTagFilter(tag: AccountShareListingFeatureTag): void {
+  const index = listingFilters.featureTags.indexOf(tag)
+  if (index >= 0) listingFilters.featureTags.splice(index, 1)
+}
+
 function addModelFilterFromInput(): void {
   addModelFilter(modelFilterInput.value)
   modelFilterInput.value = ''
 }
 
-function parseFilterNumber(raw: unknown): number | undefined {
-  if (raw === undefined || raw === null) return undefined
-  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : Number.NaN
-  if (typeof raw !== 'string') return Number.NaN
-  const value = raw.trim()
-  if (!value) return undefined
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : Number.NaN
-}
-
-function validateRangeFilter(range: TextRangeFilter, label: string, integerOnly = false): string {
-  const min = parseFilterNumber(range.min)
-  const max = parseFilterNumber(range.max)
-  if (Number.isNaN(min) || Number.isNaN(max)) return `${label}必须是有效数字`
-  if ((min !== undefined && min < 0) || (max !== undefined && max < 0)) return `${label}不能小于 0`
-  if (integerOnly && ((min !== undefined && !Number.isInteger(min)) || (max !== undefined && !Number.isInteger(max)))) {
-    return `${label}必须是整数`
-  }
-  if (min !== undefined && max !== undefined && min > max) return `${label}的最低值不能大于最高值`
-  return ''
-}
-
-function validateListingFilters(): string {
-  return validateRangeFilter(listingFilters.perUserConcurrency, '单用户并发数范围', true) ||
-    validateRangeFilter(listingFilters.minBalance, '最低余额范围') ||
-    validateRangeFilter(listingFilters.hourlyRate, '小时费范围') ||
-    validateRangeFilter(listingFilters.hourlyFeeWaiver, '免小时费低消范围')
-}
-
-function appendRangeFilters(target: AccountShareListingFilters, range: TextRangeFilter, minKey: keyof AccountShareListingFilters, maxKey: keyof AccountShareListingFilters): void {
-  const min = parseFilterNumber(range.min)
-  const max = parseFilterNumber(range.max)
-  if (min !== undefined && !Number.isNaN(min)) {
-    target[minKey] = min as never
-  }
-  if (max !== undefined && !Number.isNaN(max)) {
-    target[maxKey] = max as never
-  }
-}
-
 function buildListingFilters(): AccountShareListingFilters {
   const result: AccountShareListingFilters = {
-    tab: activeFilter.value.tab
+    tab: activeFilter.value.tab,
+    platform: activeListingPlatform.value
   }
-  if (activeFilter.value.seatLimit) result.seat_limit = activeFilter.value.seatLimit
   const search = searchQuery.value.trim()
   if (search) result.search = search
   if (listingFilters.status === 'available') {
@@ -2021,12 +3561,21 @@ function buildListingFilters(): AccountShareListingFilters {
   } else if (listingFilters.status !== '') {
     result.status = listingFilters.status
   }
-  if (listingFilters.accountLevel !== 'all') result.account_level = listingFilters.accountLevel
+  if (isOpenAIListingPlatform.value && listingFilters.accountLevel !== 'all') result.account_level = listingFilters.accountLevel
   if (listingFilters.models.length > 0) result.models = normalizeAllowedModelList(listingFilters.models)
-  appendRangeFilters(result, listingFilters.perUserConcurrency, 'per_user_concurrency_min', 'per_user_concurrency_max')
-  appendRangeFilters(result, listingFilters.minBalance, 'min_balance_required_min', 'min_balance_required_max')
-  appendRangeFilters(result, listingFilters.hourlyRate, 'hourly_rate_min', 'hourly_rate_max')
-  appendRangeFilters(result, listingFilters.hourlyFeeWaiver, 'hourly_fee_waiver_min', 'hourly_fee_waiver_max')
+  if (listingFilters.seatLimits.length > 0) result.seat_limits = [...listingFilters.seatLimits]
+  const featureTags = listingFilters.featureTags.filter(tag =>
+    visibleListingFeatureTagOptions.value.some(option => option.value === tag)
+  )
+  if (featureTags.length > 0) result.feature_tags = featureTags
+  if (selectedSortOptions.value.length > 0) {
+    result.sorts = [...listingFilters.sortKeys]
+    const firstSort = selectedSortOptions.value[0]
+    if (firstSort.sortBy && firstSort.sortOrder) {
+      result.sort_by = firstSort.sortBy
+      result.sort_order = firstSort.sortOrder
+    }
+  }
   return result
 }
 
@@ -2047,31 +3596,34 @@ function abortActiveListingsRequest(): void {
 function isCanceledRequest(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
   const maybeCanceled = error as { code?: string; name?: string }
-  return maybeCanceled.code === 'ERR_CANCELED' || maybeCanceled.name === 'CanceledError'
+  return maybeCanceled.code === 'ERR_CANCELED' || maybeCanceled.name === 'CanceledError' || maybeCanceled.name === 'AbortError'
+}
+
+function formatAccountShareLoadError(error: unknown, fallback: string): string {
+  const message = extractApiErrorMessage(error, fallback)
+  if (/Request failed with status code 500/i.test(message)) {
+    return '账号广场接口返回 500，请确认后端服务已启动，或查看后端日志定位原因。'
+  }
+  if (/Network Error/i.test(message)) {
+    return '账号广场接口暂时无法连接，请确认后端服务已启动。'
+  }
+  return message
 }
 
 function applyListingFilters(): void {
   clearSearchDebounceTimer()
-  const validationError = validateListingFilters()
-  if (validationError) {
-    errorMessage.value = validationError
-    return
-  }
+  closeFilterPopover()
   pagination.page = 1
   void loadListings()
 }
 
 function resetListingFilters(): void {
+  closeFilterPopover()
   listingFilters.status = ''
   listingFilters.accountLevel = 'all'
-  listingFilters.perUserConcurrency.min = ''
-  listingFilters.perUserConcurrency.max = ''
-  listingFilters.minBalance.min = ''
-  listingFilters.minBalance.max = ''
-  listingFilters.hourlyRate.min = ''
-  listingFilters.hourlyRate.max = ''
-  listingFilters.hourlyFeeWaiver.min = ''
-  listingFilters.hourlyFeeWaiver.max = ''
+  listingFilters.sortKeys = []
+  listingFilters.seatLimits = []
+  listingFilters.featureTags = []
   listingFilters.models = []
   modelFilterInput.value = ''
   if (searchQuery.value !== '') {
@@ -2100,6 +3652,83 @@ function formatNumber(value: number): string {
   return Number(value || 0).toFixed(4).replace(/\.?0+$/, '')
 }
 
+function formatRecommendationCost(value: number): string {
+  const amount = Number(value || 0)
+  if (!Number.isFinite(amount)) return '0'
+  if (amount >= 1) return amount.toFixed(4).replace(/\.?0+$/, '')
+  if (amount >= 0.0001) return amount.toFixed(6).replace(/\.?0+$/, '')
+  return amount.toFixed(8).replace(/\.?0+$/, '')
+}
+
+function formatSpendCost(value: number): string {
+  return formatRecommendationCost(value)
+}
+
+function formatWholeNumber(value: number): string {
+  const amount = Math.trunc(Number(value || 0))
+  return Number.isFinite(amount) ? amount.toLocaleString() : '0'
+}
+
+function normalizeRecommendationActiveHours(value: number): number {
+  const activeHours = Number(value || 0)
+  return Number.isFinite(activeHours) && activeHours > 0 ? activeHours : 1
+}
+
+function recommendationEstimatedHourlyCost(candidate: AccountShareRecommendationCandidate): number {
+  const activeHours = normalizeRecommendationActiveHours(recommendationResult.value?.input.active_hours || recommendationForm.active_hours)
+  return Number(candidate.estimate.total_cost || 0) / activeHours
+}
+
+function recommendationRequestCostLabel(candidate: AccountShareRecommendationCandidate): string {
+  const prefix = candidate.estimate.owner_self_use ? '自用' : ''
+  return `${prefix}${recommendationBillingModeLabel(candidate.estimate.billing_mode)}总费用`
+}
+
+function recommendationHourlyCostText(candidate: AccountShareRecommendationCandidate): string {
+  return candidate.estimate.owner_self_use ? '不收取' : formatRecommendationCost(candidate.estimate.hourly_net_cost)
+}
+
+function recommendationUpfrontCostText(candidate: AccountShareRecommendationCandidate): string {
+  return candidate.estimate.owner_self_use ? '不校验' : formatRecommendationCost(candidate.estimate.upfront_required)
+}
+
+function recommendationOwnerSelfUseSummary(candidate: AccountShareRecommendationCandidate): string {
+  const listing = candidate.listing
+  return `这是你自己上架的账号，推荐测算按自用规则执行：${formatNumber(OWNER_SELF_USE_RATE_MULTIPLIER)}x、不收小时费、不校验最低余额；公开参数 ${formatNumber(listing.rate_multiplier)}x / 小时费 ${formatNumber(listing.hourly_rate)} / 低消 ${hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum)} 仍用于其他用户。`
+}
+
+function recommendationBillingModeLabel(mode: string): string {
+  switch (mode) {
+    case 'per_request':
+      return '按次'
+    case 'image':
+      return '图片'
+    case 'token':
+      return 'Token'
+    default:
+      return mode || 'Token'
+  }
+}
+
+function formatRating(value: number): string {
+  return Number(value || 0).toFixed(1).replace(/\.0$/, '')
+}
+
+function listingRatingLabel(listing: AccountShareListing): string {
+  const count = Number(listing.rating_count || 0)
+  if (count <= 0) return '未评分'
+  return `${formatRating(Number(listing.rating_avg || 0))}/10 · ${count}人`
+}
+
+function ownerDisplayName(listing: AccountShareListing | null | undefined): string {
+  if (!listing) return ''
+  return listing.owner_username || `用户 ${listing.owner_user_id}`
+}
+
+function ownerDialogButtonTitle(listing: AccountShareListing): string {
+  return `查看 ${ownerDisplayName(listing)} 的其他账号和评论`
+}
+
 function hourlyFeeWaiverLabel(value?: number | null): string {
   const amount = Number(value || 0)
   if (!Number.isFinite(amount) || amount <= 0) return '未开启'
@@ -2108,7 +3737,7 @@ function hourlyFeeWaiverLabel(value?: number | null): string {
 
 function formatIdleTimeoutSetting(minutes: number): string {
   const normalized = normalizeIdleTimeoutMinutes(minutes)
-  if (normalized <= 0) return '未开启'
+  if (normalized <= 0) return '未设置'
   if (normalized < 60) return `${normalized} 分钟`
   const hours = Math.floor(normalized / 60)
   const restMinutes = normalized % 60
@@ -2223,6 +3852,7 @@ function listingDisplayName(listing: AccountShareListing): string {
 }
 
 function isRateMultiplierExpensive(listing: AccountShareListing): boolean {
+  if (!isOpenAIListing(listing)) return false
   const multiplier = Number(listing.rate_multiplier || 0)
   if (!Number.isFinite(multiplier)) return false
   switch (accountLevelTone(listing)) {
@@ -2241,6 +3871,7 @@ function isHourlyRateExpensive(listing: AccountShareListing): boolean {
 }
 
 function supportsImageGeneration(listing: AccountShareListing): boolean {
+  if (!isOpenAIListing(listing)) return false
   return listing.allowed_models.some(model => {
     const value = model.toLowerCase()
     return /(^|[/_:])(?:gpt-image(?:-|$)|dall-e(?:-|$)|dalle(?:-|$))/.test(value)
@@ -2290,11 +3921,20 @@ function validityInfo(listing: AccountShareListing): { label: string; expiresAtL
 type RuntimeTone = 'normal' | 'warning' | 'danger' | 'muted'
 
 function runtimeInsight(listing: AccountShareListing): { label: string; detail: string; badge: string; tone: RuntimeTone } {
-  if (listing.codex_quota_protection_reason) {
+  if (showOpenAIUsageWindows(listing) && listing.codex_quota_protection_reason) {
     const windowLabel = listing.codex_quota_protection_reason === '7d' ? '7天' : '5小时'
     return {
       label: `${windowLabel}保护中`,
       detail: listing.codex_quota_protection_reset_at ? `预计 ${formatRelativeUntil(listing.codex_quota_protection_reset_at)} 后解除` : '',
+      badge: '保护',
+      tone: 'warning'
+    }
+  }
+  if (showAnthropicUsageWindows(listing) && listing.anthropic_quota_protection_reason) {
+    const windowLabel = listing.anthropic_quota_protection_reason === '7d' ? '7天' : '5小时'
+    return {
+      label: `Claude ${windowLabel}保护中`,
+      detail: listing.anthropic_quota_protection_reset_at ? `预计 ${formatRelativeUntil(listing.anthropic_quota_protection_reset_at)} 后解除` : '',
       badge: '保护',
       tone: 'warning'
     }
@@ -2364,12 +4004,19 @@ function hasRecoverableListingState(listing: AccountShareListing): boolean {
   )
 }
 
-function canOwnerRelistListing(listing: AccountShareListing): boolean {
+function isOwnListing(listing: AccountShareListing): boolean {
   const currentUserID = Number(authStore.user?.id || 0)
+  return currentUserID > 0 && listing.owner_user_id === currentUserID
+}
+
+function canShowListingJoinSection(listing: AccountShareListing): boolean {
+  return !listing.queue_membership_id && !listing.current_membership_id && (!isManagementView.value || isOwnListing(listing))
+}
+
+function canOwnerRelistListing(listing: AccountShareListing): boolean {
   return !authStore.isAdmin &&
     listing.status !== 'active' &&
-    currentUserID > 0 &&
-    listing.owner_user_id === currentUserID
+    isOwnListing(listing)
 }
 
 function isFuture(value?: string | null): boolean {
@@ -2452,7 +4099,7 @@ function modeKeyLabel(key: ApiKey): string {
 }
 
 function selectedModeApiKeyID(listing: AccountShareListing): number {
-  return singleModeApiKey.value?.id || Number(selectedKeyByListing[listing.id] || 0)
+  return singleModeApiKeyForListing(listing)?.id || Number(selectedKeyByListing[listing.id] || 0)
 }
 
 function showActionError(message: string, title = '操作失败', action: AccountShareActionErrorAction = null): void {
@@ -2469,7 +4116,9 @@ function closeActionErrorDialog(): void {
   actionErrorDialog.action = null
 }
 
-function showModeApiKeyRequiredDialog(): void {
+function showModeApiKeyRequiredDialog(listing?: AccountShareListing): void {
+  const platform = listingPlatform(listing)
+  const groupName = accountModeGroupName(platform)
   if (modeKeysLoading.value) {
     showActionError('账号模式 API Key 正在加载，请稍候再加入使用。', '正在加载')
     return
@@ -2478,13 +4127,14 @@ function showModeApiKeyRequiredDialog(): void {
     showActionError('账号模式 API Key 尚未加载成功，请刷新账号广场后再加入使用。', '无法加入使用')
     return
   }
-  if (!modeGroup.value) {
-    showActionError('当前账号没有可用的「OpenAI账号模式」分组，请联系管理员开通后再加入。', '无法加入使用')
+  const accountModeGroup = availableGroups.value.find(group => isAccountModeGroupForPlatform(group, platform))
+  if (!accountModeGroup) {
+    showActionError(`当前账号没有可用的「${groupName}」分组，请联系管理员开通后再加入。`, '无法加入使用')
     return
   }
-  if (modeApiKeys.value.length === 0) {
+  if (modeApiKeysForPlatform(platform).length === 0) {
     showActionError(
-      '你还没有账号模式 API Key，请先到「API 密钥」页面创建一个绑定「OpenAI账号模式」分组的 Key。',
+      `你还没有账号模式 API Key，请先到「API 密钥」页面创建一个绑定「${groupName}」分组的 Key。`,
       '需要账号模式 API Key',
       'create-mode-key'
     )
@@ -2506,7 +4156,8 @@ function normalizeIdleTimeoutMinutes(value: unknown): number {
 
 function validateIdleTimeoutMinutes(value: unknown): string {
   const parsed = Number(value ?? 0)
-  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) return '空闲自动退出时间必须是非负整数分钟'
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return '空闲自动退出时间必须是整数分钟'
+  if (parsed <= 0) return '空闲自动退出时间必须大于 0 分钟'
   if (parsed > ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES) return '空闲自动退出时间不能超过 10080 分钟'
   return ''
 }
@@ -2517,8 +4168,13 @@ function syncIdleTimeoutControls(items: AccountShareListing[]): void {
       idleTimeoutByListing[listing.id] = normalizeIdleTimeoutMinutes(listing.current_idle_timeout_minutes)
       continue
     }
-    if (idleTimeoutByListing[listing.id] === undefined) {
-      idleTimeoutByListing[listing.id] = 0
+    if (listing.queue_membership_id && typeof listing.queue_idle_timeout_minutes === 'number') {
+      idleTimeoutByListing[listing.id] = normalizeIdleTimeoutMinutes(listing.queue_idle_timeout_minutes)
+      continue
+    }
+    const cachedValue = Number(idleTimeoutByListing[listing.id] ?? 0)
+    if (!Number.isFinite(cachedValue) || cachedValue <= 0) {
+      idleTimeoutByListing[listing.id] = DEFAULT_ACCOUNT_SHARE_IDLE_TIMEOUT_MINUTES
     }
   }
 }
@@ -2532,16 +4188,298 @@ function idleTimeoutSummary(listing: AccountShareListing): string {
   return `${countdown}自动退出`
 }
 
+function queueIdleTimeoutSummary(listing: AccountShareListing): string {
+  const minutes = normalizeIdleTimeoutMinutes(listing.queue_idle_timeout_minutes ?? idleTimeoutByListing[listing.id] ?? 0)
+  if (minutes <= 0) return '激活后使用默认空闲退出'
+  return `激活后 ${formatIdleTimeoutSetting(minutes)} 无请求会自动退出`
+}
+
+function queueStatusLabel(listing: AccountShareListing): string {
+  if (listing.queue_status === 'active' || listing.current_membership_id) return '当前使用'
+  if (isFuture(listing.queue_dispatch_cooldown_until)) return `冷却中，${formatRelativeUntil(listing.queue_dispatch_cooldown_until)} 后重试`
+  return `预约第 ${listing.queue_rank || '-'} 位`
+}
+
+function queueStatusPillClass(listing: AccountShareListing): string {
+  if (listing.queue_status === 'active' || listing.current_membership_id) return 'membership-status-pill'
+  if (isFuture(listing.queue_dispatch_cooldown_until)) return 'membership-status-pill membership-status-pill-waiting'
+  return 'membership-status-pill membership-status-pill-queued'
+}
+
+function mySpendMembershipID(listing: AccountShareListing | null | undefined): number {
+  return Number(listing?.current_membership_id || listing?.queue_membership_id || listing?.last_used_membership_id || 0)
+}
+
+function canOpenMySpend(listing: AccountShareListing): boolean {
+  return mySpendMembershipID(listing) > 0
+}
+
+function mySpendButtonTitle(listing: AccountShareListing): string {
+  const membershipID = mySpendMembershipID(listing)
+  return membershipID > 0 ? `查看本账号在使用记录 #${membershipID} 下的消费统计` : '暂无可统计的使用记录'
+}
+
+function mySpendRangeLabel(range: string): string {
+  switch (range) {
+    case 'today':
+      return '今天'
+    case '7d':
+      return '近7天'
+    default:
+      return '本次使用'
+  }
+}
+
+function mySpendStatusLabel(status?: string): string {
+  switch (status) {
+    case 'active':
+      return '正在使用'
+    case 'queued':
+      return '预约中'
+    case 'ended':
+      return '已结束'
+    default:
+      return status || '-'
+  }
+}
+
+function mySpendWindowLabel(summary: AccountShareMySpendSummary): string {
+  return `${formatDate(summary.start_time)} 至 ${formatDate(summary.end_time)}`
+}
+
+function mySpendAccountName(summary: AccountShareMySpendSummary): string {
+  return summary.listing.account_name || `共享账号 #${summary.listing.id}`
+}
+
+function mySpendLastActivityLabel(summary: AccountShareMySpendSummary): string {
+  return summary.last_activity_at ? formatDate(summary.last_activity_at) : '暂无消费记录'
+}
+
+function mySpendAverageRequestCost(summary: AccountShareMySpendSummary): string {
+  if (summary.request_count <= 0) return '0'
+  return formatSpendCost(summary.request_cost / summary.request_count)
+}
+
+function mySpendBrowserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+  } catch {
+    return ''
+  }
+}
+
+function abortMySpendRequest(): void {
+  if (mySpendRequestController) {
+    mySpendRequestController.abort()
+    mySpendRequestController = null
+  }
+}
+
+function openMySpendDialog(listing: AccountShareListing): void {
+  if (!canOpenMySpend(listing)) return
+  abortMySpendRequest()
+  mySpendListing.value = listing
+  mySpendRange.value = 'current_membership'
+  mySpendSummary.value = null
+  mySpendError.value = ''
+  showMySpendDialog.value = true
+  void loadMySpendSummary()
+}
+
+function closeMySpendDialog(): void {
+  abortMySpendRequest()
+  showMySpendDialog.value = false
+  mySpendListing.value = null
+  mySpendSummary.value = null
+  mySpendError.value = ''
+  mySpendLoading.value = false
+}
+
+function setMySpendRange(range: AccountShareMySpendRange): void {
+  if (mySpendRange.value === range || mySpendLoading.value) return
+  mySpendRange.value = range
+  void loadMySpendSummary()
+}
+
+async function loadMySpendSummary(): Promise<void> {
+  const listing = mySpendListing.value
+  if (!listing) return
+  abortMySpendRequest()
+  const controller = new AbortController()
+  const requestSeq = ++mySpendRequestSeq
+  mySpendRequestController = controller
+  mySpendLoading.value = true
+  mySpendError.value = ''
+  try {
+    const membershipID = mySpendRange.value === 'current_membership' ? mySpendMembershipID(listing) : 0
+    const summary = await accountShareAPI.getMySpendSummary(listing.id, {
+      range: mySpendRange.value,
+      membership_id: membershipID > 0 ? membershipID : undefined,
+      timezone: mySpendBrowserTimeZone()
+    }, {
+      signal: controller.signal
+    })
+    if (requestSeq !== mySpendRequestSeq) return
+    mySpendSummary.value = summary
+  } catch (error: unknown) {
+    if (controller.signal.aborted || isCanceledRequest(error)) return
+    if (requestSeq !== mySpendRequestSeq) return
+    mySpendError.value = extractApiErrorMessage(error, '加载消费统计失败', {
+      ACCOUNT_SHARE_LISTING_NOT_FOUND: '没有找到这次使用记录或账号已不可查看',
+      ACCOUNT_SHARE_SPEND_INVALID_RANGE: '统计范围无效，请切换范围后重试',
+      USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+    })
+  } finally {
+    if (requestSeq === mySpendRequestSeq) {
+      mySpendLoading.value = false
+      if (mySpendRequestController === controller) mySpendRequestController = null
+    }
+  }
+}
+
+function queueMembershipsForApiKey(apiKeyID?: number): AccountShareMembership[] {
+  const normalizedApiKeyID = Number(apiKeyID || 0)
+  if (normalizedApiKeyID <= 0) return []
+  return (queueMembershipsByApiKey.value[normalizedApiKeyID] || [])
+    .slice()
+    .sort((a, b) => Number(a.queue_rank || 0) - Number(b.queue_rank || 0))
+}
+
+async function refreshMembershipQueue(apiKeyID: number): Promise<AccountShareMembership[]> {
+  const normalizedApiKeyID = Number(apiKeyID || 0)
+  if (normalizedApiKeyID <= 0) return []
+  const memberships = await accountShareAPI.listMembershipQueue(normalizedApiKeyID)
+  queueMembershipsByApiKey.value = {
+    ...queueMembershipsByApiKey.value,
+    [normalizedApiKeyID]: memberships
+  }
+  return queueMembershipsForApiKey(normalizedApiKeyID)
+}
+
+async function loadQueueSnapshotsForListings(items: AccountShareListing[]): Promise<void> {
+  const apiKeyIDs = Array.from(new Set(items
+    .map(item => Number(item.queue_api_key_id || 0))
+    .filter(apiKeyID => apiKeyID > 0)))
+  if (apiKeyIDs.length === 0) return
+  const entries = await Promise.all(apiKeyIDs.map(async apiKeyID => {
+    try {
+      const memberships = await accountShareAPI.listMembershipQueue(apiKeyID)
+      return [apiKeyID, memberships] as const
+    } catch (error: unknown) {
+      if (isCanceledRequest(error)) throw error
+      if (extractApiErrorCode(error) === 'API_KEY_NOT_FOUND') {
+        return [apiKeyID, [] as AccountShareMembership[]] as const
+      }
+      throw error
+    }
+  }))
+  const next = { ...queueMembershipsByApiKey.value }
+  for (const [apiKeyID, memberships] of entries) {
+    next[apiKeyID] = memberships
+  }
+  queueMembershipsByApiKey.value = next
+}
+
+function canMoveQueueItem(listing: AccountShareListing, direction: -1 | 1): boolean {
+  if (!listing.queue_membership_id || reorderingQueueId.value !== null) return false
+  const queue = queueMembershipsForApiKey(listing.queue_api_key_id)
+  const index = queue.findIndex(item => item.id === listing.queue_membership_id)
+  if (index < 0) return false
+  return direction < 0 ? index > 0 : index < queue.length - 1
+}
+
+async function moveQueueItem(listing: AccountShareListing, direction: -1 | 1): Promise<void> {
+  const apiKeyID = Number(listing.queue_api_key_id || 0)
+  const membershipID = Number(listing.queue_membership_id || 0)
+  if (apiKeyID <= 0 || membershipID <= 0 || reorderingQueueId.value !== null) return
+  reorderingQueueId.value = membershipID
+  try {
+    const queue = await refreshMembershipQueue(apiKeyID)
+    const index = queue.findIndex(item => Number(item.id || 0) === membershipID)
+    const targetIndex = index + direction
+    if (index < 0 || targetIndex < 0 || targetIndex >= queue.length) {
+      showActionError('预约列表已变化，请刷新后重试。', '排序失败')
+      return
+    }
+    const reordered = queue.map(item => Number(item.id || 0))
+    const target = reordered[targetIndex]
+    reordered[targetIndex] = reordered[index]
+    reordered[index] = target
+    const memberships = await accountShareAPI.reorderMembershipQueue({
+      api_key_id: apiKeyID,
+      membership_ids: reordered
+    })
+    queueMembershipsByApiKey.value = {
+      ...queueMembershipsByApiKey.value,
+      [apiKeyID]: memberships
+    }
+    await loadListings()
+    appStore.showSuccess('预约顺序已更新')
+  } catch (error: unknown) {
+    showActionError(extractApiErrorMessage(error, '更新预约顺序失败', accountShareJoinErrorMessages), '排序失败')
+  } finally {
+    reorderingQueueId.value = null
+  }
+}
+
 function setFilter(filter: FilterOption): void {
   clearSearchDebounceTimer()
+  closeFilterPopover()
   activeFilter.value = filter
   pagination.page = 1
   void loadListings()
 }
 
+function sanitizeListingFiltersForPlatform(platform: AccountSharePlatform): void {
+  if (platform !== 'openai') {
+    listingFilters.accountLevel = 'all'
+  }
+  listingFilters.featureTags = listingFilters.featureTags.filter(tag =>
+    platform === 'openai' || (tag !== 'image_generation' && tag !== 'codex_cli_only' && tag !== 'non_codex_cli_only')
+  )
+}
+
+function setListingPlatform(platform: AccountSharePlatform): void {
+  if (activeListingPlatform.value === platform) return
+  clearSearchDebounceTimer()
+  closeFilterPopover()
+  activeListingPlatform.value = platform
+  sanitizeListingFiltersForPlatform(platform)
+  syncRecommendationFormForPlatform(platform)
+  resetRecommendationResult()
+  pagination.page = 1
+  void loadListings()
+}
+
+function openUsageGuideDialog(): void {
+  showUsageGuideDialog.value = true
+}
+
+function closeUsageGuideDialog(): void {
+  showUsageGuideDialog.value = false
+}
+
+function openRecommendationFromUsageGuide(): void {
+  showUsageGuideDialog.value = false
+  openRecommendationDialog()
+}
+
+function openRecommendationDialog(): void {
+  syncRecommendationFormForPlatform(activeListingPlatform.value)
+  showRecommendationDialog.value = true
+  if (!modeKeysLoaded.value && !modeKeysLoading.value) {
+    void loadModeKeys()
+  }
+}
+
+function closeRecommendationDialog(): void {
+  showRecommendationDialog.value = false
+}
+
 function toggleCreatePanel(): void {
   showCreate.value = !showCreate.value
   if (showCreate.value) {
+    selectCreatePlatform(activeListingPlatform.value)
     void loadProxies()
     void loadListingNameIndex()
   }
@@ -2555,7 +4493,17 @@ function resetOAuthState(): void {
 
 function resetCreateForm(): void {
   Object.assign(createForm, buildDefaultCreateForm())
-  allowedModels.value = [...DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS]
+  allowedModels.value = defaultAllowedModelsForPlatform(createPlatform.value)
+  createErrorMessage.value = ''
+  resetOAuthState()
+}
+
+function selectCreatePlatform(platform: AccountSharePlatform): void {
+  if (createPlatform.value === platform || creating.value || generatingOAuthURL.value) return
+  const proxyID = createForm.proxy_id
+  createPlatform.value = platform
+  Object.assign(createForm, buildDefaultCreateForm(), { proxy_id: proxyID })
+  allowedModels.value = defaultAllowedModelsForPlatform(platform)
   createErrorMessage.value = ''
   resetOAuthState()
 }
@@ -2756,8 +4704,13 @@ function validateCreateConfig(): string {
   if (!Number.isFinite(Number(createForm.hourly_rate)) || Number(createForm.hourly_rate) < 0) return '每小时扣费额度不能小于 0'
   if (!Number.isFinite(Number(createForm.hourly_fee_waiver_minimum)) || Number(createForm.hourly_fee_waiver_minimum) < 0) return '免小时费低消不能小于 0'
   if (!Number.isFinite(Number(createForm.min_balance_required)) || Number(createForm.min_balance_required) < 0) return '最低余额准入不能小于 0'
-  if (!Number.isFinite(Number(createForm.codex_5h_limit_percent)) || Number(createForm.codex_5h_limit_percent) < 1 || Number(createForm.codex_5h_limit_percent) > 100) return 'Codex 5h 保护必须在 1-100 之间'
-  if (!Number.isFinite(Number(createForm.codex_7d_limit_percent)) || Number(createForm.codex_7d_limit_percent) < 1 || Number(createForm.codex_7d_limit_percent) > 100) return 'Codex 7d 保护必须在 1-100 之间'
+  if (createPlatform.value === 'openai') {
+    if (!Number.isFinite(Number(createForm.codex_5h_limit_percent)) || Number(createForm.codex_5h_limit_percent) < 1 || Number(createForm.codex_5h_limit_percent) > 100) return 'Codex 5h 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(createForm.codex_7d_limit_percent)) || Number(createForm.codex_7d_limit_percent) < 1 || Number(createForm.codex_7d_limit_percent) > 100) return 'Codex 7d 保护必须在 1-100 之间'
+  } else {
+    if (!Number.isFinite(Number(createForm.anthropic_5h_limit_percent)) || Number(createForm.anthropic_5h_limit_percent) < 1 || Number(createForm.anthropic_5h_limit_percent) > 100) return 'Claude 5h 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(createForm.anthropic_7d_limit_percent)) || Number(createForm.anthropic_7d_limit_percent) < 1 || Number(createForm.anthropic_7d_limit_percent) > 100) return 'Claude 7d 保护必须在 1-100 之间'
+  }
   if (parseAllowedModels().length === 0) return '至少填写一个模型白名单'
   return ''
 }
@@ -2778,21 +4731,19 @@ function validateEditConfig(): string {
   if (!Number.isFinite(Number(editForm.hourly_rate)) || Number(editForm.hourly_rate) < 0) return '每小时扣费额度不能小于 0'
   if (!Number.isFinite(Number(editForm.hourly_fee_waiver_minimum)) || Number(editForm.hourly_fee_waiver_minimum) < 0) return '免小时费低消不能小于 0'
   if (!Number.isFinite(Number(editForm.min_balance_required)) || Number(editForm.min_balance_required) < 0) return '最低余额准入不能小于 0'
-  if (!Number.isFinite(Number(editForm.codex_5h_limit_percent)) || Number(editForm.codex_5h_limit_percent) < 1 || Number(editForm.codex_5h_limit_percent) > 100) return 'Codex 5h 保护必须在 1-100 之间'
-  if (!Number.isFinite(Number(editForm.codex_7d_limit_percent)) || Number(editForm.codex_7d_limit_percent) < 1 || Number(editForm.codex_7d_limit_percent) > 100) return 'Codex 7d 保护必须在 1-100 之间'
+  if (listingPlatform(editingConfigListing.value) === 'openai') {
+    if (!Number.isFinite(Number(editForm.codex_5h_limit_percent)) || Number(editForm.codex_5h_limit_percent) < 1 || Number(editForm.codex_5h_limit_percent) > 100) return 'Codex 5h 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(editForm.codex_7d_limit_percent)) || Number(editForm.codex_7d_limit_percent) < 1 || Number(editForm.codex_7d_limit_percent) > 100) return 'Codex 7d 保护必须在 1-100 之间'
+  } else if (listingPlatform(editingConfigListing.value) === 'anthropic') {
+    if (!Number.isFinite(Number(editForm.anthropic_5h_limit_percent)) || Number(editForm.anthropic_5h_limit_percent) < 1 || Number(editForm.anthropic_5h_limit_percent) > 100) return 'Claude 5h 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(editForm.anthropic_7d_limit_percent)) || Number(editForm.anthropic_7d_limit_percent) < 1 || Number(editForm.anthropic_7d_limit_percent) > 100) return 'Claude 7d 保护必须在 1-100 之间'
+  }
   if (parseEditAllowedModels().length === 0) return '至少填写一个模型白名单'
   if (!editSessionID.value) return '编辑会话已失效，请关闭后重新编辑'
   return ''
 }
 
 async function loadListings(): Promise<void> {
-  const validationError = validateListingFilters()
-  if (validationError) {
-    abortActiveListingsRequest()
-    loading.value = false
-    errorMessage.value = validationError
-    return
-  }
   abortActiveListingsRequest()
   const requestSeq = ++listingsRequestSeq
   const controller = new AbortController()
@@ -2805,6 +4756,8 @@ async function loadListings(): Promise<void> {
     })
     if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return
     const realListings = (result.items || []).map(normalizeListingForMerge)
+    await loadQueueSnapshotsForListings(realListings)
+    if (controller.signal.aborted || requestSeq !== listingsRequestSeq) return
     pagination.total = result.total || 0
     pagination.page = result.page || pagination.page
     pagination.page_size = result.page_size || ACCOUNT_SHARE_PAGE_SIZE
@@ -2817,7 +4770,7 @@ async function loadListings(): Promise<void> {
     listings.value = []
     pagination.total = 0
     pagination.pages = 1
-    errorMessage.value = extractApiErrorMessage(error, '加载账号广场失败')
+    errorMessage.value = formatAccountShareLoadError(error, '加载账号广场失败')
   } finally {
     if (requestSeq === listingsRequestSeq) {
       if (listingsRequestController === controller) listingsRequestController = null
@@ -2874,24 +4827,250 @@ async function loadListingNameIndex(updateSuggestedName = true): Promise<void> {
   }
 }
 
+function closeOwnerDialog(): void {
+  ownerDialog.show = false
+  ownerDialog.ownerUserID = 0
+  ownerDialog.ownerUsername = ''
+  ownerDialog.sourceListing = null
+  ownerDialog.tab = 'listings'
+  ownerDialog.listings = []
+  ownerDialog.reviews = []
+  ownerDialog.error = ''
+}
+
+async function openOwnerDialog(listing: AccountShareListing): Promise<void> {
+  ownerDialog.show = true
+  ownerDialog.ownerUserID = listing.owner_user_id
+  ownerDialog.ownerUsername = ownerDisplayName(listing)
+  ownerDialog.sourceListing = listing
+  ownerDialog.tab = 'listings'
+  ownerDialog.error = ''
+  ownerDialog.listings = []
+  ownerDialog.reviews = []
+  await Promise.all([loadOwnerListings(), loadOwnerReviews()])
+}
+
+function searchOwnerFromDialog(): void {
+  const keyword = ownerDialog.ownerUsername || (ownerDialog.ownerUserID ? String(ownerDialog.ownerUserID) : '')
+  if (!keyword) return
+  searchQuery.value = keyword
+  pagination.page = 1
+  closeOwnerDialog()
+  applyListingFilters()
+}
+
+async function loadOwnerListings(): Promise<void> {
+  if (!ownerDialog.ownerUserID) return
+  ownerDialog.loadingListings = true
+  try {
+    const result = await accountShareAPI.listListings(1, 24, {
+      tab: 'all',
+      status: 'all',
+      platform: activeListingPlatform.value,
+      owner_user_id: ownerDialog.ownerUserID,
+      sort_by: 'rating',
+      sort_order: 'desc'
+    })
+    ownerDialog.listings = result.items || []
+  } catch (error: unknown) {
+    ownerDialog.error = extractApiErrorMessage(error, '加载号主账号失败')
+  } finally {
+    ownerDialog.loadingListings = false
+  }
+}
+
+async function loadOwnerReviews(): Promise<void> {
+  if (!ownerDialog.ownerUserID) return
+  ownerDialog.loadingReviews = true
+  try {
+    const result = await accountShareAPI.listOwnerReviews(ownerDialog.ownerUserID, 1, 20)
+    ownerDialog.reviews = result.items || []
+  } catch (error: unknown) {
+    ownerDialog.error = extractApiErrorMessage(error, '加载号主评论失败')
+  } finally {
+    ownerDialog.loadingReviews = false
+  }
+}
+
 async function loadModeKeys(): Promise<void> {
   modeKeysLoading.value = true
   modeKeysLoaded.value = false
-  modeApiKeys.value = []
+  modeApiKeysByPlatform.openai = []
+  modeApiKeysByPlatform.anthropic = []
   try {
     const groups = await userGroupsAPI.getAvailable()
     availableGroups.value = groups
-    const accountModeGroup = groups.find(isOpenAIAccountModeGroup)
-    if (!accountModeGroup) {
-      modeKeysLoaded.value = true
-      return
-    }
-    const result = await keysAPI.list(1, 100, { group_id: accountModeGroup.id })
-    modeApiKeys.value = result.items || []
+    await Promise.all(ACCOUNT_SHARE_PLATFORM_OPTIONS.map(async option => {
+      const accountModeGroup = groups.find(group => isAccountModeGroupForPlatform(group, option.value))
+      if (!accountModeGroup) {
+        modeApiKeysByPlatform[option.value] = []
+        return
+      }
+      const result = await keysAPI.list(1, 100, { group_id: accountModeGroup.id })
+      modeApiKeysByPlatform[option.value] = result.items || []
+    }))
     modeKeysLoaded.value = true
+    syncRecommendationApiKey()
   } finally {
     modeKeysLoading.value = false
   }
+}
+
+function resetRecommendationResult(options: { keepUsageProfileMessage?: boolean } = {}): void {
+  recommendationResult.value = null
+  recommendationError.value = ''
+  if (!options.keepUsageProfileMessage) {
+    recommendationUsageProfileMessage.value = ''
+  }
+}
+
+function syncRecommendationApiKey(): void {
+  const keys = recommendationKeyOptions.value
+  const selectedID = Number(recommendationForm.api_key_id || 0)
+  if (selectedID > 0 && keys.some(item => item.id === selectedID)) return
+  recommendationForm.api_key_id = keys[0]?.id || 0
+}
+
+function syncRecommendationFormForPlatform(platform: AccountSharePlatform = activeListingPlatform.value): void {
+  const models = new Set<string>(DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[platform])
+  for (const listing of [...knownListings.value, ...listings.value]) {
+    if (listingPlatform(listing) !== platform) continue
+    for (const model of listing.allowed_models) {
+      const value = model.trim()
+      if (value) models.add(value)
+    }
+  }
+  if (!models.has(recommendationForm.model)) {
+    recommendationForm.model = DEFAULT_ACCOUNT_SHARE_ALLOWED_MODELS_BY_PLATFORM[platform][0]
+  }
+  syncRecommendationApiKey()
+}
+
+function applyRecommendationPreset(key: RecommendationPresetKey): void {
+  const preset = recommendationPresets.find(item => item.key === key)
+  if (!preset) return
+  selectedRecommendationPreset.value = key
+  recommendationForm.request_count = preset.request_count
+  recommendationForm.active_hours = preset.active_hours
+  recommendationForm.input_tokens_per_request = preset.input_tokens_per_request
+  recommendationForm.output_tokens_per_request = preset.output_tokens_per_request
+  recommendationForm.cache_creation_tokens_per_request = preset.cache_creation_tokens_per_request
+  recommendationForm.cache_read_tokens_per_request = preset.cache_read_tokens_per_request
+  resetRecommendationResult()
+}
+
+function applyRecommendationUsageProfileToForm(profile: AccountShareRecommendationUsageProfile): void {
+  recommendationForm.request_count = profile.request_count
+  recommendationForm.active_hours = profile.active_hours
+  recommendationForm.input_tokens_per_request = profile.input_tokens_per_request
+  recommendationForm.output_tokens_per_request = profile.output_tokens_per_request
+  recommendationForm.cache_creation_tokens_per_request = profile.cache_creation_tokens_per_request
+  recommendationForm.cache_read_tokens_per_request = profile.cache_read_tokens_per_request
+}
+
+function buildRecommendationUsageProfileMessage(profile: AccountShareRecommendationUsageProfile): string {
+  const prefix = profile.used_model_fallback
+    ? '当前模型近3天历史不足，已按全部模型均值填入'
+    : '已按近3天历史均值填入'
+  const capped = profile.capped ? '，部分数值已按测算上限处理' : ''
+  const activeHours = normalizeRecommendationActiveHours(profile.active_hours)
+  const requestsPerHour = profile.request_count / activeHours
+  return `${prefix}：单次输入 ${formatNumber(profile.input_tokens_per_request)}、输出 ${formatNumber(profile.output_tokens_per_request)}、Cache写入 ${formatNumber(profile.cache_creation_tokens_per_request)}、Cache读取 ${formatNumber(profile.cache_read_tokens_per_request)}；按 ${profile.request_count} 次 / ${formatNumber(activeHours)} 小时（${formatNumber(requestsPerHour)} 次/小时）测算预计额度${capped}`
+}
+
+async function applyRecentUsageProfile(): Promise<void> {
+  if (recommendationUsageProfileLoading.value || recommendationLoading.value) return
+  recommendationUsageProfileMessage.value = ''
+  recommendationError.value = ''
+  syncRecommendationFormForPlatform()
+  recommendationUsageProfileLoading.value = true
+  try {
+    const profile = await accountShareAPI.getRecommendationUsageProfile({
+      platform: activeListingPlatform.value,
+      model: recommendationForm.model.trim(),
+      days: 3
+    })
+    if (!profile.has_history) {
+      recommendationUsageProfileMessage.value = '近3天暂无历史请求，已保留当前预设'
+      return
+    }
+    selectedRecommendationPreset.value = 'history'
+    applyRecommendationUsageProfileToForm(profile)
+    resetRecommendationResult({ keepUsageProfileMessage: true })
+    recommendationUsageProfileMessage.value = buildRecommendationUsageProfileMessage(profile)
+  } catch (error: unknown) {
+    recommendationUsageProfileMessage.value = extractApiErrorMessage(error, '近3天均值读取失败')
+  } finally {
+    recommendationUsageProfileLoading.value = false
+  }
+}
+
+function validateRecommendationForm(): string {
+  if (modeKeysLoading.value) return '账号模式 Key 正在加载，请稍候再测算'
+  if (!modeKeysLoaded.value) return '账号模式 Key 尚未加载成功，请刷新后再测算'
+  if (recommendationKeyOptions.value.length === 0) return `请先创建一个绑定「${accountModeGroupName(activeListingPlatform.value)}」分组的 API Key`
+  const apiKeyID = Number(recommendationForm.api_key_id || 0)
+  if (apiKeyID <= 0 || !recommendationKeyOptions.value.some(item => item.id === apiKeyID)) return '请选择账号模式 API Key'
+  if (!recommendationForm.model.trim()) return '请选择需要测算的模型'
+  const requestCount = Number(recommendationForm.request_count)
+  if (!Number.isFinite(requestCount) || requestCount <= 0 || !Number.isInteger(requestCount)) return '请求次数必须是正整数'
+  const activeHours = Number(recommendationForm.active_hours)
+  if (!Number.isFinite(activeHours) || activeHours <= 0) return '使用时长必须大于 0 小时'
+  const tokenFields = [
+    recommendationForm.input_tokens_per_request,
+    recommendationForm.output_tokens_per_request,
+    recommendationForm.cache_creation_tokens_per_request,
+    recommendationForm.cache_read_tokens_per_request
+  ]
+  if (tokenFields.some(value => !Number.isFinite(Number(value)) || Number(value) < 0 || !Number.isInteger(Number(value)))) {
+    return '单次 token 必须是非负整数'
+  }
+  return ''
+}
+
+async function runRecommendation(): Promise<void> {
+  if (recommendationLoading.value) return
+  recommendationError.value = ''
+  syncRecommendationFormForPlatform()
+  const validationError = validateRecommendationForm()
+  if (validationError) {
+    recommendationError.value = validationError
+    return
+  }
+  recommendationLoading.value = true
+  try {
+    const result = await accountShareAPI.recommendListings({
+      platform: activeListingPlatform.value,
+      model: recommendationForm.model.trim(),
+      api_key_id: Number(recommendationForm.api_key_id),
+      request_count: Number(recommendationForm.request_count),
+      active_hours: Number(recommendationForm.active_hours),
+      input_tokens_per_request: Number(recommendationForm.input_tokens_per_request),
+      output_tokens_per_request: Number(recommendationForm.output_tokens_per_request),
+      cache_creation_tokens_per_request: Number(recommendationForm.cache_creation_tokens_per_request),
+      cache_read_tokens_per_request: Number(recommendationForm.cache_read_tokens_per_request),
+      limit: ACCOUNT_SHARE_RECOMMENDATION_LIMIT
+    })
+    recommendationResult.value = result
+    const recommendedListings = (result.items || []).map(item => item.listing)
+    mergeKnownListings(recommendedListings)
+    syncIdleTimeoutControls(recommendedListings)
+  } catch (error: unknown) {
+    recommendationResult.value = null
+    recommendationError.value = extractApiErrorMessage(error, '账号推荐测算失败', accountShareRecommendationErrorMessages)
+  } finally {
+    recommendationLoading.value = false
+  }
+}
+
+function useRecommendedListing(candidate: AccountShareRecommendationCandidate): void {
+  const listing = candidate.listing
+  mergeKnownListings([listing])
+  selectedKeyByListing[listing.id] = Number(recommendationForm.api_key_id || 0)
+  if (!idleTimeoutByListing[listing.id]) {
+    idleTimeoutByListing[listing.id] = DEFAULT_ACCOUNT_SHARE_IDLE_TIMEOUT_MINUTES
+  }
+  void joinUse(listing)
 }
 
 async function loadProxies(): Promise<void> {
@@ -2918,7 +5097,9 @@ async function startOAuth(): Promise<void> {
 
   generatingOAuthURL.value = true
   try {
-    const result = await accountShareAPI.generateOpenAIAuthURL({ proxy_id: currentProxyID.value })
+    const result = createPlatform.value === 'anthropic'
+      ? await accountShareAPI.generateAnthropicAuthURL({ proxy_id: currentProxyID.value })
+      : await accountShareAPI.generateOpenAIAuthURL({ proxy_id: currentProxyID.value })
     authURL.value = result.auth_url
     authSessionID.value = result.session_id
     window.open(result.auth_url, '_blank', 'noopener,noreferrer')
@@ -2939,17 +5120,18 @@ async function submitOAuth(): Promise<void> {
 
   const authCode = (oauthFlowRef.value?.authCode || '').trim()
   const oauthState = (oauthFlowRef.value?.oauthState || '').trim()
-  if (!authSessionID.value || !authCode || !oauthState) {
-    createErrorMessage.value = '请先生成登录链接，并粘贴包含 code 和 state 的 OpenAI 回调结果'
+  if (!authSessionID.value || !authCode || (createPlatform.value === 'openai' && !oauthState)) {
+    createErrorMessage.value = createPlatform.value === 'openai'
+      ? '请先生成登录链接，并粘贴包含 code 和 state 的 OpenAI 回调结果'
+      : '请先生成登录链接，并粘贴包含 code 的 Anthropic 回调结果'
     return
   }
 
   creating.value = true
   try {
-    await accountShareAPI.exchangeOpenAICode({
+    const payload = {
       session_id: authSessionID.value,
       code: authCode,
-      state: oauthState,
       proxy_id: currentProxyID.value,
       name: createForm.name.trim(),
       concurrency: Number(createForm.concurrency),
@@ -2959,11 +5141,23 @@ async function submitOAuth(): Promise<void> {
       per_user_concurrency: Number(createForm.per_user_concurrency),
       hourly_rate: Number(createForm.hourly_rate),
       hourly_fee_waiver_minimum: Number(createForm.hourly_fee_waiver_minimum),
-      min_balance_required: Number(createForm.min_balance_required),
-      codex_cli_only: createForm.codex_cli_only,
-      codex_5h_limit_percent: Number(createForm.codex_5h_limit_percent),
-      codex_7d_limit_percent: Number(createForm.codex_7d_limit_percent)
-    })
+      min_balance_required: Number(createForm.min_balance_required)
+    }
+    if (createPlatform.value === 'anthropic') {
+      await accountShareAPI.exchangeAnthropicCode({
+        ...payload,
+        anthropic_5h_limit_percent: Number(createForm.anthropic_5h_limit_percent),
+        anthropic_7d_limit_percent: Number(createForm.anthropic_7d_limit_percent)
+      })
+    } else {
+      await accountShareAPI.exchangeOpenAICode({
+        ...payload,
+        state: oauthState,
+        codex_cli_only: createForm.codex_cli_only,
+        codex_5h_limit_percent: Number(createForm.codex_5h_limit_percent),
+        codex_7d_limit_percent: Number(createForm.codex_7d_limit_percent)
+      })
+    }
     resetCreateForm()
     showCreate.value = false
     await loadListings()
@@ -2982,12 +5176,12 @@ async function joinUse(listing: AccountShareListing): Promise<void> {
     return
   }
   if (modeKeysLoading.value || !modeKeysLoaded.value) {
-    showModeApiKeyRequiredDialog()
+    showModeApiKeyRequiredDialog(listing)
     return
   }
   const apiKeyID = selectedModeApiKeyID(listing)
   if (!apiKeyID) {
-    showModeApiKeyRequiredDialog()
+    showModeApiKeyRequiredDialog(listing)
     return
   }
   const idleTimeoutValue = idleTimeoutByListing[listing.id] ?? 0
@@ -3024,13 +5218,13 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
   const { listing, apiKeyID, idleTimeoutMinutes } = pendingJoin
   joiningId.value = listing.id
   try {
-    await accountShareAPI.joinListing(listing.id, {
+    const membership = await accountShareAPI.joinListing(listing.id, {
       api_key_id: apiKeyID,
       idle_timeout_minutes: idleTimeoutMinutes
     })
     pendingJoinConfirmation.value = null
     await loadListings()
-    appStore.showSuccess('已加入使用')
+    appStore.showSuccess(membership.status === 'queued' ? '已加入预约列表' : '已加入使用')
   } catch (error: unknown) {
     pendingJoinConfirmation.value = null
     showActionError(extractApiErrorMessage(error, '加入使用失败', accountShareJoinErrorMessages), '加入使用失败')
@@ -3040,11 +5234,13 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
 }
 
 function openEndUseConfirm(listing: AccountShareListing): void {
-  const membershipID = Number(listing.current_membership_id || 0)
+  const membershipID = Number(listing.queue_membership_id || listing.current_membership_id || 0)
   if (membershipID <= 0 || endingId.value === membershipID) return
   pendingEndUse.value = {
     membershipID,
-    apiKeyID: listing.current_api_key_id
+    apiKeyID: listing.queue_api_key_id || listing.current_api_key_id,
+    status: listing.queue_status || (listing.current_membership_id ? 'active' : ''),
+    listing
   }
 }
 
@@ -3053,32 +5249,84 @@ function cancelEndUse(): void {
 }
 
 async function confirmEndUse(): Promise<void> {
-  const membershipID = pendingEndUse.value?.membershipID
+  const pending = pendingEndUse.value
+  const membershipID = pending?.membershipID
   if (!membershipID || endingId.value === membershipID) return
-  await endUse(membershipID)
+  const membership = await endUse(membershipID)
   pendingEndUse.value = null
+  if (pending && membership && pending.status !== 'queued' && membership.last_request_at) {
+    openReviewDialog(pending.listing, membership)
+  }
 }
 
-async function endUse(membershipID: number): Promise<void> {
+async function endUse(membershipID: number): Promise<AccountShareMembership | null> {
   errorMessage.value = ''
   endingId.value = membershipID
   try {
     const intent = await accountShareAPI.createEndMembershipIntent(membershipID)
-    await accountShareAPI.endMembership(membershipID, intent.token)
+    const membership = await accountShareAPI.endMembership(membershipID, intent.token)
     await loadListings()
-    appStore.showSuccess('已结束使用')
+    appStore.showSuccess(pendingEndUse.value?.status === 'queued' ? '已移出预约' : '已结束使用')
+    return membership
   } catch (error: unknown) {
     showActionError(extractApiErrorMessage(error, '结束使用失败'), '结束使用失败')
+    return null
   } finally {
     endingId.value = null
   }
 }
 
+function openReviewDialog(listing: AccountShareListing, membership: AccountShareMembership): void {
+  pendingReview.value = {
+    membershipID: membership.id,
+    listing,
+    score: null,
+    comment: '',
+    submitting: false,
+    error: ''
+  }
+}
+
+function closeReviewDialog(): void {
+  if (pendingReview.value?.submitting) return
+  pendingReview.value = null
+}
+
+async function submitReview(): Promise<void> {
+  const state = pendingReview.value
+  if (!state || state.submitting) return
+  if (state.score === null || state.score < 0 || state.score > 10) {
+    state.error = '请选择 0-10 分'
+    return
+  }
+  state.submitting = true
+  state.error = ''
+  try {
+    await accountShareAPI.submitReview(state.membershipID, {
+      score: state.score,
+      comment: state.comment.trim() || undefined
+    })
+    pendingReview.value = null
+    await loadListings()
+    appStore.showSuccess(state.comment.trim() ? '评分已提交，评论审核通过后展示' : '评分已提交')
+  } catch (error: unknown) {
+    state.error = extractApiErrorMessage(error, '提交评分失败', {
+      ACCOUNT_SHARE_REVIEW_ALREADY_EXISTS: '该次使用已经评分',
+      ACCOUNT_SHARE_REVIEW_NO_USAGE: '该次使用没有实际请求记录，不能评分',
+      ACCOUNT_SHARE_COMMENT_REVIEW_UNAVAILABLE: '评论审核未启用或配置不完整，请先删除评论内容或稍后再试',
+      ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG: '评论最多 1000 个字符',
+      ACCOUNT_SHARE_REVIEW_INVALID_SCORE: '评分必须在 0-10 之间'
+    })
+  } finally {
+    if (pendingReview.value) pendingReview.value.submitting = false
+  }
+}
+
 async function saveIdleTimeout(listing: AccountShareListing): Promise<void> {
-  const membershipID = Number(listing.current_membership_id || 0)
+  const membershipID = Number(listing.queue_membership_id || listing.current_membership_id || 0)
   if (membershipID <= 0 || savingIdleTimeoutId.value === membershipID) return
   errorMessage.value = ''
-  const idleTimeoutValue = idleTimeoutByListing[listing.id] ?? listing.current_idle_timeout_minutes ?? 0
+  const idleTimeoutValue = idleTimeoutByListing[listing.id] ?? listing.current_idle_timeout_minutes ?? listing.queue_idle_timeout_minutes ?? 0
   const idleTimeoutError = validateIdleTimeoutMinutes(idleTimeoutValue)
   if (idleTimeoutError) {
     showActionError(idleTimeoutError, '空闲退出设置有误')
@@ -3162,7 +5410,7 @@ function normalizeEditableProxyID(listing: AccountShareListing): number | null {
 function populateEditForm(listing: AccountShareListing): void {
   mergeListingProxyOption(listing)
   Object.assign(editForm, {
-    name: listing.account_name?.trim() ? listing.account_name : `${ACCOUNT_NAME_BASE}${listing.account_id}`,
+    name: listing.account_name?.trim() ? listing.account_name : `${ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(listing)]}${listing.account_id}`,
     proxy_id: normalizeEditableProxyID(listing),
     concurrency: normalizeEditableNumber(listing.account_concurrency, DEFAULT_ACCOUNT_CONCURRENCY),
     seat_limit: normalizeEditableNumber(listing.seat_limit, 2),
@@ -3173,7 +5421,9 @@ function populateEditForm(listing: AccountShareListing): void {
     min_balance_required: normalizeEditableNumber(listing.min_balance_required, 0),
     codex_cli_only: Boolean(listing.codex_cli_only),
     codex_5h_limit_percent: normalizeEditableNumber(listing.codex_5h_limit_percent, 100),
-    codex_7d_limit_percent: normalizeEditableNumber(listing.codex_7d_limit_percent, 100)
+    codex_7d_limit_percent: normalizeEditableNumber(listing.codex_7d_limit_percent, 100),
+    anthropic_5h_limit_percent: anthropic5hLimitPercent(listing),
+    anthropic_7d_limit_percent: anthropic7dLimitPercent(listing)
   } satisfies CreateFormState)
   editAllowedModels.value = Array.isArray(listing.allowed_models) ? [...listing.allowed_models] : []
 }
@@ -3316,7 +5566,7 @@ async function saveConfigEdit(): Promise<void> {
 
   savingConfigEdit.value = true
   try {
-    const updated = await accountShareAPI.updateListing(listing.id, {
+    const payload: UpdateAccountShareListingRequest = {
       name: editForm.name.trim(),
       proxy_id: currentEditProxyID.value,
       concurrency: Number(editForm.concurrency),
@@ -3327,12 +5577,18 @@ async function saveConfigEdit(): Promise<void> {
       hourly_rate: Number(editForm.hourly_rate),
       hourly_fee_waiver_minimum: Number(editForm.hourly_fee_waiver_minimum),
       min_balance_required: Number(editForm.min_balance_required),
-      codex_cli_only: editForm.codex_cli_only,
-      codex_5h_limit_percent: Number(editForm.codex_5h_limit_percent),
-      codex_7d_limit_percent: Number(editForm.codex_7d_limit_percent),
       edit_session_id: editSessionID.value,
       force_active_edit: editForceActive.value
-    })
+    }
+    if (listingPlatform(listing) === 'openai') {
+      payload.codex_cli_only = editForm.codex_cli_only
+      payload.codex_5h_limit_percent = Number(editForm.codex_5h_limit_percent)
+      payload.codex_7d_limit_percent = Number(editForm.codex_7d_limit_percent)
+    } else if (listingPlatform(listing) === 'anthropic') {
+      payload.anthropic_5h_limit_percent = Number(editForm.anthropic_5h_limit_percent)
+      payload.anthropic_7d_limit_percent = Number(editForm.anthropic_7d_limit_percent)
+    }
+    const updated = await accountShareAPI.updateListing(listing.id, payload)
     stopEditSessionRenewal()
     mergeListingUpdate(updated)
     await loadListings()
@@ -3491,7 +5747,28 @@ watch(searchQuery, () => {
   }, 300)
 })
 
+watch(modeApiKeys, () => {
+  syncRecommendationApiKey()
+})
+
+watch(
+  () => [
+    recommendationForm.api_key_id,
+    recommendationForm.model,
+    recommendationForm.request_count,
+    recommendationForm.active_hours,
+    recommendationForm.input_tokens_per_request,
+    recommendationForm.output_tokens_per_request,
+    recommendationForm.cache_creation_tokens_per_request,
+    recommendationForm.cache_read_tokens_per_request
+  ],
+  () => {
+    resetRecommendationResult()
+  }
+)
+
 onMounted(async () => {
+  document.addEventListener('click', handleFilterPanelDocumentClick)
   clockTimer = window.setInterval(() => {
     nowMs.value = Date.now()
   }, 30_000)
@@ -3503,12 +5780,14 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('click', handleFilterPanelDocumentClick)
   if (clockTimer != null) {
     window.clearInterval(clockTimer)
     clockTimer = null
   }
   clearSearchDebounceTimer()
   abortActiveListingsRequest()
+  abortMySpendRequest()
   stopEditSessionRenewal()
   void releaseConfigEditSession()
 })
@@ -3564,6 +5843,316 @@ onBeforeUnmount(() => {
 .hero-actions .btn-primary,
 .hero-actions .btn-secondary {
   min-height: 2.75rem;
+}
+
+.account-share-guide-button {
+  display: inline-flex;
+  min-height: 2.75rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0 0.875rem;
+  color: rgb(29 78 216);
+  font-size: 0.875rem;
+  font-weight: 800;
+  transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.account-share-guide-button:hover {
+  border-color: rgb(96 165 250);
+  background: rgb(219 234 254);
+  box-shadow: 0 8px 18px rgb(37 99 235 / 0.1);
+}
+
+.account-share-guide {
+  display: grid;
+  gap: 1rem;
+  color: rgb(51 65 85);
+}
+
+.account-share-guide-summary,
+.account-share-guide-section,
+.account-share-guide-note {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(255 255 255);
+}
+
+.account-share-guide-summary {
+  padding: 1rem;
+  background: linear-gradient(180deg, rgb(248 250 252), rgb(255 255 255));
+}
+
+.account-share-guide-summary span {
+  display: inline-flex;
+  margin-bottom: 0.375rem;
+  color: rgb(37 99 235);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.account-share-guide-summary strong {
+  display: block;
+  color: rgb(15 23 42);
+  font-size: 1rem;
+  font-weight: 850;
+  line-height: 1.5rem;
+}
+
+.account-share-guide-summary p,
+.account-share-guide-step p,
+.account-share-guide-rule-list p,
+.account-share-guide-example p,
+.account-share-guide-note p,
+.account-share-guide-param-grid dd {
+  margin: 0;
+  color: rgb(71 85 105);
+  font-size: 0.875rem;
+  line-height: 1.625rem;
+}
+
+.account-share-guide-summary p {
+  margin-top: 0.5rem;
+}
+
+.account-share-guide-flow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.account-share-guide-step {
+  display: grid;
+  gap: 0.375rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.875rem;
+}
+
+.account-share-guide-step > span {
+  display: inline-flex;
+  height: 1.75rem;
+  width: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(37 99 235);
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 900;
+}
+
+.account-share-guide-step strong,
+.account-share-guide-section h4 {
+  margin: 0;
+  color: rgb(15 23 42);
+  font-weight: 850;
+}
+
+.account-share-guide-section {
+  display: grid;
+  gap: 0.875rem;
+  padding: 1rem;
+}
+
+.account-share-guide-rule-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.account-share-guide-rule-list > div,
+.account-share-guide-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+}
+
+.account-share-guide-rule-list svg,
+.account-share-guide-note svg {
+  margin-top: 0.25rem;
+  flex-shrink: 0;
+  color: rgb(37 99 235);
+}
+
+.account-share-guide-rule-list strong {
+  color: rgb(15 23 42);
+  font-weight: 850;
+}
+
+.account-share-guide-example {
+  display: grid;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  background: rgb(248 250 252);
+  padding: 0.875rem;
+}
+
+.account-share-guide-example .account-share-guide-formula {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0.5rem 0.625rem;
+  color: rgb(29 78 216);
+  font-weight: 850;
+}
+
+.account-share-guide-param-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.account-share-guide-param-grid > div {
+  min-width: 0;
+  border-radius: 0.5rem;
+  background: rgb(248 250 252);
+  padding: 0.75rem;
+}
+
+.account-share-guide-param-grid dt {
+  margin-bottom: 0.25rem;
+  color: rgb(15 23 42);
+  font-size: 0.8125rem;
+  font-weight: 850;
+}
+
+.account-share-guide-assistant {
+  border-color: rgb(191 219 254);
+  background:
+    linear-gradient(180deg, rgb(239 246 255 / 0.74), rgb(255 255 255)),
+    radial-gradient(circle at 100% 0%, rgb(16 185 129 / 0.12), transparent 34%);
+}
+
+.account-share-guide-assistant-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.account-share-guide-assistant-head > span {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.account-share-guide-assistant-head p {
+  margin: 0.25rem 0 0;
+  color: rgb(71 85 105);
+  font-size: 0.875rem;
+  line-height: 1.625rem;
+}
+
+.account-share-guide-assistant-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.account-share-guide-assistant-grid > div {
+  min-width: 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(219 234 254);
+  background: rgb(255 255 255 / 0.88);
+  padding: 0.75rem;
+}
+
+.account-share-guide-assistant-grid strong {
+  display: block;
+  color: rgb(15 23 42);
+  font-size: 0.8125rem;
+  font-weight: 850;
+}
+
+.account-share-guide-assistant-grid p {
+  margin: 0.25rem 0 0;
+  color: rgb(71 85 105);
+  font-size: 0.8125rem;
+  line-height: 1.5rem;
+}
+
+.account-share-guide-note {
+  padding: 0.875rem 1rem;
+  background: rgb(239 246 255);
+}
+
+.account-share-platform-tabs {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  border-bottom: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252 / 0.82);
+  padding: 0.875rem 1.125rem;
+}
+
+.account-share-platform-tab {
+  display: flex;
+  min-height: 3rem;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.125rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  padding: 0.625rem 0.875rem;
+  text-align: left;
+  transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+}
+
+.account-share-platform-tab span,
+.account-share-platform-tab small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-share-platform-tab span {
+  font-size: 0.875rem;
+  font-weight: 800;
+}
+
+.account-share-platform-tab small {
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.account-share-platform-tab-active {
+  border-color: rgb(37 99 235);
+  background: rgb(239 246 255);
+  color: rgb(29 78 216);
+  box-shadow: inset 0 0 0 1px rgb(37 99 235 / 0.16), 0 8px 18px rgb(37 99 235 / 0.08);
+}
+
+.account-share-platform-tab-active small {
+  color: rgb(71 85 105);
+}
+
+.account-share-platform-tab-idle {
+  background: rgb(255 255 255);
+  color: rgb(51 65 85);
+}
+
+.account-share-platform-tab-idle small {
+  color: rgb(100 116 139);
+}
+
+.account-share-platform-tab-idle:hover {
+  border-color: rgb(148 163 184);
+  background: rgb(255 255 255);
 }
 
 .account-share-summary-grid {
@@ -3634,6 +6223,379 @@ onBeforeUnmount(() => {
   color: rgb(124 58 237);
 }
 
+.recommendation-panel {
+  overflow: hidden;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(255 255 255);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 0.06);
+}
+
+.recommendation-dialog-panel {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.recommendation-dialog-panel .recommendation-head {
+  padding: 0 0 1rem;
+}
+
+.recommendation-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  border-bottom: 1px solid rgb(226 232 240);
+  padding: 1rem 1.125rem;
+}
+
+.recommendation-head h2 {
+  margin: 0;
+  color: rgb(17 24 39);
+  font-size: 1rem;
+  font-weight: 850;
+  line-height: 1.5rem;
+}
+
+.recommendation-head p {
+  margin: 0.125rem 0 0;
+  color: rgb(100 116 139);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.recommendation-profile-help {
+  max-width: 62rem;
+  margin: -0.25rem 0 0;
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  font-weight: 650;
+  line-height: 1.25rem;
+}
+
+.recommendation-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.recommendation-preset {
+  min-height: 2.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0 0.875rem;
+  color: rgb(51 65 85);
+  font-size: 0.8125rem;
+  font-weight: 800;
+  transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
+}
+
+.recommendation-preset:hover {
+  border-color: rgb(148 163 184);
+  background: rgb(255 255 255);
+}
+
+.recommendation-preset-active {
+  border-color: rgb(37 99 235);
+  background: rgb(239 246 255);
+  color: rgb(29 78 216);
+}
+
+.recommendation-profile-button {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0 0.875rem;
+  color: rgb(29 78 216);
+  font-size: 0.8125rem;
+  font-weight: 850;
+  transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
+}
+
+.recommendation-profile-button:hover:not(:disabled) {
+  border-color: rgb(96 165 250);
+  background: rgb(219 234 254);
+}
+
+.recommendation-profile-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.recommendation-layout {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 1.125rem;
+}
+
+.recommendation-dialog-panel .recommendation-layout {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.recommendation-form-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.recommendation-action-box {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+}
+
+.recommendation-profile-message {
+  margin: 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0.75rem;
+  color: rgb(29 78 216);
+  font-size: 0.8125rem;
+  font-weight: 750;
+  line-height: 1.25rem;
+}
+
+.recommendation-error {
+  margin: 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(248 113 113 / 0.55);
+  background: rgb(254 242 242);
+  padding: 0.75rem;
+  color: rgb(185 28 28);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+}
+
+.recommendation-summary {
+  display: grid;
+  gap: 0.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: linear-gradient(180deg, rgb(239 246 255), rgb(240 253 250));
+  padding: 0.875rem;
+}
+
+.recommendation-summary span,
+.recommendation-summary small {
+  color: rgb(30 64 175);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.recommendation-summary strong {
+  color: rgb(13 148 136);
+  font-size: 1.5rem;
+  font-weight: 900;
+  line-height: 1.875rem;
+}
+
+.recommendation-results {
+  display: grid;
+  gap: 0.75rem;
+  border-top: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 1rem 1.125rem;
+}
+
+.recommendation-dialog-panel .recommendation-results {
+  margin-top: 0.25rem;
+  border-radius: 0.5rem;
+}
+
+.recommendation-empty {
+  border-radius: 0.5rem;
+  border: 1px dashed rgb(203 213 225);
+  background: rgb(255 255 255);
+  padding: 1rem;
+  color: rgb(100 116 139);
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.recommendation-card {
+  display: grid;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(255 255 255);
+  padding: 0.875rem;
+}
+
+.recommendation-card-head {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.recommendation-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.recommendation-rank {
+  display: inline-flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(15 23 42);
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 900;
+}
+
+.recommendation-title strong,
+.recommendation-title small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recommendation-title strong {
+  color: rgb(17 24 39);
+  font-size: 0.9375rem;
+  font-weight: 850;
+}
+
+.recommendation-title small {
+  margin-top: 0.125rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.recommendation-total {
+  display: grid;
+  gap: 0.125rem;
+  border-radius: 0.5rem;
+  background: rgb(236 253 245);
+  padding: 0.625rem 0.75rem;
+}
+
+.recommendation-total span {
+  color: rgb(5 150 105);
+  font-size: 0.6875rem;
+  font-weight: 800;
+}
+
+.recommendation-total strong {
+  color: rgb(4 120 87);
+  font-size: 1.125rem;
+  font-weight: 900;
+  line-height: 1.375rem;
+}
+
+.recommendation-tag-row,
+.recommendation-reasons,
+.recommendation-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.recommendation-tag-row span {
+  border-radius: 999px;
+  background: rgb(219 234 254);
+  padding: 0.25rem 0.625rem;
+  color: rgb(29 78 216);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.recommendation-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.recommendation-metrics > div {
+  min-width: 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.625rem;
+}
+
+.recommendation-metrics span {
+  display: block;
+  color: rgb(100 116 139);
+  font-size: 0.6875rem;
+  font-weight: 800;
+}
+
+.recommendation-metrics strong {
+  display: block;
+  margin-top: 0.125rem;
+  color: rgb(17 24 39);
+  font-size: 0.875rem;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.recommendation-self-use-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0.625rem 0.75rem;
+  color: rgb(30 64 175);
+  font-size: 0.75rem;
+  font-weight: 750;
+  line-height: 1.25rem;
+}
+
+.recommendation-self-use-note svg {
+  margin-top: 0.125rem;
+  flex-shrink: 0;
+}
+
+.recommendation-reasons span {
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+}
+
+.recommendation-warnings span {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(251 146 60 / 0.5);
+  background: rgb(255 247 237);
+  padding: 0.5rem 0.625rem;
+  color: rgb(154 52 18);
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1.125rem;
+}
+
+.recommendation-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  border-top: 1px solid rgb(226 232 240);
+  padding-top: 0.75rem;
+}
+
+.recommendation-card-actions > span {
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
 .dark .account-share-hero {
   border-color: rgb(63 63 70);
   background: linear-gradient(180deg, rgb(24 24 27), rgb(31 41 55 / 0.72));
@@ -3644,10 +6606,137 @@ onBeforeUnmount(() => {
   border-color: rgb(63 63 70);
 }
 
+.dark .account-share-platform-tabs {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27 / 0.78);
+}
+
+.dark .account-share-platform-tab {
+  border-color: rgb(63 63 70);
+}
+
+.dark .account-share-platform-tab-active {
+  border-color: rgb(96 165 250);
+  background: rgb(30 64 175 / 0.2);
+  color: rgb(191 219 254);
+  box-shadow: inset 0 0 0 1px rgb(96 165 250 / 0.18);
+}
+
+.dark .account-share-platform-tab-active small {
+  color: rgb(203 213 225);
+}
+
+.dark .account-share-platform-tab-idle {
+  background: rgb(39 39 42 / 0.68);
+  color: rgb(226 232 240);
+}
+
+.dark .account-share-platform-tab-idle small {
+  color: rgb(161 161 170);
+}
+
+.dark .account-share-platform-tab-idle:hover {
+  border-color: rgb(113 113 122);
+  background: rgb(39 39 42);
+}
+
 .dark .hero-icon {
   border-color: rgb(59 130 246 / 0.36);
   background: rgb(30 64 175 / 0.2);
   color: rgb(147 197 253);
+}
+
+.dark .account-share-guide-button {
+  border-color: rgb(59 130 246 / 0.38);
+  background: rgb(30 64 175 / 0.22);
+  color: rgb(191 219 254);
+}
+
+.dark .account-share-guide-button:hover {
+  border-color: rgb(96 165 250 / 0.7);
+  background: rgb(30 64 175 / 0.34);
+  box-shadow: 0 8px 18px rgb(0 0 0 / 0.2);
+}
+
+.dark .account-share-guide {
+  color: rgb(203 213 225);
+}
+
+.dark .account-share-guide-summary,
+.dark .account-share-guide-section,
+.dark .account-share-guide-note {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27 / 0.86);
+}
+
+.dark .account-share-guide-summary {
+  background: linear-gradient(180deg, rgb(31 41 55 / 0.82), rgb(24 24 27 / 0.86));
+}
+
+.dark .account-share-guide-summary span,
+.dark .account-share-guide-rule-list svg,
+.dark .account-share-guide-note svg {
+  color: rgb(147 197 253);
+}
+
+.dark .account-share-guide-summary strong,
+.dark .account-share-guide-step strong,
+.dark .account-share-guide-section h4,
+.dark .account-share-guide-rule-list strong,
+.dark .account-share-guide-param-grid dt {
+  color: rgb(248 250 252);
+}
+
+.dark .account-share-guide-summary p,
+.dark .account-share-guide-step p,
+.dark .account-share-guide-rule-list p,
+.dark .account-share-guide-example p,
+.dark .account-share-guide-note p,
+.dark .account-share-guide-param-grid dd {
+  color: rgb(203 213 225);
+}
+
+.dark .account-share-guide-step,
+.dark .account-share-guide-example,
+.dark .account-share-guide-param-grid > div {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.72);
+}
+
+.dark .account-share-guide-assistant {
+  border-color: rgb(59 130 246 / 0.38);
+  background:
+    linear-gradient(180deg, rgb(30 64 175 / 0.2), rgb(24 24 27 / 0.86)),
+    radial-gradient(circle at 100% 0%, rgb(16 185 129 / 0.16), transparent 34%);
+}
+
+.dark .account-share-guide-assistant-head > span {
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.dark .account-share-guide-assistant-head p,
+.dark .account-share-guide-assistant-grid p {
+  color: rgb(203 213 225);
+}
+
+.dark .account-share-guide-assistant-grid > div {
+  border-color: rgb(59 130 246 / 0.28);
+  background: rgb(39 39 42 / 0.62);
+}
+
+.dark .account-share-guide-assistant-grid strong {
+  color: rgb(248 250 252);
+}
+
+.dark .account-share-guide-example .account-share-guide-formula {
+  border-color: rgb(59 130 246 / 0.38);
+  background: rgb(30 64 175 / 0.24);
+  color: rgb(191 219 254);
+}
+
+.dark .account-share-guide-note {
+  background: rgb(30 64 175 / 0.18);
 }
 
 .dark .account-share-summary-grid {
@@ -3686,9 +6775,183 @@ onBeforeUnmount(() => {
   color: rgb(196 181 253);
 }
 
+.dark .recommendation-panel {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27);
+  box-shadow: 0 14px 36px rgb(0 0 0 / 0.26);
+}
+
+.dark .recommendation-dialog-panel {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.dark .recommendation-head,
+.dark .recommendation-results,
+.dark .recommendation-card-actions {
+  border-color: rgb(63 63 70);
+}
+
+.dark .recommendation-head h2,
+.dark .recommendation-title strong,
+.dark .recommendation-metrics strong {
+  color: white;
+}
+
+.dark .recommendation-head p,
+.dark .recommendation-title small,
+.dark .recommendation-metrics span,
+.dark .recommendation-card-actions > span {
+  color: rgb(161 161 170);
+}
+
+.dark .recommendation-profile-help {
+  color: rgb(148 163 184);
+}
+
+.dark .recommendation-preset {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.72);
+  color: rgb(212 212 216);
+}
+
+.dark .recommendation-preset:hover {
+  border-color: rgb(113 113 122);
+  background: rgb(39 39 42);
+}
+
+.dark .recommendation-preset-active {
+  border-color: rgb(96 165 250);
+  background: rgb(30 64 175 / 0.22);
+  color: rgb(191 219 254);
+}
+
+.dark .recommendation-profile-button {
+  border-color: rgb(59 130 246 / 0.42);
+  background: rgb(30 64 175 / 0.24);
+  color: rgb(191 219 254);
+}
+
+.dark .recommendation-profile-button:hover:not(:disabled) {
+  border-color: rgb(96 165 250);
+  background: rgb(30 64 175 / 0.36);
+}
+
+.dark .recommendation-profile-message {
+  border-color: rgb(59 130 246 / 0.35);
+  background: rgb(30 64 175 / 0.2);
+  color: rgb(191 219 254);
+}
+
+.dark .recommendation-error {
+  border-color: rgb(248 113 113 / 0.45);
+  background: rgb(127 29 29 / 0.36);
+  color: rgb(254 202 202);
+}
+
+.dark .recommendation-summary {
+  border-color: rgb(59 130 246 / 0.35);
+  background: linear-gradient(180deg, rgb(30 41 59 / 0.9), rgb(20 83 45 / 0.28));
+}
+
+.dark .recommendation-summary span,
+.dark .recommendation-summary small {
+  color: rgb(147 197 253);
+}
+
+.dark .recommendation-summary strong {
+  color: rgb(94 234 212);
+}
+
+.dark .recommendation-results {
+  background: rgb(39 39 42 / 0.58);
+}
+
+.dark .recommendation-empty,
+.dark .recommendation-card {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27);
+}
+
+.dark .recommendation-empty,
+.dark .recommendation-reasons span {
+  color: rgb(161 161 170);
+}
+
+.dark .recommendation-rank {
+  background: rgb(59 130 246);
+}
+
+.dark .recommendation-total {
+  background: rgb(6 78 59 / 0.42);
+}
+
+.dark .recommendation-total span {
+  color: rgb(110 231 183);
+}
+
+.dark .recommendation-total strong {
+  color: rgb(167 243 208);
+}
+
+.dark .recommendation-tag-row span {
+  background: rgb(30 64 175 / 0.3);
+  color: rgb(191 219 254);
+}
+
+.dark .recommendation-metrics > div {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.72);
+}
+
+.dark .recommendation-self-use-note {
+  border-color: rgb(59 130 246 / 0.35);
+  background: rgb(30 64 175 / 0.2);
+  color: rgb(191 219 254);
+}
+
+.dark .recommendation-warnings span {
+  border-color: rgb(251 146 60 / 0.42);
+  background: rgb(124 45 18 / 0.36);
+  color: rgb(254 215 170);
+}
+
 @media (min-width: 640px) {
+  .account-share-platform-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-share-guide-param-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-share-guide-assistant-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .account-share-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recommendation-head {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .recommendation-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recommendation-card-head,
+  .recommendation-card-actions {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .recommendation-card-actions {
+    display: grid;
   }
 }
 
@@ -3698,6 +6961,32 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: space-between;
     padding: 1.125rem 1.25rem;
+  }
+
+  .account-share-guide-button {
+    align-self: center;
+  }
+
+  .account-share-guide-flow {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .account-share-platform-tabs {
+    padding: 0.875rem 1.25rem;
+  }
+
+  .recommendation-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
+    align-items: start;
+    padding: 1rem 1.25rem;
+  }
+
+  .recommendation-results {
+    padding: 1rem 1.25rem;
+  }
+
+  .recommendation-metrics {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 
@@ -3891,15 +7180,15 @@ onBeforeUnmount(() => {
 
 .mode-key-readonly {
   display: inline-flex;
-  min-height: 2.5rem;
+  min-height: 2.25rem;
   min-width: 0;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4375rem;
   border-radius: 0.5rem;
   border: 1px solid rgb(191 219 254);
   background: rgb(239 246 255);
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
+  padding: 0.4375rem 0.625rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: rgb(30 64 175);
 }
@@ -3916,19 +7205,32 @@ onBeforeUnmount(() => {
 }
 
 .listing-model-row {
-  margin-top: 0.625rem;
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
-  gap: 0.375rem;
+  align-items: center;
+  gap: 0.3125rem;
+  padding-bottom: 0.125rem;
+}
+
+.listing-bottom-bar {
+  margin-top: 0.5rem;
+  display: grid;
+  min-width: 0;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252 / 0.86);
+  padding: 0.5rem;
 }
 
 .model-copy-chip {
   border-radius: 0.375rem;
   background: rgb(239 246 255);
-  padding: 0.1875rem 0.4375rem;
-  font-size: 0.6875rem;
+  padding: 0.15625rem 0.40625rem;
+  font-size: 0.65625rem;
   font-weight: 600;
-  line-height: 0.9375rem;
+  line-height: 0.875rem;
   color: rgb(29 78 216);
   transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -3953,6 +7255,11 @@ onBeforeUnmount(() => {
   color: white;
 }
 
+.dark .listing-bottom-bar {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27 / 0.58);
+}
+
 .model-overflow-wrapper {
   position: relative;
   display: inline-flex;
@@ -3961,10 +7268,10 @@ onBeforeUnmount(() => {
 .model-overflow-chip {
   border-radius: 0.375rem;
   background: rgb(243 244 246);
-  padding: 0.1875rem 0.4375rem;
-  font-size: 0.6875rem;
+  padding: 0.15625rem 0.40625rem;
+  font-size: 0.65625rem;
   font-weight: 700;
-  line-height: 0.9375rem;
+  line-height: 0.875rem;
   color: rgb(75 85 99);
   transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -3982,7 +7289,7 @@ onBeforeUnmount(() => {
   visibility: hidden;
   position: absolute;
   bottom: calc(100% + 0.5rem);
-  left: 0;
+  right: 0;
   z-index: 70;
   display: flex;
   width: max-content;
@@ -4116,15 +7423,15 @@ onBeforeUnmount(() => {
 .filter-panel {
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
-  background: rgb(255 255 255 / 0.92);
-  padding: 0.625rem;
-  box-shadow: 0 8px 22px rgb(15 23 42 / 0.05);
+  background: rgb(255 255 255 / 0.96);
+  padding: 0.75rem;
+  box-shadow: 0 12px 32px rgb(15 23 42 / 0.06);
 }
 
 .filter-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 0.625rem;
+  gap: 0.75rem;
 }
 
 .filter-primary-row {
@@ -4136,7 +7443,7 @@ onBeforeUnmount(() => {
 
 .filter-search {
   display: flex;
-  min-height: 2.375rem;
+  min-height: 2.5rem;
   min-width: 0;
   align-items: center;
   gap: 0.5rem;
@@ -4266,14 +7573,14 @@ onBeforeUnmount(() => {
 .filter-body {
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
-  background: linear-gradient(180deg, rgb(248 250 252), rgb(255 255 255));
+  background: rgb(248 250 252);
   padding: 0.75rem;
 }
 
 .filter-body-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
   gap: 0.75rem;
 }
 
@@ -4314,126 +7621,281 @@ onBeforeUnmount(() => {
   line-height: 1rem;
 }
 
-.advanced-filter-grid {
-  margin-top: 0.75rem;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.625rem;
-}
-
-.filter-field {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.375rem;
-}
-
-.filter-field > span {
+.filter-section-label {
+  display: block;
+  margin-bottom: 0.375rem;
   font-size: 0.75rem;
   font-weight: 800;
   color: rgb(71 85 105);
 }
 
-.range-inputs {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.range-inputs span {
-  font-size: 0.75rem;
-  font-weight: 800;
-  color: rgb(100 116 139);
-}
-
-.model-filter-field {
-  position: relative;
-}
-
-.model-filter-menu {
-  position: relative;
-}
-
-.model-filter-menu summary {
-  display: flex;
-  min-height: 2.375rem;
-  min-width: 0;
+.sort-option-button,
+.filter-trigger-button,
+.choice-chip,
+.filter-menu-option,
+.active-filter-chip {
   cursor: pointer;
-  list-style: none;
+}
+
+.advanced-filter-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.filter-section,
+.filter-popover-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.sort-section {
+  margin-top: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: white;
+  padding: 0.625rem;
+}
+
+.sort-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.sort-section-head .filter-section-label {
+  margin-bottom: 0;
+}
+
+.sort-button-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.sort-option-button {
+  display: inline-flex;
+  min-height: 2.25rem;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.375rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.375rem 0.5625rem;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  color: rgb(51 65 85);
+  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sort-default-button {
+  flex: 0 0 auto;
+}
+
+.sort-field-button {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.sort-option-button > svg {
+  flex: 0 0 auto;
+}
+
+.sort-option-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sort-option-button:hover {
+  border-color: rgb(147 197 253);
+  background: rgb(239 246 255);
+  color: rgb(29 78 216);
+}
+
+.sort-option-active {
+  border-color: rgb(37 99 235);
+  background: rgb(37 99 235);
+  color: white;
+  box-shadow: 0 8px 18px rgb(37 99 235 / 0.18);
+}
+
+.sort-option-check {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.sort-priority-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border-radius: 999px;
+  background: rgb(226 232 240);
+  padding: 0.0625rem 0.3125rem;
+  color: rgb(71 85 105);
+  font-size: 0.6875rem;
+  font-weight: 900;
+  line-height: 1rem;
+}
+
+.sort-direction-pill {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0.0625rem 0.375rem;
+  color: rgb(29 78 216);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  line-height: 1rem;
+}
+
+.sort-option-active .sort-direction-pill {
+  border-color: rgb(255 255 255 / 0.32);
+  background: rgb(255 255 255 / 0.16);
+  color: white;
+}
+
+.sort-option-active .sort-priority-badge {
+  background: rgb(255 255 255 / 0.2);
+  color: white;
+}
+
+.filter-trigger-button {
+  display: flex;
+  min-height: 2.5rem;
+  width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 0.5rem;
   border-radius: 0.5rem;
   border: 1px solid rgb(203 213 225);
   background: white;
-  padding: 0.4375rem 0.625rem;
+  padding: 0.5rem 0.625rem;
   font-size: 0.8125rem;
   font-weight: 800;
   color: rgb(31 41 55);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
 
-.model-filter-menu summary span {
+.filter-trigger-button span {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.model-filter-menu summary::-webkit-details-marker {
-  display: none;
-}
-
-.model-filter-menu[open] summary {
+.filter-trigger-button:hover,
+.filter-trigger-active {
   border-color: rgb(14 165 233);
   box-shadow: 0 0 0 3px rgb(14 165 233 / 0.14);
 }
 
-.model-filter-panel {
+.filter-trigger-selected {
+  border-color: rgb(59 130 246);
+  background: rgb(239 246 255);
+  color: rgb(29 78 216);
+}
+
+.filter-trigger-chevron {
+  flex: 0 0 auto;
+}
+
+.filter-popover {
   position: absolute;
   top: calc(100% + 0.5rem);
   right: 0;
-  z-index: 80;
-  width: min(26rem, calc(100vw - 2rem));
+  z-index: 90;
+  width: min(22rem, calc(100vw - 2rem));
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
   background: white;
-  padding: 0.625rem;
+  padding: 0.5rem;
   box-shadow: 0 22px 48px rgb(15 23 42 / 0.18);
+}
+
+.seat-popover {
+  width: min(17rem, calc(100vw - 2rem));
+}
+
+.model-popover {
+  width: min(28rem, calc(100vw - 2rem));
+}
+
+.seat-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.375rem;
+}
+
+.choice-chip {
+  min-height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  color: rgb(51 65 85);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.choice-chip:hover {
+  border-color: rgb(147 197 253);
+  background: rgb(239 246 255);
+}
+
+.choice-chip-active {
+  border-color: rgb(37 99 235);
+  background: rgb(37 99 235);
+  color: white;
 }
 
 .model-filter-options {
   display: grid;
-  max-height: 12rem;
+  max-height: 15rem;
   gap: 0.25rem;
   overflow-y: auto;
   padding-right: 0.25rem;
 }
 
-.model-filter-option {
+.filter-menu-option {
   display: flex;
   min-height: 2.25rem;
-  cursor: pointer;
+  width: 100%;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
   border-radius: 0.5rem;
   padding: 0.375rem 0.5rem;
   font-size: 0.8125rem;
   font-weight: 700;
   color: rgb(55 65 81);
+  text-align: left;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.model-filter-option:hover {
+.filter-menu-option:hover {
   background: rgb(248 250 252);
 }
 
-.model-filter-option input {
-  height: 1rem;
-  width: 1rem;
-  accent-color: rgb(2 132 199);
+.filter-menu-option-active {
+  background: rgb(239 246 255);
+  color: rgb(29 78 216);
 }
 
-.model-filter-option span {
+.filter-menu-option span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4447,27 +7909,35 @@ onBeforeUnmount(() => {
   gap: 0.5rem;
 }
 
-.selected-model-filters {
-  margin-top: 0.625rem;
+.active-filter-row {
+  margin-top: 0.75rem;
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
 }
 
-.selected-model-filter {
+.active-filter-chip {
   display: inline-flex;
+  min-height: 2rem;
   min-width: 0;
   align-items: center;
   gap: 0.375rem;
   border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
   background: rgb(239 246 255);
-  padding: 0.25rem 0.5rem;
+  padding: 0.3125rem 0.5rem;
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 800;
   color: rgb(29 78 216);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.selected-model-filter span {
+.active-filter-chip:hover {
+  border-color: rgb(96 165 250);
+  background: rgb(219 234 254);
+}
+
+.active-filter-chip span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4475,20 +7945,20 @@ onBeforeUnmount(() => {
 }
 
 .filter-button-row {
-  margin-top: 0.75rem;
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.625rem;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
 }
 
 .filter-apply-button,
 .filter-reset-button {
   display: inline-flex;
-  min-height: 2.375rem;
+  min-height: 2.25rem;
   align-items: center;
   justify-content: center;
+  gap: 0.375rem;
   border-radius: 0.5rem;
-  padding: 0.5rem 0.875rem;
+  padding: 0.4375rem 0.75rem;
   font-size: 0.8125rem;
   font-weight: 800;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
@@ -4526,7 +7996,8 @@ onBeforeUnmount(() => {
   .filter-search,
   .filter-chip,
   .owner-filter-button,
-  .model-filter-menu summary,
+  .sort-option-button,
+  .filter-trigger-button,
   .filter-apply-button,
   .filter-reset-button {
     min-height: 2.75rem;
@@ -4535,12 +8006,14 @@ onBeforeUnmount(() => {
 
 .dark .filter-panel {
   border-color: rgb(63 63 70);
-  background: rgb(24 24 27 / 0.92);
+  background: rgb(24 24 27 / 0.94);
   box-shadow: 0 10px 26px rgb(0 0 0 / 0.22);
 }
 
 .dark .filter-search,
-.dark .model-filter-menu summary,
+.dark .sort-section,
+.dark .sort-option-button,
+.dark .filter-trigger-button,
 .dark .filter-reset-button {
   border-color: rgb(63 63 70);
   background: rgb(24 24 27);
@@ -4594,12 +8067,11 @@ onBeforeUnmount(() => {
 }
 
 .dark .filter-body-title strong,
-.dark .filter-field > span {
+.dark .filter-section-label {
   color: white;
 }
 
-.dark .filter-body-title small,
-.dark .range-inputs span {
+.dark .filter-body-title small {
   color: rgb(161 161 170);
 }
 
@@ -4608,22 +8080,56 @@ onBeforeUnmount(() => {
   color: rgb(125 211 252);
 }
 
-.dark .model-filter-panel {
+.dark .sort-option-button:hover,
+.dark .filter-menu-option:hover {
+  background: rgb(63 63 70);
+  color: white;
+}
+
+.dark .sort-option-active {
+  border-color: rgb(96 165 250);
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.dark .filter-trigger-selected,
+.dark .filter-menu-option-active,
+.dark .active-filter-chip {
+  border-color: rgb(59 130 246 / 0.35);
+  background: rgb(30 64 175 / 0.2);
+  color: rgb(191 219 254);
+}
+
+.dark .filter-popover {
   border-color: rgb(63 63 70);
   background: rgb(24 24 27);
 }
 
-.dark .model-filter-option {
+.dark .filter-menu-option,
+.dark .choice-chip,
+.dark .sort-option-button {
   color: rgb(229 231 235);
 }
 
-.dark .model-filter-option:hover {
+.dark .choice-chip {
+  border-color: rgb(63 63 70);
   background: rgb(39 39 42);
 }
 
-.dark .selected-model-filter {
-  background: rgb(59 130 246 / 0.12);
-  color: rgb(191 219 254);
+.dark .choice-chip-active {
+  border-color: rgb(96 165 250);
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.dark .sort-priority-badge {
+  background: rgb(63 63 70);
+  color: rgb(212 212 216);
+}
+
+.dark .sort-option-active .sort-priority-badge {
+  background: rgb(255 255 255 / 0.2);
+  color: white;
 }
 
 .dark .filter-reset-button:hover {
@@ -4632,10 +8138,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 640px) {
-  .model-filter-panel {
+  .filter-popover {
     left: 0;
     right: auto;
-    width: min(100%, calc(100vw - 2rem));
+    width: min(100%, calc(100vw - 1.5rem));
   }
 
   .model-filter-input-row {
@@ -4645,7 +8151,7 @@ onBeforeUnmount(() => {
 
 @media (min-width: 640px) {
   .filter-button-row {
-    grid-template-columns: minmax(9rem, 11rem) minmax(7rem, 9rem);
+    grid-template-columns: minmax(7rem, 8rem) minmax(7rem, 8rem);
     justify-content: end;
   }
 }
@@ -4683,13 +8189,19 @@ onBeforeUnmount(() => {
   }
 
   .advanced-filter-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(9.5rem, 1fr));
+  }
+
+  .filter-body-head {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
   }
 }
 
 @media (min-width: 1536px) {
   .advanced-filter-grid {
-    grid-template-columns: minmax(8.75rem, 0.72fr) minmax(8.75rem, 0.72fr) repeat(4, minmax(12rem, 1fr)) minmax(13rem, 0.9fr);
+    grid-template-columns: repeat(5, minmax(12rem, 1fr));
     align-items: end;
   }
 }
@@ -5038,43 +8550,196 @@ onBeforeUnmount(() => {
   color: white;
 }
 
+.listing-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.875rem;
+  align-items: start;
+}
+
+@media (min-width: 1120px) {
+  .listing-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .listing-card {
+  container: account-listing-card / inline-size;
+  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
-  background: linear-gradient(180deg, rgb(255 255 255), rgb(248 250 252 / 0.72));
-  padding: 1rem;
-  box-shadow: 0 12px 28px rgb(15 23 42 / 0.06);
+  background:
+    linear-gradient(180deg, rgb(255 255 255), rgb(248 250 252 / 0.92)),
+    radial-gradient(circle at 14% 0%, rgb(14 165 233 / 0.08), transparent 28%);
+  padding: 0.6875rem 0.75rem 0.75rem;
+  box-shadow: 0 10px 24px rgb(15 23 42 / 0.05);
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.listing-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto;
+  height: 0.1875rem;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: linear-gradient(90deg, rgb(56 189 248), rgb(45 212 191), rgb(251 191 36));
 }
 
 .listing-card:hover {
   border-color: rgb(186 230 253);
-  box-shadow: 0 18px 38px rgb(15 23 42 / 0.1);
+  box-shadow: 0 16px 34px rgb(15 23 42 / 0.09);
   transform: translateY(-1px);
+}
+
+.listing-card-head {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.listing-card-identity {
+  min-width: 0;
+}
+
+.listing-badge-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.listing-title-row {
+  margin-top: 0.4375rem;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.1875rem;
 }
 
 .listing-title {
   color: rgb(17 24 39);
   font-size: 1rem;
-  font-weight: 700;
-  line-height: 1.375rem;
+  font-weight: 800;
+  line-height: 1.3125rem;
   overflow-wrap: anywhere;
 }
 
 .listing-owner {
-  margin-top: 0.25rem;
   color: rgb(107 114 128);
-  font-size: 0.75rem;
-  line-height: 1.125rem;
+  font-size: 0.78125rem;
+  font-weight: 600;
+  line-height: 1rem;
   overflow-wrap: anywhere;
+}
+
+.owner-inline-button {
+  margin-left: 0.375rem;
+  display: inline-flex;
+  min-height: 1.5rem;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.375rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255);
+  padding: 0.125rem 0.375rem;
+  color: rgb(30 64 175);
+  font-size: 0.71875rem;
+  font-weight: 800;
+  line-height: 1rem;
+  vertical-align: baseline;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.owner-inline-button:hover {
+  border-color: rgb(37 99 235);
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.owner-inline-button svg {
+  flex-shrink: 0;
+}
+
+.listing-card-state {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.listing-rating-pill {
+  display: inline-flex;
+  min-height: 1.75rem;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255 / 0.82);
+  padding: 0.1875rem 0.5rem;
+  color: rgb(30 64 175);
+  font-size: 0.71875rem;
+  font-weight: 800;
+  line-height: 1rem;
+  white-space: nowrap;
+}
+
+.listing-rating-pill svg {
+  flex-shrink: 0;
+  color: rgb(79 70 229);
+}
+
+.listing-rating-pill strong {
+  color: rgb(17 24 39);
+  font-size: 0.78125rem;
+  font-weight: 900;
+}
+
+.listing-seat-pill {
+  display: inline-flex;
+  min-height: 1.75rem;
+  align-items: center;
+  border-radius: 0.5rem;
+  background: rgb(239 246 255);
+  padding: 0.1875rem 0.5625rem;
+  color: rgb(30 64 175);
+  font-size: 0.78125rem;
+  font-weight: 800;
+}
+
+@media (min-width: 768px) {
+  .listing-card {
+    padding: 0.75rem 0.8125rem 0.8125rem;
+  }
+
+  .listing-card-head {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .listing-title-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 1.25rem;
+  }
+
+  .listing-card-state {
+    justify-content: flex-end;
+  }
 }
 
 .dark .listing-card {
   border-color: rgb(63 63 70);
-  background: linear-gradient(180deg, rgb(24 24 27), rgb(39 39 42 / 0.48));
+  background:
+    linear-gradient(180deg, rgb(24 24 27), rgb(39 39 42 / 0.56)),
+    radial-gradient(circle at 16% 0%, rgb(14 165 233 / 0.14), transparent 30%);
   box-shadow: 0 14px 32px rgb(0 0 0 / 0.26);
 }
 
@@ -5089,6 +8754,37 @@ onBeforeUnmount(() => {
 
 .dark .listing-owner {
   color: rgb(161 161 170);
+}
+
+.dark .owner-inline-button {
+  border-color: rgb(59 130 246 / 0.35);
+  background: rgb(59 130 246 / 0.14);
+  color: rgb(191 219 254);
+}
+
+.dark .owner-inline-button:hover {
+  border-color: rgb(96 165 250 / 0.65);
+  background: rgb(59 130 246 / 0.42);
+  color: white;
+}
+
+.dark .listing-rating-pill {
+  border-color: rgb(59 130 246 / 0.35);
+  background: rgb(30 64 175 / 0.18);
+  color: rgb(191 219 254);
+}
+
+.dark .listing-rating-pill svg {
+  color: rgb(165 180 252);
+}
+
+.dark .listing-rating-pill strong {
+  color: white;
+}
+
+.dark .listing-seat-pill {
+  background: rgb(59 130 246 / 0.12);
+  color: rgb(191 219 254);
 }
 
 .account-level-badge {
@@ -5153,56 +8849,89 @@ onBeforeUnmount(() => {
   color: rgb(4 120 87);
 }
 
+.feature-badge-client-only {
+  background: rgb(239 246 255);
+  color: rgb(29 78 216);
+}
+
 .feature-badge-waiver {
   background: rgb(255 247 237);
   color: rgb(194 65 12);
 }
 
 .listing-health-panel {
-  margin-top: 0.875rem;
+  margin-top: 0.625rem;
   display: grid;
-  gap: 0.75rem;
-  border-top: 1px solid rgb(226 232 240);
-  padding-top: 0.875rem;
+  gap: 0.375rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252 / 0.72);
+  padding: 0.4375rem;
 }
 
-.listing-status-grid {
+.listing-health-grid {
   display: grid;
   min-width: 0;
-  gap: 0.625rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem;
+  align-items: stretch;
 }
 
-@media (min-width: 640px) {
-  .listing-status-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(8.5rem, 10rem);
-    align-items: center;
+.listing-status-stack,
+.listing-usage-grid {
+  display: contents;
+}
+
+@container account-listing-card (min-width: 41rem) {
+  .listing-health-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-.listing-runtime-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
+.listing-runtime-tile {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.4375rem;
+  border-radius: 0.5rem;
+  background: white;
+  padding: 0.5rem;
+}
+
+.listing-runtime-tile > svg {
+  color: rgb(107 114 128);
 }
 
 .listing-runtime-label {
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
   color: rgb(107 114 128);
 }
 
-.listing-runtime-row strong {
-  display: block;
-  margin-top: 0.125rem;
-  color: rgb(17 24 39);
-  font-size: 0.9375rem;
+.listing-runtime-value-row {
+  margin-top: 0.1875rem;
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
 }
 
-.listing-runtime-row p {
-  margin-top: 0.125rem;
-  font-size: 0.75rem;
+.listing-runtime-value-row strong {
+  display: block;
+  color: rgb(17 24 39);
+  font-size: 0.9375rem;
+  font-weight: 800;
   line-height: 1.125rem;
+  overflow-wrap: anywhere;
+}
+
+.listing-runtime-tile p {
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  line-height: 1rem;
   color: rgb(107 114 128);
   overflow-wrap: anywhere;
 }
@@ -5212,8 +8941,8 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   align-items: center;
   border-radius: 999px;
-  padding: 0.25rem 0.625rem;
-  font-size: 0.75rem;
+  padding: 0.1875rem 0.5rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -5238,24 +8967,13 @@ onBeforeUnmount(() => {
   color: rgb(75 85 99);
 }
 
-.usage-window-list {
-  display: grid;
-  gap: 0.375rem;
-}
-
-@media (min-width: 640px) {
-  .usage-window-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 .usage-window-row {
   display: grid;
   min-width: 0;
-  gap: 0.25rem;
+  gap: 0.1875rem;
   border-radius: 0.5rem;
-  background: rgb(248 250 252 / 0.8);
-  padding: 0.375rem 0.5rem;
+  background: white;
+  padding: 0.5rem;
 }
 
 .usage-window-title {
@@ -5263,7 +8981,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: rgb(75 85 99);
 }
 
@@ -5277,7 +8995,7 @@ onBeforeUnmount(() => {
   margin-left: auto;
   color: rgb(17 24 39);
   font-weight: 800;
-  line-height: 1rem;
+  line-height: 0.9375rem;
   text-align: right;
 }
 
@@ -5288,14 +9006,23 @@ onBeforeUnmount(() => {
 
 .capacity-panel {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.1875rem;
   align-self: stretch;
+  align-content: start;
   border-radius: 0.5rem;
-  border: 1px solid rgb(226 232 240);
   background: white;
-  padding: 0.4375rem 0.5625rem;
-  font-size: 0.6875rem;
+  padding: 0.5rem;
+  font-size: 0.65625rem;
   color: rgb(75 85 99);
+}
+
+.capacity-panel span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
 }
 
 .capacity-panel strong {
@@ -5305,7 +9032,7 @@ onBeforeUnmount(() => {
 }
 
 .capacity-track {
-  height: 0.3125rem;
+  height: 0.25rem;
   overflow: hidden;
   border-radius: 999px;
   background: rgb(229 231 235);
@@ -5334,13 +9061,13 @@ onBeforeUnmount(() => {
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.625rem;
   border-radius: 0.5rem;
   border: 1px solid rgb(167 243 208);
   background: rgb(236 253 245);
-  padding: 0.5rem 0.625rem;
+  padding: 0.4375rem 0.5625rem;
   color: rgb(6 95 70);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -5358,9 +9085,15 @@ onBeforeUnmount(() => {
 .listing-health-foot {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 0.625rem;
-  font-size: 0.6875rem;
+  gap: 0.25rem 0.75rem;
+  border-top: 1px solid rgb(226 232 240);
+  padding-top: 0.25rem;
+  font-size: 0.65625rem;
   color: rgb(107 114 128);
+}
+
+.listing-health-foot-empty {
+  display: none;
 }
 
 .dark .account-level-plus {
@@ -5387,6 +9120,11 @@ onBeforeUnmount(() => {
   color: rgb(167 243 208);
 }
 
+.dark .feature-badge-client-only {
+  background: rgb(30 64 175 / 0.25);
+  color: rgb(191 219 254);
+}
+
 .dark .feature-badge-waiver {
   background: rgb(154 52 18 / 0.25);
   color: rgb(253 186 116);
@@ -5394,26 +9132,31 @@ onBeforeUnmount(() => {
 
 .dark .listing-health-panel {
   border-color: rgb(63 63 70);
+  background: rgb(24 24 27 / 0.62);
 }
 
 .dark .listing-runtime-label,
-.dark .listing-runtime-row p,
+.dark .listing-runtime-tile p,
 .dark .usage-window-title,
 .dark .listing-health-foot {
   color: rgb(161 161 170);
 }
 
+.dark .listing-health-foot {
+  border-color: rgb(63 63 70);
+}
+
+.dark .listing-runtime-tile,
 .dark .usage-window-row {
   background: rgb(39 39 42 / 0.45);
 }
 
 .dark .capacity-panel {
-  border-color: rgb(63 63 70);
-  background: rgb(24 24 27 / 0.78);
+  background: rgb(39 39 42 / 0.45);
   color: rgb(161 161 170);
 }
 
-.dark .listing-runtime-row strong,
+.dark .listing-runtime-value-row strong,
 .dark .usage-window-title strong,
 .dark .capacity-panel strong {
   color: white;
@@ -5479,6 +9222,15 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.membership-status-pill-queued {
+  background: rgb(37 99 235);
+}
+
+.membership-status-pill-waiting {
+  background: rgb(245 158 11);
+  color: rgb(120 53 15);
+}
+
 .membership-detail-grid {
   margin-top: 0.75rem;
   display: grid;
@@ -5520,6 +9272,13 @@ onBeforeUnmount(() => {
   gap: 0.5rem;
 }
 
+.idle-timeout-input-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+}
+
 .idle-timeout-row .input,
 .idle-timeout-join .input {
   min-width: 0;
@@ -5535,13 +9294,30 @@ onBeforeUnmount(() => {
 .idle-timeout-join {
   display: grid;
   min-width: 0;
-  gap: 0.25rem;
+  gap: 0.125rem;
+}
+
+.idle-timeout-join > span {
+  font-size: 0.6875rem;
+  line-height: 0.875rem;
+}
+
+.idle-timeout-join-unit {
+  flex-shrink: 0;
+  color: rgb(6 95 70);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .listing-join-section {
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
   display: grid;
-  gap: 0.5rem;
+  gap: 0.375rem;
+}
+
+.listing-bottom-bar .listing-join-section {
+  margin-top: 0;
 }
 
 .edit-lock-strip {
@@ -5552,11 +9328,11 @@ onBeforeUnmount(() => {
   border-radius: 0.5rem;
   border: 1px solid rgb(253 230 138);
   background: rgb(255 251 235);
-  padding: 0.625rem 0.75rem;
+  padding: 0.5rem 0.625rem;
   color: rgb(146 64 14);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 700;
-  line-height: 1.25rem;
+  line-height: 1.125rem;
 }
 
 .edit-lock-strip span {
@@ -5565,14 +9341,96 @@ onBeforeUnmount(() => {
 
 .listing-action-row {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.375rem;
 }
 
-@media (min-width: 640px) {
+@container account-listing-card (min-width: 38rem) {
   .listing-action-row {
-    grid-template-columns: minmax(0, 1fr) minmax(8.25rem, 10rem) auto;
-    align-items: end;
+    grid-template-columns: minmax(8.75rem, 10rem) minmax(0, 1fr) auto;
+    align-items: center;
   }
+}
+
+.listing-action-row .btn-primary {
+  min-width: 6rem;
+}
+
+.listing-spend-action-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.listing-spend-action-row .btn-secondary {
+  min-width: 6rem;
+}
+
+.listing-timeout-row {
+  display: grid;
+  min-width: 0;
+  gap: 0.375rem;
+}
+
+@container account-listing-card (min-width: 38rem) {
+  .listing-timeout-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+}
+
+.idle-timeout-join-inline {
+  gap: 0.375rem;
+}
+
+@container account-listing-card (min-width: 38rem) {
+  .idle-timeout-join-inline {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+}
+
+.idle-timeout-join-inline > span {
+  white-space: nowrap;
+}
+
+.idle-timeout-inline-note {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.375rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255 / 0.82);
+  padding: 0.4375rem 0.5625rem;
+  color: rgb(29 78 216);
+  font-size: 0.71875rem;
+  line-height: 1.0625rem;
+}
+
+.idle-timeout-inline-note svg {
+  margin-top: 0.0625rem;
+  flex-shrink: 0;
+}
+
+.idle-timeout-reminder,
+.idle-timeout-hint,
+.join-usage-reminder {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.4375rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: rgb(239 246 255 / 0.82);
+  padding: 0.5rem 0.625rem;
+  color: rgb(29 78 216);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+
+.idle-timeout-reminder svg,
+.idle-timeout-hint svg,
+.join-usage-reminder svg {
+  flex-shrink: 0;
 }
 
 .dark .account-share-membership-panel {
@@ -5591,6 +9449,15 @@ onBeforeUnmount(() => {
   background: rgb(5 150 105);
 }
 
+.dark .membership-status-pill-queued {
+  background: rgb(37 99 235);
+}
+
+.dark .membership-status-pill-waiting {
+  background: rgb(146 64 14);
+  color: rgb(253 230 138);
+}
+
 .dark .membership-detail-grid span,
 .dark .idle-timeout-control label,
 .dark .idle-timeout-join span {
@@ -5598,8 +9465,396 @@ onBeforeUnmount(() => {
 }
 
 .dark .membership-detail-grid strong,
-.dark .idle-timeout-row span {
+.dark .idle-timeout-row span,
+.dark .idle-timeout-join-unit {
   color: rgb(209 250 229);
+}
+
+.dark .idle-timeout-reminder,
+.dark .idle-timeout-hint,
+.dark .join-usage-reminder {
+  border-color: rgb(37 99 235 / 0.4);
+  background: rgb(30 64 175 / 0.16);
+  color: rgb(191 219 254);
+}
+
+.dark .idle-timeout-inline-note {
+  border-color: rgb(37 99 235 / 0.4);
+  background: rgb(30 64 175 / 0.16);
+  color: rgb(191 219 254);
+}
+
+.my-spend-panel {
+  display: grid;
+  gap: 1rem;
+  color: rgb(51 65 85);
+}
+
+.my-spend-context {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(191 219 254);
+  background: linear-gradient(180deg, rgb(239 246 255), rgb(240 253 250));
+  padding: 0.875rem;
+}
+
+.my-spend-context-icon {
+  display: inline-flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.my-spend-eyebrow {
+  display: block;
+  color: rgb(29 78 216);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.my-spend-context strong {
+  display: block;
+  margin-top: 0.1875rem;
+  color: rgb(15 23 42);
+  font-size: 1rem;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.my-spend-context small {
+  display: block;
+  margin-top: 0.25rem;
+  color: rgb(71 85 105);
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.my-spend-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.my-spend-range-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  padding: 0.25rem;
+}
+
+.my-spend-range-tabs button {
+  min-width: 0;
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  color: rgb(71 85 105);
+  font-size: 0.8125rem;
+  font-weight: 800;
+  transition: background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.my-spend-range-tabs button:hover {
+  background: white;
+  color: rgb(37 99 235);
+}
+
+.my-spend-range-tabs button.active {
+  background: rgb(37 99 235);
+  color: white;
+  box-shadow: 0 8px 16px rgb(37 99 235 / 0.18);
+}
+
+.my-spend-loading,
+.my-spend-empty {
+  border-radius: 0.5rem;
+  border: 1px dashed rgb(203 213 225);
+  background: rgb(248 250 252);
+  padding: 1rem;
+  text-align: center;
+  color: rgb(100 116 139);
+  font-size: 0.875rem;
+}
+
+.my-spend-window {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.5rem;
+}
+
+.my-spend-window > div,
+.my-spend-detail-grid > div,
+.my-spend-hourly-panel > div {
+  min-width: 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: white;
+  padding: 0.75rem;
+}
+
+.my-spend-window span,
+.my-spend-detail-grid span,
+.my-spend-hourly-panel span {
+  display: block;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.my-spend-window strong,
+.my-spend-detail-grid strong,
+.my-spend-hourly-panel strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: rgb(15 23 42);
+  font-size: 0.875rem;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.my-spend-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.625rem;
+}
+
+.my-spend-metric {
+  display: grid;
+  min-width: 0;
+  gap: 0.1875rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: white;
+  padding: 0.875rem;
+  box-shadow: inset 3px 0 0 rgb(148 163 184);
+}
+
+.my-spend-metric span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.my-spend-metric strong {
+  color: rgb(15 23 42);
+  font-size: 1.25rem;
+  font-weight: 900;
+  line-height: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.my-spend-metric small {
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  line-height: 1.0625rem;
+  overflow-wrap: anywhere;
+}
+
+.my-spend-metric-total {
+  border-color: rgb(59 130 246 / 0.3);
+  background: rgb(239 246 255);
+  box-shadow: inset 3px 0 0 rgb(37 99 235);
+}
+
+.my-spend-metric-request {
+  border-color: rgb(20 184 166 / 0.32);
+  background: rgb(240 253 250);
+  box-shadow: inset 3px 0 0 rgb(13 148 136);
+}
+
+.my-spend-metric-hourly {
+  border-color: rgb(245 158 11 / 0.32);
+  background: rgb(255 251 235);
+  box-shadow: inset 3px 0 0 rgb(217 119 6);
+}
+
+.my-spend-detail-grid,
+.my-spend-hourly-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.5rem;
+}
+
+.my-spend-breakdown {
+  display: grid;
+  gap: 0.625rem;
+}
+
+.my-spend-section-head {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.my-spend-section-head strong {
+  display: block;
+  color: rgb(15 23 42);
+  font-size: 0.9375rem;
+  font-weight: 850;
+}
+
+.my-spend-section-head small {
+  display: block;
+  margin-top: 0.1875rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+}
+
+.my-spend-table-wrap {
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+}
+
+.my-spend-table {
+  width: 100%;
+  min-width: 38rem;
+  border-collapse: collapse;
+  background: white;
+  font-size: 0.8125rem;
+}
+
+.my-spend-table th,
+.my-spend-table td {
+  border-bottom: 1px solid rgb(226 232 240);
+  padding: 0.625rem 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.my-spend-table th {
+  background: rgb(248 250 252);
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.my-spend-table td {
+  color: rgb(15 23 42);
+  font-weight: 650;
+}
+
+.my-spend-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.dark .my-spend-panel {
+  color: rgb(212 212 216);
+}
+
+.dark .my-spend-context {
+  border-color: rgb(96 165 250 / 0.32);
+  background: linear-gradient(180deg, rgb(30 41 59 / 0.82), rgb(20 83 45 / 0.24));
+}
+
+.dark .my-spend-eyebrow {
+  color: rgb(147 197 253);
+}
+
+.dark .my-spend-context strong,
+.dark .my-spend-window strong,
+.dark .my-spend-detail-grid strong,
+.dark .my-spend-hourly-panel strong,
+.dark .my-spend-section-head strong,
+.dark .my-spend-metric strong,
+.dark .my-spend-table td {
+  color: white;
+}
+
+.dark .my-spend-context small,
+.dark .my-spend-window span,
+.dark .my-spend-detail-grid span,
+.dark .my-spend-hourly-panel span,
+.dark .my-spend-section-head small,
+.dark .my-spend-metric span,
+.dark .my-spend-metric small {
+  color: rgb(161 161 170);
+}
+
+.dark .my-spend-range-tabs,
+.dark .my-spend-window > div,
+.dark .my-spend-detail-grid > div,
+.dark .my-spend-hourly-panel > div,
+.dark .my-spend-metric,
+.dark .my-spend-table {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.72);
+}
+
+.dark .my-spend-range-tabs button {
+  color: rgb(212 212 216);
+}
+
+.dark .my-spend-range-tabs button:hover {
+  background: rgb(63 63 70);
+  color: rgb(147 197 253);
+}
+
+.dark .my-spend-range-tabs button.active {
+  background: rgb(37 99 235);
+  color: white;
+}
+
+.dark .my-spend-loading,
+.dark .my-spend-empty {
+  border-color: rgb(63 63 70);
+  background: rgb(39 39 42 / 0.65);
+  color: rgb(161 161 170);
+}
+
+.dark .my-spend-metric-total {
+  border-color: rgb(96 165 250 / 0.34);
+  background: rgb(30 64 175 / 0.18);
+}
+
+.dark .my-spend-metric-request {
+  border-color: rgb(45 212 191 / 0.3);
+  background: rgb(20 83 45 / 0.2);
+}
+
+.dark .my-spend-metric-hourly {
+  border-color: rgb(245 158 11 / 0.3);
+  background: rgb(146 64 14 / 0.18);
+}
+
+.dark .my-spend-table-wrap {
+  border-color: rgb(63 63 70);
+}
+
+.dark .my-spend-table th {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27);
+  color: rgb(212 212 216);
+}
+
+.dark .my-spend-table td {
+  border-color: rgb(63 63 70);
+}
+
+@media (min-width: 640px) {
+  .my-spend-toolbar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .my-spend-range-tabs {
+    width: min(100%, 24rem);
+  }
 }
 
 .join-confirmation {
@@ -5820,16 +10075,45 @@ onBeforeUnmount(() => {
 }
 
 .listing-metric-grid {
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.375rem;
+  gap: 0.3125rem;
   font-size: 0.8125rem;
 }
 
-@media (min-width: 640px) {
+@container account-listing-card (min-width: 26rem) {
+  .listing-metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container account-listing-card (min-width: 34rem) {
   .listing-metric-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container account-listing-card (min-width: 38rem) {
+  .listing-metric-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .metric {
+    min-height: 2.875rem;
+    gap: 0;
+    padding: 0.3125rem 0.34375rem;
+  }
+
+  .metric span {
+    font-size: 0.625rem;
+    line-height: 0.8125rem;
+  }
+
+  .metric strong,
+  .metric-billing strong {
+    font-size: 0.78125rem;
+    line-height: 0.9375rem;
   }
 }
 
@@ -5837,27 +10121,39 @@ onBeforeUnmount(() => {
   display: grid;
   min-width: 0;
   align-content: start;
-  gap: 0.125rem;
+  min-height: 3.25rem;
+  gap: 0.0625rem;
   border-radius: 0.5rem;
   border: 1px solid rgb(226 232 240);
   background: rgb(255 255 255 / 0.86);
-  padding: 0.4375rem 0.5625rem;
+  padding: 0.375rem 0.4375rem;
 }
 
 .metric span {
   min-width: 0;
-  font-size: 0.6875rem;
-  line-height: 0.9375rem;
+  font-size: 0.65625rem;
+  line-height: 0.875rem;
   color: rgb(107 114 128);
+}
+
+.metric-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 700;
+}
+
+.metric-label svg {
+  flex-shrink: 0;
 }
 
 .metric strong {
   display: block;
   min-width: 0;
   color: rgb(17 24 39);
-  font-size: 0.8125rem;
+  font-size: 0.84375rem;
   font-weight: 800;
-  line-height: 1.0625rem;
+  line-height: 1rem;
   overflow-wrap: anywhere;
 }
 
@@ -5874,7 +10170,7 @@ onBeforeUnmount(() => {
 
 .metric-billing strong {
   color: rgb(13 148 136);
-  font-size: 0.875rem;
+  font-size: 0.84375rem;
   font-weight: 900;
 }
 

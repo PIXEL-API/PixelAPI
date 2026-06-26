@@ -57,6 +57,14 @@
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.today_actual_cost || 0) }}</span>
             <span class="text-sm font-normal text-gray-400 dark:text-gray-500" :title="t('dashboard.standard')"> / ${{ formatCost(stats?.today_cost || 0) }}</span>
           </p>
+          <p class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5">
+            <span class="text-purple-600 dark:text-purple-400" :title="t('usage.requestBilled')">
+              {{ t('usage.requestBilled') }} ${{ formatCost(stats?.today_request_actual_cost || 0) }}
+            </span>
+            <span class="text-sky-600 dark:text-sky-400" :title="t('usage.hourlyBilled')">
+              {{ t('usage.hourlyBilled') }} ${{ formatCost(stats?.today_hourly_cost || 0) }}
+            </span>
+          </p>
           <p class="text-xs">
             <span class="text-gray-500 dark:text-gray-400">{{ t('common.total') }}: </span>
             <span class="text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">${{ formatCost(stats?.total_actual_cost || 0) }}</span>

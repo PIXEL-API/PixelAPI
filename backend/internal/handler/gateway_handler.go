@@ -304,8 +304,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		}
 
 		for {
-			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
+			selectionCtx := openAIAccountShareModeRequestContext(c, apiKey)
+			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
 			if err != nil {
+				if h.handleAccountShareModeAnthropicError(c, err, streamStarted) {
+					return
+				}
 				if len(fs.FailedAccountIDs) == 0 {
 					reqLog.Warn("gateway.select_account_no_available",
 						zap.String("model", reqModel),
@@ -496,7 +500,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 			h.submitUsageRecordTask(func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+				usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
+				if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
 					Result:             result,
 					ParsedRequest:      parsedReq,
 					APIKey:             apiKey,
@@ -638,8 +643,12 @@ routeLoop:
 				zap.Bool("has_bound_session", currentHasBoundSession),
 				zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
 			)
-			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
+			selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
+			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
 			if err != nil {
+				if h.handleAccountShareModeAnthropicError(c, err, streamStarted) {
+					return
+				}
 				if len(fs.FailedAccountIDs) == 0 {
 					reqLog.Warn("gateway.select_account_no_available",
 						zap.String("model", reqModel),
@@ -873,7 +882,8 @@ routeLoop:
 
 				// 使用量记录通过有界 worker 池提交；提交被拒绝时 submitUsageRecordTask 会同步兜底。
 				h.submitUsageRecordTask(func(ctx context.Context) {
-					if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+					usageCtx := service.WithAccountShareModeRequestFromContext(ctx, selectionCtx)
+					if err := h.gatewayService.RecordUsage(usageCtx, &service.RecordUsageInput{
 						Result:             result,
 						ParsedRequest:      parsedReq,
 						APIKey:             currentAPIKey,
@@ -1757,6 +1767,25 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 
 	// Normal case: return JSON response with proper status code
 	h.errorResponse(c, status, errType, message)
+}
+
+func (h *GatewayHandler) handleAccountShareModeAnthropicError(c *gin.Context, err error, streamStarted bool) bool {
+	switch {
+	case errors.Is(err, service.ErrAccountShareModeGroupUnbound):
+		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "该分组未绑定账号", streamStarted)
+		return true
+	case errors.Is(err, service.ErrAccountShareBalanceBelowMinimum):
+		h.handleStreamingAwareError(c, http.StatusForbidden, "permission_error", "账户余额低于共享账号最低准入余额", streamStarted)
+		return true
+	case errors.Is(err, service.ErrAccountSharePerUserConcurrencyExceeded):
+		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "共享账号单用户并发已达上限", streamStarted)
+		return true
+	case errors.Is(err, service.ErrAccountShareModeUnsupportedModel):
+		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "模型不支持", streamStarted)
+		return true
+	default:
+		return false
+	}
 }
 
 // ensureForwardErrorResponse 在 Forward 返回错误但尚未写响应时补写统一错误响应。

@@ -5,8 +5,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 )
@@ -232,8 +234,8 @@ func TestOAuthService_ExchangeCode_SessionNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExchangeCode 应返回错误（session 不存在）")
 	}
-	if err.Error() != "session not found or expired" {
-		t.Fatalf("错误信息不匹配: got=%q", err.Error())
+	if infraerrors.Code(err) != http.StatusBadRequest || infraerrors.Reason(err) != "ANTHROPIC_OAUTH_SESSION_NOT_FOUND" || infraerrors.Message(err) != "session not found or expired" {
+		t.Fatalf("错误不匹配: code=%d reason=%q message=%q err=%v", infraerrors.Code(err), infraerrors.Reason(err), infraerrors.Message(err), err)
 	}
 }
 

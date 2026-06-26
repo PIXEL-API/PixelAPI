@@ -4352,7 +4352,7 @@ func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Contex
 	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
 		return
 	}
-	if isOpenAIModelCapacityError(http.StatusServiceUnavailable, strings.TrimSpace(msgRaw+" "+codeRaw+" "+errTypeRaw), responseBody) {
+	if isOpenAITransientCapacityError(http.StatusServiceUnavailable, strings.TrimSpace(msgRaw+" "+codeRaw+" "+errTypeRaw), responseBody) {
 		s.rateLimitService.HandleUpstreamError(ctx, account, http.StatusServiceUnavailable, headers, responseBody)
 		return
 	}
@@ -4379,7 +4379,7 @@ func classifyOpenAIWSErrorEventFromRaw(codeRaw, errTypeRaw, msgRaw string) (stri
 	case "previous_response_not_found":
 		return "previous_response_not_found", true
 	}
-	if isOpenAIModelCapacityText(strings.Join([]string{msg, code, errType}, " ")) {
+	if isOpenAITransientCapacityError(http.StatusServiceUnavailable, strings.Join([]string{msg, code, errType}, " "), nil) {
 		return "upstream_capacity", true
 	}
 	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
@@ -4427,7 +4427,7 @@ func openAIWSErrorHTTPStatusFromRawWithMessage(codeRaw, errTypeRaw, msgRaw strin
 	errType := strings.ToLower(strings.TrimSpace(errTypeRaw))
 	msg := strings.ToLower(strings.TrimSpace(msgRaw))
 	switch {
-	case isOpenAIModelCapacityText(strings.Join([]string{msg, code, errType}, " ")):
+	case isOpenAITransientCapacityError(http.StatusServiceUnavailable, strings.Join([]string{msg, code, errType}, " "), nil):
 		return http.StatusServiceUnavailable
 	case strings.Contains(errType, "invalid_request"),
 		strings.Contains(code, "invalid_request"),
